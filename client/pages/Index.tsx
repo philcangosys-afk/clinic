@@ -62,6 +62,54 @@ type Appointment = {
   status: string;
 };
 
+type ClinicalModal = "service" | "radiology" | "medicine" | "prescription";
+
+type ClinicalRows = string[][];
+
+const initialServices: ClinicalRows = [
+  ["استشارة جلدية أولية", "الجلدية والتجميل", "٣٠ دقيقة", "٢٠٠ ر.س", "الرياض · جدة", "نشطة"],
+  ["جلسة ليزر", "التجميل", "٦٠ دقيقة", "٦٠٠ ر.س", "الرياض", "نشطة"],
+  ["متابعة علاج", "طب عام", "٢٠ دقيقة", "١٥٠ ر.س", "كل الفروع", "نشطة"],
+  ["زيارة طب أطفال", "طب الأطفال", "٣٠ دقيقة", "١٨٠ ر.س", "الرياض", "مسودة"],
+];
+
+const initialRadiologyOrders: ClinicalRows = [
+  ["RAD-1024", "سارة أحمد العتيبي", "أشعة سونار البطن", "د. ليان المطيري", "مجدول", "اليوم ١١:٠٠"],
+  ["RAD-1023", "عبدالله سالم القحطاني", "أشعة سينية للصدر", "د. عمر الحربي", "قيد التنفيذ", "اليوم ١٠:٣٠"],
+  ["RAD-1022", "نورة محمد الغامدي", "تصوير بالرنين المغناطيسي", "د. ريم الزهراني", "بانتظار التقرير", "أمس ١٦:٢٠"],
+];
+
+const initialStock: ClinicalRows = [
+  ["باراسيتامول ٥٠٠ مج", "مسكن", "BTH-8821", "١٢٠", "يناير ٢٠٢٧", "متوفر"],
+  ["أموكسيسيلين ٥٠٠ مج", "مضاد حيوي", "BTH-5510", "٢٤", "أكتوبر ٢٠٢٦", "منخفض"],
+  ["كريم هيدروكورتيزون", "جلدية", "BTH-3009", "٥٦", "يونيو ٢٠٢٦", "متوفر"],
+  ["محلول ملحي ٥٠٠ مل", "مستلزمات", "BTH-1022", "٨٠", "مارس ٢٠٢٧", "متوفر"],
+];
+
+const initialPrescriptions: ClinicalRows = [
+  ["RX-2025-0841", "سارة أحمد العتيبي", "د. ليان المطيري", "٣ أصناف", "معتمدة", "اليوم ٠٩:٤٥"],
+  ["RX-2025-0840", "عبدالله سالم القحطاني", "د. عمر الحربي", "٢ صنف", "تم الصرف", "اليوم ٠٩:١٠"],
+  ["RX-2025-0839", "نورة محمد الغامدي", "د. ليان المطيري", "٤ أصناف", "بانتظار الصرف", "أمس ١٧:٢٠"],
+];
+
+const initialDispensingQueue: ClinicalRows = [
+  ["RX-2025-0841", "سارة أحمد العتيبي", "٣ أصناف", "تأمين", "بانتظار التجهيز"],
+  ["RX-2025-0839", "نورة محمد الغامدي", "٤ أصناف", "نقدي", "جاري التجهيز"],
+  ["RX-2025-0838", "خالد إبراهيم الشهري", "١ صنف", "باقة", "جاهز للتسليم"],
+];
+
+function readClinicalRows(key: string, fallback: ClinicalRows) {
+  if (typeof window === "undefined") return fallback;
+  const stored = window.localStorage.getItem(key);
+  if (!stored) return fallback;
+  try {
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed as ClinicalRows : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 const navigation: NavItem[] = [
   { label: "الرئيسية", icon: LayoutDashboard, section: "لوحة التحكم" },
   { label: "المرضى", icon: UsersRound, badge: "1,248", section: "الاستقبال والمواعيد" },
@@ -129,6 +177,20 @@ export default function Index() {
   const [patientCount, setPatientCount] = useState(1248);
   const [appointmentCount, setAppointmentCount] = useState(38);
   const [recentPatient, setRecentPatient] = useState("سارة أحمد العتيبي");
+  const [clinicalModal, setClinicalModal] = useState<ClinicalModal | null>(null);
+  const [services, setServices] = useState<ClinicalRows>(() => readClinicalRows("zaincare-local-services", initialServices));
+  const [radiologyOrders, setRadiologyOrders] = useState<ClinicalRows>(() => readClinicalRows("zaincare-local-radiology", initialRadiologyOrders));
+  const [stock, setStock] = useState<ClinicalRows>(() => readClinicalRows("zaincare-local-stock", initialStock));
+  const [prescriptions, setPrescriptions] = useState<ClinicalRows>(() => readClinicalRows("zaincare-local-prescriptions", initialPrescriptions));
+  const [dispensingQueue, setDispensingQueue] = useState<ClinicalRows>(() => readClinicalRows("zaincare-local-dispensing", initialDispensingQueue));
+
+  useEffect(() => {
+    window.localStorage.setItem("zaincare-local-services", JSON.stringify(services));
+    window.localStorage.setItem("zaincare-local-radiology", JSON.stringify(radiologyOrders));
+    window.localStorage.setItem("zaincare-local-stock", JSON.stringify(stock));
+    window.localStorage.setItem("zaincare-local-prescriptions", JSON.stringify(prescriptions));
+    window.localStorage.setItem("zaincare-local-dispensing", JSON.stringify(dispensingQueue));
+  }, [services, radiologyOrders, stock, prescriptions, dispensingQueue]);
 
   const activeIcon = navIcons[activeItem] ?? LayoutDashboard;
   const activeLabel = activeItem === "الرئيسية" ? "نظرة عامة" : activeItem;
@@ -150,6 +212,44 @@ export default function Index() {
     setAppointmentCount((count) => count + 1);
     setActiveItem("المواعيد");
     notify("تم حجز الموعد وإرسال رسالة التأكيد");
+  };
+  const handleClinicalCreated = (type: ClinicalModal, row: string[], payment = "نقدي") => {
+    if (type === "service") {
+      setServices((current) => [row, ...current]);
+      setActiveItem("الخدمات");
+      notify(`تمت إضافة خدمة ${row[0]}`);
+      return;
+    }
+    if (type === "radiology") {
+      setRadiologyOrders((current) => [row, ...current]);
+      setActiveItem("الأشعة والتصوير الطبي");
+      notify(`تم إنشاء طلب الأشعة ${row[0]}`);
+      return;
+    }
+    if (type === "medicine") {
+      setStock((current) => [row, ...current]);
+      setActiveItem("الصيدلية");
+      notify(`تمت إضافة ${row[0]} إلى المخزون`);
+      return;
+    }
+    setPrescriptions((current) => [row, ...current]);
+    setDispensingQueue((current) => [[row[0], row[1], row[3], payment, "بانتظار التجهيز"], ...current]);
+    setActiveItem("صرف الأدوية");
+    notify(`تم اعتماد الوصفة ${row[0]} وإضافتها إلى طابور الصرف`);
+  };
+  const updateDispensingStatus = (prescriptionId: string, status: string) => {
+    setDispensingQueue((current) => current.map((row) => row[0] === prescriptionId ? [...row.slice(0, 4), status] : row));
+    const prescriptionStatus = status === "تم التسليم" ? "تم الصرف" : status === "جاهز للتسليم" ? "جاهزة للتسليم" : "قيد التجهيز";
+    setPrescriptions((current) => current.map((row) => row[0] === prescriptionId ? [...row.slice(0, 4), prescriptionStatus, row[5]] : row));
+    notify(status === "تم التسليم" ? "تم تسليم الوصفة وتحديث سجل المريض" : `تم تحديث حالة ${prescriptionId} إلى ${status}`);
+  };
+  const scanPrescription = () => {
+    const waiting = dispensingQueue.find((row) => row[4] === "بانتظار التجهيز");
+    if (!waiting) {
+      notify("لا توجد وصفات جديدة في انتظار التجهيز");
+      return;
+    }
+    updateDispensingStatus(waiting[0], "جاري التجهيز");
   };
 
   return (
@@ -211,7 +311,7 @@ export default function Index() {
 
           <div className="mx-auto max-w-[1500px] px-5 pb-12 pt-7 sm:px-8 lg:px-10 lg:pt-9">
             {activeItem === "الرئيسية" ? <>
-            <ReferenceOverview branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} />
+            <ReferenceOverview branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} onPrescription={() => setClinicalModal("prescription")} onFinance={() => setActiveItem("الفوترة والمدفوعات")} onStaff={() => setActiveItem("الموظفون")} onLab={() => setActiveItem("المختبر")} />
             <div className="hidden">
             <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
               <div><div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[#91a8a5]"><span>{dateLabel}</span><span className="h-1 w-1 rounded-full bg-[#b8c9c6]" /><span>١٨ مايو ٢٠٢٥</span></div><h1 className="text-[27px] font-bold tracking-[-0.04em] text-[#183f42] sm:text-[32px]">صباح الخير، أحمد <span className="inline-block">👋</span></h1><p className="mt-2 text-[13px] text-[#76918e]">إليك ملخص أداء عيادتك لهذا اليوم.</p></div>
@@ -251,7 +351,7 @@ export default function Index() {
 
             <div className="mt-6 flex flex-col items-start justify-between gap-3 rounded-[20px] bg-[#e8f5f1] px-5 py-4 sm:flex-row sm:items-center sm:px-6"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-[#0d716a]"><MapPin className="h-4 w-4" /></div><div><p className="text-[12px] font-bold text-[#2d625e]">أنت تعمل الآن من {branch}</p><p className="mt-1 text-[10px] text-[#6f9690]">آخر مزامنة للبيانات: منذ دقيقة واحدة</p></div></div><button className="flex items-center gap-1 text-[11px] font-bold text-[#0d716a]">تغيير الفرع <ArrowUpLeft className="h-3.5 w-3.5" /></button></div>
             </div>
-            </> : <ModuleView activeItem={activeItem} branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} newPatient={recentPatient} patientCount={patientCount} />}
+            </> : <ModuleView activeItem={activeItem} branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} newPatient={recentPatient} patientCount={patientCount} services={services} radiologyOrders={radiologyOrders} stock={stock} prescriptions={prescriptions} dispensingQueue={dispensingQueue} onCreate={(type) => setClinicalModal(type)} onUpdateDispensing={updateDispensingStatus} onScanPrescription={scanPrescription} />}
           </div>
         </section>
       </div>
@@ -259,12 +359,13 @@ export default function Index() {
       {modal === "patient" && <PatientModal onClose={() => setModal(null)} onCreated={handlePatientCreated} />}
       {modal === "appointment" && <AppointmentModal onClose={() => setModal(null)} onCreated={handleAppointmentCreated} />}
       {modal === "clinic" && <ClinicProfileModal onClose={() => setModal(null)} onSaved={(profile) => notify(`تم تفعيل ملف ${profile} وتحديث الوحدات`)} />}
+      {clinicalModal && <ClinicalEntryModal type={clinicalModal} onClose={() => setClinicalModal(null)} onCreated={(row, payment) => { setClinicalModal(null); handleClinicalCreated(clinicalModal, row, payment); }} />}
     </main>
   );
 }
 
-function ReferenceOverview({ branch, onPatient, onAppointment, onClinic }: { branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void }) {
-  return <div className="mb-8 space-y-5"><div className="flex flex-col justify-between gap-4 rounded-[22px] bg-gradient-to-l from-[#173957] via-[#115b68] to-[#0d716a] p-5 text-white shadow-[0_12px_28px_rgba(17,84,100,0.14)] sm:flex-row sm:items-center sm:p-6"><div><div className="mb-2 text-[10px] font-bold text-[#9bd8cc]">لوحة التحكم · {branch}</div><h2 className="text-[24px] font-bold tracking-[-0.04em]">مرحبًا بعودتك يا أحمد</h2><p className="mt-2 text-[11px] text-[#c0e1dc]">تابع أداء عيادتك وإدارة العمليات اليومية من مكان واحد.</p></div><div className="rounded-2xl bg-white/10 px-4 py-3 text-right backdrop-blur"><div className="text-[10px] text-[#bfe1dc]">آخر مزامنة</div><div className="mt-1 text-[15px] font-bold">الثلاثاء، ١٨ أغسطس ٢٠٢٥</div><div className="mt-1 text-[10px] text-[#9bd8cc]">قبل ٣٣ دقيقة</div></div></div><div className="flex gap-2 overflow-x-auto pb-1">{[["إضافة موعد جديد", CalendarClock, "purple", onAppointment], ["إضافة مريض", UserRoundPlus, "teal", onPatient], ["إضافة فاتورة", ReceiptText, "orange", () => undefined], ["وصفة جديدة", FileText, "blue", () => undefined], ["إضافة موظف", UserCog, "green", () => undefined], ["طلب مختبر", FlaskConical, "pink", () => undefined]].map(([label, Icon, tone, action]) => <button key={String(label)} onClick={action as () => void} className={cn("flex min-w-max items-center gap-2 rounded-full px-4 py-2.5 text-[10px] font-bold text-white shadow-sm transition hover:-translate-y-0.5", tone === "purple" ? "bg-[#7654ba]" : tone === "orange" ? "bg-[#d88142]" : tone === "blue" ? "bg-[#397fbd]" : tone === "green" ? "bg-[#4d9b82]" : tone === "pink" ? "bg-[#d36c83]" : "bg-[#0d857b]")}>{String(label)}</button>)}</div><div className="grid gap-4 xl:grid-cols-3"><OverviewCard title="دليل المستخدمين" subtitle="إجمالي المستخدمين والمرضى" tone="blue" icon={UsersRound}><div className="grid grid-cols-3 divide-x divide-x-reverse divide-[#dce9f4]"><MiniStat value="٦٣" label="المستخدمون" icon={UserCog} /><MiniStat value="١٣٢" label="المرضى" icon={UsersRound} /><MiniStat value="٣٤" label="أفراد العائلة" icon={UsersRound} /></div><div className="mt-4 flex items-center justify-between rounded-xl bg-white/70 px-3 py-2 text-[10px] text-[#65839b]"><span>آخر تسجيل: سارة أحمد</span><button onClick={() => undefined} className="font-bold text-[#397fbd]">فتح الدليل <ChevronLeft className="mr-1 inline h-3 w-3" /></button></div></OverviewCard><OverviewCard title="الكيانات الطبية" subtitle="المرافق والأطباء والأقسام" tone="mint" icon={Activity}><div className="grid grid-cols-2 gap-x-6 gap-y-4">{[["المرافق", "٢٢", "نشط", Building2], ["الأطباء", "١٠", "نشط", Stethoscope], ["الأقسام", "١٠", "نشط", ClipboardList], ["الأمراض", "١٠", "إجمالي", FileText]].map(([label, value, note, Icon]) => <div key={String(label)} className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#0d857b]"><Icon className="h-3.5 w-3.5" /></span><div><div className="text-[10px] font-bold text-[#567b78]">{String(label)}</div><div className="text-[9px] text-[#9bb3ad]">{String(note)}</div></div></div><span className="text-[16px] font-bold text-[#2b6862]">{String(value)}</span></div>)}</div></OverviewCard><AdminProfileCard /></div><div className="grid gap-4 xl:grid-cols-3"><OverviewCard title="أداء المحتوى" subtitle="آخر ٣٠ يومًا" tone="purple" icon={Newspaper}><div className="flex items-end gap-1.5 pt-4">{[38, 55, 44, 70, 61, 88, 49, 76, 64, 91, 73, 84].map((height, index) => <div key={index} className={cn("flex-1 rounded-t-md", index === 9 ? "bg-[#7654ba]" : "bg-[#dcd3f2]")} style={{ height: `${height}px` }} />)}</div><div className="mt-4 flex items-center justify-between text-[10px] text-[#8e83ad]"><span>مشاهدات المدونة</span><strong className="text-[#7654ba]">١٬٢٤٠ مشاهدة ↑ ٢٤٪</strong></div></OverviewCard><OverviewCard title="المحتوى والتصنيف" subtitle="ملخص المنصة" tone="coral" icon={ClipboardList}><div className="space-y-3">{[["مقالات منشورة", "٢٤", "bg-[#d36c83]"], ["خدمات نشطة", "١٨", "bg-[#e19a63]"], ["أسئلة شائعة", "٣٦", "bg-[#4d9b82]"]].map(([label, value, color]) => <div key={String(label)} className="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2"><span className="text-[10px] font-bold text-[#7f7978]">{String(label)}</span><span className={cn("rounded-md px-2 py-1 text-[10px] font-bold text-white", color)}>{String(value)}</span></div>)}</div></OverviewCard><OverviewCard title="نظرة مالية" subtitle="هذا الشهر" tone="navy" icon={CircleDollarSign}><div className="text-[26px] font-bold tracking-[-0.04em] text-[#204363]">٧٩٬٧٠٠ <span className="text-[11px] text-[#7794a5]">ر.س</span></div><div className="mt-3 flex items-center justify-between text-[10px]"><span className="text-[#8098a4]">صافي الإيرادات</span><span className="font-bold text-[#4d9b82]">↑ ١٨٪</span></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-[#dbe8ef]"><div className="h-full w-[78%] rounded-full bg-[#397fbd]" /></div><div className="mt-2 text-[9px] text-[#91a7b1]">٢٩ فاتورة مدفوعة · ٧ معلقة</div></OverviewCard></div></div>;
+function ReferenceOverview({ branch, onPatient, onAppointment, onClinic, onPrescription, onFinance, onStaff, onLab }: { branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void; onPrescription: () => void; onFinance: () => void; onStaff: () => void; onLab: () => void }) {
+  return <div className="mb-8 space-y-5"><div className="flex flex-col justify-between gap-4 rounded-[22px] bg-gradient-to-l from-[#173957] via-[#115b68] to-[#0d716a] p-5 text-white shadow-[0_12px_28px_rgba(17,84,100,0.14)] sm:flex-row sm:items-center sm:p-6"><div><div className="mb-2 text-[10px] font-bold text-[#9bd8cc]">لوحة التحكم · {branch}</div><h2 className="text-[24px] font-bold tracking-[-0.04em]">مرحبًا بعودتك يا أحمد</h2><p className="mt-2 text-[11px] text-[#c0e1dc]">تابع أداء عيادتك وإدارة العمليات اليومية من مكان واحد.</p></div><div className="rounded-2xl bg-white/10 px-4 py-3 text-right backdrop-blur"><div className="text-[10px] text-[#bfe1dc]">آخر مزامنة</div><div className="mt-1 text-[15px] font-bold">الثلاثاء، ١٨ أغسطس ٢٠٢٥</div><div className="mt-1 text-[10px] text-[#9bd8cc]">قبل ٣٣ دقيقة</div></div></div><div className="flex gap-2 overflow-x-auto pb-1">{[["إضافة موعد جديد", CalendarClock, "purple", onAppointment], ["إضافة مريض", UserRoundPlus, "teal", onPatient], ["إضافة فاتورة", ReceiptText, "orange", onFinance], ["وصفة جديدة", FileText, "blue", onPrescription], ["إضافة موظف", UserCog, "green", onStaff], ["طلب مختبر", FlaskConical, "pink", onLab]].map(([label, Icon, tone, action]) => <button key={String(label)} onClick={action as () => void} className={cn("flex min-w-max items-center gap-2 rounded-full px-4 py-2.5 text-[10px] font-bold text-white shadow-sm transition hover:-translate-y-0.5", tone === "purple" ? "bg-[#7654ba]" : tone === "orange" ? "bg-[#d88142]" : tone === "blue" ? "bg-[#397fbd]" : tone === "green" ? "bg-[#4d9b82]" : tone === "pink" ? "bg-[#d36c83]" : "bg-[#0d857b]")}>{String(label)}</button>)}</div><div className="grid gap-4 xl:grid-cols-3"><OverviewCard title="دليل المستخدمين" subtitle="إجمالي المستخدمين والمرضى" tone="blue" icon={UsersRound}><div className="grid grid-cols-3 divide-x divide-x-reverse divide-[#dce9f4]"><MiniStat value="٦٣" label="المستخدمون" icon={UserCog} /><MiniStat value="١٣٢" label="المرضى" icon={UsersRound} /><MiniStat value="٣٤" label="أفراد العائلة" icon={UsersRound} /></div><div className="mt-4 flex items-center justify-between rounded-xl bg-white/70 px-3 py-2 text-[10px] text-[#65839b]"><span>آخر تسجيل: سارة أحمد</span><button onClick={() => undefined} className="font-bold text-[#397fbd]">فتح الدليل <ChevronLeft className="mr-1 inline h-3 w-3" /></button></div></OverviewCard><OverviewCard title="الكيانات الطبية" subtitle="المرافق والأطباء والأقسام" tone="mint" icon={Activity}><div className="grid grid-cols-2 gap-x-6 gap-y-4">{[["المرافق", "٢٢", "نشط", Building2], ["الأطباء", "١٠", "نشط", Stethoscope], ["الأقسام", "١٠", "نشط", ClipboardList], ["الأمراض", "١٠", "إجمالي", FileText]].map(([label, value, note, Icon]) => <div key={String(label)} className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#0d857b]"><Icon className="h-3.5 w-3.5" /></span><div><div className="text-[10px] font-bold text-[#567b78]">{String(label)}</div><div className="text-[9px] text-[#9bb3ad]">{String(note)}</div></div></div><span className="text-[16px] font-bold text-[#2b6862]">{String(value)}</span></div>)}</div></OverviewCard><AdminProfileCard /></div><div className="grid gap-4 xl:grid-cols-3"><OverviewCard title="أداء المحتوى" subtitle="آخر ٣٠ يومًا" tone="purple" icon={Newspaper}><div className="flex items-end gap-1.5 pt-4">{[38, 55, 44, 70, 61, 88, 49, 76, 64, 91, 73, 84].map((height, index) => <div key={index} className={cn("flex-1 rounded-t-md", index === 9 ? "bg-[#7654ba]" : "bg-[#dcd3f2]")} style={{ height: `${height}px` }} />)}</div><div className="mt-4 flex items-center justify-between text-[10px] text-[#8e83ad]"><span>مشاهدات المدونة</span><strong className="text-[#7654ba]">١٬٢٤٠ مشاهدة ↑ ٢٤٪</strong></div></OverviewCard><OverviewCard title="المحتوى والتصنيف" subtitle="ملخص المنصة" tone="coral" icon={ClipboardList}><div className="space-y-3">{[["مقالات منشورة", "٢٤", "bg-[#d36c83]"], ["خدمات نشطة", "١٨", "bg-[#e19a63]"], ["أسئلة شائعة", "٣٦", "bg-[#4d9b82]"]].map(([label, value, color]) => <div key={String(label)} className="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2"><span className="text-[10px] font-bold text-[#7f7978]">{String(label)}</span><span className={cn("rounded-md px-2 py-1 text-[10px] font-bold text-white", color)}>{String(value)}</span></div>)}</div></OverviewCard><OverviewCard title="نظرة مالية" subtitle="هذا الشهر" tone="navy" icon={CircleDollarSign}><div className="text-[26px] font-bold tracking-[-0.04em] text-[#204363]">٧٩٬٧٠٠ <span className="text-[11px] text-[#7794a5]">ر.س</span></div><div className="mt-3 flex items-center justify-between text-[10px]"><span className="text-[#8098a4]">صافي الإيرادات</span><span className="font-bold text-[#4d9b82]">↑ ١٨٪</span></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-[#dbe8ef]"><div className="h-full w-[78%] rounded-full bg-[#397fbd]" /></div><div className="mt-2 text-[9px] text-[#91a7b1]">٢٩ فاتورة مدفوعة · ٧ معلقة</div></OverviewCard></div></div>;
 }
 
 function OverviewCard({ title, subtitle, tone, icon: Icon, children }: { title: string; subtitle: string; tone: "blue" | "mint" | "purple" | "coral" | "navy"; icon: typeof LayoutDashboard; children: ReactNode }) {
@@ -302,38 +403,37 @@ function ReportCard({ title, detail, bars, tone }: { title: string; detail: stri
   return <section className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><h2 className="text-[16px] font-bold text-[#234b4b]">{title}</h2><p className="mt-1 text-[11px] text-[#96aaa8]">{detail}</p><div className="mt-6 flex h-28 items-end gap-3">{bars.map((height, index) => <div key={index} className={cn("flex-1 rounded-t-lg", tone === "teal" ? "bg-[#cdebe4]" : "bg-[#d7e8f3]", index === bars.length - 1 && (tone === "teal" ? "bg-[#0d857b]" : "bg-[#397fbd]"))} style={{ height: `${height}%` }} />)}</div></section>;
 }
 
-function ServicesView({ branch }: { branch: string }) {
-  const rows = [["استشارة جلدية أولية", "الجلدية والتجميل", "٣٠ دقيقة", "٢٠٠ ر.س", "الرياض · جدة", "نشطة"], ["جلسة ليزر", "التجميل", "٦٠ دقيقة", "٦٠٠ ر.س", "الرياض", "نشطة"], ["متابعة علاج", "طب عام", "٢٠ دقيقة", "١٥٠ ر.س", "كل الفروع", "نشطة"], ["زيارة طب أطفال", "طب الأطفال", "٣٠ دقيقة", "١٨٠ ر.س", "الرياض", "مسودة"]];
-  return <><ViewHeader eyebrow="الكتالوج الطبي" title="الخدمات والأسعار" description={`${branch} · الخدمات المتاحة للحجز والفوترة والتأمين`} action="إضافة خدمة" icon={ReceiptText} /><SummaryCards items={[{ label: "الخدمات النشطة", value: "١٨", note: "عبر ٣ فروع", tone: "bg-[#0d857b]" }, { label: "خدمات التأمين", value: "١٢", note: "مرتبطة برموز المطالبات", tone: "bg-[#397fbd]" }, { label: "الخدمات الرقمية", value: "٠٥", note: "متاحة للحجز الإلكتروني", tone: "bg-[#7654ba]" }, { label: "تحتاج مراجعة", value: "٠٢", note: "تسعير أو مدة ناقصة", tone: "bg-[#e5b15a]" }]} /><ModuleTable title="دليل الخدمات" description="السعر والمدة والفرع والتخصص" columns={["الخدمة", "التخصص", "المدة", "السعر", "الفروع", "الحالة"]} rows={rows} /></>;
+function ServicesView({ branch, rows, onAdd }: { branch: string; rows: ClinicalRows; onAdd: () => void }) {
+  return <><ViewHeader eyebrow="الكتالوج الطبي" title="الخدمات والأسعار" description={`${branch} · الخدمات المتاحة للحجز والفوترة والتأمين`} action="إضافة خدمة" icon={ReceiptText} onAction={onAdd} /><SummaryCards items={[{ label: "الخدمات النشطة", value: toArabicNumber(rows.filter((row) => row[5] === "نشطة").length), note: "في هذا العرض", tone: "bg-[#0d857b]" }, { label: "خدمات التأمين", value: "١٢", note: "مرتبطة برموز المطالبات", tone: "bg-[#397fbd]" }, { label: "الخدمات الرقمية", value: "٠٥", note: "متاحة للحجز الإلكتروني", tone: "bg-[#7654ba]" }, { label: "تحتاج مراجعة", value: toArabicNumber(rows.filter((row) => row[5] !== "نشطة").length), note: "تسعير أو مدة ناقصة", tone: "bg-[#e5b15a]" }]} /><ModuleTable title="دليل الخدمات" description="السعر والمدة والفرع والتخصص" columns={["الخدمة", "التخصص", "المدة", "السعر", "الفروع", "الحالة"]} rows={rows} /></>;
 }
 
-function RadiologyView({ branch }: { branch: string }) {
-  const orders = [["RAD-1024", "سارة أحمد العتيبي", "أشعة سونار البطن", "د. ليان المطيري", "مجدول", "اليوم ١١:٠٠"], ["RAD-1023", "عبدالله سالم القحطاني", "أشعة سينية للصدر", "د. عمر الحربي", "قيد التنفيذ", "اليوم ١٠:٣٠"], ["RAD-1022", "نورة محمد الغامدي", "تصوير بالرنين المغناطيسي", "د. ريم الزهراني", "بانتظار التقرير", "أمس ١٦:٢٠"]];
-  return <><ViewHeader eyebrow="الأشعة والتصوير الطبي" title="مركز الأشعة" description={`${branch} · الطلبات والتقارير وجدولة أجهزة التصوير`} action="طلب أشعة" icon={Activity} /><SummaryCards items={[{ label: "طلبات اليوم", value: "١٦", note: "٤ مجدولة الآن", tone: "bg-[#397fbd]" }, { label: "قيد التنفيذ", value: "٠٤", note: "على الأجهزة", tone: "bg-[#0d857b]" }, { label: "بانتظار التقرير", value: "٠٣", note: "يحتاج مراجعة", tone: "bg-[#e5b15a]" }, { label: "الأجهزة المتاحة", value: "٠٦ / ٠٧", note: "جهاز واحد للصيانة", tone: "bg-[#7654ba]" }]} /><ModuleTable title="طلبات الأشعة" description="كل طلب مرتبط بالزيارة والطبيب والمريض" columns={["رقم الطلب", "المريض", "الفحص", "الطبيب", "الحالة", "الموعد"]} rows={orders} /></>;
+function RadiologyView({ branch, orders, onAdd }: { branch: string; orders: ClinicalRows; onAdd: () => void }) {
+  return <><ViewHeader eyebrow="الأشعة والتصوير الطبي" title="مركز الأشعة" description={`${branch} · الطلبات والتقارير وجدولة أجهزة التصوير`} action="طلب أشعة" icon={Activity} onAction={onAdd} /><SummaryCards items={[{ label: "طلبات اليوم", value: toArabicNumber(orders.length), note: "مرتبطة بالزيارات", tone: "bg-[#397fbd]" }, { label: "قيد التنفيذ", value: toArabicNumber(orders.filter((row) => row[4] === "قيد التنفيذ").length), note: "على الأجهزة", tone: "bg-[#0d857b]" }, { label: "بانتظار التقرير", value: toArabicNumber(orders.filter((row) => row[4] === "بانتظار التقرير").length), note: "يحتاج مراجعة", tone: "bg-[#e5b15a]" }, { label: "الأجهزة المتاحة", value: "٠٦ / ٠٧", note: "جهاز واحد للصيانة", tone: "bg-[#7654ba]" }]} /><ModuleTable title="طلبات الأشعة" description="كل طلب مرتبط بالزيارة والطبيب والمريض" columns={["رقم الطلب", "المريض", "الفحص", "الطبيب", "الحالة", "الموعد"]} rows={orders} /></>;
 }
 
-function PharmacyView({ branch }: { branch: string }) {
-  const stock = [["باراسيتامول ٥٠٠ مج", "مسكن", "BTH-8821", "١٢٠", "يناير ٢٠٢٧", "متوفر"], ["أموكسيسيلين ٥٠٠ مج", "مضاد حيوي", "BTH-5510", "أكتوبر ٢٠٢٦", "منخفض"], ["كريم هيدروكورتيزون", "جلدية", "BTH-3009", "يونيو ٢٠٢٦", "متوفر"], ["محلول ملحي ٥٠٠ مل", "مستلزمات", "BTH-1022", "مارس ٢٠٢٧", "متوفر"]];
-  return <><ViewHeader eyebrow="الصيدلية والمخزون" title="الصيدلية" description={`${branch} · المخزون والدفعات والصرف بنظام FEFO`} action="إضافة دواء" icon={Package} /><SummaryCards items={[{ label: "الأصناف النشطة", value: "٢٤", note: "أدوية ومستلزمات", tone: "bg-[#0d857b]" }, { label: "منخفض المخزون", value: "٠٣", note: "تحتاج طلب شراء", tone: "bg-[#e5b15a]" }, { label: "تنتهي قريبًا", value: "٠٢", note: "خلال ٩٠ يومًا", tone: "bg-[#d36c83]" }, { label: "قيمة المخزون", value: "٤٨٬٢٠٠", note: "ر.س تقديرية", tone: "bg-[#397fbd]" }]} /><ModuleTable title="مخزون الصيدلية" description="تتبع الدفعات والصلاحية وصرف الأقدم أولاً" columns={["الدواء", "التصنيف", "رقم الدفعة", "الكمية", "الصلاحية", "الحالة"]} rows={stock} /></>;
+function PharmacyView({ branch, stock, onAdd }: { branch: string; stock: ClinicalRows; onAdd: () => void }) {
+  return <><ViewHeader eyebrow="الصيدلية والمخزون" title="الصيدلية" description={`${branch} · المخزون والدفعات والصرف بنظام FEFO`} action="إضافة دواء" icon={Package} onAction={onAdd} /><SummaryCards items={[{ label: "الأصناف النشطة", value: toArabicNumber(stock.length), note: "أدوية ومستلزمات", tone: "bg-[#0d857b]" }, { label: "منخفض المخزون", value: toArabicNumber(stock.filter((row) => row[5] === "منخفض").length), note: "تحتاج طلب شراء", tone: "bg-[#e5b15a]" }, { label: "تنتهي قريبًا", value: "٠٢", note: "خلال ٩٠ يومًا", tone: "bg-[#d36c83]" }, { label: "قيمة المخزون", value: "٤٨٬٢٠٠", note: "ر.س تقديرية", tone: "bg-[#397fbd]" }]} /><ModuleTable title="مخزون الصيدلية" description="تتبع الدفعات والصلاحية وصرف الأقدم أولاً" columns={["الدواء", "التصنيف", "رقم الدفعة", "الكمية", "الصلاحية", "الحالة"]} rows={stock} /></>;
 }
 
-function PrescriptionsView({ branch }: { branch: string }) {
-  const prescriptions = [["RX-2025-0841", "سارة أحمد العتيبي", "د. ليان المطيري", "٣ أصناف", "معتمدة", "اليوم ٠٩:٤٥"], ["RX-2025-0840", "عبدالله سالم القحطاني", "د. عمر الحربي", "٢ صنف", "تم الصرف", "اليوم ٠٩:١٠"], ["RX-2025-0839", "نورة محمد الغامدي", "د. ليان المطيري", "٤ أصناف", "بانتظار الصرف", "أمس ١٧:٢٠"]];
-  return <><ViewHeader eyebrow="الأدوية والوصفات" title="الوصفات الطبية" description={`${branch} · وصفات ثنائية اللغة جاهزة للطباعة والصرف`} action="وصفة جديدة" icon={FileText} /><SummaryCards items={[{ label: "وصفات اليوم", value: "٢٨", note: "١٨ مكتملة", tone: "bg-[#0d857b]" }, { label: "بانتظار الصرف", value: "٠٨", note: "في طابور الصيدلية", tone: "bg-[#e5b15a]" }, { label: "أدوية موصوفة", value: "٧٢", note: "من ٢٨ وصفة", tone: "bg-[#397fbd]" }, { label: "وصفات فيديو", value: "٠٥", note: "وصفة إلكترونية", tone: "bg-[#7654ba]" }]} /><ModuleTable title="آخر الوصفات" description="التوقيع الطبي وحالة الصرف لكل وصفة" columns={["رقم الوصفة", "المريض", "الطبيب", "الأصناف", "الحالة", "التاريخ"]} rows={prescriptions} /></>;
+function PrescriptionsView({ branch, prescriptions, onAdd }: { branch: string; prescriptions: ClinicalRows; onAdd: () => void }) {
+  return <><ViewHeader eyebrow="الأدوية والوصفات" title="الوصفات الطبية" description={`${branch} · وصفات ثنائية اللغة جاهزة للطباعة والصرف`} action="وصفة جديدة" icon={FileText} onAction={onAdd} /><SummaryCards items={[{ label: "وصفات اليوم", value: toArabicNumber(prescriptions.length), note: "في هذا العرض", tone: "bg-[#0d857b]" }, { label: "بانتظار الصرف", value: toArabicNumber(prescriptions.filter((row) => ["معتمدة", "بانتظار الصرف", "قيد التجهيز", "جاهزة للتسليم"].includes(row[4])).length), note: "في طابور الصيدلية", tone: "bg-[#e5b15a]" }, { label: "أدوية موصوفة", value: "٧٢", note: "من الوصفات الحالية", tone: "bg-[#397fbd]" }, { label: "وصفات فيديو", value: "٠٥", note: "وصفة إلكترونية", tone: "bg-[#7654ba]" }]} /><ModuleTable title="آخر الوصفات" description="التوقيع الطبي وحالة الصرف لكل وصفة" columns={["رقم الوصفة", "المريض", "الطبيب", "الأصناف", "الحالة", "التاريخ"]} rows={prescriptions} /></>;
 }
 
-function DispensingView({ branch }: { branch: string }) {
-  const queueRows = [["RX-2025-0841", "سارة أحمد العتيبي", "٣ أصناف", "تأمين", "بانتظار التجهيز"], ["RX-2025-0839", "نورة محمد الغامدي", "٤ أصناف", "نقدي", "جاري التجهيز"], ["RX-2025-0838", "خالد إبراهيم الشهري", "١ صنف", "باقة", "جاهز للتسليم"]];
-  return <><ViewHeader eyebrow="الصيدلية والوصفات" title="صرف الأدوية" description={`${branch} · طابور الوصفات والتسليم للمريض`} action="مسح وصفة QR" icon={ClipboardList} /><div className="mb-6 rounded-[22px] border border-[#cfe3ee] bg-[#edf6fb] p-5"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><div className="text-[12px] font-bold text-[#315d77]">طابور الصرف الحالي</div><div className="mt-1 text-[10px] text-[#7794a5]">يتم تحديث الحالة عند استلام المريض</div></div><div className="flex gap-6"><MiniStat value="٠٨" label="بانتظار التجهيز" icon={Clock3} /><MiniStat value="٠٣" label="جاهز" icon={CheckCircle2} /></div></div></div><ModuleTable title="وصفات بانتظار الصرف" description="تحقق من هوية المريض والدواء والدفعة قبل التسليم" columns={["الوصفة", "المريض", "الأصناف", "الدفع", "الحالة"]} rows={queueRows} /></>;
+function DispensingView({ branch, queueRows, onScan, onUpdate }: { branch: string; queueRows: ClinicalRows; onScan: () => void; onUpdate: (id: string, status: string) => void }) {
+  const waiting = queueRows.filter((row) => row[4] === "بانتظار التجهيز").length;
+  const ready = queueRows.filter((row) => row[4] === "جاهز للتسليم").length;
+  return <><ViewHeader eyebrow="الصيدلية والوصفات" title="صرف الأدوية" description={`${branch} · طابور الوصفات والتسليم للمريض`} action="مسح وصفة QR" icon={ClipboardList} onAction={onScan} /><div className="mb-6 rounded-[22px] border border-[#cfe3ee] bg-[#edf6fb] p-5"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><div className="text-[12px] font-bold text-[#315d77]">طابور الصرف الحالي</div><div className="mt-1 text-[10px] text-[#7794a5]">اختر الإجراء لتحديث الوصفة والطابور معًا</div></div><div className="flex gap-6"><MiniStat value={toArabicNumber(waiting)} label="بانتظار التجهيز" icon={Clock3} /><MiniStat value={toArabicNumber(ready)} label="جاهز" icon={CheckCircle2} /></div></div></div><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 shadow-[0_4px_18px_rgba(30,73,72,0.025)] sm:p-6"><div className="mb-5"><h2 className="text-[16px] font-bold text-[#234b4b]">وصفات بانتظار الصرف</h2><p className="mt-1 text-[11px] text-[#96aaa8]">تحقق من هوية المريض والدواء والدفعة قبل التسليم</p></div><div className="overflow-x-auto"><table className="w-full min-w-[780px] text-right"><thead><tr className="border-b border-[#dbeaf0] bg-[#eaf6fb] text-[10px] font-bold text-[#5d7f91]"><th className="px-3 py-3">الوصفة</th><th className="px-3 py-3">المريض</th><th className="px-3 py-3">الأصناف</th><th className="px-3 py-3">الدفع</th><th className="px-3 py-3">الحالة</th><th className="px-3 py-3">إجراء</th></tr></thead><tbody>{queueRows.map((row) => <tr key={row[0]} className="border-b border-[#f0f4f3] text-[11px] last:border-0"><td className="px-3 py-3.5 font-mono text-[10px] text-[#436f86]" dir="ltr">{row[0]}</td><td className="px-3 py-3.5 font-bold text-[#426765]">{row[1]}</td><td className="px-3 py-3.5 text-[#66817f]">{row[2]}</td><td className="px-3 py-3.5 text-[#66817f]">{row[3]}</td><td className="px-3 py-3.5"><StatusPill tone={row[4] === "تم التسليم" ? "teal" : row[4] === "جاري التجهيز" ? "blue" : row[4] === "جاهز للتسليم" ? "purple" : "amber"}>{row[4]}</StatusPill></td><td className="px-3 py-3.5"><div className="flex gap-2"><button onClick={() => onUpdate(row[0], row[4] === "بانتظار التجهيز" ? "جاري التجهيز" : "جاهز للتسليم")} disabled={row[4] === "تم التسليم"} className="rounded-lg bg-[#e6f4f1] px-3 py-2 text-[10px] font-bold text-[#0d716a] disabled:cursor-not-allowed disabled:opacity-50">{row[4] === "بانتظار التجهيز" ? "بدء التجهيز" : row[4] === "جاري التجهيز" ? "تجهيز مكتمل" : row[4] === "جاهز للتسليم" ? "تأكيد التسليم" : "تم التسليم"}</button><button onClick={() => onUpdate(row[0], "تم التسليم")} disabled={row[4] === "تم التسليم"} className="rounded-lg border border-[#dfece9] px-3 py-2 text-[10px] font-bold text-[#6d8b88] disabled:cursor-not-allowed disabled:opacity-50">تسليم</button></div></td></tr>)}</tbody></table></div></div></>;
 }
 
 function ModuleTable({ title, description, columns, rows }: { title: string; description: string; columns: string[]; rows: string[][] }) {
-  return <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 shadow-[0_4px_18px_rgba(30,73,72,0.025)] sm:p-6"><div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-[16px] font-bold text-[#234b4b]">{title}</h2><p className="mt-1 text-[11px] text-[#96aaa8]">{description}</p></div><div className="flex gap-2"><div className="flex h-10 items-center rounded-xl border border-[#dfebe8] px-3"><Search className="ml-2 h-4 w-4 text-[#9bb1ae]" /><input className="w-36 bg-transparent text-xs outline-none" placeholder="بحث..." /></div><button className="rounded-xl border border-[#dfebe8] px-3 text-[11px] font-bold text-[#6d8b88]"><Download className="h-4 w-4" /></button></div></div><div className="overflow-x-auto"><table className="w-full min-w-[720px] text-right"><thead><tr className="border-b border-[#dbeaf0] bg-[#eaf6fb] text-[10px] font-bold text-[#5d7f91]">{columns.map((column) => <th key={column} className="px-3 py-3">{column}</th>)}<th className="px-3 py-3">إجراء</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row[0]}-${index}`} className="border-b border-[#f0f4f3] text-[11px] last:border-0 hover:bg-[#fbfdfd]">{row.map((cell, cellIndex) => <td key={`${cell}-${cellIndex}`} className={cn("px-3 py-3.5 text-[#66817f]", cellIndex === 0 && "font-mono text-[10px] text-[#436f86]", cellIndex === row.length - 1 && "font-bold text-[#426765]")}>{cellIndex === row.length - 1 ? <StatusPill tone={cell.includes("منخفض") || cell.includes("انتظار") || cell.includes("معلق") ? "amber" : cell.includes("مسودة") ? "purple" : "teal"}>{cell}</StatusPill> : cell}</td>)}<td className="px-3 py-3.5"><button className="text-[10px] font-bold text-[#0d716a]">عرض</button></td></tr>)}</tbody></table></div></div>;
+  const [query, setQuery] = useState("");
+  const visibleRows = rows.filter((row) => row.join(" ").includes(query.trim()));
+  return <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 shadow-[0_4px_18px_rgba(30,73,72,0.025)] sm:p-6"><div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-[16px] font-bold text-[#234b4b]">{title}</h2><p className="mt-1 text-[11px] text-[#96aaa8]">{description}</p></div><div className="flex gap-2"><div className="flex h-10 items-center rounded-xl border border-[#dfebe8] px-3"><Search className="ml-2 h-4 w-4 text-[#9bb1ae]" /><input value={query} onChange={(event) => setQuery(event.target.value)} className="w-36 bg-transparent text-xs outline-none" placeholder="بحث..." /></div><button className="rounded-xl border border-[#dfebe8] px-3 text-[11px] font-bold text-[#6d8b88]"><Download className="h-4 w-4" /></button></div></div><div className="overflow-x-auto"><table className="w-full min-w-[720px] text-right"><thead><tr className="border-b border-[#dbeaf0] bg-[#eaf6fb] text-[10px] font-bold text-[#5d7f91]">{columns.map((column) => <th key={column} className="px-3 py-3">{column}</th>)}<th className="px-3 py-3">إجراء</th></tr></thead><tbody>{visibleRows.map((row, index) => <tr key={`${row[0]}-${index}`} className="border-b border-[#f0f4f3] text-[11px] last:border-0 hover:bg-[#fbfdfd]">{row.map((cell, cellIndex) => <td key={`${cell}-${cellIndex}`} className={cn("px-3 py-3.5 text-[#66817f]", cellIndex === 0 && "font-mono text-[10px] text-[#436f86]", cellIndex === row.length - 1 && "font-bold text-[#426765]")}>{cellIndex === row.length - 1 ? <StatusPill tone={cell.includes("منخفض") || cell.includes("انتظار") || cell.includes("معلق") ? "amber" : cell.includes("مسودة") ? "purple" : "teal"}>{cell}</StatusPill> : cell}</td>)}<td className="px-3 py-3.5"><button className="text-[10px] font-bold text-[#0d716a]">عرض</button></td></tr>)}</tbody></table></div></div>;
 }
 
-type ModuleViewProps = { activeItem: string; branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void; newPatient: string; patientCount: number };
+type ModuleViewProps = { activeItem: string; branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void; newPatient: string; patientCount: number; services: ClinicalRows; radiologyOrders: ClinicalRows; stock: ClinicalRows; prescriptions: ClinicalRows; dispensingQueue: ClinicalRows; onCreate: (type: ClinicalModal) => void; onUpdateDispensing: (id: string, status: string) => void; onScanPrescription: () => void };
 
-function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, newPatient, patientCount }: ModuleViewProps) {
+function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, newPatient, patientCount, services, radiologyOrders, stock, prescriptions, dispensingQueue, onCreate, onUpdateDispensing, onScanPrescription }: ModuleViewProps) {
   if (activeItem === "المرضى") return <PatientsView branch={branch} onAdd={onPatient} newPatient={newPatient} patientCount={patientCount} />;
   if (activeItem === "المواعيد") return <AppointmentsView branch={branch} onBook={onAppointment} />;
   if (activeItem === "الطابور") return <QueueView branch={branch} />;
@@ -341,11 +441,11 @@ function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, ne
   if (activeItem === "المختبر") return <LabView branch={branch} />;
   if (activeItem === "التأمين والمطالبات") return <InsuranceView branch={branch} />;
   if (activeItem === "الباقات") return <PackagesView branch={branch} />;
-  if (activeItem === "الخدمات") return <ServicesView branch={branch} />;
-  if (activeItem === "الأشعة والتصوير الطبي") return <RadiologyView branch={branch} />;
-  if (activeItem === "الصيدلية") return <PharmacyView branch={branch} />;
-  if (activeItem === "الأدوية والوصفات") return <PrescriptionsView branch={branch} />;
-  if (activeItem === "صرف الأدوية") return <DispensingView branch={branch} />;
+  if (activeItem === "الخدمات") return <ServicesView branch={branch} rows={services} onAdd={() => onCreate("service")} />;
+  if (activeItem === "الأشعة والتصوير الطبي") return <RadiologyView branch={branch} orders={radiologyOrders} onAdd={() => onCreate("radiology")} />;
+  if (activeItem === "الصيدلية") return <PharmacyView branch={branch} stock={stock} onAdd={() => onCreate("medicine")} />;
+  if (activeItem === "الأدوية والوصفات") return <PrescriptionsView branch={branch} prescriptions={prescriptions} onAdd={() => onCreate("prescription")} />;
+  if (activeItem === "صرف الأدوية") return <DispensingView branch={branch} queueRows={dispensingQueue} onScan={onScanPrescription} onUpdate={onUpdateDispensing} />;
   if (["الأطباء", "الأقسام والعيادات", "الموظفون", "الأمراض والتشخيص"].includes(activeItem)) return <DirectoryView activeItem={activeItem} branch={branch} />;
   if (activeItem === "المحتوى") return <ContentView branch={branch} />;
   if (activeItem === "التقارير") return <ReportsView branch={branch} />;
@@ -570,6 +670,31 @@ function AppointmentModal({ onClose, onCreated }: { onClose: () => void; onCreat
 function ClinicProfileModal({ onClose, onSaved }: { onClose: () => void; onSaved: (profile: string) => void }) {
   const [selected, setSelected] = useState("dermatology");
   return <ModalShell title="اختيار نوع العيادة" description="اختر الملف المتخصص لتفعيل الحقول والوحدات المناسبة" icon={Building2} onClose={onClose}><div className="grid gap-3 sm:grid-cols-2">{clinicProfiles.map((profile) => <button type="button" key={profile.id} onClick={() => setSelected(profile.id)} className={cn("rounded-2xl border p-4 text-right transition", selected === profile.id ? "border-[#8acbc1] bg-[#eaf7f3] shadow-[0_5px_15px_rgba(13,113,106,0.08)]" : "border-[#e3eeeb] hover:border-[#b9ded8]")}><div className="flex items-start gap-3"><div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white text-[#0d857b]"><profile.icon className="h-5 w-5" /></div><div className="min-w-0"><div className="text-[13px] font-bold text-[#355e5c]">{profile.name}</div><div className="mt-1 text-[10px] text-[#8ca6a2]">{profile.detail}</div><div className="mt-2 text-[10px] font-semibold text-[#0d857b]">{profile.modules}</div></div></div></button>)}</div><div className="mt-5 rounded-xl bg-[#f1f8f6] p-4 text-[11px] leading-5 text-[#628580]">عند التفعيل سيتم تجهيز نموذج السجل الطبي، الحقول المخصصة، الخدمات المقترحة، وقواعد الحجز الخاصة بهذا النوع.</div><div className="mt-5 flex justify-end gap-2 border-t border-[#edf3f1] pt-5"><button type="button" onClick={onClose} className="h-11 rounded-xl border border-[#dfece9] px-5 text-[11px] font-bold text-[#769390]">إلغاء</button><button type="button" onClick={() => onSaved(clinicProfiles.find((profile) => profile.id === selected)?.name ?? "نوع العيادة")} className="h-11 rounded-xl bg-[#0d716a] px-6 text-[11px] font-bold text-white">تفعيل الملف المختار</button></div></ModalShell>;
+}
+
+function ClinicalEntryModal({ type, onClose, onCreated }: { type: ClinicalModal; onClose: () => void; onCreated: (row: string[], payment?: string) => void }) {
+  const [form, setForm] = useState({ name: "", specialty: "الجلدية والتجميل", duration: "٣٠", price: "٢٠٠", patient: "سارة أحمد العتيبي", exam: "أشعة سونار البطن", doctor: "د. ليان المطيري", time: "١١:٠٠", category: "مسكن", batch: "", quantity: "١٠٠", expiry: "يناير ٢٠٢٧", payment: "نقدي", itemCount: "٣" });
+  const update = (key: keyof typeof form, value: string) => setForm((current) => ({ ...current, [key]: value }));
+  const config = {
+    service: { title: "إضافة خدمة", description: "أضف خدمة لتظهر في الحجز والفوترة", icon: ReceiptText },
+    radiology: { title: "طلب أشعة جديد", description: "اربط الطلب بزيارة المريض والطبيب", icon: Activity },
+    medicine: { title: "إضافة دواء للمخزون", description: "سجل الصنف والدفعة والكمية لتفعيل الصرف", icon: Package },
+    prescription: { title: "إنشاء وصفة جديدة", description: "اعتمد الوصفة لإضافتها تلقائيًا إلى طابور الصرف", icon: FileText },
+  }[type];
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (type === "service") onCreated([form.name, form.specialty, `${form.duration} دقيقة`, `${form.price} ر.س`, "الرياض · النخيل", "نشطة"]);
+    if (type === "radiology") onCreated([`RAD-${String(Date.now()).slice(-4)}`, form.patient, form.exam, form.doctor, "مجدول", `اليوم ${form.time}`]);
+    if (type === "medicine") onCreated([form.name, form.category, form.batch || `BTH-${String(Date.now()).slice(-4)}`, form.quantity, form.expiry, Number(form.quantity) < 10 ? "منخفض" : "متوفر"]);
+    if (type === "prescription") onCreated([`RX-2025-${String(Date.now()).slice(-4)}`, form.patient, form.doctor, `${form.itemCount} أصناف`, "معتمدة", "الآن"], form.payment);
+  };
+  return <ModalShell title={config.title} description={config.description} icon={config.icon} onClose={onClose}><form onSubmit={submit} className="space-y-5">
+    {type === "service" && <div className="grid gap-4 sm:grid-cols-2"><FormField label="اسم الخدمة" required><input required value={form.name} onChange={(event) => update("name", event.target.value)} className={formControlClass()} placeholder="مثال: تنظيف البشرة العميق" /></FormField><FormField label="التخصص" required><select required value={form.specialty} onChange={(event) => update("specialty", event.target.value)} className={formControlClass()}><option>الجلدية والتجميل</option><option>طب عام</option><option>طب الأطفال</option><option>طب الأسنان</option><option>العلاج الطبيعي</option></select></FormField><FormField label="المدة بالدقائق" required><input required type="number" min="5" value={form.duration} onChange={(event) => update("duration", event.target.value)} className={formControlClass()} dir="ltr" /></FormField><FormField label="السعر قبل الضريبة" required><input required type="number" min="0" value={form.price} onChange={(event) => update("price", event.target.value)} className={formControlClass()} dir="ltr" /></FormField></div>}
+    {type === "radiology" && <div className="grid gap-4 sm:grid-cols-2"><FormField label="المريض" required><select required value={form.patient} onChange={(event) => update("patient", event.target.value)} className={formControlClass()}><option>سارة أحمد العتيبي</option><option>عبدالله سالم القحطاني</option><option>نورة محمد الغامدي</option><option>خالد إبراهيم الشهري</option></select></FormField><FormField label="نوع الفحص" required><select required value={form.exam} onChange={(event) => update("exam", event.target.value)} className={formControlClass()}><option>أشعة سونار البطن</option><option>أشعة سينية للصدر</option><option>تصوير بالرنين المغناطيسي</option><option>أشعة مقطعية</option></select></FormField><FormField label="الطبيب الطالب" required><select required value={form.doctor} onChange={(event) => update("doctor", event.target.value)} className={formControlClass()}><option>د. ليان المطيري</option><option>د. عمر الحربي</option><option>د. ريم الزهراني</option></select></FormField><FormField label="وقت الموعد" required><input required value={form.time} onChange={(event) => update("time", event.target.value)} className={formControlClass()} dir="ltr" /></FormField></div>}
+    {type === "medicine" && <div className="grid gap-4 sm:grid-cols-2"><FormField label="اسم الدواء أو المستلزم" required><input required value={form.name} onChange={(event) => update("name", event.target.value)} className={formControlClass()} placeholder="مثال: باراسيتامول ٥٠٠ مج" /></FormField><FormField label="التصنيف" required><select required value={form.category} onChange={(event) => update("category", event.target.value)} className={formControlClass()}><option>مسكن</option><option>مضاد حيوي</option><option>جلدية</option><option>مستلزمات</option></select></FormField><FormField label="رقم الدفعة"><input value={form.batch} onChange={(event) => update("batch", event.target.value)} className={formControlClass()} dir="ltr" placeholder="يُنشأ تلقائيًا عند تركه فارغًا" /></FormField><FormField label="الكمية" required><input required type="number" min="1" value={form.quantity} onChange={(event) => update("quantity", event.target.value)} className={formControlClass()} dir="ltr" /></FormField><FormField label="تاريخ الانتهاء" required><input required value={form.expiry} onChange={(event) => update("expiry", event.target.value)} className={formControlClass()} placeholder="مثال: ديسمبر ٢٠٢٧" /></FormField></div>}
+    {type === "prescription" && <div className="grid gap-4 sm:grid-cols-2"><FormField label="المريض" required><select required value={form.patient} onChange={(event) => update("patient", event.target.value)} className={formControlClass()}><option>سارة أحمد العتيبي</option><option>عبدالله سالم القحطاني</option><option>نورة محمد الغامدي</option><option>خالد إبراهيم الشهري</option></select></FormField><FormField label="الطبيب" required><select required value={form.doctor} onChange={(event) => update("doctor", event.target.value)} className={formControlClass()}><option>د. ليان المطيري</option><option>د. عمر الحربي</option><option>د. ريم الزهراني</option></select></FormField><FormField label="عدد الأصناف" required><input required type="number" min="1" value={form.itemCount} onChange={(event) => update("itemCount", event.target.value)} className={formControlClass()} dir="ltr" /></FormField><FormField label="طريقة الدفع" required><select required value={form.payment} onChange={(event) => update("payment", event.target.value)} className={formControlClass()}><option>نقدي</option><option>تأمين</option><option>باقة</option></select></FormField></div>}
+    <div className="rounded-xl bg-[#f1f8f6] px-4 py-3 text-[11px] leading-5 text-[#628580]">سيتم حفظ السجل محليًا في الواجهة، وربطه مباشرة بالوحدة التالية دون إرسال أي بيانات إلى خادم.</div><div className="flex justify-end gap-2 border-t border-[#edf3f1] pt-5"><button type="button" onClick={onClose} className="h-11 rounded-xl border border-[#dfece9] px-5 text-[11px] font-bold text-[#769390]">إلغاء</button><button type="submit" className="h-11 rounded-xl bg-[#0d716a] px-5 text-[11px] font-bold text-white">حفظ ومتابعة</button></div>
+  </form></ModalShell>;
 }
 
 function EyeIcon({ className }: { className?: string }) {
