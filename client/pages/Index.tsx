@@ -54,13 +54,18 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-type NavItem = {
-  label: string;
-  icon: typeof LayoutDashboard;
-  badge?: string;
-  section?: string;
-};
+import { useNavigate } from "react-router-dom";
+import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { isOrganizationAdmin } from "@/lib/organization-access";
+import { supabase } from "@/lib/supabase";
+import { Switch } from "@/components/ui/switch";
+import {
+  filterAccessibleModules,
+  groupModules,
+  moduleRegistry,
+  settingsModule,
+} from "@/lib/module-registry";
+import type { FeatureCatalogEntry, FeatureKey, OrganizationFeature } from "@shared/api";
 
 type Appointment = {
   time: string;
@@ -151,45 +156,6 @@ function readWorkflowCases() {
   }
 }
 
-const navigation: NavItem[] = [
-  { label: "الرئيسية", icon: LayoutDashboard, section: "لوحة التحكم" },
-  { label: "الاستقبال والانتظار", icon: Activity, badge: "12", section: "الاستقبال والمواعيد" },
-  { label: "المواعيد", icon: CalendarDays },
-  { label: "المرضى", icon: UsersRound, badge: "1,248" },
-  { label: "السجل الطبي", icon: ClipboardList, badge: "24" },
-  { label: "رحلة المريض", icon: Activity, badge: "3" },
-  { label: "الخدمات", icon: ReceiptText, badge: "18", section: "الكتالوج الطبي" },
-  { label: "الأقسام والعيادات", icon: Building2, badge: "22" },
-  { label: "الأطباء", icon: Stethoscope, badge: "10" },
-  { label: "المختبر", icon: FlaskConical, badge: "4" },
-  { label: "الأشعة والتصوير الطبي", icon: Activity, badge: "6" },
-  { label: "الصيدلية", icon: Package, badge: "24", section: "الصيدلية والوصفات" },
-  { label: "الأدوية والوصفات", icon: FileText },
-  { label: "صرف الأدوية", icon: ClipboardList, badge: "8" },
-  { label: "التأمين والمطالبات", icon: ShieldCheck, section: "المالية والتأمين" },
-  { label: "الفوترة والمدفوعات", icon: WalletCards },
-  { label: "الباقات", icon: Package },
-  { label: "الموظفون", icon: UserCog, badge: "63", section: "الموارد البشرية" },
-  { label: "الحضور والانصراف", icon: UserCheck, badge: "58" },
-  { label: "الإجازات", icon: CalendarCheck2, badge: "7" },
-  { label: "الرواتب", icon: Banknote, badge: "شهرية" },
-  { label: "العقود والملفات", icon: FileCheck2, badge: "63" },
-  { label: "التوظيف", icon: UserPlus, badge: "12" },
-  { label: "تقييم الأداء", icon: Gauge },
-  { label: "التدريب والتطوير", icon: GraduationCap, badge: "4" },
-  { label: "المناوبات والجداول", icon: CalendarRange, badge: "3" },
-  { label: "تقارير الموارد البشرية", icon: BarChart3, section: "الإدارة" },
-  { label: "الأمراض والتشخيص", icon: ClipboardList, badge: "10" },
-  { label: "المحتوى", icon: Newspaper },
-  { label: "التقارير", icon: BarChart3 },
-  { label: "الحسابات ودليل الحسابات", icon: CircleDollarSign, section: "التشغيل والإدارة" },
-  { label: "المشتريات والموردون", icon: BriefcaseBusiness, badge: "9" },
-  { label: "حركات المخزون", icon: Package, badge: "16" },
-  { label: "الرسائل والتنبيهات", icon: MessageCircle, badge: "3" },
-  { label: "سجل التدقيق", icon: LockKeyhole, badge: "107" },
-  { label: "إعدادات التشغيل", icon: Settings2 },
-];
-
 const appointments: Appointment[] = [
   { time: "09:30", patient: "سارة أحمد العتيبي", type: "استشارة جلدية", doctor: "د. ليان المطيري", color: "teal", status: "مؤكد" },
   { time: "10:00", patient: "عبدالله سالم القحطاني", type: "متابعة علاج", doctor: "د. عمر الحربي", color: "purple", status: "وصل" },
@@ -203,46 +169,9 @@ const queue = [
   { number: "A-019", patient: "نورة م.", doctor: "د. ليان", wait: "11 د", state: "منتظر" },
 ];
 
-const navIcons: Record<string, typeof LayoutDashboard> = {
-  الرئيسية: LayoutDashboard,
-  المرضى: UsersRound,
-  "السجل الطبي": ClipboardList,
-  "رحلة المريض": Activity,
-  المواعيد: CalendarDays,
-  "الاستقبال والانتظار": Activity,
-  "الفوترة والمدفوعات": WalletCards,
-  المختبر: FlaskConical,
-  "الأشعة والتصوير الطبي": Activity,
-  الخدمات: ReceiptText,
-  الصيدلية: Package,
-  "الأدوية والوصفات": FileText,
-  "صرف الأدوية": ClipboardList,
-  "التأمين والمطالبات": ShieldCheck,
-  الباقات: Package,
-  الأطباء: Stethoscope,
-  "الأقسام والعيادات": Building2,
-  الموظفون: UserCog,
-  "الحضور والانصراف": UserCheck,
-  الإجازات: CalendarCheck2,
-  الرواتب: Banknote,
-  "العقود والملفات": FileCheck2,
-  التوظيف: UserPlus,
-  "تقييم الأداء": Gauge,
-  "التدريب والتطوير": GraduationCap,
-  "المناوبات والجداول": CalendarRange,
-  "تقارير الموارد البشرية": BarChart3,
-  "الأمراض والتشخيص": ClipboardList,
-  المحتوى: Newspaper,
-  التقارير: BarChart3,
-  "الحسابات ودليل الحسابات": CircleDollarSign,
-  "المشتريات والموردون": BriefcaseBusiness,
-  "حركات المخزون": Package,
-  "الرسائل والتنبيهات": MessageCircle,
-  "سجل التدقيق": LockKeyhole,
-  "إعدادات التشغيل": Settings2,
-};
-
 export default function Index() {
+  const access = useOrganizationAccess();
+  const navigate = useNavigate();
   const [activeItem, setActiveItem] = useState("الرئيسية");
   const [collapsed, setCollapsed] = useState(false);
   const [branch, setBranch] = useState("فرع الرياض - النخيل");
@@ -272,17 +201,24 @@ export default function Index() {
     window.localStorage.setItem("zaincare-workflow-cases", JSON.stringify(workflowCases));
   }, [services, radiologyOrders, stock, prescriptions, dispensingQueue, workflowCases]);
 
-  const navGroups = useMemo(() => navigation.reduce<{ section: string; items: NavItem[] }[]>((groups, item) => {
-    if (item.section || groups.length === 0) groups.push({ section: item.section ?? "أخرى", items: [item] });
-    else groups[groups.length - 1].items.push(item);
-    return groups;
-  }, []), []);
+  const accessibleNavigation = useMemo(
+    () => filterAccessibleModules(moduleRegistry, access.canAccess),
+    [access.canAccess],
+  );
+  const navGroups = useMemo(() => groupModules(accessibleNavigation), [accessibleNavigation]);
+  const requestedModule = [...moduleRegistry, settingsModule].find((item) => item.label === activeItem);
+  const safeActiveItem = requestedModule && access.canAccess(requestedModule.featureKey, requestedModule.requiredPermission)
+    ? activeItem
+    : "الرئيسية";
   useEffect(() => {
-    const activeSection = navGroups.find((group) => group.items.some((item) => item.label === activeItem))?.section;
+    if (safeActiveItem !== activeItem) setActiveItem("الرئيسية");
+  }, [activeItem, safeActiveItem]);
+  useEffect(() => {
+    const activeSection = navGroups.find((group) => group.items.some((item) => item.label === safeActiveItem))?.section;
     if (activeSection) setOpenNavSections((sections) => sections.includes(activeSection) ? sections : [...sections, activeSection]);
-  }, [activeItem, navGroups]);
-  const activeIcon = navIcons[activeItem] ?? LayoutDashboard;
-  const activeLabel = activeItem === "الرئيسية" ? "نظرة عامة" : activeItem;
+  }, [safeActiveItem, navGroups]);
+  const activeIcon = requestedModule?.icon ?? LayoutDashboard;
+  const activeLabel = safeActiveItem === "الرئيسية" ? "نظرة عامة" : safeActiveItem;
   const dateLabel = useMemo(() => new Intl.DateTimeFormat("ar-SA", { weekday: "long", day: "numeric", month: "long" }).format(new Date(2025, 4, 18)), []);
   const openPatientForm = () => setModal("patient");
   const openAppointmentForm = () => setModal("appointment");
@@ -386,12 +322,12 @@ export default function Index() {
             <nav className="space-y-2 pb-5">
               {navGroups.map((group) => {
                 const isOpen = collapsed || openNavSections.includes(group.section);
-                const hasActiveItem = group.items.some((item) => item.label === activeItem);
+                const hasActiveItem = group.items.some((item) => item.label === safeActiveItem);
                 return <div key={group.section} className={cn(!collapsed && "rounded-xl", hasActiveItem && !collapsed && "bg-[#14233a]")}>
                   {!collapsed && <button onClick={() => setOpenNavSections((sections) => sections.includes(group.section) ? sections.filter((section) => section !== group.section) : [...sections, group.section])} className={cn("flex w-full items-center justify-between rounded-xl px-3 py-3 text-[11px] font-bold transition", hasActiveItem ? "text-[#70b7e4]" : "text-[#8193ad] hover:bg-[#192943] hover:text-[#b9cce2]")}><span>{group.section}</span><ChevronDown className={cn("h-3.5 w-3.5 transition-transform", isOpen && "rotate-180")} /></button>}
                   {isOpen && <div className={cn("space-y-1", !collapsed && "px-1 pb-2")}>{group.items.map((item) => {
                     const Icon = item.icon;
-                    const active = item.label === activeItem;
+                    const active = item.label === safeActiveItem;
                     return <button key={item.label} onClick={() => setActiveItem(item.label)} title={collapsed ? item.label : undefined} className={cn("group flex w-full items-center rounded-xl text-right text-[12px] font-semibold transition", collapsed ? "justify-center px-2 py-3" : "gap-3 px-3 py-2.5", active ? "bg-[#245d9b] text-white" : "text-[#b9c5d7] hover:bg-[#192943] hover:text-white")}><Icon className={cn("h-[17px] w-[17px] shrink-0", active ? "text-white" : "text-[#8092ac] group-hover:text-[#c5d2e3]")} strokeWidth={active ? 2.3 : 1.9} />{!collapsed && <><span className="flex-1">{item.label}</span>{item.badge && <span className={cn("rounded-md px-1.5 py-0.5 text-[9px]", active ? "bg-white/15 text-white" : "bg-[#1b2a43] text-[#91a4be]")}>{item.badge}</span>}</>}</button>;
                   })}</div>}
                 </div>;
@@ -401,7 +337,7 @@ export default function Index() {
 
           <div className={cn("mt-auto p-3", collapsed && "p-2")}>
             {!collapsed && <div className="mb-4 rounded-2xl bg-[#172741] p-4"><div className="mb-2 flex items-center gap-2 text-[#87d4c7]"><Sparkles className="h-4 w-4" /><span className="text-xs font-bold">مساحة النمو</span></div><p className="text-[11px] leading-5 text-[#a7b6ca]">أكمل إعداد قنوات الواتساب لرفع معدل تذكير المرضى.</p><button onClick={() => setModal("clinic")} className="mt-3 text-[11px] font-bold text-[#87d4c7]">إكمال الإعداد <ArrowUpLeft className="mr-1 inline h-3 w-3" /></button></div>}
-            <button onClick={() => setActiveItem("الإعدادات")} className={cn("flex w-full items-center rounded-xl text-[#aab8ca] hover:bg-[#192943]", collapsed ? "justify-center p-3" : "gap-3 px-3 py-3")}><Settings2 className="h-[18px] w-[18px]" /><span className={cn("text-[13px] font-semibold", collapsed && "sr-only")}>الإعدادات</span></button>
+            {access.canAccess(settingsModule.featureKey, settingsModule.requiredPermission) && <button onClick={() => setActiveItem("الإعدادات")} className={cn("flex w-full items-center rounded-xl text-[#aab8ca] hover:bg-[#192943]", collapsed ? "justify-center p-3" : "gap-3 px-3 py-3")}><Settings2 className="h-[18px] w-[18px]" /><span className={cn("text-[13px] font-semibold", collapsed && "sr-only")}>الإعدادات</span></button>}
             <button onClick={() => notify("مركز المساعدة متاح من خلال مدير الحساب والدعم الفني")} className={cn("flex w-full items-center rounded-xl text-[#aab8ca] hover:bg-[#192943]", collapsed ? "justify-center p-3" : "gap-3 px-3 py-3")}><HelpCircle className="h-[18px] w-[18px]" /><span className={cn("text-[13px] font-semibold", collapsed && "sr-only")}>مركز المساعدة</span></button>
           </div>
         </aside>
@@ -414,19 +350,19 @@ export default function Index() {
               <div className="flex items-center gap-2 sm:hidden"><div className="text-[17px] font-bold text-[#123f42]">زين كير</div><span className="rounded-full bg-[#e6f4f1] px-2 py-1 text-[10px] font-bold text-[#0d716a]">مدير العيادة</span></div>
             </div>
             <div className="flex items-center gap-2 sm:gap-3">
-              <div className="relative hidden h-10 items-center rounded-xl border border-[#dfebe8] bg-white px-3 sm:flex sm:w-[218px]"><Search className="ml-2 h-4 w-4 text-[#99afac]" /><input aria-label="بحث عام" value={globalQuery} onChange={(event) => setGlobalQuery(event.target.value)} onKeyDown={(event) => { if (event.key !== "Enter") return; const match = navigation.find((item) => item.label.includes(globalQuery.trim())); if (match) { setActiveItem(match.label); setGlobalQuery(""); notify(`تم فتح وحدة ${match.label}`); } else notify("لم يتم العثور على وحدة بهذا الاسم"); }} className="w-full bg-transparent text-xs outline-none placeholder:text-[#a9bcba]" placeholder="ابحث في زين كير..." /></div>
+              <div className="relative hidden h-10 items-center rounded-xl border border-[#dfebe8] bg-white px-3 sm:flex sm:w-[218px]"><Search className="ml-2 h-4 w-4 text-[#99afac]" /><input aria-label="بحث عام" value={globalQuery} onChange={(event) => setGlobalQuery(event.target.value)} onKeyDown={(event) => { if (event.key !== "Enter") return; const match = accessibleNavigation.find((item) => item.label.includes(globalQuery.trim())); if (match) { setActiveItem(match.label); setGlobalQuery(""); notify(`تم فتح وحدة ${match.label}`); } else notify("لم يتم العثور على وحدة بهذا الاسم"); }} className="w-full bg-transparent text-xs outline-none placeholder:text-[#a9bcba]" placeholder="ابحث في زين كير..." /></div>
               <button aria-label="البحث" onClick={() => notify("اكتب اسم الوحدة ثم اضغط Enter للانتقال إليها")} className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#dfebe8] bg-white text-[#799693] sm:hidden"><Search className="h-4 w-4" /></button>
               <div className="relative">
                 <button aria-label="الإشعارات" onClick={() => setShowNotifications((value) => !value)} className="relative flex h-10 w-10 items-center justify-center rounded-xl border border-[#dfebe8] bg-white text-[#799693] transition hover:border-[#aad8d1] hover:text-[#0d716a]"><Bell className="h-[17px] w-[17px]" /><span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-[#e98b66] ring-2 ring-white" /></button>
                 {showNotifications && <div className="absolute left-0 top-12 z-30 w-[280px] rounded-2xl border border-[#deebe8] bg-white p-4 shadow-[0_18px_45px_rgba(29,72,72,0.13)]"><div className="mb-3 flex items-center justify-between"><span className="font-bold text-[#234b4b]">التنبيهات</span><span className="text-[10px] font-bold text-[#0d716a]">٣ جديدة</span></div><div className="space-y-3"><div className="flex gap-3 border-b border-[#eff4f3] pb-3"><div className="rounded-lg bg-[#fff1e7] p-2 text-[#df865b]"><AlertTriangle className="h-4 w-4" /></div><p className="text-[11px] leading-5 text-[#547371]">نتيجة مختبر غير طبيعية تحتاج مراجعة الطبيب.</p></div><div className="flex gap-3"><div className="rounded-lg bg-[#e8f6f2] p-2 text-[#0d857b]"><CheckCircle2 className="h-4 w-4" /></div><p className="text-[11px] leading-5 text-[#547371]">تم تأكيد موعد نورة الغامدي.</p></div></div></div>}
               </div>
               <div className="hidden h-8 w-px bg-[#dfeae8] sm:block" />
-              <div className="relative"><button onClick={() => setShowProfileMenu((value) => !value)} className="flex items-center gap-2 rounded-xl p-1 transition hover:bg-white"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#d9eeea] text-xs font-bold text-[#0d716a]">أم</div><div className="hidden text-right sm:block"><div className="max-w-[150px] truncate text-[9px] font-bold text-[#0d716a]">مركز اسناني المميز</div><div className="text-[12px] font-bold text-[#345a59]">أحمد المطيري</div><div className="text-[9px] text-[#92a9a6]">مالك العيادة</div></div><ChevronDown className="hidden h-4 w-4 text-[#9db2af] sm:block" /></button>{showProfileMenu && <div className="absolute left-0 top-12 z-30 w-52 rounded-2xl border border-[#deebe8] bg-white p-2 shadow-[0_18px_45px_rgba(29,72,72,0.13)]"><button onClick={() => { setShowProfileMenu(false); setActiveItem("الإعدادات"); }} className="w-full rounded-xl px-3 py-2 text-right text-[11px] font-bold text-[#557673] hover:bg-[#f1f8f6]">الملف والإعدادات</button><button onClick={() => { setShowProfileMenu(false); notify("تم تسجيل الخروج من العرض التجريبي"); }} className="w-full rounded-xl px-3 py-2 text-right text-[11px] font-bold text-[#d77e65] hover:bg-[#fff3ef]">تسجيل الخروج</button></div>}</div>
+              <div className="relative"><button onClick={() => setShowProfileMenu((value) => !value)} className="flex items-center gap-2 rounded-xl p-1 transition hover:bg-white"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#d9eeea] text-xs font-bold text-[#0d716a]">أم</div><div className="hidden text-right sm:block"><div className="max-w-[150px] truncate text-[9px] font-bold text-[#0d716a]">مركز اسناني المميز</div><div className="text-[12px] font-bold text-[#345a59]">أحمد المطيري</div><div className="text-[9px] text-[#92a9a6]">مالك العيادة</div></div><ChevronDown className="hidden h-4 w-4 text-[#9db2af] sm:block" /></button>{showProfileMenu && <div className="absolute left-0 top-12 z-30 w-52 rounded-2xl border border-[#deebe8] bg-white p-2 shadow-[0_18px_45px_rgba(29,72,72,0.13)]"><button onClick={() => { setShowProfileMenu(false); setActiveItem("الإعدادات"); }} className="w-full rounded-xl px-3 py-2 text-right text-[11px] font-bold text-[#557673] hover:bg-[#f1f8f6]">الملف والإعدادات</button>{access.needsOnboarding && <button onClick={() => { setShowProfileMenu(false); navigate("/onboarding"); }} className="w-full rounded-xl px-3 py-2 text-right text-[11px] font-bold text-[#0d716a] hover:bg-[#f1f8f6]">إعداد منشأة جديدة</button>}<button onClick={() => { setShowProfileMenu(false); if (access.legacyMode) navigate("/onboarding"); else void access.signOut(); }} className="w-full rounded-xl px-3 py-2 text-right text-[11px] font-bold text-[#d77e65] hover:bg-[#fff3ef]">{access.legacyMode ? "تسجيل الدخول أو إعداد منشأة" : "تسجيل الخروج"}</button></div>}</div>
             </div>
           </header>
 
           <div className="mx-auto max-w-[1500px] px-5 pb-12 pt-7 sm:px-8 lg:px-10 lg:pt-9">
-            {activeItem === "الرئيسية" ? <>
+            {safeActiveItem === "الرئيسية" ? <>
             <ReferenceOverview branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} onPrescription={() => setClinicalModal("prescription")} onFinance={() => setActiveItem("الفوترة والمدفوعات")} onStaff={() => setActiveItem("الموظفون")} onLab={() => setActiveItem("المختبر")} />
             <div className="hidden">
             <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
@@ -467,7 +403,7 @@ export default function Index() {
 
             <div className="mt-6 flex flex-col items-start justify-between gap-3 rounded-[20px] bg-[#e8f5f1] px-5 py-4 sm:flex-row sm:items-center sm:px-6"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-[#0d716a]"><MapPin className="h-4 w-4" /></div><div><p className="text-[12px] font-bold text-[#2d625e]">أنت تعمل الآن من {branch}</p><p className="mt-1 text-[10px] text-[#6f9690]">آخر مزامنة للبيانات: منذ دقيقة واحدة</p></div></div><button className="flex items-center gap-1 text-[11px] font-bold text-[#0d716a]">تغيير الفرع <ArrowUpLeft className="h-3.5 w-3.5" /></button></div>
             </div>
-            </> : <ModuleView activeItem={activeItem} branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} newPatient={recentPatient} patientCount={patientCount} services={services} radiologyOrders={radiologyOrders} stock={stock} prescriptions={prescriptions} dispensingQueue={dispensingQueue} onCreate={(type) => setClinicalModal(type)} onUpdateDispensing={updateDispensingStatus} onScanPrescription={scanPrescription} onNavigate={setActiveItem} workflowCases={workflowCases} onAdvanceWorkflow={advanceWorkflow} />}
+            </> : <ModuleView activeItem={safeActiveItem} branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} newPatient={recentPatient} patientCount={patientCount} services={services} radiologyOrders={radiologyOrders} stock={stock} prescriptions={prescriptions} dispensingQueue={dispensingQueue} onCreate={(type) => setClinicalModal(type)} onUpdateDispensing={updateDispensingStatus} onScanPrescription={scanPrescription} onNavigate={setActiveItem} workflowCases={workflowCases} onAdvanceWorkflow={advanceWorkflow} />}
           </div>
         </section>
       </div>
@@ -1038,7 +974,55 @@ function EditableSettingsView({ branch, onClinic }: { branch: string; onClinic: 
   const input = (label: string, key: keyof LocalClinicSettings, direction?: "ltr", type = "text") => <EditableField label={label} value={String(settings[key])} dir={direction} type={type} onChange={(value) => update(key, value as never)} />;
   const toggle = (label: string, description: string, key: keyof LocalClinicSettings) => <ToggleRow label={label} description={description} checked={Boolean(settings[key])} onChange={(value) => update(key, value as never)} />;
 
-  return <><ViewHeader eyebrow="إعدادات العيادة" title="إعدادات النظام" description={`${branch} · التهيئة والهوية وقواعد التشغيل`} action="اختيار نوع العيادة" icon={Settings2} onAction={onClinic} /><div className="grid gap-6 lg:grid-cols-[230px_1fr]"><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-3"><div className="mb-3 px-3 text-[10px] font-bold text-[#9ab1af]">إعدادات المساحة</div>{localSettingsTabs.map(([id, label, Icon]) => <button key={id} onClick={() => setTab(id)} className={cn("flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-[11px] font-bold transition", tab === id ? "bg-[#e6f4f1] text-[#0d716a]" : "text-[#7d9894] hover:bg-[#f5f9f8]")}><Icon className="h-4 w-4" />{label}</button>)}<div className="mt-4 rounded-xl bg-[#f1f8f6] p-3"><div className="flex items-center gap-2 text-[10px] font-bold text-[#0d716a]"><Database className="h-3.5 w-3.5" /> حفظ محلي</div><p className="mt-1 text-[10px] leading-5 text-[#799792]">تُحفظ التغييرات في هذا المتصفح فقط حتى يتم ربط قاعدة البيانات.</p></div></div><div className="min-w-0 space-y-6">{tab === "profile" && <SettingsCard title="ملف المنشأة" description="البيانات التي تظهر في البوابة والفواتير" icon={Building2}><div className="grid gap-4 sm:grid-cols-2">{input("اسم المنشأة بالعربية", "nameAr")} {input("الاسم بالإنجليزية", "nameEn", "ltr")} {input("الرقم الضريبي", "vatNumber", "ltr")} {input("المدينة", "city")} {input("رقم التواصل", "phone", "ltr")} {input("البريد الإلكتروني", "email", "ltr", "email")}</div></SettingsCard>}{tab === "users" && <SettingsCard title="المستخدمون والصلاحيات" description="إدارة الفريق والوصول حسب الدور والفرع" icon={UsersRound}><div className="mb-4 flex items-center justify-between rounded-xl bg-[#f1f8f6] p-4"><div><div className="text-[12px] font-bold text-[#426765]">١٢ مستخدمًا نشطًا</div><div className="mt-1 text-[10px] text-[#8ca6a2]">الصلاحيات مبنية على أدوار ZainCare</div></div><button className="h-10 rounded-xl bg-[#0d716a] px-4 text-[11px] font-bold text-white"><Plus className="ml-1 inline h-4 w-4" /> دعوة مستخدم</button></div>{["أحمد المطيري · مالك العيادة · كل الفروع", "د. ليان المطيري · طبيب · الرياض وجدة", "ريم السبيعي · استقبال · الرياض", "عمر الحربي · محاسب · دعوة معلقة"].map((user) => <div key={user} className="flex items-center justify-between border-b border-[#f0f4f3] py-4 last:border-0"><span className="text-[11px] font-bold text-[#426765]">{user}</span><button className="text-[10px] font-bold text-[#0d716a]">إدارة الصلاحيات</button></div>)}</SettingsCard>}{tab === "hours" && <SettingsCard title="أوقات العمل" description="جدول الفرع والفترات اليومية والاستراحات" icon={CalendarClock}><div className="grid gap-4 sm:grid-cols-3">{input("وقت الافتتاح", "openingTime", "ltr", "time")} {input("وقت الإغلاق", "closingTime", "ltr", "time")} {input("استراحة الصلاة", "prayerBreak", "ltr")}</div><div className="mt-6 space-y-2">{["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس"].map((day) => <div key={day} className="flex items-center justify-between rounded-xl border border-[#edf3f1] px-4 py-3"><span className="text-[11px] font-bold text-[#527572]">{day}</span><span className="text-[11px] text-[#789693]">{settings.openingTime} - {settings.closingTime}</span><span className="text-[10px] font-bold text-[#0d857b]">مفتوح</span></div>)}<div className="flex items-center justify-between rounded-xl border border-[#f3e4d0] bg-[#fffaf2] px-4 py-3"><span className="text-[11px] font-bold text-[#8c6e45]">الجمعة</span><span className="text-[11px] font-bold text-[#bd812b]">مغلق · قابل للتعديل</span></div></div></SettingsCard>}{tab === "notifications" && <SettingsCard title="الإشعارات والواتساب" description="قنوات التواصل الأساسية مع المرضى" icon={MessageCircle}><div className="grid gap-4 sm:grid-cols-2">{input("مزود واتساب", "whatsappProvider")} {input("رقم المرسل", "whatsappSender", "ltr")}</div><div className="mt-6 space-y-3">{toggle("تذكير الموعد قبل ٢٤ ساعة", "إرسال رسالة واتساب ثنائية اللغة", "reminder24h")}{toggle("تذكير الموعد قبل ساعة", "تقليل حالات عدم الحضور", "reminder1h")}{toggle("تنبيه اقتراب الدور", "إبلاغ المريض عند بقاء ٣ أرقام أمامه", "queueAlerts")}</div><div className="mt-5 rounded-xl border border-[#dcece8] bg-[#f4fbf8] p-4"><div className="flex items-center gap-2 text-[11px] font-bold text-[#0d716a]"><MessageCircle className="h-4 w-4" /> حالة الاتصال: متصل</div><p className="mt-1 text-[10px] text-[#789792]">تم إرسال ١٨٤ رسالة هذا الشهر بنسبة تسليم ٩٨٪.</p></div></SettingsCard>}{tab === "payments" && <SettingsCard title="الدفع والفوترة" description="طرق الدفع والضريبة وتسلسل الفواتير" icon={CreditCard}><div className="grid gap-4 sm:grid-cols-2">{input("بادئة الفاتورة", "vatNumber", "ltr")} {input("نسبة الضريبة", "vatNumber", "ltr")}</div><div className="mt-6 space-y-3">{toggle("مدى", "الدفع الإلكتروني المحلي", "mada")}{toggle("Apple Pay", "الدفع السريع من الهاتف", "applePay")}{toggle("الدفع النقدي", "تسجيل المدفوعات من الكاشير", "cash")}{toggle("التأمين", "تحويل حصة شركة التأمين إلى المطالبة", "insurance")}{toggle("تفعيل VAT والفاتورة الإلكترونية", "عرض الضريبة في الفاتورة", "vatEnabled")}</div></SettingsCard>}{tab === "security" && <SettingsCard title="الأمان والخصوصية" description="حماية بيانات المرضى وسجل التدقيق" icon={LockKeyhole}><div className="space-y-3">{toggle("المصادقة الثنائية للموظفين", "إلزام المالك والمحاسبين والأطباء بالتحقق الإضافي", "twoFactor")}{toggle("تسجيل عمليات التصدير", "حفظ كل عمليات طباعة وتصدير بيانات المرضى", "auditExports")}</div><div className="mt-6 grid gap-4 sm:grid-cols-2">{input("مهلة انتهاء الجلسة", "sessionTimeout")}<EditableField label="نسخة الموافقة PDPL" value="v2.1 · ١ مايو ٢٠٢٥" onChange={() => undefined} /></div><div className="mt-5 rounded-xl border border-[#f2ddd6] bg-[#fff8f5] p-4"><div className="flex items-center gap-2 text-[11px] font-bold text-[#c5785f]"><LockKeyhole className="h-4 w-4" /> لا توجد قاعدة بيانات مرتبطة</div><p className="mt-1 text-[10px] leading-5 text-[#98776d]">هذه النسخة تحفظ الإعدادات محليًا في المتصفح فقط.</p></div></SettingsCard>}<div className="flex flex-col items-stretch justify-between gap-3 rounded-[18px] border border-[#dcece8] bg-[#eaf7f3] p-4 sm:flex-row sm:items-center"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-[#0d716a]"><CheckCircle2 className="h-4 w-4" /></div><div><div className="text-[11px] font-bold text-[#356460]">{saved ? "تم حفظ الإعدادات محليًا" : "لديك إعدادات قابلة للحفظ"}</div><div className="mt-1 text-[10px] text-[#7c9995]">لن يتم إرسال أي بيانات إلى خادم خارجي.</div></div></div><button onClick={save} className="h-10 rounded-xl bg-[#0d716a] px-5 text-[11px] font-bold text-white transition hover:bg-[#095d58]">حفظ البيانات</button></div></div></div></>;
+  return <><ViewHeader eyebrow="إعدادات العيادة" title="إعدادات النظام" description={`${branch} · التهيئة والهوية وقواعد التشغيل`} action="اختيار نوع العيادة" icon={Settings2} onAction={onClinic} /><OrganizationModulesPanel /><div className="grid gap-6 lg:grid-cols-[230px_1fr]"><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-3"><div className="mb-3 px-3 text-[10px] font-bold text-[#9ab1af]">إعدادات المساحة</div>{localSettingsTabs.map(([id, label, Icon]) => <button key={id} onClick={() => setTab(id)} className={cn("flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-[11px] font-bold transition", tab === id ? "bg-[#e6f4f1] text-[#0d716a]" : "text-[#7d9894] hover:bg-[#f5f9f8]")}><Icon className="h-4 w-4" />{label}</button>)}<div className="mt-4 rounded-xl bg-[#f1f8f6] p-3"><div className="flex items-center gap-2 text-[10px] font-bold text-[#0d716a]"><Database className="h-3.5 w-3.5" /> حفظ محلي</div><p className="mt-1 text-[10px] leading-5 text-[#799792]">تُحفظ التغييرات في هذا المتصفح فقط حتى يتم ربط قاعدة البيانات.</p></div></div><div className="min-w-0 space-y-6">{tab === "profile" && <SettingsCard title="ملف المنشأة" description="البيانات التي تظهر في البوابة والفواتير" icon={Building2}><div className="grid gap-4 sm:grid-cols-2">{input("اسم المنشأة بالعربية", "nameAr")} {input("الاسم بالإنجليزية", "nameEn", "ltr")} {input("الرقم الضريبي", "vatNumber", "ltr")} {input("المدينة", "city")} {input("رقم التواصل", "phone", "ltr")} {input("البريد الإلكتروني", "email", "ltr", "email")}</div></SettingsCard>}{tab === "users" && <SettingsCard title="المستخدمون والصلاحيات" description="إدارة الفريق والوصول حسب الدور والفرع" icon={UsersRound}><div className="mb-4 flex items-center justify-between rounded-xl bg-[#f1f8f6] p-4"><div><div className="text-[12px] font-bold text-[#426765]">١٢ مستخدمًا نشطًا</div><div className="mt-1 text-[10px] text-[#8ca6a2]">الصلاحيات مبنية على أدوار ZainCare</div></div><button className="h-10 rounded-xl bg-[#0d716a] px-4 text-[11px] font-bold text-white"><Plus className="ml-1 inline h-4 w-4" /> دعوة مستخدم</button></div>{["أحمد المطيري · مالك العيادة · كل الفروع", "د. ليان المطيري · طبيب · الرياض وجدة", "ريم السبيعي · استقبال · الرياض", "عمر الحربي · محاسب · دعوة معلقة"].map((user) => <div key={user} className="flex items-center justify-between border-b border-[#f0f4f3] py-4 last:border-0"><span className="text-[11px] font-bold text-[#426765]">{user}</span><button className="text-[10px] font-bold text-[#0d716a]">إدارة الصلاحيات</button></div>)}</SettingsCard>}{tab === "hours" && <SettingsCard title="أوقات العمل" description="جدول الفرع والفترات اليومية والاستراحات" icon={CalendarClock}><div className="grid gap-4 sm:grid-cols-3">{input("وقت الافتتاح", "openingTime", "ltr", "time")} {input("وقت الإغلاق", "closingTime", "ltr", "time")} {input("استراحة الصلاة", "prayerBreak", "ltr")}</div><div className="mt-6 space-y-2">{["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس"].map((day) => <div key={day} className="flex items-center justify-between rounded-xl border border-[#edf3f1] px-4 py-3"><span className="text-[11px] font-bold text-[#527572]">{day}</span><span className="text-[11px] text-[#789693]">{settings.openingTime} - {settings.closingTime}</span><span className="text-[10px] font-bold text-[#0d857b]">مفتوح</span></div>)}<div className="flex items-center justify-between rounded-xl border border-[#f3e4d0] bg-[#fffaf2] px-4 py-3"><span className="text-[11px] font-bold text-[#8c6e45]">الجمعة</span><span className="text-[11px] font-bold text-[#bd812b]">مغلق · قابل للتعديل</span></div></div></SettingsCard>}{tab === "notifications" && <SettingsCard title="الإشعارات والواتساب" description="قنوات التواصل الأساسية مع المرضى" icon={MessageCircle}><div className="grid gap-4 sm:grid-cols-2">{input("مزود واتساب", "whatsappProvider")} {input("رقم المرسل", "whatsappSender", "ltr")}</div><div className="mt-6 space-y-3">{toggle("تذكير الموعد قبل ٢٤ ساعة", "إرسال رسالة واتساب ثنائية اللغة", "reminder24h")}{toggle("تذكير الموعد قبل ساعة", "تقليل حالات عدم الحضور", "reminder1h")}{toggle("تنبيه اقتراب الدور", "إبلاغ المريض عند بقاء ٣ أرقام أمامه", "queueAlerts")}</div><div className="mt-5 rounded-xl border border-[#dcece8] bg-[#f4fbf8] p-4"><div className="flex items-center gap-2 text-[11px] font-bold text-[#0d716a]"><MessageCircle className="h-4 w-4" /> حالة الاتصال: متصل</div><p className="mt-1 text-[10px] text-[#789792]">تم إرسال ١٨٤ رسالة هذا الشهر بنسبة تسليم ٩٨٪.</p></div></SettingsCard>}{tab === "payments" && <SettingsCard title="الدفع والفوترة" description="طرق الدفع والضريبة وتسلسل الفواتير" icon={CreditCard}><div className="grid gap-4 sm:grid-cols-2">{input("بادئة الفاتورة", "vatNumber", "ltr")} {input("نسبة الضريبة", "vatNumber", "ltr")}</div><div className="mt-6 space-y-3">{toggle("مدى", "الدفع الإلكتروني المحلي", "mada")}{toggle("Apple Pay", "الدفع السريع من الهاتف", "applePay")}{toggle("الدفع النقدي", "تسجيل المدفوعات من الكاشير", "cash")}{toggle("التأمين", "تحويل حصة شركة التأمين إلى المطالبة", "insurance")}{toggle("تفعيل VAT والفاتورة الإلكترونية", "عرض الضريبة في الفاتورة", "vatEnabled")}</div></SettingsCard>}{tab === "security" && <SettingsCard title="الأمان والخصوصية" description="حماية بيانات المرضى وسجل التدقيق" icon={LockKeyhole}><div className="space-y-3">{toggle("المصادقة الثنائية للموظفين", "إلزام المالك والمحاسبين والأطباء بالتحقق الإضافي", "twoFactor")}{toggle("تسجيل عمليات التصدير", "حفظ كل عمليات طباعة وتصدير بيانات المرضى", "auditExports")}</div><div className="mt-6 grid gap-4 sm:grid-cols-2">{input("مهلة انتهاء الجلسة", "sessionTimeout")}<EditableField label="نسخة الموافقة PDPL" value="v2.1 · ١ مايو ٢٠٢٥" onChange={() => undefined} /></div><div className="mt-5 rounded-xl border border-[#f2ddd6] bg-[#fff8f5] p-4"><div className="flex items-center gap-2 text-[11px] font-bold text-[#c5785f]"><LockKeyhole className="h-4 w-4" /> لا توجد قاعدة بيانات مرتبطة</div><p className="mt-1 text-[10px] leading-5 text-[#98776d]">هذه النسخة تحفظ الإعدادات محليًا في المتصفح فقط.</p></div></SettingsCard>}<div className="flex flex-col items-stretch justify-between gap-3 rounded-[18px] border border-[#dcece8] bg-[#eaf7f3] p-4 sm:flex-row sm:items-center"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-[#0d716a]"><CheckCircle2 className="h-4 w-4" /></div><div><div className="text-[11px] font-bold text-[#356460]">{saved ? "تم حفظ الإعدادات محليًا" : "لديك إعدادات قابلة للحفظ"}</div><div className="mt-1 text-[10px] text-[#7c9995]">لن يتم إرسال أي بيانات إلى خادم خارجي.</div></div></div><button onClick={save} className="h-10 rounded-xl bg-[#0d716a] px-5 text-[11px] font-bold text-white transition hover:bg-[#095d58]">حفظ البيانات</button></div></div></div></>;
+}
+
+function OrganizationModulesPanel() {
+  const access = useOrganizationAccess();
+  const [catalog, setCatalog] = useState<FeatureCatalogEntry[]>([]);
+  const [features, setFeatures] = useState<OrganizationFeature[]>([]);
+  const [updating, setUpdating] = useState<FeatureKey | null>(null);
+  const [error, setError] = useState("");
+  const canConfigure = Boolean(access.organization && isOrganizationAdmin(access.membership?.role_key));
+
+  useEffect(() => {
+    if (!canConfigure || !access.organization) return;
+    void Promise.all([
+      supabase.from("feature_catalog").select("*"),
+      supabase.from("organization_features").select("organization_id, feature_key, enabled").eq("organization_id", access.organization.id),
+    ]).then(([catalogResult, featuresResult]) => {
+      if (catalogResult.error || featuresResult.error) {
+        setError(catalogResult.error?.message ?? featuresResult.error?.message ?? "تعذر تحميل الوحدات");
+        return;
+      }
+      setCatalog((catalogResult.data as FeatureCatalogEntry[]) ?? []);
+      setFeatures((featuresResult.data as OrganizationFeature[]) ?? []);
+    });
+  }, [access.organization, canConfigure]);
+
+  if (!canConfigure || !access.organization) return null;
+  const isEnabled = (featureKey: FeatureKey) => features.find((feature) => feature.feature_key === featureKey)?.enabled ?? false;
+  const updateFeature = async (featureKey: FeatureKey, enabled: boolean) => {
+    setUpdating(featureKey);
+    setError("");
+    const { error: updateError } = await supabase.from("organization_features").upsert({
+      organization_id: access.organization!.id,
+      feature_key: featureKey,
+      enabled,
+    }, { onConflict: "organization_id,feature_key" });
+    if (updateError) setError(updateError.message);
+    else {
+      setFeatures((current) => [...current.filter((feature) => feature.feature_key !== featureKey), { organization_id: access.organization!.id, feature_key: featureKey, enabled }]);
+      await access.refresh();
+    }
+    setUpdating(null);
+  };
+
+  return <div className="mb-6 rounded-[22px] border border-[#e3eeeb] bg-white p-5 shadow-[0_4px_18px_rgba(30,73,72,0.025)] sm:p-6"><div className="mb-5 flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e4f5f1] text-[#0d857b]"><SlidersHorizontal className="h-5 w-5" /></div><div><h2 className="text-[16px] font-bold text-[#234b4b]">وحدات المنظمة</h2><p className="mt-1 text-[11px] text-[#96aaa8]">تفعيل الوحدات المتاحة لأعضاء المنظمة</p></div></div>{error && <div role="alert" className="mb-4 rounded-xl bg-[#fff0eb] px-3 py-2 text-[10px] text-[#bd654d]">{error}</div>}<div className="grid gap-3 md:grid-cols-2">{catalog.map((entry) => {
+    const rawEntry = entry as FeatureCatalogEntry & { name_ar?: string; label_ar?: string; description_ar?: string; core?: boolean };
+    const enabled = isEnabled(entry.feature_key);
+    return <div key={entry.feature_key} className="flex items-center justify-between gap-4 rounded-xl border border-[#edf3f1] p-4"><div><div className="flex items-center gap-2"><div className="text-[11px] font-bold text-[#426765]">{rawEntry.name_ar ?? rawEntry.label_ar ?? entry.name ?? entry.feature_key}</div><span className={cn("rounded-md px-2 py-1 text-[9px] font-bold", (entry.is_core ?? rawEntry.core) ? "bg-[#eaf3fb] text-[#4284b9]" : "bg-[#f3effb] text-[#7654ba]")}>{(entry.is_core ?? rawEntry.core) ? "أساسية" : "اختيارية"}</span></div><div className="mt-1 text-[10px] leading-5 text-[#9aafac]">{rawEntry.description_ar ?? entry.description ?? "وحدة قابلة للتفعيل حسب احتياج المنظمة"}</div></div><Switch checked={enabled} disabled={updating === entry.feature_key} onCheckedChange={(checked) => void updateFeature(entry.feature_key, checked)} aria-label={`تفعيل ${rawEntry.name_ar ?? entry.name ?? entry.feature_key}`} /></div>;
+  })}</div></div>;
 }
 
 function SettingsCard({ title, description, icon: Icon, children }: { title: string; description: string; icon: typeof Building2; children: ReactNode }) {

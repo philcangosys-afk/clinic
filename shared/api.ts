@@ -11,6 +11,107 @@ export interface DemoResponse {
   message: string;
 }
 
+export type HealthcareOrganizationType =
+  | "clinic"
+  | "medical_center"
+  | "specialized_medical_center"
+  | "health_center";
+
+export type FeatureKey =
+  | "core_dashboard"
+  | "reception"
+  | "appointments"
+  | "patients"
+  | "medical_records"
+  | "patient_journey"
+  | "medical_catalog"
+  | "laboratory"
+  | "radiology"
+  | "pharmacy"
+  | "insurance"
+  | "billing"
+  | "packages"
+  | "human_resources"
+  | "content"
+  | "reports"
+  | "accounting"
+  | "procurement"
+  | "inventory"
+  | "messaging"
+  | "audit_log"
+  | "settings";
+
+export type OrganizationRole =
+  | "owner"
+  | "organization_admin"
+  | "branch_manager"
+  | "doctor"
+  | "nurse"
+  | "receptionist"
+  | "lab_technician"
+  | "pharmacist"
+  | "accountant"
+  | "hr_manager"
+  | "staff";
+
+export interface HealthcareOrganization {
+  id: string;
+  name: string;
+  organization_type: HealthcareOrganizationType;
+  created_by: string;
+  legacy_full_access: boolean;
+}
+
+export interface OrganizationBranch {
+  id: string;
+  organization_id: string;
+  name: string;
+  [key: string]: unknown;
+}
+
+export interface OrganizationMembership {
+  id?: string;
+  organization_id: string;
+  user_id: string;
+  branch_id: string | null;
+  role_key: OrganizationRole;
+  is_active: boolean;
+}
+
+export interface FeatureCatalogEntry {
+  feature_key: FeatureKey;
+  name: string;
+  description: string | null;
+  is_core: boolean;
+  [key: string]: unknown;
+}
+
+export interface OrganizationFeature {
+  organization_id: string;
+  feature_key: FeatureKey;
+  enabled: boolean;
+}
+
+export interface MembershipPermission {
+  membership_id?: string;
+  organization_id?: string;
+  user_id?: string;
+  permission_key: string;
+  allowed?: boolean;
+  granted?: boolean;
+  [key: string]: unknown;
+}
+
+export interface OrganizationAccessState {
+  legacyMode: boolean;
+  needsOnboarding: boolean;
+  organization: HealthcareOrganization | null;
+  branch: OrganizationBranch | null;
+  membership: OrganizationMembership | null;
+  enabledFeatures: FeatureKey[];
+  permissions: string[];
+}
+
 export type ZainCareCountry = "SA" | "AE" | "QA" | "KW" | "BH" | "OM";
 
 export type ClinicTypeProfile =
