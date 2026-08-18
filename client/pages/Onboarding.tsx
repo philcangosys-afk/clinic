@@ -6,11 +6,9 @@ import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
-const organizationTypes: { value: HealthcareOrganizationType; label: string; detail: string }[] = [
-  { value: "clinic", label: "عيادة", detail: "عيادة مستقلة أو تخصص واحد" },
-  { value: "medical_center", label: "مجمع طبي", detail: "عدة عيادات وتخصصات" },
-  { value: "specialized_medical_center", label: "مركز طبي متخصص", detail: "مركز متكامل لتخصص محدد" },
-  { value: "health_center", label: "مركز صحي", detail: "خدمات رعاية صحية شاملة" },
+export const organizationTypes: { value: HealthcareOrganizationType; label: string; detail: string }[] = [
+  { value: "clinic", label: "عيادة", detail: "الوحدات التشغيلية الأساسية للاستقبال والمواعيد والمرضى والسجل الطبي والفوترة والموارد البشرية" },
+  { value: "medical_center", label: "مركز طبي متكامل", detail: "الوحدات الأساسية مع الأقسام والمختبر والأشعة والصيدلية والتأمين والمخزون والمشتريات والتمريض والتقارير المتقدمة" },
 ];
 
 export default function Onboarding() {

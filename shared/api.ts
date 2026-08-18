@@ -11,11 +11,7 @@ export interface DemoResponse {
   message: string;
 }
 
-export type HealthcareOrganizationType =
-  | "clinic"
-  | "medical_center"
-  | "specialized_medical_center"
-  | "health_center";
+export type HealthcareOrganizationType = "clinic" | "medical_center";
 
 export type FeatureKey =
   | "core_dashboard"
