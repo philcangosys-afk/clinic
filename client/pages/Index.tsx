@@ -3,8 +3,10 @@ import {
   Activity,
   AlertTriangle,
   ArrowUpLeft,
+  BarChart3,
   Bell,
   Building2,
+  ClipboardList,
   CalendarClock,
   CalendarDays,
   CheckCircle2,
@@ -22,6 +24,7 @@ import {
   LayoutDashboard,
   MapPin,
   MoreHorizontal,
+  Newspaper,
   Package,
   PanelRightClose,
   PanelRightOpen,
@@ -35,6 +38,7 @@ import {
   ShieldCheck,
   Sparkles,
   Stethoscope,
+  UserCog,
   UserRoundPlus,
   UsersRound,
   WalletCards,
@@ -66,6 +70,12 @@ const navigation: NavItem[] = [
   { label: "المختبر", icon: FlaskConical, badge: "4" },
   { label: "التأمين والمطالبات", icon: ShieldCheck },
   { label: "الباقات", icon: Package },
+  { label: "الأطباء", icon: Stethoscope, badge: "10" },
+  { label: "الأقسام والعيادات", icon: Building2, badge: "22" },
+  { label: "الموظفون", icon: UserCog, badge: "63" },
+  { label: "الأمراض والتشخيص", icon: ClipboardList, badge: "10" },
+  { label: "المحتوى", icon: Newspaper },
+  { label: "التقارير", icon: BarChart3 },
 ];
 
 const appointments: Appointment[] = [
@@ -90,6 +100,12 @@ const navIcons: Record<string, typeof LayoutDashboard> = {
   المختبر: FlaskConical,
   "التأمين والمطالبات": ShieldCheck,
   الباقات: Package,
+  الأطباء: Stethoscope,
+  "الأقسام والعيادات": Building2,
+  الموظفون: UserCog,
+  "الأمراض والتشخيص": ClipboardList,
+  المحتوى: Newspaper,
+  التقارير: BarChart3,
 };
 
 export default function Index() {
@@ -184,6 +200,7 @@ export default function Index() {
 
           <div className="mx-auto max-w-[1500px] px-5 pb-12 pt-7 sm:px-8 lg:px-10 lg:pt-9">
             {activeItem === "الرئيسية" ? <>
+            <ReferenceOverview branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} />
             <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
               <div><div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[#91a8a5]"><span>{dateLabel}</span><span className="h-1 w-1 rounded-full bg-[#b8c9c6]" /><span>١٨ مايو ٢٠٢٥</span></div><h1 className="text-[27px] font-bold tracking-[-0.04em] text-[#183f42] sm:text-[32px]">صباح الخير، أحمد <span className="inline-block">👋</span></h1><p className="mt-2 text-[13px] text-[#76918e]">إليك ملخص أداء عيادتك لهذا اليوم.</p></div>
               <div className="flex items-center gap-2"><div className="relative"><select aria-label="اختيار الفرع" value={branch} onChange={(event) => setBranch(event.target.value)} className="h-11 appearance-none rounded-xl border border-[#dfebe8] bg-white py-2 pl-9 pr-10 text-xs font-bold text-[#436866] outline-none transition focus:border-[#83c7bf]"><option>فرع الرياض - النخيل</option><option>فرع جدة - الروضة</option><option>فرع دبي - الخليج التجاري</option></select><Building2 className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-[#0d857b]" /><ChevronDown className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-[#9ab2ae]" /></div><button onClick={openAppointmentForm} className="flex h-11 items-center gap-2 rounded-xl bg-[#0d716a] px-4 text-xs font-bold text-white shadow-[0_8px_18px_rgba(13,113,106,0.19)] transition hover:bg-[#095d58]"><Plus className="h-4 w-4" /> موعد جديد</button></div>
@@ -233,6 +250,45 @@ export default function Index() {
   );
 }
 
+function ReferenceOverview({ branch, onPatient, onAppointment, onClinic }: { branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void }) {
+  return <div className="mb-8 space-y-5"><div className="flex flex-col justify-between gap-4 rounded-[22px] bg-gradient-to-l from-[#173957] via-[#115b68] to-[#0d716a] p-5 text-white shadow-[0_12px_28px_rgba(17,84,100,0.14)] sm:flex-row sm:items-center sm:p-6"><div><div className="mb-2 text-[10px] font-bold text-[#9bd8cc]">لوحة التحكم · {branch}</div><h2 className="text-[24px] font-bold tracking-[-0.04em]">مرحبًا بعودتك يا أحمد</h2><p className="mt-2 text-[11px] text-[#c0e1dc]">تابع أداء عيادتك وإدارة العمليات اليومية من مكان واحد.</p></div><div className="rounded-2xl bg-white/10 px-4 py-3 text-right backdrop-blur"><div className="text-[10px] text-[#bfe1dc]">آخر مزامنة</div><div className="mt-1 text-[15px] font-bold">الثلاثاء، ١٨ أغسطس ٢٠٢٥</div><div className="mt-1 text-[10px] text-[#9bd8cc]">قبل ٣٣ دقيقة</div></div></div><div className="flex gap-2 overflow-x-auto pb-1">{[["إضافة موعد جديد", CalendarClock, "purple", onAppointment], ["إضافة مريض", UserRoundPlus, "teal", onPatient], ["إضافة فاتورة", ReceiptText, "orange", () => undefined], ["وصفة جديدة", FileText, "blue", () => undefined], ["إضافة موظف", UserCog, "green", () => undefined], ["طلب مختبر", FlaskConical, "pink", () => undefined]].map(([label, Icon, tone, action]) => <button key={String(label)} onClick={action as () => void} className={cn("flex min-w-max items-center gap-2 rounded-full px-4 py-2.5 text-[10px] font-bold text-white shadow-sm transition hover:-translate-y-0.5", tone === "purple" ? "bg-[#7654ba]" : tone === "orange" ? "bg-[#d88142]" : tone === "blue" ? "bg-[#397fbd]" : tone === "green" ? "bg-[#4d9b82]" : tone === "pink" ? "bg-[#d36c83]" : "bg-[#0d857b]")}>{String(label)}</button>)}</div><div className="grid gap-4 xl:grid-cols-3"><OverviewCard title="دليل المستخدمين" subtitle="إجمالي المستخدمين والمرضى" tone="blue" icon={UsersRound}><div className="grid grid-cols-3 divide-x divide-x-reverse divide-[#dce9f4]"><MiniStat value="٦٣" label="المستخدمون" icon={UserCog} /><MiniStat value="١٣٢" label="المرضى" icon={UsersRound} /><MiniStat value="٣٤" label="أفراد العائلة" icon={UsersRound} /></div><div className="mt-4 flex items-center justify-between rounded-xl bg-white/70 px-3 py-2 text-[10px] text-[#65839b]"><span>آخر تسجيل: سارة أحمد</span><button onClick={() => undefined} className="font-bold text-[#397fbd]">فتح الدليل <ChevronLeft className="mr-1 inline h-3 w-3" /></button></div></OverviewCard><OverviewCard title="الكيانات الطبية" subtitle="المرافق والأطباء والأقسام" tone="mint" icon={Activity}><div className="grid grid-cols-2 gap-x-6 gap-y-4">{[["المرافق", "٢٢", "نشط", Building2], ["الأطباء", "١٠", "نشط", Stethoscope], ["الأقسام", "١٠", "نشط", ClipboardList], ["الأمراض", "١٠", "إجمالي", FileText]].map(([label, value, note, Icon]) => <div key={String(label)} className="flex items-center justify-between"><div className="flex items-center gap-2"><span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white text-[#0d857b]"><Icon className="h-3.5 w-3.5" /></span><div><div className="text-[10px] font-bold text-[#567b78]">{String(label)}</div><div className="text-[9px] text-[#9bb3ad]">{String(note)}</div></div></div><span className="text-[16px] font-bold text-[#2b6862]">{String(value)}</span></div>)}</div></OverviewCard><AdminProfileCard /></div><div className="grid gap-4 xl:grid-cols-3"><OverviewCard title="أداء المحتوى" subtitle="آخر ٣٠ يومًا" tone="purple" icon={Newspaper}><div className="flex items-end gap-1.5 pt-4">{[38, 55, 44, 70, 61, 88, 49, 76, 64, 91, 73, 84].map((height, index) => <div key={index} className={cn("flex-1 rounded-t-md", index === 9 ? "bg-[#7654ba]" : "bg-[#dcd3f2]")} style={{ height: `${height}px` }} />)}</div><div className="mt-4 flex items-center justify-between text-[10px] text-[#8e83ad]"><span>مشاهدات المدونة</span><strong className="text-[#7654ba]">١٬٢٤٠ مشاهدة ↑ ٢٤٪</strong></div></OverviewCard><OverviewCard title="المحتوى والتصنيف" subtitle="ملخص المنصة" tone="coral" icon={ClipboardList}><div className="space-y-3">{[["مقالات منشورة", "٢٤", "bg-[#d36c83]"], ["خدمات نشطة", "١٨", "bg-[#e19a63]"], ["أسئلة شائعة", "٣٦", "bg-[#4d9b82]"]].map(([label, value, color]) => <div key={String(label)} className="flex items-center justify-between rounded-xl bg-white/70 px-3 py-2"><span className="text-[10px] font-bold text-[#7f7978]">{String(label)}</span><span className={cn("rounded-md px-2 py-1 text-[10px] font-bold text-white", color)}>{String(value)}</span></div>)}</div></OverviewCard><OverviewCard title="نظرة مالية" subtitle="هذا الشهر" tone="navy" icon={CircleDollarSign}><div className="text-[26px] font-bold tracking-[-0.04em] text-[#204363]">٧٩٬٧٠٠ <span className="text-[11px] text-[#7794a5]">ر.س</span></div><div className="mt-3 flex items-center justify-between text-[10px]"><span className="text-[#8098a4]">صافي الإيرادات</span><span className="font-bold text-[#4d9b82]">↑ ١٨٪</span></div><div className="mt-4 h-2 overflow-hidden rounded-full bg-[#dbe8ef]"><div className="h-full w-[78%] rounded-full bg-[#397fbd]" /></div><div className="mt-2 text-[9px] text-[#91a7b1]">٢٩ فاتورة مدفوعة · ٧ معلقة</div></OverviewCard></div></div>;
+}
+
+function OverviewCard({ title, subtitle, tone, icon: Icon, children }: { title: string; subtitle: string; tone: "blue" | "mint" | "purple" | "coral" | "navy"; icon: typeof LayoutDashboard; children: ReactNode }) {
+  const tones = { blue: "bg-[#e9f4fc]", mint: "bg-[#eefaf7]", purple: "bg-[#f5f1fc]", coral: "bg-[#fff4f0]", navy: "bg-[#edf4f9]" };
+  const iconTones = { blue: "bg-[#397fbd]", mint: "bg-[#0d857b]", purple: "bg-[#7654ba]", coral: "bg-[#d36c83]", navy: "bg-[#204363]" };
+  return <section className={cn("rounded-[20px] border border-white/70 p-5 shadow-[0_5px_18px_rgba(39,77,89,0.05)]", tones[tone])}><div className="mb-5 flex items-start justify-between"><div><h3 className="text-[14px] font-bold text-[#274d63]">{title}</h3><p className="mt-1 text-[10px] text-[#89a3ae]">{subtitle}</p></div><div className={cn("flex h-8 w-8 items-center justify-center rounded-lg text-white", iconTones[tone])}><Icon className="h-4 w-4" /></div></div>{children}</section>;
+}
+
+function MiniStat({ value, label, icon: Icon }: { value: string; label: string; icon: typeof UsersRound }) {
+  return <div className="px-2 text-center first:pr-0 last:pl-0"><div className="flex items-center justify-center gap-1 text-[18px] font-bold text-[#214662]">{value}<Icon className="h-3 w-3 text-[#397fbd]" /></div><div className="mt-1 text-[9px] text-[#7895a7]">{label}</div></div>;
+}
+
+function AdminProfileCard() {
+  return <section className="relative overflow-hidden rounded-[20px] bg-gradient-to-br from-[#1d568d] via-[#286ea6] to-[#173957] p-5 text-white shadow-[0_12px_24px_rgba(36,94,139,0.18)]"><div className="absolute -left-8 -top-10 h-32 w-32 rounded-full bg-white/10" /><div className="relative flex items-start justify-between"><div><div className="text-[10px] text-[#b8d9ec]">مرحبًا بك مجددًا</div><h3 className="mt-1 text-[20px] font-bold">مدير النظام</h3><div className="mt-1 inline-flex rounded-md bg-[#193d60] px-2 py-1 text-[8px] font-bold tracking-[0.12em] text-[#c1e2f5]">SUPER ADMIN</div></div><div className="flex h-14 w-14 items-center justify-center rounded-full border-4 border-white/30 bg-[#d4ecf4] text-[20px] font-bold text-[#286ea6]">أم</div></div><div className="mt-8 grid grid-cols-2 gap-3 border-t border-white/15 pt-4"><div><div className="text-[10px] text-[#afd2e6]">إجمالي المرضى</div><div className="mt-1 text-[22px] font-bold">١٣٢</div></div><div><div className="text-[10px] text-[#afd2e6]">العائلة</div><div className="mt-1 text-[22px] font-bold">٣٤</div></div></div><div className="mt-6 flex items-center justify-between text-[9px] text-[#9ec7df]"><span>MEDICARE ADMIN · ZAINCARE</span><span>الثلاثاء ١٨ أغسطس</span></div></section>;
+}
+
+function DirectoryView({ activeItem, branch }: { activeItem: string; branch: string }) {
+  const content = { الأطباء: { title: "دليل الأطباء", eyebrow: "الكوادر الطبية", description: "الأطباء والتخصصات والتراخيص حسب الفرع", action: "إضافة طبيب", rows: [["د. ليان المطيري", "جلدية وتجميل", "الرياض · جدة", "نشط"], ["د. عمر الحربي", "طب عام", "الرياض", "نشط"], ["د. ريم الزهراني", "تجميل وليزر", "جدة", "إجازة"]] }, "الأقسام والعيادات": { title: "الأقسام والعيادات", eyebrow: "الكيانات الطبية", description: `${branch} · المرافق والأقسام والغرف`, action: "إضافة عيادة", rows: [["عيادة الجلدية", "الرياض", "غرفة ٣", "نشطة"], ["عيادة طب الأطفال", "الرياض", "غرفة ١", "نشطة"], ["قسم المختبر", "جدة", "مختبر مركزي", "نشط"]] }, الموظفون: { title: "دليل الموظفين", eyebrow: "دليل المستخدمين", description: "المستخدمون والأدوار ونطاق الوصول", action: "دعوة موظف", rows: [["أحمد المطيري", "مالك العيادة", "كل الفروع", "نشط"], ["ريم السبيعي", "استقبال", "الرياض", "نشط"], ["عمر الحربي", "محاسب", "كل الفروع", "دعوة معلقة"]] }, "الأمراض والتشخيص": { title: "الأمراض والتشخيص", eyebrow: "القاموس الطبي", description: "قائمة التشخيصات المستخدمة في السجل الطبي والمطالبات", action: "إضافة تشخيص", rows: [["السكري من النوع الثاني", "E11", "ICD-10", "نشط"], ["ارتفاع ضغط الدم", "I10", "ICD-10", "نشط"], ["التهاب الجلد", "L30", "ICD-10", "نشط"]] } }[activeItem as "الأطباء" | "الأقسام والعيادات" | "الموظفون" | "الأمراض والتشخيص"];
+  return <><ViewHeader eyebrow={content.eyebrow} title={content.title} description={content.description} action={content.action} icon={activeItem === "الأطباء" ? Stethoscope : activeItem === "الموظفون" ? UserCog : activeItem === "الأمراض والتشخيص" ? ClipboardList : Building2} /><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><div className="mb-5 flex items-center justify-between"><div><h2 className="text-[16px] font-bold text-[#234b4b]">السجل الكامل</h2><p className="mt-1 text-[11px] text-[#96aaa8]">بيانات تجريبية قابلة للتوسع محليًا</p></div><div className="flex gap-2"><div className="flex h-10 items-center rounded-xl border border-[#dfebe8] px-3"><Search className="ml-2 h-4 w-4 text-[#9bb1ae]" /><input className="w-40 bg-transparent text-xs outline-none" placeholder="بحث..." /></div><button className="rounded-xl border border-[#dfebe8] px-3 text-[11px] font-bold text-[#6d8b88]"><SlidersHorizontal className="h-4 w-4" /></button></div></div><div className="space-y-2">{content.rows.map((row) => <div key={row[0]} className="flex flex-col gap-3 rounded-xl border border-[#edf3f1] p-4 sm:flex-row sm:items-center"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#e6f4f1] text-[#0d857b]"><Building2 className="h-4 w-4" /></div><div className="flex-1"><div className="text-[12px] font-bold text-[#426765]">{row[0]}</div><div className="mt-1 text-[10px] text-[#9aafac]">{row[1]} · {row[2]}</div></div><StatusPill tone={row[3] === "إجازة" || row[3] === "دعوة معلقة" ? "amber" : "teal"}>{row[3]}</StatusPill><button className="text-[10px] font-bold text-[#0d716a]">عرض التفاصيل</button></div>)}</div></div></>;
+}
+
+function ContentView({ branch }: { branch: string }) {
+  return <><ViewHeader eyebrow="المحتوى والتصنيف" title="إدارة المحتوى" description={`${branch} · المدونة والخدمات والأسئلة الشائعة`} action="مقالة جديدة" icon={Newspaper} /><div className="grid gap-4 md:grid-cols-3"><SummaryCards items={[{ label: "مقالات منشورة", value: "٢٤", note: "٣ مسودات", tone: "bg-[#7654ba]" }, { label: "الخدمات النشطة", value: "١٨", note: "متاحة للحجز", tone: "bg-[#0d857b]" }, { label: "الأسئلة الشائعة", value: "٣٦", note: "بالعربية والإنجليزية", tone: "bg-[#d36c83]" }]} /></div><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><h2 className="text-[16px] font-bold text-[#234b4b]">آخر المحتوى</h2><div className="mt-5 grid gap-3 sm:grid-cols-3"><ContentTile title="متى تحتاج إلى فحص البشرة؟" type="مقالة" status="منشور" /><ContentTile title="خدمات عيادة الجلدية" type="خدمة" status="نشطة" /><ContentTile title="أسئلة التأمين الشائعة" type="صفحة" status="مراجعة" /></div></div></>;
+}
+
+function ContentTile({ title, type, status }: { title: string; type: string; status: string }) {
+  return <div className="rounded-xl border border-[#edf3f1] p-4"><div className="mb-4 flex items-center justify-between"><span className="rounded-md bg-[#f3effb] px-2 py-1 text-[9px] font-bold text-[#7654ba]">{type}</span><StatusPill tone={status === "مراجعة" ? "amber" : "teal"}>{status}</StatusPill></div><div className="text-[12px] font-bold leading-5 text-[#426765]">{title}</div><button className="mt-4 text-[10px] font-bold text-[#0d716a]">تحرير المحتوى <ChevronLeft className="mr-1 inline h-3 w-3" /></button></div>;
+}
+
+function ReportsView({ branch }: { branch: string }) {
+  return <><ViewHeader eyebrow="التقارير والتحليلات" title="التقارير" description={`${branch} · مؤشرات الأداء والمالية والعمليات`} action="إنشاء تقرير" icon={BarChart3} /><SummaryCards items={[{ label: "تغطية التقارير", value: "٩٤٪", note: "بيانات مكتملة", tone: "bg-[#0d857b]" }, { label: "استخدام الأطباء", value: "٧٨٪", note: "هذا الشهر", tone: "bg-[#397fbd]" }, { label: "رضا المرضى", value: "٤٫٨ / ٥", note: "من ١٤٢ تقييمًا", tone: "bg-[#e5b15a]" }, { label: "حالات عدم الحضور", value: "٦٪", note: "تحسن ٢٪", tone: "bg-[#7654ba]" }]} /><div className="grid gap-4 md:grid-cols-2"><ReportCard title="أداء المواعيد" detail="٣٨ موعدًا اليوم · ٨٩٪ مكتملة" bars={[45, 72, 58, 88, 66, 78, 54]} tone="teal" /><ReportCard title="الإيرادات حسب الفرع" detail="الرياض ٥٤٪ · جدة ٣١٪ · دبي ١٥٪" bars={[82, 54, 34]} tone="blue" /></div></>;
+}
+
+function ReportCard({ title, detail, bars, tone }: { title: string; detail: string; bars: number[]; tone: "teal" | "blue" }) {
+  return <section className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><h2 className="text-[16px] font-bold text-[#234b4b]">{title}</h2><p className="mt-1 text-[11px] text-[#96aaa8]">{detail}</p><div className="mt-6 flex h-28 items-end gap-3">{bars.map((height, index) => <div key={index} className={cn("flex-1 rounded-t-lg", tone === "teal" ? "bg-[#cdebe4]" : "bg-[#d7e8f3]", index === bars.length - 1 && (tone === "teal" ? "bg-[#0d857b]" : "bg-[#397fbd]"))} style={{ height: `${height}%` }} />)}</div></section>;
+}
+
 type ModuleViewProps = { activeItem: string; branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void; newPatient: string; patientCount: number };
 
 function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, newPatient, patientCount }: ModuleViewProps) {
@@ -243,6 +299,9 @@ function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, ne
   if (activeItem === "المختبر") return <LabView branch={branch} />;
   if (activeItem === "التأمين والمطالبات") return <InsuranceView branch={branch} />;
   if (activeItem === "الباقات") return <PackagesView branch={branch} />;
+  if (["الأطباء", "الأقسام والعيادات", "الموظفون", "الأمراض والتشخيص"].includes(activeItem)) return <DirectoryView activeItem={activeItem} branch={branch} />;
+  if (activeItem === "المحتوى") return <ContentView branch={branch} />;
+  if (activeItem === "التقارير") return <ReportsView branch={branch} />;
   return <EditableSettingsView branch={branch} onClinic={onClinic} />;
 }
 
