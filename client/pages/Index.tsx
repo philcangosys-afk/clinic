@@ -748,7 +748,90 @@ function AppointmentsView({ branch, onBook }: { branch: string; onBook: () => vo
   return <><ViewHeader eyebrow="الجدولة والحجز" title="مواعيد العيادة" description={`${branch} · إدارة المواعيد والانتظار والتذكيرات`} action="حجز موعد" icon={CalendarDays} onAction={onBook} /><div className="mb-6 flex gap-2 overflow-x-auto pb-1">{days.map((day, index) => <button key={day} onClick={() => setSelectedDay(day)} className={cn("min-w-[92px] rounded-xl border px-4 py-3 text-right transition", selectedDay === day ? "border-[#0d857b] bg-[#e6f4f1] text-[#0d716a]" : "border-[#e3eeeb] bg-white text-[#769390] hover:border-[#acd8d2]")}><div className="text-[10px] font-semibold">{day}</div><div className="mt-1 text-[16px] font-bold">{17 + index}</div></button>)}</div><div className="grid gap-6 xl:grid-cols-[1fr_320px]"><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><div className="mb-5 flex items-center justify-between"><div><h2 className="text-[16px] font-bold text-[#234b4b]">جدول {selectedDay}</h2><p className="mt-1 text-[11px] text-[#96aaa8]">٤ أطباء · ٣٨ موعدًا</p></div><div className="flex gap-2"><button onClick={() => setSelectedDay(days[Math.max(0, days.indexOf(selectedDay) - 1)])} aria-label="اليوم السابق" className="rounded-lg bg-[#f5f9f8] p-2 text-[#789794]"><ChevronRight className="h-4 w-4" /></button><button onClick={() => setSelectedDay(days[Math.min(days.length - 1, days.indexOf(selectedDay) + 1)])} aria-label="اليوم التالي" className="rounded-lg bg-[#f5f9f8] p-2 text-[#789794]"><ChevronLeft className="h-4 w-4" /></button></div></div><div className="space-y-2">{appointments.map((appointment) => <AppointmentRow key={appointment.time + appointment.patient} appointment={appointment} />)}</div></div><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><h2 className="text-[16px] font-bold text-[#234b4b]">قواعد الحجز</h2><p className="mt-1 text-[11px] text-[#96aaa8]">إعدادات الفرع الحالية</p><div className="mt-5 space-y-4"><SettingRow label="أقل مدة قبل الحجز" value="ساعتان" /><SettingRow label="نافذة الإلغاء" value="٢٤ ساعة" /><SettingRow label="التذكير" value="واتساب + SMS" /><SettingRow label="الإجازة الأسبوعية" value="الجمعة" /></div><div className="mt-6 rounded-xl bg-[#f1f8f6] p-3 text-[11px] leading-5 text-[#6b8d89]">يتم تحديث التوافر تلقائيًا عند تغيير جدول الطبيب أو إضافة فترة صلاة.</div></div></div></>;
 }
 
+type ReceptionRecord = {
+  id: string;
+  collector: string;
+  clinic: string;
+  appointment: string;
+  doctor: string;
+  patient: string;
+  date: string;
+  time: string;
+  createdAt: string;
+  updatedAt: string;
+  status: "مسجل" | "في الطابور" | "جاري النداء" | "مكتمل";
+};
+
+const receptionSeed: ReceptionRecord[] = [
+  { id: "REC-1042", collector: "ريم السبيعي", clinic: "عيادة ١", appointment: "109", doctor: "د. ليان المطيري", patient: "سارة أحمد العتيبي", date: "2025-05-18", time: "09:30", createdAt: "2025-05-18 09:12", updatedAt: "2025-05-18 09:18", status: "جاري النداء" },
+  { id: "REC-1041", collector: "ريم السبيعي", clinic: "عيادة ٢", appointment: "117", doctor: "د. عمر الحربي", patient: "عبدالله سالم القحطاني", date: "2025-05-18", time: "10:00", createdAt: "2025-05-18 09:20", updatedAt: "2025-05-18 09:20", status: "في الطابور" },
+  { id: "REC-1040", collector: "نجلاء القحطاني", clinic: "عيادة ٣", appointment: "121", doctor: "د. ريم الزهراني", patient: "نورة محمد الغامدي", date: "2025-05-18", time: "10:30", createdAt: "2025-05-18 09:34", updatedAt: "2025-05-18 09:34", status: "مسجل" },
+  { id: "REC-1039", collector: "نجلاء القحطاني", clinic: "عيادة ١", appointment: "098", doctor: "د. ليان المطيري", patient: "خالد إبراهيم الشهري", date: "2025-05-17", time: "16:15", createdAt: "2025-05-17 15:58", updatedAt: "2025-05-17 16:22", status: "مكتمل" },
+];
+
 function QueueView({ branch }: { branch: string }) {
+  const [records, setRecords] = useState<ReceptionRecord[]>(() => {
+    if (typeof window === "undefined") return receptionSeed;
+    try {
+      return JSON.parse(window.localStorage.getItem("zaincare-reception-records") ?? "null") ?? receptionSeed;
+    } catch {
+      return receptionSeed;
+    }
+  });
+  const [showForm, setShowForm] = useState(false);
+  const [view, setView] = useState<"records" | "queue">("records");
+  const [draftRange, setDraftRange] = useState({ from: "", to: "" });
+  const [range, setRange] = useState({ from: "", to: "" });
+  const [activeId, setActiveId] = useState(() => records.find((row) => row.status === "جاري النداء")?.id ?? "");
+  const [notice, setNotice] = useState("");
+  const [form, setForm] = useState({ patient: "", doctor: "د. ليان المطيري", clinic: "عيادة ١", appointment: "", date: new Date().toISOString().slice(0, 10), time: "09:00" });
+
+  useEffect(() => {
+    window.localStorage.setItem("zaincare-reception-records", JSON.stringify(records));
+  }, [records]);
+
+  const visibleRecords = useMemo(() => records.filter((row) => (!range.from || row.date >= range.from) && (!range.to || row.date <= range.to)), [records, range]);
+  const queue = records.filter((row) => row.status === "في الطابور" || row.status === "جاري النداء");
+  const current = records.find((row) => row.id === activeId) ?? queue[0];
+  const updateForm = (key: keyof typeof form, value: string) => setForm((currentForm) => ({ ...currentForm, [key]: value }));
+  const activate = (id: string) => {
+    const updatedAt = new Date().toLocaleString("ar-SA");
+    setRecords((rows) => rows.map((row) => row.id === id ? { ...row, status: "جاري النداء", updatedAt } : row.status === "جاري النداء" ? { ...row, status: "في الطابور", updatedAt } : row));
+    setActiveId(id);
+    setNotice("تم تفعيل الاستقبال في الطابور المباشر");
+    setView("queue");
+  };
+  const addToQueue = (id: string) => {
+    setRecords((rows) => rows.map((row) => row.id === id ? { ...row, status: "في الطابور", updatedAt: new Date().toLocaleString("ar-SA") } : row));
+    setNotice("تمت إضافة المراجع إلى الطابور");
+  };
+  const callNext = () => {
+    const waiting = records.find((row) => row.status === "في الطابور");
+    if (waiting) activate(waiting.id);
+    else setNotice("لا يوجد مراجعون بانتظار النداء");
+  };
+  const saveReception = (event: FormEvent) => {
+    event.preventDefault();
+    const now = new Date().toLocaleString("ar-SA");
+    setRecords((rows) => [{ id: `REC-${String(Date.now()).slice(-6)}`, collector: "موظف الاستقبال", clinic: form.clinic, appointment: form.appointment, doctor: form.doctor, patient: form.patient, date: form.date, time: form.time, createdAt: now, updatedAt: now, status: "مسجل" }, ...rows]);
+    setShowForm(false);
+    setNotice("تم حفظ سجل الاستقبال محليًا");
+  };
+  const columns = ["المعرّف", "محصل العيادة", "رقم العيادة", "رقم الموعد", "الطبيب", "المريض", "التاريخ", "الوقت", "تاريخ الإنشاء", "تاريخ التحديث", "الحالة"];
+  const exportRows = visibleRecords.map((row) => [row.id, row.collector, row.clinic, row.appointment, row.doctor, row.patient, row.date, row.time, row.createdAt, row.updatedAt, row.status]);
+
+  return <div dir="rtl">
+    <div className="mb-7 flex flex-col justify-between gap-5 md:flex-row md:items-end">
+      <div><div className="mb-2 flex items-center gap-2 text-[11px] font-bold text-[#92aaa7]"><Activity className="h-4 w-4 text-[#0d857b]" /> الاستقبال والطابور</div><h1 className="text-[28px] font-bold tracking-[-0.04em] text-[#183f42] sm:text-[32px]">الاستقبال</h1><p className="mt-2 text-[13px] text-[#76918e]">{branch} · تسجيل وصول المرضى وربطهم بالطابور المباشر</p></div>
+      <div className="flex flex-col gap-2 sm:flex-row"><button onClick={() => setShowForm(true)} className="flex h-11 items-center justify-center gap-2 rounded-xl bg-[#0d716a] px-4 text-xs font-bold text-white"><Plus className="h-4 w-4" /> استقبال جديد</button><button onClick={() => setView(view === "records" ? "queue" : "records")} className="flex h-11 items-center justify-center gap-2 rounded-xl border border-[#b9ded8] bg-white px-4 text-xs font-bold text-[#0d716a]"><Activity className="h-4 w-4" /> {view === "records" ? "عرض شاشة الاستقبال" : "عرض سجلات الاستقبال"}</button></div>
+    </div>
+    {notice && <div role="status" className="mb-4 rounded-xl bg-[#e8f7f1] px-4 py-3 text-[11px] font-bold text-[#28765d]">{notice}</div>}
+    {showForm && <form onSubmit={saveReception} className="mb-6 rounded-[22px] border border-[#b9ded8] bg-white p-5 shadow-[0_10px_30px_rgba(30,73,72,0.08)]"><div className="mb-5 flex items-center justify-between"><div><h2 className="text-[16px] font-bold text-[#234b4b]">استقبال جديد</h2><p className="mt-1 text-[10px] text-[#96aaa8]">أدخل بيانات وصول المريض</p></div><button type="button" onClick={() => setShowForm(false)} aria-label="إغلاق"><X className="h-4 w-4 text-[#8ea7a3]" /></button></div><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"><FormField label="المريض" required><input required value={form.patient} onChange={(event) => updateForm("patient", event.target.value)} className={formControlClass()} /></FormField><FormField label="الطبيب" required><select value={form.doctor} onChange={(event) => updateForm("doctor", event.target.value)} className={formControlClass()}><option>د. ليان المطيري</option><option>د. عمر الحربي</option><option>د. ريم الزهراني</option></select></FormField><FormField label="العيادة" required><select value={form.clinic} onChange={(event) => updateForm("clinic", event.target.value)} className={formControlClass()}><option>عيادة ١</option><option>عيادة ٢</option><option>عيادة ٣</option></select></FormField><FormField label="رقم الموعد" required><input required value={form.appointment} onChange={(event) => updateForm("appointment", event.target.value)} className={formControlClass()} /></FormField><FormField label="التاريخ" required><input required type="date" value={form.date} onChange={(event) => updateForm("date", event.target.value)} className={formControlClass()} /></FormField><FormField label="الوقت" required><input required type="time" value={form.time} onChange={(event) => updateForm("time", event.target.value)} className={formControlClass()} /></FormField></div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setShowForm(false)} className="h-10 rounded-xl border border-[#dfece9] px-4 text-[10px] font-bold text-[#769390]">إلغاء</button><button type="submit" className="h-10 rounded-xl bg-[#0d716a] px-5 text-[10px] font-bold text-white">حفظ الاستقبال</button></div></form>}
+    {view === "records" ? <section className="rounded-[22px] border border-[#e3eeeb] bg-white p-4 shadow-[0_4px_18px_rgba(30,73,72,0.025)] sm:p-6"><div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between"><div><h2 className="text-[16px] font-bold text-[#234b4b]">سجلات الاستقبال</h2><p className="mt-1 text-[11px] text-[#96aaa8]">{toArabicNumber(visibleRecords.length)} سجلات مطابقة</p></div><div className="flex flex-col gap-2 sm:flex-row sm:items-end"><FormField label="من تاريخ"><input type="date" value={draftRange.from} onChange={(event) => setDraftRange((value) => ({ ...value, from: event.target.value }))} className={formControlClass()} /></FormField><FormField label="إلى تاريخ"><input type="date" value={draftRange.to} onChange={(event) => setDraftRange((value) => ({ ...value, to: event.target.value }))} className={formControlClass()} /></FormField><button onClick={() => setRange(draftRange)} className="flex h-10 items-center justify-center gap-2 rounded-xl bg-[#e6f4f1] px-4 text-[11px] font-bold text-[#0d716a]"><SlidersHorizontal className="h-4 w-4" /> تصفية</button><button onClick={() => downloadCsv("reception-records.csv", columns, exportRows)} className="flex h-10 items-center justify-center gap-2 rounded-xl border border-[#dfebe8] px-4 text-[11px] font-bold text-[#6d8b88]"><Download className="h-4 w-4" /> تصدير CSV</button></div></div><div className="overflow-x-auto"><table className="w-full min-w-[1450px] text-right"><thead><tr className="border-b border-[#dbeaf0] bg-[#eaf6fb] text-[10px] font-bold text-[#5d7f91]">{columns.map((column) => <th key={column} className="px-3 py-3">{column}</th>)}<th className="px-3 py-3">إجراء</th></tr></thead><tbody>{visibleRecords.map((row) => <tr key={row.id} className="border-b border-[#f0f4f3] text-[11px] last:border-0 hover:bg-[#fbfdfd]">{[row.id, row.collector, row.clinic, row.appointment, row.doctor, row.patient, row.date, row.time, row.createdAt, row.updatedAt].map((cell, index) => <td key={`${row.id}-${index}`} className={cn("px-3 py-3 text-[#66817f]", (index === 0 || index === 5) && "font-bold text-[#426765]")}>{cell}</td>)}<td className="px-3 py-3"><StatusPill tone={row.status === "مكتمل" ? "teal" : row.status === "جاري النداء" ? "blue" : "amber"}>{row.status}</StatusPill></td><td className="px-3 py-3"><button disabled={row.status === "مكتمل"} onClick={() => row.status === "مسجل" ? addToQueue(row.id) : activate(row.id)} className="rounded-lg bg-[#e6f4f1] px-3 py-2 text-[10px] font-bold text-[#0d716a] disabled:cursor-not-allowed disabled:opacity-40">{row.status === "مسجل" ? "إضافة للطابور" : row.status === "مكتمل" ? "مكتمل" : "تفعيل النداء"}</button></td></tr>)}</tbody></table></div></section> : <div className="grid gap-6 lg:grid-cols-[minmax(0,1.2fr)_minmax(300px,0.8fr)]"><section className="rounded-[22px] border border-[#d5e9e5] bg-white p-5 sm:p-6"><div className="mb-5 flex items-center justify-between"><div><h2 className="text-[16px] font-bold text-[#234b4b]">الطابور المباشر</h2><p className="mt-1 text-[11px] text-[#96aaa8]">مرتبط بسجلات الاستقبال</p></div><StatusPill>مباشر</StatusPill></div><div className="mb-5 rounded-2xl bg-[#eaf6f2] p-6 text-center"><div className="text-[11px] font-bold text-[#6c918c]">الرقم الحالي</div><div className="my-2 text-[38px] font-bold text-[#0d716a]" dir="ltr">{current?.appointment ?? "—"}</div><div className="text-[13px] font-bold text-[#426765]">{current?.patient ?? "لا يوجد مراجع حالي"}</div><div className="mt-1 text-[10px] text-[#7b9a96]">{current ? `${current.doctor} · ${current.clinic}` : ""}</div></div><div className="flex gap-2"><button onClick={callNext} className="flex-1 rounded-xl bg-[#0d716a] py-3 text-[11px] font-bold text-white">استدعاء التالي</button><button onClick={() => setNotice(current ? `تمت إعادة نداء ${current.patient}` : "لا يوجد رقم حالي")} className="rounded-xl border border-[#dfece9] px-4 text-[11px] font-bold text-[#6e8e8a]">إعادة النداء</button></div></section><section className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><h2 className="text-[16px] font-bold text-[#234b4b]">قائمة الانتظار</h2><p className="mt-1 text-[11px] text-[#96aaa8]">{toArabicNumber(queue.length)} مراجعين</p><div className="mt-5 space-y-3">{queue.map((row) => <button key={row.id} onClick={() => activate(row.id)} className={cn("flex w-full items-center justify-between rounded-xl border p-3 text-right", row.id === current?.id ? "border-[#0d857b] bg-[#eaf7f4]" : "border-[#edf3f1]")}><div><div className="text-[11px] font-bold text-[#426765]">{row.patient}</div><div className="mt-1 text-[9px] text-[#8ba4a1]">{row.doctor} · {row.time}</div></div><span className="text-[15px] font-bold text-[#0d716a]" dir="ltr">{row.appointment}</span></button>)}</div></section></div>}
+  </div>;
+}
+
+function LegacyQueueView({ branch }: { branch: string }) {
   const [activeNumber, setActiveNumber] = useState("A-017");
   const [recalled, setRecalled] = useState(false);
   const tickets = [{ number: "A-017", name: "سارة أحمد", doctor: "د. ليان المطيري", room: "غرفة ٣", wait: "الآن", tone: "teal" as const }, { number: "A-018", name: "عبدالله سالم", doctor: "د. عمر الحربي", room: "غرفة ٢", wait: "٤ دقائق", tone: "purple" as const }, { number: "A-019", name: "نورة محمد", doctor: "د. ليان المطيري", room: "غرفة ٣", wait: "١١ دقيقة", tone: "amber" as const }, { number: "A-020", name: "خالد إبراهيم", doctor: "د. ريم الزهراني", room: "غرفة ١", wait: "١٨ دقيقة", tone: "blue" as const }];
