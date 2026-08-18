@@ -75,6 +75,26 @@ type ClinicalModal = "service" | "radiology" | "medicine" | "prescription";
 
 type ClinicalRows = string[][];
 
+type WorkflowCase = {
+  id: string;
+  patient: string;
+  mrn: string;
+  appointment: string;
+  visit: string;
+  service: string;
+  invoice: string;
+  payment: string;
+  insurance: string;
+  prescription: string;
+  stage: string;
+};
+
+const initialWorkflowCases: WorkflowCase[] = [
+  { id: "CASE-1024", patient: "سارة أحمد العتيبي", mrn: "MRN-1024", appointment: "مؤكد", visit: "مفتوحة", service: "كشف جلدية", invoice: "INV-RYD-1048", payment: "مدفوعة", insurance: "مؤهلة", prescription: "RX-2025-0841", stage: "الصرف" },
+  { id: "CASE-1023", patient: "عبدالله سالم القحطاني", mrn: "MRN-1023", appointment: "وصل", visit: "بانتظار الطبيب", service: "متابعة علاج", invoice: "لم تنشأ", payment: "غير مدفوع", insurance: "نقدي", prescription: "لم تنشأ", stage: "الزيارة" },
+  { id: "CASE-1022", patient: "نورة محمد الغامدي", mrn: "MRN-1022", appointment: "في الانتظار", visit: "لم تبدأ", service: "فحص أولي", invoice: "لم تنشأ", payment: "غير مدفوع", insurance: "بانتظار الأهلية", prescription: "لم تنشأ", stage: "الاستقبال" },
+];
+
 const initialServices: ClinicalRows = [
   ["استشارة جلدية أولية", "الجلدية والتجميل", "٣٠ دقيقة", "٢٠٠ ر.س", "الرياض · جدة", "نشطة"],
   ["جلسة ليزر", "التجميل", "٦٠ دقيقة", "٦٠٠ ر.س", "الرياض", "نشطة"],
@@ -119,10 +139,23 @@ function readClinicalRows(key: string, fallback: ClinicalRows) {
   }
 }
 
+function readWorkflowCases() {
+  if (typeof window === "undefined") return initialWorkflowCases;
+  const stored = window.localStorage.getItem("zaincare-workflow-cases");
+  if (!stored) return initialWorkflowCases;
+  try {
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? parsed as WorkflowCase[] : initialWorkflowCases;
+  } catch {
+    return initialWorkflowCases;
+  }
+}
+
 const navigation: NavItem[] = [
   { label: "الرئيسية", icon: LayoutDashboard, section: "لوحة التحكم" },
   { label: "المرضى", icon: UsersRound, badge: "1,248", section: "الاستقبال والمواعيد" },
   { label: "السجل الطبي", icon: ClipboardList, badge: "24" },
+  { label: "رحلة المريض", icon: Activity, badge: "3" },
   { label: "المواعيد", icon: CalendarDays },
   { label: "الطابور", icon: Activity, badge: "12" },
   { label: "الخدمات", icon: ReceiptText, badge: "18", section: "الكتالوج الطبي" },
@@ -174,6 +207,7 @@ const navIcons: Record<string, typeof LayoutDashboard> = {
   الرئيسية: LayoutDashboard,
   المرضى: UsersRound,
   "السجل الطبي": ClipboardList,
+  "رحلة المريض": Activity,
   المواعيد: CalendarDays,
   الطابور: Activity,
   "الفوترة والمدفوعات": WalletCards,
@@ -226,6 +260,7 @@ export default function Index() {
   const [stock, setStock] = useState<ClinicalRows>(() => readClinicalRows("zaincare-local-stock", initialStock));
   const [prescriptions, setPrescriptions] = useState<ClinicalRows>(() => readClinicalRows("zaincare-local-prescriptions", initialPrescriptions));
   const [dispensingQueue, setDispensingQueue] = useState<ClinicalRows>(() => readClinicalRows("zaincare-local-dispensing", initialDispensingQueue));
+  const [workflowCases, setWorkflowCases] = useState<WorkflowCase[]>(readWorkflowCases);
 
   useEffect(() => {
     window.localStorage.setItem("zaincare-local-services", JSON.stringify(services));
@@ -233,7 +268,8 @@ export default function Index() {
     window.localStorage.setItem("zaincare-local-stock", JSON.stringify(stock));
     window.localStorage.setItem("zaincare-local-prescriptions", JSON.stringify(prescriptions));
     window.localStorage.setItem("zaincare-local-dispensing", JSON.stringify(dispensingQueue));
-  }, [services, radiologyOrders, stock, prescriptions, dispensingQueue]);
+    window.localStorage.setItem("zaincare-workflow-cases", JSON.stringify(workflowCases));
+  }, [services, radiologyOrders, stock, prescriptions, dispensingQueue, workflowCases]);
 
   const activeIcon = navIcons[activeItem] ?? LayoutDashboard;
   const activeLabel = activeItem === "الرئيسية" ? "نظرة عامة" : activeItem;
@@ -248,13 +284,16 @@ export default function Index() {
   const handlePatientCreated = (name: string) => {
     setPatientCount((count) => count + 1);
     setRecentPatient(name);
-    setActiveItem("المرضى");
-    notify(`تم تسجيل ملف ${name} بنجاح`);
+    const sequence = String(workflowCases.length + 1025);
+    setWorkflowCases((cases) => [{ id: `CASE-${sequence}`, patient: name, mrn: `MRN-${sequence}`, appointment: "لم يحجز", visit: "لم تبدأ", service: "لم تحدد", invoice: "لم تنشأ", payment: "غير مدفوع", insurance: "بانتظار التحقق", prescription: "لم تنشأ", stage: "الاستقبال" }, ...cases]);
+    setActiveItem("رحلة المريض");
+    notify(`تم تسجيل ملف ${name} وفتح رحلة المريض`);
   };
   const handleAppointmentCreated = () => {
     setAppointmentCount((count) => count + 1);
-    setActiveItem("المواعيد");
-    notify("تم حجز الموعد وإرسال رسالة التأكيد");
+    setWorkflowCases((cases) => cases.map((item, index) => index === 0 ? { ...item, appointment: "مؤكد", stage: "الاستقبال" } : item));
+    setActiveItem("رحلة المريض");
+    notify("تم حجز الموعد وربطه برحلة المريض وإرسال رسالة التأكيد");
   };
   const handleClinicalCreated = (type: ClinicalModal, row: string[], payment = "نقدي") => {
     if (type === "service") {
@@ -293,6 +332,25 @@ export default function Index() {
       return;
     }
     updateDispensingStatus(waiting[0], "جاري التجهيز");
+  };
+  const advanceWorkflow = (caseId: string) => {
+    const currentCase = workflowCases.find((item) => item.id === caseId);
+    if (!currentCase) return;
+    const transitions: Record<string, string> = { الاستقبال: "الزيارة", الزيارة: "الخدمات", الخدمات: "الفوترة", الفوترة: "الصرف", الصرف: "مكتملة" };
+    const nextStage = transitions[currentCase.stage] ?? "مكتملة";
+    let updates: Partial<WorkflowCase> = { stage: nextStage };
+    if (nextStage === "الزيارة") updates = { ...updates, appointment: "وصل", visit: "مفتوحة" };
+    if (nextStage === "الخدمات") updates = { ...updates, visit: "مكتملة", prescription: `RX-2025-${currentCase.mrn.slice(-4)}` };
+    if (nextStage === "الفوترة") updates = { ...updates, invoice: `INV-RYD-${currentCase.mrn.slice(-4)}`, payment: "بانتظار الدفع" };
+    if (nextStage === "الصرف") updates = { ...updates, payment: "مدفوعة", insurance: currentCase.insurance === "بانتظار الأهلية" ? "مؤهلة" : currentCase.insurance };
+    if (nextStage === "مكتملة") updates = { ...updates, payment: "مدفوعة", visit: "مغلقة" };
+    setWorkflowCases((cases) => cases.map((item) => item.id === caseId ? { ...item, ...updates } : item));
+    if (nextStage === "الخدمات" && !prescriptions.some((row) => row[1] === currentCase.patient)) {
+      const prescriptionId = `RX-2025-${currentCase.mrn.slice(-4)}`;
+      setPrescriptions((rows) => [[prescriptionId, currentCase.patient, "د. ليان المطيري", "٢ صنف", "معتمدة", "الآن"], ...rows]);
+      setDispensingQueue((rows) => [[prescriptionId, currentCase.patient, "٢ صنف", currentCase.insurance === "نقدي" ? "نقدي" : "تأمين", "بانتظار التجهيز"], ...rows]);
+    }
+    notify(`انتقلت حالة ${currentCase.patient} إلى ${nextStage}`);
   };
 
   return (
@@ -394,7 +452,7 @@ export default function Index() {
 
             <div className="mt-6 flex flex-col items-start justify-between gap-3 rounded-[20px] bg-[#e8f5f1] px-5 py-4 sm:flex-row sm:items-center sm:px-6"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-[#0d716a]"><MapPin className="h-4 w-4" /></div><div><p className="text-[12px] font-bold text-[#2d625e]">أنت تعمل الآن من {branch}</p><p className="mt-1 text-[10px] text-[#6f9690]">آخر مزامنة للبيانات: منذ دقيقة واحدة</p></div></div><button className="flex items-center gap-1 text-[11px] font-bold text-[#0d716a]">تغيير الفرع <ArrowUpLeft className="h-3.5 w-3.5" /></button></div>
             </div>
-            </> : <ModuleView activeItem={activeItem} branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} newPatient={recentPatient} patientCount={patientCount} services={services} radiologyOrders={radiologyOrders} stock={stock} prescriptions={prescriptions} dispensingQueue={dispensingQueue} onCreate={(type) => setClinicalModal(type)} onUpdateDispensing={updateDispensingStatus} onScanPrescription={scanPrescription} onNavigate={setActiveItem} />}
+            </> : <ModuleView activeItem={activeItem} branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} newPatient={recentPatient} patientCount={patientCount} services={services} radiologyOrders={radiologyOrders} stock={stock} prescriptions={prescriptions} dispensingQueue={dispensingQueue} onCreate={(type) => setClinicalModal(type)} onUpdateDispensing={updateDispensingStatus} onScanPrescription={scanPrescription} onNavigate={setActiveItem} workflowCases={workflowCases} onAdvanceWorkflow={advanceWorkflow} />}
           </div>
         </section>
       </div>
@@ -550,6 +608,19 @@ function HRView({ activeItem, branch, onNavigate }: { activeItem: string; branch
   return <><ViewHeader eyebrow={section.eyebrow} title={section.title} description={section.description} action={section.action} icon={section.icon} onAction={handleAction} /><div className="mb-6 flex gap-2 overflow-x-auto pb-1">{hrSectionLabels.map((label) => <button key={label} onClick={() => onNavigate(label)} className={cn("min-w-max rounded-xl border px-3 py-2.5 text-[10px] font-bold transition", activeSection === label ? "border-[#0d857b] bg-[#e6f4f1] text-[#0d716a]" : "border-[#e3eeeb] bg-white text-[#789794] hover:border-[#acd8d2]")}>{label}</button>)}</div>{activeSection === "الموظفون" && <><SummaryCards items={[{ label: "إجمالي الموظفين", value: toArabicNumber(employees.length), note: "كل الفروع", tone: "bg-[#0d857b]" }, { label: "الموظفون النشطون", value: "٥٨", note: "جاهزون للعمل", tone: "bg-[#397fbd]" }, { label: "إجازات اليوم", value: "٠٣", note: "تؤثر على التغطية", tone: "bg-[#e5b15a]" }, { label: "وثائق تحتاج تحديث", value: "٠٦", note: "عقود أو تراخيص", tone: "bg-[#d36c83]" }]} /><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><div className="mb-5"><h2 className="text-[16px] font-bold text-[#234b4b]">سجل الموظفين</h2><p className="mt-1 text-[11px] text-[#96aaa8]">الملفات والأدوار والصلاحيات حسب الفرع</p></div><HRTable columns={["الموظف", "الرقم", "المسمى الوظيفي", "القسم", "الفرع", "الحالة"]} rows={employees} actionLabel="فتح الملف" onAction={() => setNote("تم فتح ملف الموظف محليًا")} /></div></>}{activeSection === "الحضور والانصراف" && <><SummaryCards items={[{ label: "حاضرون الآن", value: attendanceMarked ? "٥٨" : "٥٧", note: "من ٦٣ موظفًا", tone: "bg-[#0d857b]" }, { label: "متأخرون", value: "٠٥", note: "يحتاجون متابعة", tone: "bg-[#e5b15a]" }, { label: "غائبون", value: "٠٣", note: "معتمدون بإجازة", tone: "bg-[#d36c83]" }, { label: "ساعات إضافية", value: "٢٤", note: "ساعة هذا الأسبوع", tone: "bg-[#397fbd]" }]} /><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الموظف", "القسم", "وقت الدخول", "الحالة"]} rows={attendanceRows} actionLabel={attendanceMarked ? "تعديل" : "تسجيل"} onAction={markAttendance} /></div></>}{activeSection === "الإجازات" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><div className="mb-5"><h2 className="text-[16px] font-bold text-[#234b4b]">طلبات الإجازات</h2><p className="mt-1 text-[11px] text-[#96aaa8]">اعتماد الطلب ينعكس على تغطية المناوبات</p></div><HRTable columns={["الطلب", "الموظف", "النوع", "المدة", "الحالة"]} rows={leaveRows} actionLabel="اعتماد" onAction={approveLeave} /></div>}{activeSection === "الرواتب" && <><SummaryCards items={[{ label: "إجمالي المسير", value: "٤٠٬٥٠٠ ر.س", note: payrollReady ? "معتمد للمراجعة" : "مسودة الشهر الحالي", tone: "bg-[#0d857b]" }, { label: "بدلات", value: "١٬٨٠٠ ر.س", note: "بدلات حضور ونقل", tone: "bg-[#397fbd]" }, { label: "استقطاعات", value: "٣٠٠ ر.س", note: "حسب الحضور", tone: "bg-[#e5b15a]" }, { label: "موعد الصرف", value: "٢٧ مايو", note: "متوافق مع السياسة", tone: "bg-[#7654ba]" }]} /><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الموظف", "المسمى", "الأساسي", "الاستقطاعات", "الحالة"]} rows={payrollRows} actionLabel="كشف الراتب" onAction={() => setNote("تم فتح كشف الراتب محليًا")} /></div></>}{activeSection === "العقود والملفات" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الرقم", "الموظف", "نوع العقد", "الانتهاء", "الحالة"]} rows={contractRows} actionLabel="عرض الملف" onAction={() => setNote("تم فتح ملف العقد والوثائق")} /></div>}{activeSection === "التوظيف" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الوظيفة", "القسم", "المرشحون", "المرحلة", "الحالة"]} rows={recruitmentRows} actionLabel="متابعة" onAction={() => setNote("تم فتح مسار التوظيف")} /></div>}{activeSection === "تقييم الأداء" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الموظف", "القسم", "التقييم", "تحقيق الأهداف", "الحالة"]} rows={performanceRows} actionLabel="فتح التقييم" onAction={() => setNote("تم فتح نموذج تقييم الأداء")} /></div>}{activeSection === "التدريب والتطوير" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الدورة", "النوع", "المسجلون", "التاريخ", "الحالة"]} rows={trainingRows} actionLabel="إدارة الدورة" onAction={() => setNote("تم فتح إدارة الدورة التدريبية")} /></div>}{activeSection === "المناوبات والجداول" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["المناوبة", "الوقت", "التغطية", "الفريق", "الحالة"]} rows={shiftRows} actionLabel="تعديل الجدول" onAction={() => setNote("تم فتح جدول المناوبة")} /></div>}{activeSection === "تقارير الموارد البشرية" && <><SummaryCards items={reportCards} /><div className="grid gap-4 md:grid-cols-2"><ReportCard title="توزيع القوى العاملة" detail="العيادات ٤٢٪ · الاستقبال ٢٢٪ · الخدمات المساندة ٣٦٪" bars={[82, 54, 68, 43]} tone="blue" /><ReportCard title="الحضور والالتزام" detail="نسبة الحضور ٩٢٪ · الإجازات ٥٪ · الغياب ٣٪" bars={[92, 55, 35]} tone="teal" /></div></>}{note && <div role="status" className="mt-4 rounded-xl bg-[#e8f5f1] px-4 py-3 text-[11px] font-bold text-[#0d716a]">{note}</div>}</>;
 }
 
+function PatientJourneyView({ branch, cases, onAdvance, onNavigate }: { branch: string; cases: WorkflowCase[]; onAdvance: (caseId: string) => void; onNavigate: (item: string) => void }) {
+  const stages = ["الاستقبال", "الزيارة", "الخدمات", "الفوترة", "الصرف", "مكتملة"];
+  const [selectedId, setSelectedId] = useState(cases[0]?.id ?? "");
+  const selected = cases.find((item) => item.id === selectedId) ?? cases[0];
+  if (!selected) return null;
+  const stageIndex = stages.indexOf(selected.stage);
+  return <><ViewHeader eyebrow="التشغيل السريري والمالي" title="رحلة المريض المترابطة" description={`${branch} · كل إجراء يحدث الوحدات المرتبطة ويحفظ محليًا`} action={selected.stage === "مكتملة" ? "الرحلة مكتملة" : `نقل إلى ${stages[Math.min(stageIndex + 1, stages.length - 1)]}`} icon={Activity} onAction={() => onAdvance(selected.id)} /><div className="mb-5 flex gap-2 overflow-x-auto">{cases.map((item) => <button key={item.id} onClick={() => setSelectedId(item.id)} className={cn("min-w-[210px] rounded-2xl border p-4 text-right", selected.id === item.id ? "border-[#0d857b] bg-[#eaf7f4]" : "border-[#e3eeeb] bg-white")}><div className="text-[11px] font-bold text-[#315d5a]">{item.patient}</div><div className="mt-1 text-[10px] text-[#8ba4a1]">{item.mrn} · {item.id}</div><div className="mt-3"><StatusPill tone={item.stage === "مكتملة" ? "teal" : "blue"}>{item.stage}</StatusPill></div></button>)}</div><div className="mb-6 rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><div className="flex min-w-[720px] items-center overflow-x-auto">{stages.map((stage, index) => <div key={stage} className="flex flex-1 items-center"><div className="min-w-[90px] text-center"><div className={cn("mx-auto flex h-9 w-9 items-center justify-center rounded-full text-[11px] font-bold", index <= stageIndex ? "bg-[#0d857b] text-white" : "bg-[#edf3f1] text-[#91a8a5]")}>{index < stageIndex ? "✓" : index + 1}</div><div className={cn("mt-2 text-[10px] font-bold", index <= stageIndex ? "text-[#0d716a]" : "text-[#91a8a5]")}>{stage}</div></div>{index < stages.length - 1 && <div className={cn("h-0.5 flex-1", index < stageIndex ? "bg-[#0d857b]" : "bg-[#e3eeeb]")} />}</div>)}</div></div><div className="grid gap-5 lg:grid-cols-3"><SettingsCard title="الاستقبال والزيارة" description="الموعد والوصول والملف السريري" icon={CalendarDays}><div className="space-y-3"><JourneyRow label="الموعد" value={selected.appointment} /><JourneyRow label="الزيارة" value={selected.visit} /><JourneyRow label="الخدمة" value={selected.service} /></div><div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => onNavigate("المواعيد")} className="rounded-xl border border-[#dceae7] py-2.5 text-[10px] font-bold text-[#0d716a]">المواعيد</button><button onClick={() => onNavigate("السجل الطبي")} className="rounded-xl border border-[#dceae7] py-2.5 text-[10px] font-bold text-[#0d716a]">السجل الطبي</button></div></SettingsCard><SettingsCard title="السريري والصيدلية" description="التشخيص والوصفة والصرف والمخزون" icon={Stethoscope}><div className="space-y-3"><JourneyRow label="الوصفة" value={selected.prescription} /><JourneyRow label="حالة الصرف" value={selected.stage === "مكتملة" ? "تم التسليم" : selected.stage === "الصرف" ? "بانتظار التجهيز" : "لم تبدأ"} /><JourneyRow label="المخزون" value={selected.stage === "مكتملة" ? "تم الخصم من الدفعة" : "محجوز عند الصرف"} /></div><div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => onNavigate("الأدوية والوصفات")} className="rounded-xl border border-[#dceae7] py-2.5 text-[10px] font-bold text-[#0d716a]">الوصفات</button><button onClick={() => onNavigate("صرف الأدوية")} className="rounded-xl border border-[#dceae7] py-2.5 text-[10px] font-bold text-[#0d716a]">الصرف</button></div></SettingsCard><SettingsCard title="المالية والتأمين" description="الفاتورة والأهلية والتحصيل" icon={WalletCards}><div className="space-y-3"><JourneyRow label="الفاتورة" value={selected.invoice} /><JourneyRow label="الدفع" value={selected.payment} /><JourneyRow label="التأمين" value={selected.insurance} /></div><div className="mt-4 grid grid-cols-2 gap-2"><button onClick={() => onNavigate("الفوترة والمدفوعات")} className="rounded-xl border border-[#dceae7] py-2.5 text-[10px] font-bold text-[#0d716a]">الفوترة</button><button onClick={() => onNavigate("التأمين والمطالبات")} className="rounded-xl border border-[#dceae7] py-2.5 text-[10px] font-bold text-[#0d716a]">التأمين</button></div></SettingsCard></div><div className="mt-5 rounded-[18px] border border-[#d7e8e4] bg-[#f0f8f6] p-4"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><div className="text-[11px] font-bold text-[#315d5a]">الإجراء التالي المنطقي</div><p className="mt-1 text-[10px] text-[#789794]">سيتم تحديث الرحلة والوصفة وطابور الصرف والفاتورة تلقائيًا بحسب المرحلة.</p></div><button disabled={selected.stage === "مكتملة"} onClick={() => onAdvance(selected.id)} className="rounded-xl bg-[#0d716a] px-5 py-3 text-[10px] font-bold text-white disabled:bg-[#a8bcb8]">{selected.stage === "مكتملة" ? "تم إغلاق الرحلة" : `اعتماد والانتقال إلى ${stages[Math.min(stageIndex + 1, stages.length - 1)]}`}</button></div></div></>;
+}
+
+function JourneyRow({ label, value }: { label: string; value: string }) {
+  return <div className="flex items-center justify-between rounded-xl bg-[#f7faf9] px-3 py-2.5"><span className="text-[10px] text-[#8ba4a1]">{label}</span><span className="text-[10px] font-bold text-[#426765]">{value}</span></div>;
+}
+
 function OperationsCenterView({ activeItem, branch, onNavigate }: { activeItem: string; branch: string; onNavigate: (item: string) => void }) {
   const [tab, setTab] = useState(activeItem);
   const [statuses, setStatuses] = useState<Record<string, string>>({ "PO-2025-009": "مسودة", "REQ-1048": "بانتظار الاعتماد", "MSG-003": "مجدولة" });
@@ -560,11 +631,12 @@ function OperationsCenterView({ activeItem, branch, onNavigate }: { activeItem: 
   return <><ViewHeader eyebrow={section.eyebrow} title={section.title} description={section.description} action={saved ? "تم الحفظ محليًا" : "حفظ التغييرات"} icon={section.icon} onAction={() => setSaved(true)} /><div className="mb-5 flex gap-2 overflow-x-auto pb-1">{tabs.map((item) => <button key={item} onClick={() => setTab(item)} className={cn("min-w-max rounded-xl border px-3 py-2.5 text-[10px] font-bold", tab === item ? "border-[#0d857b] bg-[#e6f4f1] text-[#0d716a]" : "border-[#e3eeeb] bg-white text-[#789794]")}>{item}</button>)}</div>{tab === "الحسابات ودليل الحسابات" && <div className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]"><SummaryCards items={[{ label: "إيرادات اليوم", value: "١٢٬٤٨٠ ر.س", note: "٢٩ عملية دفع", tone: "bg-[#0d857b]" }, { label: "ضريبة القيمة المضافة", value: "١٬٨٧٢ ر.س", note: "VAT 15%", tone: "bg-[#397fbd]" }, { label: "دفعات معلقة", value: "٧", note: "٤٬٣٢٠ ر.س", tone: "bg-[#e5b15a]" }, { label: "حالة الصندوق", value: "مفتوح", note: "إغلاق نهاية اليوم", tone: "bg-[#7654ba]" }]} /><SettingsCard title="دورة الفاتورة والتحصيل" description="الخدمة ← الفاتورة ← الدفع ← القيد ← الإغلاق" icon={WalletCards}><div className="space-y-3">{[["INV-RYD-1048", "سارة أحمد العتيبي", "كشف جلدية", "مدفوعة"], ["INV-RYD-1046", "نورة محمد الغامدي", "فحص أولي", "بانتظار التأمين"], ["INV-RYD-1045", "خالد إبراهيم الشهري", "باقة ليزر", "مدفوعة"]].map((row) => <div key={row[0]} className="flex items-center justify-between rounded-xl border border-[#edf3f1] p-3"><div><div className="text-[11px] font-bold text-[#426765]">{row[0]} · {row[1]}</div><div className="mt-1 text-[10px] text-[#9aafac]">{row[2]} · VAT 15%</div></div><StatusPill tone={row[3] === "مدفوعة" ? "teal" : "amber"}>{row[3]}</StatusPill></div>)}</div><button onClick={() => onNavigate("الفوترة والمدفوعات")} className="mt-4 w-full rounded-xl bg-[#0d716a] py-3 text-[10px] font-bold text-white">فتح الفوترة والمدفوعات</button></SettingsCard></div>}{tab === "المشتريات والموردون" && <div className="grid gap-5 lg:grid-cols-[1fr_1fr]"><ModuleTable title="طلبات الشراء" description="المورد والصنف والكمية والحالة" columns={["الطلب", "المورد", "التاريخ", "القيمة", "الحالة"]} rows={[["PO-2025-009", "شركة المستلزمات الطبية", "18 أغسطس", "٨٬٤٥٠ ر.س", statuses["PO-2025-009"]], ["PO-2025-008", "مؤسسة المختبرات المتحدة", "16 أغسطس", "٣٬٢٨٠ ر.س", "مستلم"]]} /><SettingsCard title="بيانات المورد" description="الرقم الضريبي ووسائل الاتصال وشروط الدفع" icon={BriefcaseBusiness}><div className="grid gap-3"><EditableField label="اسم المورد" value="شركة المستلزمات الطبية" onChange={() => undefined} /><EditableField label="الرقم الضريبي" value="310123456700003" dir="ltr" onChange={() => undefined} /><EditableField label="شروط الدفع" value="آجل 30 يومًا" onChange={() => undefined} /></div><button onClick={() => action("PO-2025-009", "معتمد للشراء")} className="mt-4 w-full rounded-xl border border-[#abd6cf] py-3 text-[10px] font-bold text-[#0d716a]">اعتماد طلب الشراء</button></SettingsCard></div>}{tab === "حركات المخزون" && <><SummaryCards items={[{ label: "حركات اليوم", value: "١٦", note: "استلام وصرف وتحويل", tone: "bg-[#0d857b]" }, { label: "أصناف منخفضة", value: "٠٤", note: "تحتاج طلب شراء", tone: "bg-[#e5b15a]" }, { label: "دفعات قاربت الانتهاء", value: "٠٢", note: "خلال ٩٠ يومًا", tone: "bg-[#d36c83]" }, { label: "قيمة المخزون", value: "٤٨٬٢٠٠", note: "ر.س تقديرية", tone: "bg-[#397fbd]" }]} /><ModuleTable title="حركات المخزون" description="تتبع الصنف والدفعة والكمية والمستخدم والمستودع" columns={["المرجع", "الصنف", "الحركة", "الدفعة", "الكمية", "المستخدم"]} rows={[["REQ-1048", "أموكسيسيلين ٥٠٠ مج", "صرف وصفة", "BTH-5510", "٢", "الصيدلية"], ["GRN-021", "قفازات طبية", "استلام شراء", "BTH-9910", "٥٠٠", "المستودع"], ["TRN-014", "محلول ملحي ٥٠٠ مل", "تحويل فرع", "BTH-1022", "٢٠", "أحمد المطيري"]]} /></>}{tab === "الرسائل والتنبيهات" && <div className="grid gap-5 lg:grid-cols-[1fr_1fr]"><SettingsCard title="قوالب الإرسال" description="رسائل المواعيد والنتائج والفواتير والتذكير" icon={MessageCircle}><div className="space-y-3">{[["تأكيد الموعد", "واتساب + SMS", "مفعلة"], ["تذكير قبل 24 ساعة", "واتساب", "مفعلة"], ["جاهزية نتيجة المختبر", "واتساب + بريد", "مجدولة"], ["إيصال الدفع", "SMS + بريد", "مفعلة"]].map((row) => <div key={row[0]} className="flex items-center justify-between rounded-xl border border-[#edf3f1] p-3"><div><div className="text-[11px] font-bold text-[#426765]">{row[0]}</div><div className="mt-1 text-[10px] text-[#9aafac]">{row[1]}</div></div><StatusPill>{row[2]}</StatusPill></div>)}</div></SettingsCard><SettingsCard title="قنوات الاتصال" description="إعدادات المزود والقوالب الافتراضية" icon={MessageCircle}><div className="grid gap-3"><EditableField label="مزود واتساب" value="Meta Cloud API" onChange={() => undefined} /><EditableField label="رقم الإرسال" value="+966 55 420 1188" dir="ltr" onChange={() => undefined} /><EditableField label="البريد الافتراضي" value="notifications@zainmedical.sa" dir="ltr" onChange={() => undefined} /></div><button onClick={() => action("MSG-003", "مفعلة")} className="mt-4 w-full rounded-xl bg-[#0d716a] py-3 text-[10px] font-bold text-white">اختبار إرسال رسالة</button></SettingsCard></div>}{tab === "سجل التدقيق" && <ModuleTable title="السجل الكامل" description="إضافة وتعديل واعتماد وتصدير مع المستخدم والوقت والجهاز" columns={["الوقت", "المستخدم", "العملية", "الكيان", "المرجع", "النتيجة"]} rows={[["08/08/2025 05:41", "admin", "Add", "فاتورة", "INV-RYD-1048", "نجاح"], ["08/08/2025 05:39", "أحمد المطيري", "Update", "ملف مريض", "MRN-1024", "نجاح"], ["08/08/2025 05:37", "الصيدلية", "Dispense", "وصفة", "RX-2025-0841", "نجاح"], ["08/08/2025 05:35", "النظام", "Export", "تقرير مالي", "RPT-2025-08", "نجاح"]]} />}{tab === "إعدادات التشغيل" && <div className="grid gap-5 lg:grid-cols-2"><SettingsCard title="قواعد التشغيل" description="إعدادات الفوترة والمواعيد والتأمين" icon={Settings2}><div className="space-y-3"><ToggleRow label="احتساب ضريبة القيمة المضافة" description="إضافة VAT 15% للخدمات الخاضعة" checked={true} onChange={() => setSaved(true)} /><ToggleRow label="منع الصرف دون اعتماد الطبيب" description="ربط الوصفة بطابور الصرف" checked={true} onChange={() => setSaved(true)} /><ToggleRow label="تسجيل كل التغييرات" description="حفظ سجل التدقيق للمستخدم والوقت" checked={true} onChange={() => setSaved(true)} /><ToggleRow label="تنبيه قرب انتهاء الدفعات" description="إشعار المستودع قبل 90 يومًا" checked={true} onChange={() => setSaved(true)} /></div></SettingsCard><SettingsCard title="المستودعات والفروع" description="المستودع الافتراضي وسياسة FEFO" icon={Building2}><div className="grid gap-3"><EditableField label="المستودع الافتراضي" value="مستودع الرياض الرئيسي" onChange={() => undefined} /><EditableField label="سياسة الصرف" value="FEFO - الأقدم انتهاءً أولًا" onChange={() => undefined} /><EditableField label="حد إعادة الطلب" value="10 وحدات" onChange={() => undefined} /></div><button onClick={() => setSaved(true)} className="mt-4 w-full rounded-xl border border-[#abd6cf] py-3 text-[10px] font-bold text-[#0d716a]">حفظ إعدادات التشغيل</button></SettingsCard></div>}</>;
 }
 
-type ModuleViewProps = { activeItem: string; branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void; newPatient: string; patientCount: number; services: ClinicalRows; radiologyOrders: ClinicalRows; stock: ClinicalRows; prescriptions: ClinicalRows; dispensingQueue: ClinicalRows; onCreate: (type: ClinicalModal) => void; onUpdateDispensing: (id: string, status: string) => void; onScanPrescription: () => void; onNavigate: (item: string) => void };
+type ModuleViewProps = { activeItem: string; branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void; newPatient: string; patientCount: number; services: ClinicalRows; radiologyOrders: ClinicalRows; stock: ClinicalRows; prescriptions: ClinicalRows; dispensingQueue: ClinicalRows; onCreate: (type: ClinicalModal) => void; onUpdateDispensing: (id: string, status: string) => void; onScanPrescription: () => void; onNavigate: (item: string) => void; workflowCases: WorkflowCase[]; onAdvanceWorkflow: (caseId: string) => void };
 
-function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, newPatient, patientCount, services, radiologyOrders, stock, prescriptions, dispensingQueue, onCreate, onUpdateDispensing, onScanPrescription, onNavigate }: ModuleViewProps) {
+function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, newPatient, patientCount, services, radiologyOrders, stock, prescriptions, dispensingQueue, onCreate, onUpdateDispensing, onScanPrescription, onNavigate, workflowCases, onAdvanceWorkflow }: ModuleViewProps) {
   if (activeItem === "المرضى") return <PatientsView branch={branch} onAdd={onPatient} newPatient={newPatient} patientCount={patientCount} />;
   if (activeItem === "السجل الطبي") return <MedicalRecordView branch={branch} onNavigate={onNavigate} />;
+  if (activeItem === "رحلة المريض") return <PatientJourneyView branch={branch} cases={workflowCases} onAdvance={onAdvanceWorkflow} onNavigate={onNavigate} />;
   if (activeItem === "المواعيد") return <AppointmentsView branch={branch} onBook={onAppointment} />;
   if (activeItem === "الطابور") return <QueueView branch={branch} />;
   if (activeItem === "الفوترة والمدفوعات") return <FinanceView branch={branch} />;
