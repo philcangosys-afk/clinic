@@ -153,11 +153,11 @@ function readWorkflowCases() {
 
 const navigation: NavItem[] = [
   { label: "الرئيسية", icon: LayoutDashboard, section: "لوحة التحكم" },
-  { label: "المرضى", icon: UsersRound, badge: "1,248", section: "الاستقبال والمواعيد" },
+  { label: "الاستقبال والانتظار", icon: Activity, badge: "12", section: "الاستقبال والمواعيد" },
+  { label: "المرضى", icon: UsersRound, badge: "1,248" },
   { label: "السجل الطبي", icon: ClipboardList, badge: "24" },
   { label: "رحلة المريض", icon: Activity, badge: "3" },
   { label: "المواعيد", icon: CalendarDays },
-  { label: "الطابور", icon: Activity, badge: "12" },
   { label: "الخدمات", icon: ReceiptText, badge: "18", section: "الكتالوج الطبي" },
   { label: "الأقسام والعيادات", icon: Building2, badge: "22" },
   { label: "الأطباء", icon: Stethoscope, badge: "10" },
@@ -209,7 +209,7 @@ const navIcons: Record<string, typeof LayoutDashboard> = {
   "السجل الطبي": ClipboardList,
   "رحلة المريض": Activity,
   المواعيد: CalendarDays,
-  الطابور: Activity,
+  "الاستقبال والانتظار": Activity,
   "الفوترة والمدفوعات": WalletCards,
   المختبر: FlaskConical,
   "الأشعة والتصوير الطبي": Activity,
@@ -452,11 +452,11 @@ export default function Index() {
               </section>
 
               <section className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 shadow-[0_4px_18px_rgba(30,73,72,0.025)] sm:p-6">
-                <div className="mb-5 flex items-start justify-between"><div><div className="flex items-center gap-2"><h2 className="text-[16px] font-bold text-[#234b4b]">الطابور المباشر</h2><span className="flex h-5 items-center rounded-full bg-[#e6f6f1] px-2 text-[10px] font-bold text-[#0d857b]">مباشر</span></div><p className="mt-1 text-[11px] text-[#96aaa8]">تحديث تلقائي كل ٣٠ ثانية</p></div><button onClick={() => setActiveItem("الطابور")} className="rounded-lg p-1.5 text-[#9ab0ad] hover:bg-[#f3f8f7] hover:text-[#0d716a]"><MoreHorizontal className="h-5 w-5" /></button></div>
+                <div className="mb-5 flex items-start justify-between"><div><div className="flex items-center gap-2"><h2 className="text-[16px] font-bold text-[#234b4b]">الطابور المباشر</h2><span className="flex h-5 items-center rounded-full bg-[#e6f6f1] px-2 text-[10px] font-bold text-[#0d857b]">مباشر</span></div><p className="mt-1 text-[11px] text-[#96aaa8]">تحديث تلقائي كل ٣٠ ثانية</p></div><button onClick={() => setActiveItem("الاستقبال والانتظار")} className="rounded-lg p-1.5 text-[#9ab0ad] hover:bg-[#f3f8f7] hover:text-[#0d716a]"><MoreHorizontal className="h-5 w-5" /></button></div>
                 <div className="mb-5 flex items-center gap-4 rounded-2xl bg-[#f0f8f6] p-4"><div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-[21px] font-bold text-[#0d716a] shadow-sm">A-017</div><div className="min-w-0 flex-1"><div className="text-[12px] font-bold text-[#2d5958]">المريض الحالي</div><div className="mt-1 flex items-center gap-1 text-[11px] text-[#76938f]"><Stethoscope className="h-3.5 w-3.5" /> د. ليان المطيري · غرفة ٣</div></div><div className="text-left"><div className="text-[10px] text-[#90aaa5]">الحالة</div><div className="mt-1 text-[11px] font-bold text-[#0d857b]">في الغرفة</div></div></div>
                 <div className="mb-3 flex items-center justify-between text-[11px] font-bold text-[#89a4a0]"><span>التالي في الطابور</span><span>وقت الانتظار المتوقع</span></div>
                 <div className="space-y-2">{queue.slice(1).map((item) => <div key={item.number} className="flex items-center gap-3 rounded-xl border border-[#edf3f1] px-3 py-3"><div className="flex h-9 w-10 items-center justify-center rounded-lg bg-[#f7f9f8] text-[11px] font-bold text-[#4d7370]">{item.number}</div><div className="flex-1"><div className="text-[12px] font-bold text-[#426765]">{item.patient}</div><div className="mt-0.5 text-[10px] text-[#9bb0ad]">{item.doctor}</div></div><div className="text-left text-[11px] font-bold text-[#779490]">{item.wait}</div></div>)}</div>
-                <button onClick={() => setActiveItem("الطابور")} className="mt-4 w-full rounded-xl bg-[#0d716a] py-3 text-[11px] font-bold text-white transition hover:bg-[#095d58]">إدارة الطابور</button>
+                <button onClick={() => setActiveItem("الاستقبال والانتظار")} className="mt-4 w-full rounded-xl bg-[#0d716a] py-3 text-[11px] font-bold text-white transition hover:bg-[#095d58]">إدارة الطابور</button>
               </section>
             </div>
 
@@ -682,7 +682,7 @@ function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, ne
   if (activeItem === "السجل الطبي") return <MedicalRecordView branch={branch} onNavigate={onNavigate} />;
   if (activeItem === "رحلة المريض") return <PatientJourneyView branch={branch} cases={workflowCases} onAdvance={onAdvanceWorkflow} onNavigate={onNavigate} />;
   if (activeItem === "المواعيد") return <AppointmentsView branch={branch} onBook={onAppointment} />;
-  if (activeItem === "الطابور") return <QueueView branch={branch} />;
+  if (activeItem === "الاستقبال والانتظار") return <QueueView branch={branch} />;
   if (activeItem === "الفوترة والمدفوعات") return <FinanceView branch={branch} />;
   if (activeItem === "المختبر") return <LabView branch={branch} />;
   if (activeItem === "التأمين والمطالبات") return <InsuranceView branch={branch} />;
