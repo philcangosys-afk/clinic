@@ -249,6 +249,7 @@ export default function Index() {
   const [showNotifications, setShowNotifications] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [globalQuery, setGlobalQuery] = useState("");
+  const [openNavSections, setOpenNavSections] = useState<string[]>(["لوحة التحكم"]);
   const [modal, setModal] = useState<"patient" | "appointment" | "clinic" | null>(null);
   const [toast, setToast] = useState("");
   const [patientCount, setPatientCount] = useState(1248);
@@ -271,6 +272,15 @@ export default function Index() {
     window.localStorage.setItem("zaincare-workflow-cases", JSON.stringify(workflowCases));
   }, [services, radiologyOrders, stock, prescriptions, dispensingQueue, workflowCases]);
 
+  const navGroups = useMemo(() => navigation.reduce<{ section: string; items: NavItem[] }[]>((groups, item) => {
+    if (item.section || groups.length === 0) groups.push({ section: item.section ?? "أخرى", items: [item] });
+    else groups[groups.length - 1].items.push(item);
+    return groups;
+  }, []), []);
+  useEffect(() => {
+    const activeSection = navGroups.find((group) => group.items.some((item) => item.label === activeItem))?.section;
+    if (activeSection) setOpenNavSections((sections) => sections.includes(activeSection) ? sections : [...sections, activeSection]);
+  }, [activeItem, navGroups]);
   const activeIcon = navIcons[activeItem] ?? LayoutDashboard;
   const activeLabel = activeItem === "الرئيسية" ? "نظرة عامة" : activeItem;
   const dateLabel = useMemo(() => new Intl.DateTimeFormat("ar-SA", { weekday: "long", day: "numeric", month: "long" }).format(new Date(2025, 4, 18)), []);
@@ -370,16 +380,20 @@ export default function Index() {
 
           {collapsed && <button aria-label="فتح القائمة" onClick={() => setCollapsed(false)} className="mx-auto mt-5 rounded-lg p-2 text-[#8ba4a2] transition hover:bg-[#f1f7f5] hover:text-[#0d6f68]"><PanelRightOpen className="h-5 w-5" /></button>}
 
-          <div className={cn("px-3 pt-7", collapsed && "pt-5 px-2")}>
+          <div className={cn("min-h-0 flex-1 overflow-y-auto px-3 pt-5", collapsed && "px-2")}>
             {!collapsed && <div className="mb-3 px-3 text-[11px] font-bold tracking-[0.08em] text-[#7e91ad]">مساحة العمل</div>}
-            <nav className="space-y-1.5">
-              {navigation.map((item) => {
-                const Icon = item.icon;
-                const active = item.label === activeItem;
-                return <div key={item.label}>{item.section && !collapsed && <div className="mb-1 mt-4 px-3 text-[10px] font-bold text-[#4f91c5]">{item.section}</div>}<button onClick={() => setActiveItem(item.label)} title={collapsed ? item.label : undefined} className={cn("group flex w-full items-center rounded-xl text-right text-[13px] font-semibold transition", collapsed ? "justify-center px-2 py-3" : "gap-3 px-3 py-3", active ? "bg-[#245d9b] text-white" : "text-[#b9c5d7] hover:bg-[#192943] hover:text-white")}>
-                  <Icon className={cn("h-[18px] w-[18px] shrink-0", active ? "text-white" : "text-[#8092ac] group-hover:text-[#c5d2e3]")} strokeWidth={active ? 2.3 : 1.9} />
-                  {!collapsed && <><span className="flex-1">{item.label}</span>{item.badge && <span className={cn("rounded-md px-1.5 py-0.5 text-[10px]", active ? "bg-white/15 text-white" : "bg-[#1b2a43] text-[#91a4be]")}>{item.badge}</span>}</>}
-                </button></div>;
+            <nav className="space-y-2 pb-5">
+              {navGroups.map((group) => {
+                const isOpen = collapsed || openNavSections.includes(group.section);
+                const hasActiveItem = group.items.some((item) => item.label === activeItem);
+                return <div key={group.section} className={cn(!collapsed && "rounded-xl", hasActiveItem && !collapsed && "bg-[#14233a]")}>
+                  {!collapsed && <button onClick={() => setOpenNavSections((sections) => sections.includes(group.section) ? sections.filter((section) => section !== group.section) : [...sections, group.section])} className={cn("flex w-full items-center justify-between rounded-xl px-3 py-3 text-[11px] font-bold transition", hasActiveItem ? "text-[#70b7e4]" : "text-[#8193ad] hover:bg-[#192943] hover:text-[#b9cce2]")}><span>{group.section}</span><ChevronDown className={cn("h-3.5 w-3.5 transition-transform", isOpen && "rotate-180")} /></button>}
+                  {isOpen && <div className={cn("space-y-1", !collapsed && "px-1 pb-2")}>{group.items.map((item) => {
+                    const Icon = item.icon;
+                    const active = item.label === activeItem;
+                    return <button key={item.label} onClick={() => setActiveItem(item.label)} title={collapsed ? item.label : undefined} className={cn("group flex w-full items-center rounded-xl text-right text-[12px] font-semibold transition", collapsed ? "justify-center px-2 py-3" : "gap-3 px-3 py-2.5", active ? "bg-[#245d9b] text-white" : "text-[#b9c5d7] hover:bg-[#192943] hover:text-white")}><Icon className={cn("h-[17px] w-[17px] shrink-0", active ? "text-white" : "text-[#8092ac] group-hover:text-[#c5d2e3]")} strokeWidth={active ? 2.3 : 1.9} />{!collapsed && <><span className="flex-1">{item.label}</span>{item.badge && <span className={cn("rounded-md px-1.5 py-0.5 text-[9px]", active ? "bg-white/15 text-white" : "bg-[#1b2a43] text-[#91a4be]")}>{item.badge}</span>}</>}</button>;
+                  })}</div>}
+                </div>;
               })}
             </nav>
           </div>
