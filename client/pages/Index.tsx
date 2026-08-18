@@ -154,10 +154,10 @@ function readWorkflowCases() {
 const navigation: NavItem[] = [
   { label: "الرئيسية", icon: LayoutDashboard, section: "لوحة التحكم" },
   { label: "الاستقبال والانتظار", icon: Activity, badge: "12", section: "الاستقبال والمواعيد" },
+  { label: "المواعيد", icon: CalendarDays },
   { label: "المرضى", icon: UsersRound, badge: "1,248" },
   { label: "السجل الطبي", icon: ClipboardList, badge: "24" },
   { label: "رحلة المريض", icon: Activity, badge: "3" },
-  { label: "المواعيد", icon: CalendarDays },
   { label: "الخدمات", icon: ReceiptText, badge: "18", section: "الكتالوج الطبي" },
   { label: "الأقسام والعيادات", icon: Building2, badge: "22" },
   { label: "الأطباء", icon: Stethoscope, badge: "10" },
