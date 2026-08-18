@@ -1,5 +1,6 @@
 import type {
   FeatureKey,
+  HealthcareOrganizationType,
   MembershipPermission,
   OrganizationRole,
 } from "@shared/api";
@@ -8,6 +9,46 @@ export const ALWAYS_ACCESSIBLE_FEATURES: FeatureKey[] = [
   "core_dashboard",
   "settings",
 ];
+
+export const CLINIC_DEFAULT_FEATURES: FeatureKey[] = [
+  "core_dashboard",
+  "reception",
+  "appointments",
+  "patients",
+  "medical_records",
+  "patient_journey",
+  "medical_services",
+  "departments_clinics",
+  "doctors",
+  "prescriptions",
+  "billing_payments",
+  "hr",
+  "diagnosis",
+  "reports",
+  "audit_log",
+  "settings",
+];
+
+export const MEDICAL_CENTER_ADDED_FEATURES: FeatureKey[] = [
+  "laboratory",
+  "radiology",
+  "pharmacy",
+  "dispensing",
+  "insurance_claims",
+  "packages",
+  "accounting",
+  "procurement",
+  "inventory",
+  "messaging",
+  "nursing",
+  "advanced_analytics",
+];
+
+export function getOrganizationPlanDefaultFeatures(type: HealthcareOrganizationType) {
+  return type === "clinic"
+    ? [...CLINIC_DEFAULT_FEATURES]
+    : [...CLINIC_DEFAULT_FEATURES, ...MEDICAL_CENTER_ADDED_FEATURES];
+}
 
 const allFeatureKeys: FeatureKey[] = [
   "core_dashboard",
@@ -112,6 +153,32 @@ export function resolvePermissions(
     else permissions.delete(permission.permission_key);
   });
   return [...permissions];
+}
+
+export function resolveOrganizationAccessConfiguration({
+  authenticated,
+  legacyMode,
+  demoOrganizationType,
+  enabledFeatures,
+  permissions,
+  role,
+}: {
+  authenticated: boolean;
+  legacyMode: boolean;
+  demoOrganizationType: HealthcareOrganizationType | null;
+  enabledFeatures: FeatureKey[];
+  permissions: string[];
+  role?: OrganizationRole;
+}) {
+  if (!authenticated && legacyMode && demoOrganizationType) {
+    return {
+      legacyMode: false,
+      enabledFeatures: getOrganizationPlanDefaultFeatures(demoOrganizationType),
+      permissions: ["*"],
+      role: "organization_admin" as OrganizationRole,
+    };
+  }
+  return { legacyMode, enabledFeatures, permissions, role };
 }
 
 export function canAccessFeature({
