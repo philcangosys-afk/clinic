@@ -23,6 +23,7 @@ import {
 
 type OrganizationAccessContextValue = {
   loading: boolean;
+  error: string | null;
   session: Session | null;
   legacyMode: boolean;
   needsOnboarding: boolean;
@@ -40,6 +41,7 @@ const OrganizationAccessContext = createContext<OrganizationAccessContextValue |
 
 export function OrganizationAccessProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [organization, setOrganization] = useState<HealthcareOrganization | null>(null);
   const [branch, setBranch] = useState<OrganizationBranch | null>(null);
@@ -57,48 +59,62 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
 
   const loadAccess = useCallback(async (nextSession?: Session | null) => {
     setLoading(true);
-    const activeSession = nextSession === undefined
-      ? (await supabase.auth.getSession()).data.session
-      : nextSession;
-    setSession(activeSession);
-    if (!activeSession) {
+    setError(null);
+    try {
+      const sessionResult = nextSession === undefined
+        ? await supabase.auth.getSession()
+        : null;
+      if (sessionResult?.error) throw sessionResult.error;
+      const activeSession = nextSession === undefined
+        ? sessionResult?.data.session ?? null
+        : nextSession;
+      setSession(activeSession);
+      if (!activeSession) {
+        clearOrganization();
+        return;
+      }
+
+      const membershipResult = await supabase
+        .from("organization_memberships")
+        .select("*")
+        .eq("user_id", activeSession.user.id)
+        .eq("is_active", true)
+        .limit(1)
+        .maybeSingle();
+      if (membershipResult.error) throw membershipResult.error;
+      if (!membershipResult.data) {
+        clearOrganization();
+        return;
+      }
+
+      const currentMembership = membershipResult.data as OrganizationMembership;
+      const [organizationResult, branchResult, featuresResult, permissionsResult] = await Promise.all([
+        supabase.from("organizations").select("*").eq("id", currentMembership.organization_id).maybeSingle(),
+        currentMembership.branch_id
+          ? supabase.from("branches").select("*").eq("id", currentMembership.branch_id).maybeSingle()
+          : supabase.from("branches").select("*").eq("organization_id", currentMembership.organization_id).limit(1).maybeSingle(),
+        supabase.from("organization_features").select("feature_key, enabled").eq("organization_id", currentMembership.organization_id).eq("enabled", true),
+        supabase
+          .from("membership_permissions")
+          .select("organization_id, user_id, permission_key, granted")
+          .eq("organization_id", currentMembership.organization_id)
+          .eq("user_id", activeSession.user.id),
+      ]);
+      const queryError = organizationResult.error || branchResult.error || featuresResult.error || permissionsResult.error;
+      if (queryError) throw queryError;
+      if (!organizationResult.data) throw new Error("Organization access record was not found");
+
+      setMembership(currentMembership);
+      setOrganization(organizationResult.data as HealthcareOrganization);
+      setBranch((branchResult.data as OrganizationBranch | null) ?? null);
+      setEnabledFeatures((featuresResult.data ?? []).map((feature) => feature.feature_key as FeatureKey));
+      setExplicitPermissions((permissionsResult.data as MembershipPermission[]) ?? []);
+    } catch (loadError) {
       clearOrganization();
+      setError(loadError instanceof Error ? loadError.message : "تعذر تحميل صلاحيات المنظمة");
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const { data: membershipRow } = await supabase
-      .from("organization_memberships")
-      .select("*")
-      .eq("user_id", activeSession.user.id)
-      .eq("is_active", true)
-      .limit(1)
-      .maybeSingle();
-
-    if (!membershipRow) {
-      clearOrganization();
-      setLoading(false);
-      return;
-    }
-
-    const currentMembership = membershipRow as OrganizationMembership;
-    const [organizationResult, branchResult, featuresResult, permissionsResult] = await Promise.all([
-      supabase.from("organizations").select("*").eq("id", currentMembership.organization_id).maybeSingle(),
-      currentMembership.branch_id
-        ? supabase.from("branches").select("*").eq("id", currentMembership.branch_id).maybeSingle()
-        : supabase.from("branches").select("*").eq("organization_id", currentMembership.organization_id).limit(1).maybeSingle(),
-      supabase.from("organization_features").select("feature_key, enabled").eq("organization_id", currentMembership.organization_id).eq("enabled", true),
-      currentMembership.id
-        ? supabase.from("membership_permissions").select("*").eq("membership_id", currentMembership.id)
-        : Promise.resolve({ data: [] }),
-    ]);
-
-    setMembership(currentMembership);
-    setOrganization((organizationResult.data as HealthcareOrganization | null) ?? null);
-    setBranch((branchResult.data as OrganizationBranch | null) ?? null);
-    setEnabledFeatures((featuresResult.data ?? []).map((feature) => feature.feature_key as FeatureKey));
-    setExplicitPermissions((permissionsResult.data as MembershipPermission[] | null) ?? []);
-    setLoading(false);
   }, [clearOrganization]);
 
   useEffect(() => {
@@ -113,8 +129,8 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
     () => resolvePermissions(membership?.role_key, explicitPermissions),
     [membership?.role_key, explicitPermissions],
   );
-  const legacyMode = !session;
-  const needsOnboarding = Boolean(session && !membership);
+  const legacyMode = !session && !error;
+  const needsOnboarding = Boolean(session && !membership && !error);
   const canAccess = useCallback(
     (featureKey: FeatureKey, permissionKey: string) => canAccessFeature({
       legacyMode: legacyMode || Boolean(organization?.legacy_full_access),
@@ -133,6 +149,7 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
 
   const value = useMemo<OrganizationAccessContextValue>(() => ({
     loading,
+    error,
     session,
     legacyMode,
     needsOnboarding,
@@ -144,7 +161,7 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
     canAccess,
     refresh: () => loadAccess(),
     signOut,
-  }), [loading, session, legacyMode, needsOnboarding, organization, branch, membership, enabledFeatures, permissions, canAccess, loadAccess, signOut]);
+  }), [loading, error, session, legacyMode, needsOnboarding, organization, branch, membership, enabledFeatures, permissions, canAccess, loadAccess, signOut]);
 
   return <OrganizationAccessContext.Provider value={value}>{children}</OrganizationAccessContext.Provider>;
 }

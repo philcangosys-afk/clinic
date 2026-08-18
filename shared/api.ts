@@ -24,22 +24,33 @@ export type FeatureKey =
   | "patients"
   | "medical_records"
   | "patient_journey"
-  | "medical_catalog"
+  | "medical_services"
+  | "departments_clinics"
+  | "doctors"
   | "laboratory"
   | "radiology"
   | "pharmacy"
-  | "insurance"
-  | "billing"
+  | "prescriptions"
+  | "dispensing"
+  | "insurance_claims"
+  | "billing_payments"
   | "packages"
-  | "human_resources"
+  | "hr"
+  | "diagnosis"
   | "content"
   | "reports"
+  | "advanced_analytics"
   | "accounting"
   | "procurement"
   | "inventory"
   | "messaging"
   | "audit_log"
-  | "settings";
+  | "settings"
+  | "nursing"
+  | "emergency"
+  | "inpatient"
+  | "procedures"
+  | "referrals";
 
 export type OrganizationRole =
   | "owner"
@@ -48,11 +59,12 @@ export type OrganizationRole =
   | "doctor"
   | "nurse"
   | "receptionist"
-  | "lab_technician"
   | "pharmacist"
+  | "lab_technician"
+  | "radiology_technician"
   | "accountant"
   | "hr_manager"
-  | "staff";
+  | "employee";
 
 export interface HealthcareOrganization {
   id: string;
@@ -70,7 +82,6 @@ export interface OrganizationBranch {
 }
 
 export interface OrganizationMembership {
-  id?: string;
   organization_id: string;
   user_id: string;
   branch_id: string | null;
@@ -80,10 +91,12 @@ export interface OrganizationMembership {
 
 export interface FeatureCatalogEntry {
   feature_key: FeatureKey;
-  name: string;
-  description: string | null;
+  name_ar: string;
+  name_en: string;
+  category_key: string;
+  description_ar: string | null;
   is_core: boolean;
-  [key: string]: unknown;
+  display_order: number;
 }
 
 export interface OrganizationFeature {
@@ -93,13 +106,10 @@ export interface OrganizationFeature {
 }
 
 export interface MembershipPermission {
-  membership_id?: string;
-  organization_id?: string;
-  user_id?: string;
+  organization_id: string;
+  user_id: string;
   permission_key: string;
-  allowed?: boolean;
-  granted?: boolean;
-  [key: string]: unknown;
+  granted: boolean;
 }
 
 export interface OrganizationAccessState {

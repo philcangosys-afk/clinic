@@ -983,33 +983,38 @@ function OrganizationModulesPanel() {
   const [features, setFeatures] = useState<OrganizationFeature[]>([]);
   const [updating, setUpdating] = useState<FeatureKey | null>(null);
   const [error, setError] = useState("");
-  const canConfigure = Boolean(access.organization && isOrganizationAdmin(access.membership?.role_key));
+  const canConfigure = Boolean(access.session && access.organization && isOrganizationAdmin(access.membership?.role_key));
 
   useEffect(() => {
     if (!canConfigure || !access.organization) return;
     void Promise.all([
-      supabase.from("feature_catalog").select("*"),
+      supabase.from("feature_catalog").select("feature_key, name_ar, name_en, category_key, description_ar, is_core, display_order").order("display_order", { ascending: true }),
       supabase.from("organization_features").select("organization_id, feature_key, enabled").eq("organization_id", access.organization.id),
     ]).then(([catalogResult, featuresResult]) => {
       if (catalogResult.error || featuresResult.error) {
         setError(catalogResult.error?.message ?? featuresResult.error?.message ?? "تعذر تحميل الوحدات");
         return;
       }
-      setCatalog((catalogResult.data as FeatureCatalogEntry[]) ?? []);
-      setFeatures((featuresResult.data as OrganizationFeature[]) ?? []);
+      setCatalog(catalogResult.data ?? []);
+      setFeatures(featuresResult.data ?? []);
     });
   }, [access.organization, canConfigure]);
 
-  if (!canConfigure || !access.organization) return null;
+  if (!canConfigure || !access.organization || !access.session) return null;
   const isEnabled = (featureKey: FeatureKey) => features.find((feature) => feature.feature_key === featureKey)?.enabled ?? false;
   const updateFeature = async (featureKey: FeatureKey, enabled: boolean) => {
+    if (featureKey === "core_dashboard" || featureKey === "settings") return;
     setUpdating(featureKey);
     setError("");
-    const { error: updateError } = await supabase.from("organization_features").upsert({
-      organization_id: access.organization!.id,
-      feature_key: featureKey,
-      enabled,
-    }, { onConflict: "organization_id,feature_key" });
+    const { error: updateError } = await supabase
+      .from("organization_features")
+      .update({
+        enabled,
+        configured_by: access.session!.user.id,
+        configured_at: new Date().toISOString(),
+      })
+      .eq("organization_id", access.organization!.id)
+      .eq("feature_key", featureKey);
     if (updateError) setError(updateError.message);
     else {
       setFeatures((current) => [...current.filter((feature) => feature.feature_key !== featureKey), { organization_id: access.organization!.id, feature_key: featureKey, enabled }]);
@@ -1019,9 +1024,9 @@ function OrganizationModulesPanel() {
   };
 
   return <div className="mb-6 rounded-[22px] border border-[#e3eeeb] bg-white p-5 shadow-[0_4px_18px_rgba(30,73,72,0.025)] sm:p-6"><div className="mb-5 flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e4f5f1] text-[#0d857b]"><SlidersHorizontal className="h-5 w-5" /></div><div><h2 className="text-[16px] font-bold text-[#234b4b]">وحدات المنظمة</h2><p className="mt-1 text-[11px] text-[#96aaa8]">تفعيل الوحدات المتاحة لأعضاء المنظمة</p></div></div>{error && <div role="alert" className="mb-4 rounded-xl bg-[#fff0eb] px-3 py-2 text-[10px] text-[#bd654d]">{error}</div>}<div className="grid gap-3 md:grid-cols-2">{catalog.map((entry) => {
-    const rawEntry = entry as FeatureCatalogEntry & { name_ar?: string; label_ar?: string; description_ar?: string; core?: boolean };
     const enabled = isEnabled(entry.feature_key);
-    return <div key={entry.feature_key} className="flex items-center justify-between gap-4 rounded-xl border border-[#edf3f1] p-4"><div><div className="flex items-center gap-2"><div className="text-[11px] font-bold text-[#426765]">{rawEntry.name_ar ?? rawEntry.label_ar ?? entry.name ?? entry.feature_key}</div><span className={cn("rounded-md px-2 py-1 text-[9px] font-bold", (entry.is_core ?? rawEntry.core) ? "bg-[#eaf3fb] text-[#4284b9]" : "bg-[#f3effb] text-[#7654ba]")}>{(entry.is_core ?? rawEntry.core) ? "أساسية" : "اختيارية"}</span></div><div className="mt-1 text-[10px] leading-5 text-[#9aafac]">{rawEntry.description_ar ?? entry.description ?? "وحدة قابلة للتفعيل حسب احتياج المنظمة"}</div></div><Switch checked={enabled} disabled={updating === entry.feature_key} onCheckedChange={(checked) => void updateFeature(entry.feature_key, checked)} aria-label={`تفعيل ${rawEntry.name_ar ?? entry.name ?? entry.feature_key}`} /></div>;
+    const protectedFeature = entry.feature_key === "core_dashboard" || entry.feature_key === "settings";
+    return <div key={entry.feature_key} className="flex items-center justify-between gap-4 rounded-xl border border-[#edf3f1] p-4"><div><div className="flex items-center gap-2"><div className="text-[11px] font-bold text-[#426765]">{entry.name_ar}</div><span className={cn("rounded-md px-2 py-1 text-[9px] font-bold", entry.is_core ? "bg-[#eaf3fb] text-[#4284b9]" : "bg-[#f3effb] text-[#7654ba]")}>{entry.is_core ? "أساسية" : "اختيارية"}</span></div><div className="mt-1 text-[10px] leading-5 text-[#9aafac]">{entry.description_ar ?? entry.name_en}</div></div><Switch checked={protectedFeature || enabled} disabled={protectedFeature || updating === entry.feature_key} onCheckedChange={(checked) => void updateFeature(entry.feature_key, checked)} aria-label={`تفعيل ${entry.name_ar}`} /></div>;
   })}</div></div>;
 }
 
