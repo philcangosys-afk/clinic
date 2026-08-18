@@ -1,4 +1,4 @@
-import { useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -243,7 +243,7 @@ function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, ne
   if (activeItem === "المختبر") return <LabView branch={branch} />;
   if (activeItem === "التأمين والمطالبات") return <InsuranceView branch={branch} />;
   if (activeItem === "الباقات") return <PackagesView branch={branch} />;
-  return <SettingsView branch={branch} onClinic={onClinic} />;
+  return <EditableSettingsView branch={branch} onClinic={onClinic} />;
 }
 
 function ViewHeader({ eyebrow, title, description, action, icon: Icon = LayoutDashboard, onAction }: { eyebrow: string; title: string; description: string; action: string; icon?: typeof LayoutDashboard; onAction?: () => void }) {
@@ -305,6 +305,105 @@ function InsuranceView({ branch }: { branch: string }) {
 function PackagesView({ branch }: { branch: string }) {
   const packages = [{ name: "إشراقة البشرة", description: "٤ جلسات تنظيف وعناية", price: "٨٥٠ ر.س", used: "٢ / ٤", progress: "50%", tone: "teal" }, { name: "باقة الليزر الكاملة", description: "٦ جلسات · جميع المناطق", price: "١٬٨٠٠ ر.س", used: "٣ / ٦", progress: "50%", tone: "purple" }, { name: "متابعة الأطفال", description: "٥ زيارات طب أطفال", price: "٦٠٠ ر.س", used: "١ / ٥", progress: "20%", tone: "amber" }];
   return <><ViewHeader eyebrow="الباقات والاشتراكات" title="باقات العلاج" description={`${branch} · بيع الباقات ومتابعة الجلسات المتبقية`} action="إنشاء باقة" icon={Package} /><div className="mb-6 grid gap-4 md:grid-cols-3">{packages.map((item) => <div key={item.name} className="rounded-[20px] border border-[#e3eeeb] bg-white p-5 shadow-[0_4px_18px_rgba(30,73,72,0.025)]"><div className="mb-4 flex items-start justify-between"><div className={cn("flex h-10 w-10 items-center justify-center rounded-xl", item.tone === "teal" ? "bg-[#e4f5f1] text-[#0d857b]" : item.tone === "purple" ? "bg-[#f2edfb] text-[#8565bd]" : "bg-[#fff3df] text-[#bd812b]")}><Package className="h-5 w-5" /></div><button className="rounded-lg p-1 text-[#a5b9b6] hover:bg-[#f3f8f7]"><MoreHorizontal className="h-5 w-5" /></button></div><h2 className="text-[15px] font-bold text-[#2f5a59]">{item.name}</h2><p className="mt-1 text-[11px] text-[#94aaa7]">{item.description}</p><div className="mt-5 flex items-end justify-between"><span className="text-[18px] font-bold text-[#234b4b]">{item.price}</span><span className="text-[11px] font-bold text-[#7e9894]">{item.used}</span></div><div className="mt-3 h-2 overflow-hidden rounded-full bg-[#edf3f1]"><div className={cn("h-full rounded-full", item.tone === "teal" ? "bg-[#0d857b]" : item.tone === "purple" ? "bg-[#8565bd]" : "bg-[#e5b15a]")} style={{ width: item.progress }} /></div><button className="mt-4 flex w-full items-center justify-center gap-1 rounded-xl border border-[#dcebe8] py-2.5 text-[10px] font-bold text-[#6d8b88]">عرض المشتركين <ChevronLeft className="h-3.5 w-3.5" /></button></div>)}</div><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><div className="mb-4 flex items-center justify-between"><div><h2 className="text-[16px] font-bold text-[#234b4b]">آخر عمليات الاستخدام</h2><p className="mt-1 text-[11px] text-[#96aaa8]">كل جلسة مرتبطة بموعد وفاتورة</p></div><StatusPill tone="purple">١٢٣ جلسة هذا الشهر</StatusPill></div><div className="space-y-2"><UsageRow patient="سارة أحمد العتيبي" packageName="إشراقة البشرة" service="جلسة تنظيف" date="اليوم، ٠٩:٣٠" /><UsageRow patient="خالد إبراهيم الشهري" packageName="باقة الليزر الكاملة" service="جلسة ليزر" date="أمس، ١٧:٠٠" /><UsageRow patient="ريم فهد السبيعي" packageName="متابعة الأطفال" service="زيارة متابعة" date="أمس، ١٤:٣٠" /></div></div></>;
+}
+
+type LocalClinicSettings = {
+  nameAr: string;
+  nameEn: string;
+  vatNumber: string;
+  city: string;
+  phone: string;
+  email: string;
+  openingTime: string;
+  closingTime: string;
+  prayerBreak: string;
+  whatsappProvider: string;
+  whatsappSender: string;
+  reminder24h: boolean;
+  reminder1h: boolean;
+  queueAlerts: boolean;
+  mada: boolean;
+  applePay: boolean;
+  cash: boolean;
+  insurance: boolean;
+  vatEnabled: boolean;
+  twoFactor: boolean;
+  auditExports: boolean;
+  sessionTimeout: string;
+};
+
+const defaultLocalClinicSettings: LocalClinicSettings = {
+  nameAr: "مجمع زين الطبي",
+  nameEn: "Zain Medical Center",
+  vatNumber: "310123456700003",
+  city: "الرياض، المملكة العربية السعودية",
+  phone: "+966 11 245 8800",
+  email: "hello@zainmedical.sa",
+  openingTime: "09:00",
+  closingTime: "22:00",
+  prayerBreak: "13:00 - 13:45",
+  whatsappProvider: "Meta Cloud API",
+  whatsappSender: "+966 55 420 1188",
+  reminder24h: true,
+  reminder1h: true,
+  queueAlerts: true,
+  mada: true,
+  applePay: true,
+  cash: true,
+  insurance: true,
+  vatEnabled: true,
+  twoFactor: true,
+  auditExports: true,
+  sessionTimeout: "30 دقيقة",
+};
+
+const localSettingsTabs = [
+  ["profile", "ملف المنشأة", Building2],
+  ["users", "المستخدمون والصلاحيات", UsersRound],
+  ["hours", "أوقات العمل", CalendarClock],
+  ["notifications", "الإشعارات والواتساب", MessageCircle],
+  ["payments", "الدفع والفوترة", CreditCard],
+  ["security", "الأمان والخصوصية", LockKeyhole],
+] as const;
+
+function EditableSettingsView({ branch, onClinic }: { branch: string; onClinic: () => void }) {
+  const [tab, setTab] = useState<(typeof localSettingsTabs)[number][0]>("profile");
+  const [settings, setSettings] = useState<LocalClinicSettings>(() => {
+    if (typeof window === "undefined") return defaultLocalClinicSettings;
+    const stored = window.localStorage.getItem("zaincare-local-settings");
+    if (!stored) return defaultLocalClinicSettings;
+    try {
+      return { ...defaultLocalClinicSettings, ...JSON.parse(stored) };
+    } catch {
+      return defaultLocalClinicSettings;
+    }
+  });
+  const [saved, setSaved] = useState(false);
+  const update = <K extends keyof LocalClinicSettings>(key: K, value: LocalClinicSettings[K]) => {
+    setSettings((current) => ({ ...current, [key]: value }));
+    setSaved(false);
+  };
+  const save = () => {
+    window.localStorage.setItem("zaincare-local-settings", JSON.stringify(settings));
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 3000);
+  };
+  const input = (label: string, key: keyof LocalClinicSettings, direction?: "ltr", type = "text") => <EditableField label={label} value={String(settings[key])} dir={direction} type={type} onChange={(value) => update(key, value as never)} />;
+  const toggle = (label: string, description: string, key: keyof LocalClinicSettings) => <ToggleRow label={label} description={description} checked={Boolean(settings[key])} onChange={(value) => update(key, value as never)} />;
+
+  return <><ViewHeader eyebrow="إعدادات العيادة" title="إعدادات النظام" description={`${branch} · التهيئة والهوية وقواعد التشغيل`} action="اختيار نوع العيادة" icon={Settings2} onAction={onClinic} /><div className="grid gap-6 lg:grid-cols-[230px_1fr]"><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-3"><div className="mb-3 px-3 text-[10px] font-bold text-[#9ab1af]">إعدادات المساحة</div>{localSettingsTabs.map(([id, label, Icon]) => <button key={id} onClick={() => setTab(id)} className={cn("flex w-full items-center gap-3 rounded-xl px-3 py-3 text-right text-[11px] font-bold transition", tab === id ? "bg-[#e6f4f1] text-[#0d716a]" : "text-[#7d9894] hover:bg-[#f5f9f8]")}><Icon className="h-4 w-4" />{label}</button>)}<div className="mt-4 rounded-xl bg-[#f1f8f6] p-3"><div className="flex items-center gap-2 text-[10px] font-bold text-[#0d716a]"><Database className="h-3.5 w-3.5" /> حفظ محلي</div><p className="mt-1 text-[10px] leading-5 text-[#799792]">تُحفظ التغييرات في هذا المتصفح فقط حتى يتم ربط قاعدة البيانات.</p></div></div><div className="min-w-0 space-y-6">{tab === "profile" && <SettingsCard title="ملف المنشأة" description="البيانات التي تظهر في البوابة والفواتير" icon={Building2}><div className="grid gap-4 sm:grid-cols-2">{input("اسم المنشأة بالعربية", "nameAr")} {input("الاسم بالإنجليزية", "nameEn", "ltr")} {input("الرقم الضريبي", "vatNumber", "ltr")} {input("المدينة", "city")} {input("رقم التواصل", "phone", "ltr")} {input("البريد الإلكتروني", "email", "ltr", "email")}</div></SettingsCard>}{tab === "users" && <SettingsCard title="المستخدمون والصلاحيات" description="إدارة الفريق والوصول حسب الدور والفرع" icon={UsersRound}><div className="mb-4 flex items-center justify-between rounded-xl bg-[#f1f8f6] p-4"><div><div className="text-[12px] font-bold text-[#426765]">١٢ مستخدمًا نشطًا</div><div className="mt-1 text-[10px] text-[#8ca6a2]">الصلاحيات مبنية على أدوار ZainCare</div></div><button className="h-10 rounded-xl bg-[#0d716a] px-4 text-[11px] font-bold text-white"><Plus className="ml-1 inline h-4 w-4" /> دعوة مستخدم</button></div>{["أحمد المطيري · مالك العيادة · كل الفروع", "د. ليان المطيري · طبيب · الرياض وجدة", "ريم السبيعي · استقبال · الرياض", "عمر الحربي · محاسب · دعوة معلقة"].map((user) => <div key={user} className="flex items-center justify-between border-b border-[#f0f4f3] py-4 last:border-0"><span className="text-[11px] font-bold text-[#426765]">{user}</span><button className="text-[10px] font-bold text-[#0d716a]">إدارة الصلاحيات</button></div>)}</SettingsCard>}{tab === "hours" && <SettingsCard title="أوقات العمل" description="جدول الفرع والفترات اليومية والاستراحات" icon={CalendarClock}><div className="grid gap-4 sm:grid-cols-3">{input("وقت الافتتاح", "openingTime", "ltr", "time")} {input("وقت الإغلاق", "closingTime", "ltr", "time")} {input("استراحة الصلاة", "prayerBreak", "ltr")}</div><div className="mt-6 space-y-2">{["الأحد", "الإثنين", "الثلاثاء", "الأربعاء", "الخميس"].map((day) => <div key={day} className="flex items-center justify-between rounded-xl border border-[#edf3f1] px-4 py-3"><span className="text-[11px] font-bold text-[#527572]">{day}</span><span className="text-[11px] text-[#789693]">{settings.openingTime} - {settings.closingTime}</span><span className="text-[10px] font-bold text-[#0d857b]">مفتوح</span></div>)}<div className="flex items-center justify-between rounded-xl border border-[#f3e4d0] bg-[#fffaf2] px-4 py-3"><span className="text-[11px] font-bold text-[#8c6e45]">الجمعة</span><span className="text-[11px] font-bold text-[#bd812b]">مغلق · قابل للتعديل</span></div></div></SettingsCard>}{tab === "notifications" && <SettingsCard title="الإشعارات والواتساب" description="قنوات التواصل الأساسية مع المرضى" icon={MessageCircle}><div className="grid gap-4 sm:grid-cols-2">{input("مزود واتساب", "whatsappProvider")} {input("رقم المرسل", "whatsappSender", "ltr")}</div><div className="mt-6 space-y-3">{toggle("تذكير الموعد قبل ٢٤ ساعة", "إرسال رسالة واتساب ثنائية اللغة", "reminder24h")}{toggle("تذكير الموعد قبل ساعة", "تقليل حالات عدم الحضور", "reminder1h")}{toggle("تنبيه اقتراب الدور", "إبلاغ المريض عند بقاء ٣ أرقام أمامه", "queueAlerts")}</div><div className="mt-5 rounded-xl border border-[#dcece8] bg-[#f4fbf8] p-4"><div className="flex items-center gap-2 text-[11px] font-bold text-[#0d716a]"><MessageCircle className="h-4 w-4" /> حالة الاتصال: متصل</div><p className="mt-1 text-[10px] text-[#789792]">تم إرسال ١٨٤ رسالة هذا الشهر بنسبة تسليم ٩٨٪.</p></div></SettingsCard>}{tab === "payments" && <SettingsCard title="الدفع والفوترة" description="طرق الدفع والضريبة وتسلسل الفواتير" icon={CreditCard}><div className="grid gap-4 sm:grid-cols-2">{input("بادئة الفاتورة", "vatNumber", "ltr")} {input("نسبة الضريبة", "vatNumber", "ltr")}</div><div className="mt-6 space-y-3">{toggle("مدى", "الدفع الإلكتروني المحلي", "mada")}{toggle("Apple Pay", "الدفع السريع من الهاتف", "applePay")}{toggle("الدفع النقدي", "تسجيل المدفوعات من الكاشير", "cash")}{toggle("التأمين", "تحويل حصة شركة التأمين إلى المطالبة", "insurance")}{toggle("تفعيل VAT والفاتورة الإلكترونية", "عرض الضريبة في الفاتورة", "vatEnabled")}</div></SettingsCard>}{tab === "security" && <SettingsCard title="الأمان والخصوصية" description="حماية بيانات المرضى وسجل التدقيق" icon={LockKeyhole}><div className="space-y-3">{toggle("المصادقة الثنائية للموظفين", "إلزام المالك والمحاسبين والأطباء بالتحقق الإضافي", "twoFactor")}{toggle("تسجيل عمليات التصدير", "حفظ كل عمليات طباعة وتصدير بيانات المرضى", "auditExports")}</div><div className="mt-6 grid gap-4 sm:grid-cols-2">{input("مهلة انتهاء الجلسة", "sessionTimeout")}<EditableField label="نسخة الموافقة PDPL" value="v2.1 · ١ مايو ٢٠٢٥" onChange={() => undefined} /></div><div className="mt-5 rounded-xl border border-[#f2ddd6] bg-[#fff8f5] p-4"><div className="flex items-center gap-2 text-[11px] font-bold text-[#c5785f]"><LockKeyhole className="h-4 w-4" /> لا توجد قاعدة بيانات مرتبطة</div><p className="mt-1 text-[10px] leading-5 text-[#98776d]">هذه النسخة تحفظ الإعدادات محليًا في المتصفح فقط.</p></div></SettingsCard>}<div className="flex flex-col items-stretch justify-between gap-3 rounded-[18px] border border-[#dcece8] bg-[#eaf7f3] p-4 sm:flex-row sm:items-center"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-[#0d716a]"><CheckCircle2 className="h-4 w-4" /></div><div><div className="text-[11px] font-bold text-[#356460]">{saved ? "تم حفظ الإعدادات محليًا" : "لديك إعدادات قابلة للحفظ"}</div><div className="mt-1 text-[10px] text-[#7c9995]">لن يتم إرسال أي بيانات إلى خادم خارجي.</div></div></div><button onClick={save} className="h-10 rounded-xl bg-[#0d716a] px-5 text-[11px] font-bold text-white transition hover:bg-[#095d58]">حفظ البيانات</button></div></div></div></>;
+}
+
+function SettingsCard({ title, description, icon: Icon, children }: { title: string; description: string; icon: typeof Building2; children: ReactNode }) {
+  return <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 shadow-[0_4px_18px_rgba(30,73,72,0.025)] sm:p-6"><div className="mb-6 flex items-center gap-3"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e4f5f1] text-[#0d857b]"><Icon className="h-5 w-5" /></div><div><h2 className="text-[16px] font-bold text-[#234b4b]">{title}</h2><p className="mt-1 text-[11px] text-[#96aaa8]">{description}</p></div></div>{children}</div>;
+}
+
+function EditableField({ label, value, onChange, dir, type = "text" }: { label: string; value: string; onChange: (value: string) => void; dir?: "ltr"; type?: string }) {
+  return <label className="block"><span className="mb-2 block text-[10px] font-bold text-[#8ba4a1]">{label}</span><input type={type} value={value} onChange={(event) => onChange(event.target.value)} className={cn(formControlClass(), "bg-[#fbfdfc]")} dir={dir} /></label>;
+}
+
+function ToggleRow({ label, description, checked, onChange }: { label: string; description: string; checked: boolean; onChange: (value: boolean) => void }) {
+  return <label className="flex cursor-pointer items-center justify-between gap-4 rounded-xl border border-[#edf3f1] p-4 transition hover:border-[#c9e3df]"><div><div className="text-[11px] font-bold text-[#426765]">{label}</div><div className="mt-1 text-[10px] text-[#9aafac]">{description}</div></div><input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} className="peer sr-only" /><span className={cn("relative h-6 w-11 shrink-0 rounded-full p-1 transition", checked ? "bg-[#0d857b]" : "bg-[#d7e5e2]")}><span className={cn("block h-4 w-4 rounded-full bg-white shadow-sm transition", checked ? "translate-x-5" : "translate-x-0")} /></span></label>;
 }
 
 function SettingsView({ branch, onClinic }: { branch: string; onClinic: () => void }) {
