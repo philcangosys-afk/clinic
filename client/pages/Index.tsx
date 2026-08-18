@@ -142,16 +142,16 @@ export default function Index() {
   };
 
   return (
-    <main dir="rtl" className="min-h-screen bg-[#f6f8f8] text-[#152f33]">
+    <main dir="rtl" className="min-h-screen bg-[#f3f7fb] text-[#152f33]">
       <div className="flex min-h-screen">
-        <aside className={cn("hidden shrink-0 border-l border-[#dce9e7] bg-white transition-all duration-300 lg:flex lg:flex-col", collapsed ? "w-[88px]" : "w-[264px]")}>
-          <div className={cn("flex h-[88px] items-center border-b border-[#edf2f1] px-5", collapsed ? "justify-center" : "justify-between")}>
+        <aside className={cn("hidden shrink-0 border-l border-[#263650] bg-[#101b2e] transition-all duration-300 lg:flex lg:flex-col", collapsed ? "w-[88px]" : "w-[264px]")}>
+          <div className={cn("flex h-[76px] items-center border-b border-[#263650] px-5", collapsed ? "justify-center" : "justify-between")}>
             <div className={cn("flex items-center gap-3", collapsed && "justify-center")}>
               <div className="relative flex h-11 w-11 items-center justify-center rounded-[15px] bg-[#0d6f68] text-white shadow-[0_8px_20px_rgba(13,111,104,0.22)]">
                 <Activity className="h-6 w-6" strokeWidth={2.5} />
                 <span className="absolute bottom-1.5 left-1.5 h-1.5 w-1.5 rounded-full bg-[#f5b54b]" />
               </div>
-              {!collapsed && <div><div className="text-[19px] font-bold tracking-[-0.03em] text-[#123f42]">زين كير</div><div className="text-[10px] font-semibold tracking-[0.14em] text-[#80a19e]">ZAINCARE</div></div>}
+              {!collapsed && <div><div className="text-[19px] font-bold tracking-[-0.03em] text-white">زين كير</div><div className="text-[10px] font-semibold tracking-[0.14em] text-[#7e91ad]">ZAINCARE</div></div>}
             </div>
             {!collapsed && <button aria-label="طي القائمة" onClick={() => setCollapsed(true)} className="rounded-lg p-2 text-[#8ba4a2] transition hover:bg-[#f1f7f5] hover:text-[#0d6f68]"><PanelRightClose className="h-5 w-5" /></button>}
           </div>
@@ -159,28 +159,28 @@ export default function Index() {
           {collapsed && <button aria-label="فتح القائمة" onClick={() => setCollapsed(false)} className="mx-auto mt-5 rounded-lg p-2 text-[#8ba4a2] transition hover:bg-[#f1f7f5] hover:text-[#0d6f68]"><PanelRightOpen className="h-5 w-5" /></button>}
 
           <div className={cn("px-3 pt-7", collapsed && "pt-5 px-2")}>
-            {!collapsed && <div className="mb-3 px-3 text-[11px] font-bold tracking-[0.08em] text-[#9ab1af]">مساحة العمل</div>}
+            {!collapsed && <div className="mb-3 px-3 text-[11px] font-bold tracking-[0.08em] text-[#7e91ad]">مساحة العمل</div>}
             <nav className="space-y-1.5">
               {navigation.map((item) => {
                 const Icon = item.icon;
                 const active = item.label === activeItem;
-                return <button key={item.label} onClick={() => setActiveItem(item.label)} title={collapsed ? item.label : undefined} className={cn("group flex w-full items-center rounded-xl text-right text-[13px] font-semibold transition", collapsed ? "justify-center px-2 py-3" : "gap-3 px-3 py-3", active ? "bg-[#e6f4f1] text-[#0b716a]" : "text-[#66817f] hover:bg-[#f5f9f8] hover:text-[#244f50]")}>
-                  <Icon className={cn("h-[18px] w-[18px] shrink-0", active ? "text-[#0d857b]" : "text-[#8ba6a3] group-hover:text-[#4f7b78]")} strokeWidth={active ? 2.3 : 1.9} />
-                  {!collapsed && <><span className="flex-1">{item.label}</span>{item.badge && <span className={cn("rounded-md px-1.5 py-0.5 text-[10px]", active ? "bg-white text-[#0d716a]" : "bg-[#f0f5f4] text-[#91a9a6]")}>{item.badge}</span>}</>}
+                return <button key={item.label} onClick={() => setActiveItem(item.label)} title={collapsed ? item.label : undefined} className={cn("group flex w-full items-center rounded-xl text-right text-[13px] font-semibold transition", collapsed ? "justify-center px-2 py-3" : "gap-3 px-3 py-3", active ? "bg-[#245d9b] text-white" : "text-[#b9c5d7] hover:bg-[#192943] hover:text-white")}>
+                  <Icon className={cn("h-[18px] w-[18px] shrink-0", active ? "text-white" : "text-[#8092ac] group-hover:text-[#c5d2e3]")} strokeWidth={active ? 2.3 : 1.9} />
+                  {!collapsed && <><span className="flex-1">{item.label}</span>{item.badge && <span className={cn("rounded-md px-1.5 py-0.5 text-[10px]", active ? "bg-white/15 text-white" : "bg-[#1b2a43] text-[#91a4be]")}>{item.badge}</span>}</>}
                 </button>;
               })}
             </nav>
           </div>
 
           <div className={cn("mt-auto p-3", collapsed && "p-2")}>
-            {!collapsed && <div className="mb-4 rounded-2xl bg-[#f1f8f6] p-4"><div className="mb-2 flex items-center gap-2 text-[#0d716a]"><Sparkles className="h-4 w-4" /><span className="text-xs font-bold">مساحة النمو</span></div><p className="text-[11px] leading-5 text-[#6f8e8a]">أكمل إعداد قنوات الواتساب لرفع معدل تذكير المرضى.</p><button onClick={() => setModal("clinic")} className="mt-3 text-[11px] font-bold text-[#0d716a]">إكمال الإعداد <ArrowUpLeft className="mr-1 inline h-3 w-3" /></button></div>}
-            <button onClick={() => setActiveItem("الإعدادات")} className={cn("flex w-full items-center rounded-xl text-[#72908d] hover:bg-[#f5f9f8]", collapsed ? "justify-center p-3" : "gap-3 px-3 py-3")}><Settings2 className="h-[18px] w-[18px]" /><span className={cn("text-[13px] font-semibold", collapsed && "sr-only")}>الإعدادات</span></button>
-            <button className={cn("flex w-full items-center rounded-xl text-[#72908d] hover:bg-[#f5f9f8]", collapsed ? "justify-center p-3" : "gap-3 px-3 py-3")}><HelpCircle className="h-[18px] w-[18px]" /><span className={cn("text-[13px] font-semibold", collapsed && "sr-only")}>مركز المساعدة</span></button>
+            {!collapsed && <div className="mb-4 rounded-2xl bg-[#172741] p-4"><div className="mb-2 flex items-center gap-2 text-[#87d4c7]"><Sparkles className="h-4 w-4" /><span className="text-xs font-bold">مساحة النمو</span></div><p className="text-[11px] leading-5 text-[#a7b6ca]">أكمل إعداد قنوات الواتساب لرفع معدل تذكير المرضى.</p><button onClick={() => setModal("clinic")} className="mt-3 text-[11px] font-bold text-[#87d4c7]">إكمال الإعداد <ArrowUpLeft className="mr-1 inline h-3 w-3" /></button></div>}
+            <button onClick={() => setActiveItem("الإعدادات")} className={cn("flex w-full items-center rounded-xl text-[#aab8ca] hover:bg-[#192943]", collapsed ? "justify-center p-3" : "gap-3 px-3 py-3")}><Settings2 className="h-[18px] w-[18px]" /><span className={cn("text-[13px] font-semibold", collapsed && "sr-only")}>الإعدادات</span></button>
+            <button className={cn("flex w-full items-center rounded-xl text-[#aab8ca] hover:bg-[#192943]", collapsed ? "justify-center p-3" : "gap-3 px-3 py-3")}><HelpCircle className="h-[18px] w-[18px]" /><span className={cn("text-[13px] font-semibold", collapsed && "sr-only")}>مركز المساعدة</span></button>
           </div>
         </aside>
 
         <section className="min-w-0 flex-1">
-          <header className="sticky top-0 z-20 flex h-[88px] items-center justify-between border-b border-[#e6efed] bg-[#f6f8f8]/95 px-5 backdrop-blur-md sm:px-8 lg:px-10">
+          <header className="sticky top-0 z-20 flex h-[76px] items-center justify-between border-b border-[#e6efed] bg-[#f3f7fb]/95 px-5 backdrop-blur-md sm:px-8 lg:px-10">
             <div className="flex min-w-0 items-center gap-4">
               <div className="flex h-11 w-11 items-center justify-center rounded-[14px] bg-[#0d6f68] text-white lg:hidden"><Activity className="h-5 w-5" /></div>
               <div className="hidden min-w-0 items-center gap-2 text-sm text-[#88a19e] sm:flex"><span>مساحة العمل</span><ChevronLeft className="h-4 w-4" /><span className="font-bold text-[#355b5b]">{activeLabel}</span></div>
