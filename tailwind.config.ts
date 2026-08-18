@@ -14,6 +14,14 @@ export default {
     },
     extend: {
       colors: {
+        zain: {
+          canvas: "#f6f8f8",
+          ink: "#152f33",
+          teal: "#0d716a",
+          "teal-soft": "#e6f4f1",
+          gold: "#e5b15a",
+          line: "#e3eeeb",
+        },
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
@@ -57,6 +65,9 @@ export default {
           border: "hsl(var(--sidebar-border))",
           ring: "hsl(var(--sidebar-ring))",
         },
+      },
+      fontFamily: {
+        sans: ["IBM Plex Sans Arabic", "Inter", "sans-serif"],
       },
       borderRadius: {
         lg: "var(--radius)",
