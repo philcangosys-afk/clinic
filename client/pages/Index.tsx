@@ -39,8 +39,17 @@ import {
   Sparkles,
   Stethoscope,
   UserCog,
+  UserCheck,
   UserRoundPlus,
   UsersRound,
+  CalendarCheck2,
+  BriefcaseBusiness,
+  Banknote,
+  FileCheck2,
+  UserPlus,
+  Gauge,
+  GraduationCap,
+  CalendarRange,
   WalletCards,
   X,
 } from "lucide-react";
@@ -126,7 +135,16 @@ const navigation: NavItem[] = [
   { label: "التأمين والمطالبات", icon: ShieldCheck, section: "المالية والتأمين" },
   { label: "الفوترة والمدفوعات", icon: WalletCards },
   { label: "الباقات", icon: Package },
-  { label: "الموظفون", icon: UserCog, badge: "63", section: "الإدارة" },
+  { label: "الموظفون", icon: UserCog, badge: "63", section: "الموارد البشرية" },
+  { label: "الحضور والانصراف", icon: UserCheck, badge: "58" },
+  { label: "الإجازات", icon: CalendarCheck2, badge: "7" },
+  { label: "الرواتب", icon: Banknote, badge: "شهرية" },
+  { label: "العقود والملفات", icon: FileCheck2, badge: "63" },
+  { label: "التوظيف", icon: UserPlus, badge: "12" },
+  { label: "تقييم الأداء", icon: Gauge },
+  { label: "التدريب والتطوير", icon: GraduationCap, badge: "4" },
+  { label: "المناوبات والجداول", icon: CalendarRange, badge: "3" },
+  { label: "تقارير الموارد البشرية", icon: BarChart3, section: "الإدارة" },
   { label: "الأمراض والتشخيص", icon: ClipboardList, badge: "10" },
   { label: "المحتوى", icon: Newspaper },
   { label: "التقارير", icon: BarChart3 },
@@ -162,6 +180,15 @@ const navIcons: Record<string, typeof LayoutDashboard> = {
   الأطباء: Stethoscope,
   "الأقسام والعيادات": Building2,
   الموظفون: UserCog,
+  "الحضور والانصراف": UserCheck,
+  الإجازات: CalendarCheck2,
+  الرواتب: Banknote,
+  "العقود والملفات": FileCheck2,
+  التوظيف: UserPlus,
+  "تقييم الأداء": Gauge,
+  "التدريب والتطوير": GraduationCap,
+  "المناوبات والجداول": CalendarRange,
+  "تقارير الموارد البشرية": BarChart3,
   "الأمراض والتشخيص": ClipboardList,
   المحتوى: Newspaper,
   التقارير: BarChart3,
@@ -351,7 +378,7 @@ export default function Index() {
 
             <div className="mt-6 flex flex-col items-start justify-between gap-3 rounded-[20px] bg-[#e8f5f1] px-5 py-4 sm:flex-row sm:items-center sm:px-6"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-[#0d716a]"><MapPin className="h-4 w-4" /></div><div><p className="text-[12px] font-bold text-[#2d625e]">أنت تعمل الآن من {branch}</p><p className="mt-1 text-[10px] text-[#6f9690]">آخر مزامنة للبيانات: منذ دقيقة واحدة</p></div></div><button className="flex items-center gap-1 text-[11px] font-bold text-[#0d716a]">تغيير الفرع <ArrowUpLeft className="h-3.5 w-3.5" /></button></div>
             </div>
-            </> : <ModuleView activeItem={activeItem} branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} newPatient={recentPatient} patientCount={patientCount} services={services} radiologyOrders={radiologyOrders} stock={stock} prescriptions={prescriptions} dispensingQueue={dispensingQueue} onCreate={(type) => setClinicalModal(type)} onUpdateDispensing={updateDispensingStatus} onScanPrescription={scanPrescription} />}
+            </> : <ModuleView activeItem={activeItem} branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} newPatient={recentPatient} patientCount={patientCount} services={services} radiologyOrders={radiologyOrders} stock={stock} prescriptions={prescriptions} dispensingQueue={dispensingQueue} onCreate={(type) => setClinicalModal(type)} onUpdateDispensing={updateDispensingStatus} onScanPrescription={scanPrescription} onNavigate={setActiveItem} />}
           </div>
         </section>
       </div>
@@ -431,9 +458,73 @@ function ModuleTable({ title, description, columns, rows }: { title: string; des
   return <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 shadow-[0_4px_18px_rgba(30,73,72,0.025)] sm:p-6"><div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-[16px] font-bold text-[#234b4b]">{title}</h2><p className="mt-1 text-[11px] text-[#96aaa8]">{description}</p></div><div className="flex gap-2"><div className="flex h-10 items-center rounded-xl border border-[#dfebe8] px-3"><Search className="ml-2 h-4 w-4 text-[#9bb1ae]" /><input value={query} onChange={(event) => setQuery(event.target.value)} className="w-36 bg-transparent text-xs outline-none" placeholder="بحث..." /></div><button className="rounded-xl border border-[#dfebe8] px-3 text-[11px] font-bold text-[#6d8b88]"><Download className="h-4 w-4" /></button></div></div><div className="overflow-x-auto"><table className="w-full min-w-[720px] text-right"><thead><tr className="border-b border-[#dbeaf0] bg-[#eaf6fb] text-[10px] font-bold text-[#5d7f91]">{columns.map((column) => <th key={column} className="px-3 py-3">{column}</th>)}<th className="px-3 py-3">إجراء</th></tr></thead><tbody>{visibleRows.map((row, index) => <tr key={`${row[0]}-${index}`} className="border-b border-[#f0f4f3] text-[11px] last:border-0 hover:bg-[#fbfdfd]">{row.map((cell, cellIndex) => <td key={`${cell}-${cellIndex}`} className={cn("px-3 py-3.5 text-[#66817f]", cellIndex === 0 && "font-mono text-[10px] text-[#436f86]", cellIndex === row.length - 1 && "font-bold text-[#426765]")}>{cellIndex === row.length - 1 ? <StatusPill tone={cell.includes("منخفض") || cell.includes("انتظار") || cell.includes("معلق") ? "amber" : cell.includes("مسودة") ? "purple" : "teal"}>{cell}</StatusPill> : cell}</td>)}<td className="px-3 py-3.5"><button className="text-[10px] font-bold text-[#0d716a]">عرض</button></td></tr>)}</tbody></table></div></div>;
 }
 
-type ModuleViewProps = { activeItem: string; branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void; newPatient: string; patientCount: number; services: ClinicalRows; radiologyOrders: ClinicalRows; stock: ClinicalRows; prescriptions: ClinicalRows; dispensingQueue: ClinicalRows; onCreate: (type: ClinicalModal) => void; onUpdateDispensing: (id: string, status: string) => void; onScanPrescription: () => void };
+type HRRow = string[];
 
-function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, newPatient, patientCount, services, radiologyOrders, stock, prescriptions, dispensingQueue, onCreate, onUpdateDispensing, onScanPrescription }: ModuleViewProps) {
+const hrEmployeeSeed: HRRow[] = [
+  ["أحمد المطيري", "EMP-0001", "مدير العيادة", "الإدارة", "كل الفروع", "نشط"],
+  ["ريم السبيعي", "EMP-0042", "موظفة استقبال", "الاستقبال", "الرياض", "نشط"],
+  ["عمر الحربي", "EMP-0018", "طبيب عام", "العيادات", "الرياض", "نشط"],
+  ["هند القحطاني", "EMP-0037", "صيدلانية", "الصيدلية", "جدة", "إجازة"],
+];
+
+const hrSectionLabels = ["الموظفون", "الحضور والانصراف", "الإجازات", "الرواتب", "العقود والملفات", "التوظيف", "تقييم الأداء", "التدريب والتطوير", "المناوبات والجداول", "تقارير الموارد البشرية"];
+
+function HRTable({ columns, rows, actionLabel, onAction }: { columns: string[]; rows: HRRow[]; actionLabel?: string; onAction?: (row: HRRow) => void }) {
+  return <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-right"><thead><tr className="border-b border-[#dbeaf0] bg-[#eaf6fb] text-[10px] font-bold text-[#5d7f91]">{columns.map((column) => <th key={column} className="px-3 py-3">{column}</th>)}{onAction && <th className="px-3 py-3">إجراء</th>}</tr></thead><tbody>{rows.map((row, index) => <tr key={`${row[0]}-${index}`} className="border-b border-[#f0f4f3] text-[11px] last:border-0 hover:bg-[#fbfdfd]">{row.map((cell, cellIndex) => <td key={`${cell}-${cellIndex}`} className={cn("px-3 py-3.5 text-[#66817f]", cellIndex === 0 && "font-bold text-[#426765]", cell === "نشط" || cell === "معتمد" || cell === "مكتمل" ? "text-[#3d9573]" : cell === "معلق" || cell === "قيد المراجعة" ? "text-[#c5872e]" : "")}>{cell}</td>)}{onAction && <td className="px-3 py-3.5"><button onClick={() => onAction(row)} className="rounded-lg bg-[#e6f4f1] px-3 py-2 text-[10px] font-bold text-[#0d716a] transition hover:bg-[#cfece5]">{actionLabel}</button></td>}</tr>)}</tbody></table></div>;
+}
+
+function HRView({ activeItem, branch, onNavigate }: { activeItem: string; branch: string; onNavigate: (item: string) => void }) {
+  const [employees, setEmployees] = useState<HRRow[]>(hrEmployeeSeed);
+  const [attendanceMarked, setAttendanceMarked] = useState(false);
+  const [payrollReady, setPayrollReady] = useState(false);
+  const [leaveStatuses, setLeaveStatuses] = useState<Record<string, string>>({ "إجازة هند القحطاني": "قيد المراجعة", "إجازة ريم السبيعي": "معتمد" });
+  const [note, setNote] = useState("");
+  const activeSection = hrSectionLabels.includes(activeItem) ? activeItem : "الموظفون";
+  const addEmployee = () => {
+    setEmployees((current) => [["موظف جديد", `EMP-${String(current.length + 1).padStart(4, "0")}`, "موظف إداري", "الإدارة", branch.replace("فرع ", ""), "نشط"], ...current]);
+    setNote("تمت إضافة موظف جديد إلى السجل المحلي");
+  };
+  const markAttendance = () => {
+    setAttendanceMarked(true);
+    setNote("تم تسجيل حضور الموظفين المناوبين لهذا اليوم");
+  };
+  const approveLeave = (row: HRRow) => {
+    setLeaveStatuses((current) => ({ ...current, [row[0]]: "معتمد" }));
+    setNote(`تم اعتماد طلب ${row[0]}`);
+  };
+  const section = {
+    "الموظفون": { eyebrow: "الموارد البشرية", title: "دليل الموظفين", description: `${branch} · الملفات والأدوار ونطاق الوصول`, action: "إضافة موظف", icon: UserCog },
+    "الحضور والانصراف": { eyebrow: "الموارد البشرية", title: "الحضور والانصراف", description: `${branch} · متابعة الحضور والتأخير وساعات العمل`, action: "تسجيل حضور", icon: UserCheck },
+    "الإجازات": { eyebrow: "الموارد البشرية", title: "إدارة الإجازات", description: `${branch} · الطلبات والأرصدة ومسار الاعتماد`, action: "طلب إجازة", icon: CalendarCheck2 },
+    "الرواتب": { eyebrow: "الموارد البشرية والمالية", title: "الرواتب والمستحقات", description: `${branch} · مسير الرواتب والبدلات والاستقطاعات`, action: payrollReady ? "تم اعتماد المسير" : "اعتماد مسير الرواتب", icon: Banknote },
+    "العقود والملفات": { eyebrow: "الموارد البشرية", title: "العقود والملفات", description: `${branch} · الوثائق والتراخيص والتنبيهات`, action: "رفع وثيقة", icon: FileCheck2 },
+    "التوظيف": { eyebrow: "الموارد البشرية", title: "التوظيف", description: `${branch} · الوظائف الشاغرة والمرشحون ومراحل المقابلة`, action: "وظيفة شاغرة", icon: UserPlus },
+    "تقييم الأداء": { eyebrow: "الموارد البشرية", title: "تقييم الأداء", description: `${branch} · الأهداف والدورات وملاحظات المديرين`, action: "بدء دورة تقييم", icon: Gauge },
+    "التدريب والتطوير": { eyebrow: "الموارد البشرية", title: "التدريب والتطوير", description: `${branch} · الدورات والشهادات والامتثال المهني`, action: "إضافة دورة", icon: GraduationCap },
+    "المناوبات والجداول": { eyebrow: "الموارد البشرية", title: "المناوبات والجداول", description: `${branch} · جدولة الفرق وتغطية العيادات`, action: "مناوبة جديدة", icon: CalendarRange },
+    "تقارير الموارد البشرية": { eyebrow: "الموارد البشرية", title: "تقارير الموارد البشرية", description: `${branch} · مؤشرات القوى العاملة والتكلفة والالتزام`, action: "تصدير التقرير", icon: BarChart3 },
+  }[activeSection];
+  const handleAction = () => {
+    if (activeSection === "الموظفون") addEmployee();
+    else if (activeSection === "الحضور والانصراف") markAttendance();
+    else if (activeSection === "الرواتب") { setPayrollReady(true); setNote("تم اعتماد مسير الرواتب وإرساله للمراجعة المالية"); }
+    else setNote(`تم تنفيذ إجراء ${section.action} محليًا`);
+  };
+  const attendanceRows = [["أحمد المطيري", "مدير العيادة", attendanceMarked ? "08:42" : "لم يسجل", attendanceMarked ? "حاضر" : "بانتظار التسجيل"], ["ريم السبيعي", "الاستقبال", "08:15", "حاضر"], ["عمر الحربي", "طبيب عام", "09:05", "متأخر ٥ د"]];
+  const leaveRows = [["إجازة هند القحطاني", "هند القحطاني", "سنوية", "٢٠ - ٢٤ مايو", leaveStatuses["إجازة هند القحطاني"]], ["إجازة ريم السبيعي", "ريم السبيعي", "اضطرارية", "٢٢ مايو", leaveStatuses["إجازة ريم السبيعي"]], ["إجازة عمر الحربي", "عمر الحربي", "علمية", "١ - ٣ يونيو", "معلق"]];
+  const payrollRows = [["أحمد المطيري", "مدير العيادة", "١٨٬٥٠٠ ر.س", "٠", payrollReady ? "معتمد" : "مسودة"], ["ريم السبيعي", "الاستقبال", "٦٬٨٠٠ ر.س", "٣٠٠ ر.س", payrollReady ? "معتمد" : "مسودة"], ["عمر الحربي", "طبيب عام", "١٥٬٢٠٠ ر.س", "٠", payrollReady ? "معتمد" : "مسودة"]];
+  const contractRows = [["EMP-0001", "أحمد المطيري", "عقد دائم", "٣١ ديسمبر ٢٠٢٦", "ساري"], ["EMP-0042", "ريم السبيعي", "عقد سنوي", "٣٠ يونيو ٢٠٢٦", "ينتهي قريبًا"], ["EMP-0037", "هند القحطاني", "عقد سنوي", "١٥ مايو ٢٠٢٦", "يحتاج تجديد"]];
+  const recruitmentRows = [["طبيب جلدية", "الجلدية", "٤ مرشحين", "مقابلة", "نشطة"], ["ممرضة عيادة", "التمريض", "٧ مرشحين", "فرز أولي", "نشطة"], ["محاسب فرع", "المالية", "مرشحان", "عرض وظيفي", "قيد الإغلاق"]];
+  const performanceRows = [["ريم السبيعي", "الاستقبال", "٤٫٦ / ٥", "٩٢٪", "مكتمل"], ["عمر الحربي", "العيادات", "٤٫٨ / ٥", "٩٦٪", "قيد المراجعة"], ["هند القحطاني", "الصيدلية", "٤٫٤ / ٥", "٨٨٪", "لم يبدأ"]];
+  const trainingRows = [["سلامة المرضى", "إلزامية", "٢٤ موظفًا", "١٥ يونيو", "مفتوحة"], ["خصوصية البيانات PDPL", "امتثال", "٦٣ موظفًا", "٣٠ يونيو", "مكتملة"], ["الإسعافات الأولية", "سريرية", "١٢ موظفًا", "٧ يوليو", "مفتوحة"]];
+  const shiftRows = [["الأحد صباحي", "08:00 - 16:00", "الاستقبال · الجلدية", "٨ موظفين", "مكتملة"], ["الأحد مسائي", "16:00 - 00:00", "الطوارئ · الصيدلية", "٦ موظفين", "تحتاج تغطية"], ["الإثنين صباحي", "08:00 - 16:00", "الأطفال · المختبر", "٧ موظفين", "مكتملة"]];
+  const reportCards = [{ label: "إجمالي الموظفين", value: toArabicNumber(employees.length), note: "٤ فئات وظيفية", tone: "bg-[#0d857b]" }, { label: "نسبة الحضور", value: attendanceMarked ? "٩٧٪" : "٩٢٪", note: "هذا الشهر", tone: "bg-[#397fbd]" }, { label: "تكلفة الرواتب", value: "٤٠٫٥ك", note: "ر.س · الشهر الحالي", tone: "bg-[#7654ba]" }, { label: "معدل الدوران", value: "٣٫٢٪", note: "أفضل من الربع السابق", tone: "bg-[#e5b15a]" }];
+  return <><ViewHeader eyebrow={section.eyebrow} title={section.title} description={section.description} action={section.action} icon={section.icon} onAction={handleAction} /><div className="mb-6 flex gap-2 overflow-x-auto pb-1">{hrSectionLabels.map((label) => <button key={label} onClick={() => onNavigate(label)} className={cn("min-w-max rounded-xl border px-3 py-2.5 text-[10px] font-bold transition", activeSection === label ? "border-[#0d857b] bg-[#e6f4f1] text-[#0d716a]" : "border-[#e3eeeb] bg-white text-[#789794] hover:border-[#acd8d2]")}>{label}</button>)}</div>{activeSection === "الموظفون" && <><SummaryCards items={[{ label: "إجمالي الموظفين", value: toArabicNumber(employees.length), note: "كل الفروع", tone: "bg-[#0d857b]" }, { label: "الموظفون النشطون", value: "٥٨", note: "جاهزون للعمل", tone: "bg-[#397fbd]" }, { label: "إجازات اليوم", value: "٠٣", note: "تؤثر على التغطية", tone: "bg-[#e5b15a]" }, { label: "وثائق تحتاج تحديث", value: "٠٦", note: "عقود أو تراخيص", tone: "bg-[#d36c83]" }]} /><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><div className="mb-5"><h2 className="text-[16px] font-bold text-[#234b4b]">سجل الموظفين</h2><p className="mt-1 text-[11px] text-[#96aaa8]">الملفات والأدوار والصلاحيات حسب الفرع</p></div><HRTable columns={["الموظف", "الرقم", "المسمى الوظيفي", "القسم", "الفرع", "الحالة"]} rows={employees} actionLabel="فتح الملف" onAction={() => setNote("تم فتح ملف الموظف محليًا")} /></div></>}{activeSection === "الحضور والانصراف" && <><SummaryCards items={[{ label: "حاضرون الآن", value: attendanceMarked ? "٥٨" : "٥٧", note: "من ٦٣ موظفًا", tone: "bg-[#0d857b]" }, { label: "متأخرون", value: "٠٥", note: "يحتاجون متابعة", tone: "bg-[#e5b15a]" }, { label: "غائبون", value: "٠٣", note: "معتمدون بإجازة", tone: "bg-[#d36c83]" }, { label: "ساعات إضافية", value: "٢٤", note: "ساعة هذا الأسبوع", tone: "bg-[#397fbd]" }]} /><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الموظف", "القسم", "وقت الدخول", "الحالة"]} rows={attendanceRows} actionLabel={attendanceMarked ? "تعديل" : "تسجيل"} onAction={markAttendance} /></div></>}{activeSection === "الإجازات" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><div className="mb-5"><h2 className="text-[16px] font-bold text-[#234b4b]">طلبات الإجازات</h2><p className="mt-1 text-[11px] text-[#96aaa8]">اعتماد الطلب ينعكس على تغطية المناوبات</p></div><HRTable columns={["الطلب", "الموظف", "النوع", "المدة", "الحالة"]} rows={leaveRows} actionLabel="اعتماد" onAction={approveLeave} /></div>}{activeSection === "الرواتب" && <><SummaryCards items={[{ label: "إجمالي المسير", value: "٤٠٬٥٠٠ ر.س", note: payrollReady ? "معتمد للمراجعة" : "مسودة الشهر الحالي", tone: "bg-[#0d857b]" }, { label: "بدلات", value: "١٬٨٠٠ ر.س", note: "بدلات حضور ونقل", tone: "bg-[#397fbd]" }, { label: "استقطاعات", value: "٣٠٠ ر.س", note: "حسب الحضور", tone: "bg-[#e5b15a]" }, { label: "موعد الصرف", value: "٢٧ مايو", note: "متوافق مع السياسة", tone: "bg-[#7654ba]" }]} /><div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الموظف", "المسمى", "الأساسي", "الاستقطاعات", "الحالة"]} rows={payrollRows} actionLabel="كشف الراتب" onAction={() => setNote("تم فتح كشف الراتب محليًا")} /></div></>}{activeSection === "العقود والملفات" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الرقم", "الموظف", "نوع العقد", "الانتهاء", "الحالة"]} rows={contractRows} actionLabel="عرض الملف" onAction={() => setNote("تم فتح ملف العقد والوثائق")} /></div>}{activeSection === "التوظيف" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الوظيفة", "القسم", "المرشحون", "المرحلة", "الحالة"]} rows={recruitmentRows} actionLabel="متابعة" onAction={() => setNote("تم فتح مسار التوظيف")} /></div>}{activeSection === "تقييم الأداء" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الموظف", "القسم", "التقييم", "تحقيق الأهداف", "الحالة"]} rows={performanceRows} actionLabel="فتح التقييم" onAction={() => setNote("تم فتح نموذج تقييم الأداء")} /></div>}{activeSection === "التدريب والتطوير" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["الدورة", "النوع", "المسجلون", "التاريخ", "الحالة"]} rows={trainingRows} actionLabel="إدارة الدورة" onAction={() => setNote("تم فتح إدارة الدورة التدريبية")} /></div>}{activeSection === "المناوبات والجداول" && <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><HRTable columns={["المناوبة", "الوقت", "التغطية", "الفريق", "الحالة"]} rows={shiftRows} actionLabel="تعديل الجدول" onAction={() => setNote("تم فتح جدول المناوبة")} /></div>}{activeSection === "تقارير الموارد البشرية" && <><SummaryCards items={reportCards} /><div className="grid gap-4 md:grid-cols-2"><ReportCard title="توزيع القوى العاملة" detail="العيادات ٤٢٪ · الاستقبال ٢٢٪ · الخدمات المساندة ٣٦٪" bars={[82, 54, 68, 43]} tone="blue" /><ReportCard title="الحضور والالتزام" detail="نسبة الحضور ٩٢٪ · الإجازات ٥٪ · الغياب ٣٪" bars={[92, 55, 35]} tone="teal" /></div></>}{note && <div role="status" className="mt-4 rounded-xl bg-[#e8f5f1] px-4 py-3 text-[11px] font-bold text-[#0d716a]">{note}</div>}</>;
+}
+
+type ModuleViewProps = { activeItem: string; branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void; newPatient: string; patientCount: number; services: ClinicalRows; radiologyOrders: ClinicalRows; stock: ClinicalRows; prescriptions: ClinicalRows; dispensingQueue: ClinicalRows; onCreate: (type: ClinicalModal) => void; onUpdateDispensing: (id: string, status: string) => void; onScanPrescription: () => void; onNavigate: (item: string) => void };
+
+function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, newPatient, patientCount, services, radiologyOrders, stock, prescriptions, dispensingQueue, onCreate, onUpdateDispensing, onScanPrescription, onNavigate }: ModuleViewProps) {
   if (activeItem === "المرضى") return <PatientsView branch={branch} onAdd={onPatient} newPatient={newPatient} patientCount={patientCount} />;
   if (activeItem === "المواعيد") return <AppointmentsView branch={branch} onBook={onAppointment} />;
   if (activeItem === "الطابور") return <QueueView branch={branch} />;
@@ -446,7 +537,8 @@ function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, ne
   if (activeItem === "الصيدلية") return <PharmacyView branch={branch} stock={stock} onAdd={() => onCreate("medicine")} />;
   if (activeItem === "الأدوية والوصفات") return <PrescriptionsView branch={branch} prescriptions={prescriptions} onAdd={() => onCreate("prescription")} />;
   if (activeItem === "صرف الأدوية") return <DispensingView branch={branch} queueRows={dispensingQueue} onScan={onScanPrescription} onUpdate={onUpdateDispensing} />;
-  if (["الأطباء", "الأقسام والعيادات", "الموظفون", "الأمراض والتشخيص"].includes(activeItem)) return <DirectoryView activeItem={activeItem} branch={branch} />;
+  if (["الموظفون", "الحضور والانصراف", "الإجازات", "الرواتب", "العقود والملفات", "التوظيف", "تقييم الأداء", "التدريب والتطوير", "المناوبات والجداول", "تقارير الموارد البشرية"].includes(activeItem)) return <HRView activeItem={activeItem} branch={branch} onNavigate={onNavigate} />;
+  if (["الأطباء", "الأقسام والعيادات", "الأمراض والتشخيص"].includes(activeItem)) return <DirectoryView activeItem={activeItem} branch={branch} />;
   if (activeItem === "المحتوى") return <ContentView branch={branch} />;
   if (activeItem === "التقارير") return <ReportsView branch={branch} />;
   return <EditableSettingsView branch={branch} onClinic={onClinic} />;
