@@ -201,6 +201,7 @@ export default function Index() {
           <div className="mx-auto max-w-[1500px] px-5 pb-12 pt-7 sm:px-8 lg:px-10 lg:pt-9">
             {activeItem === "الرئيسية" ? <>
             <ReferenceOverview branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} />
+            <div className="hidden">
             <div className="mb-8 flex flex-col justify-between gap-5 md:flex-row md:items-end">
               <div><div className="mb-2 flex items-center gap-2 text-xs font-semibold text-[#91a8a5]"><span>{dateLabel}</span><span className="h-1 w-1 rounded-full bg-[#b8c9c6]" /><span>١٨ مايو ٢٠٢٥</span></div><h1 className="text-[27px] font-bold tracking-[-0.04em] text-[#183f42] sm:text-[32px]">صباح الخير، أحمد <span className="inline-block">👋</span></h1><p className="mt-2 text-[13px] text-[#76918e]">إليك ملخص أداء عيادتك لهذا اليوم.</p></div>
               <div className="flex items-center gap-2"><div className="relative"><select aria-label="اختيار الفرع" value={branch} onChange={(event) => setBranch(event.target.value)} className="h-11 appearance-none rounded-xl border border-[#dfebe8] bg-white py-2 pl-9 pr-10 text-xs font-bold text-[#436866] outline-none transition focus:border-[#83c7bf]"><option>فرع الرياض - النخيل</option><option>فرع جدة - الروضة</option><option>فرع دبي - الخليج التجاري</option></select><Building2 className="pointer-events-none absolute right-3 top-3 h-4 w-4 text-[#0d857b]" /><ChevronDown className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-[#9ab2ae]" /></div><button onClick={openAppointmentForm} className="flex h-11 items-center gap-2 rounded-xl bg-[#0d716a] px-4 text-xs font-bold text-white shadow-[0_8px_18px_rgba(13,113,106,0.19)] transition hover:bg-[#095d58]"><Plus className="h-4 w-4" /> موعد جديد</button></div>
@@ -238,6 +239,7 @@ export default function Index() {
             </div>
 
             <div className="mt-6 flex flex-col items-start justify-between gap-3 rounded-[20px] bg-[#e8f5f1] px-5 py-4 sm:flex-row sm:items-center sm:px-6"><div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-white text-[#0d716a]"><MapPin className="h-4 w-4" /></div><div><p className="text-[12px] font-bold text-[#2d625e]">أنت تعمل الآن من {branch}</p><p className="mt-1 text-[10px] text-[#6f9690]">آخر مزامنة للبيانات: منذ دقيقة واحدة</p></div></div><button className="flex items-center gap-1 text-[11px] font-bold text-[#0d716a]">تغيير الفرع <ArrowUpLeft className="h-3.5 w-3.5" /></button></div>
+            </div>
             </> : <ModuleView activeItem={activeItem} branch={branch} onPatient={openPatientForm} onAppointment={openAppointmentForm} onClinic={() => setModal("clinic")} newPatient={recentPatient} patientCount={patientCount} />}
           </div>
         </section>
