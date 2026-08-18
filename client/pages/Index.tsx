@@ -50,6 +50,7 @@ type NavItem = {
   label: string;
   icon: typeof LayoutDashboard;
   badge?: string;
+  section?: string;
 };
 
 type Appointment = {
@@ -62,17 +63,22 @@ type Appointment = {
 };
 
 const navigation: NavItem[] = [
-  { label: "الرئيسية", icon: LayoutDashboard },
-  { label: "المرضى", icon: UsersRound, badge: "1,248" },
+  { label: "الرئيسية", icon: LayoutDashboard, section: "لوحة التحكم" },
+  { label: "المرضى", icon: UsersRound, badge: "1,248", section: "الاستقبال والمواعيد" },
   { label: "المواعيد", icon: CalendarDays },
   { label: "الطابور", icon: Activity, badge: "12" },
-  { label: "الفوترة والمدفوعات", icon: WalletCards },
-  { label: "المختبر", icon: FlaskConical, badge: "4" },
-  { label: "التأمين والمطالبات", icon: ShieldCheck },
-  { label: "الباقات", icon: Package },
-  { label: "الأطباء", icon: Stethoscope, badge: "10" },
+  { label: "الخدمات", icon: ReceiptText, badge: "18", section: "الكتالوج الطبي" },
   { label: "الأقسام والعيادات", icon: Building2, badge: "22" },
-  { label: "الموظفون", icon: UserCog, badge: "63" },
+  { label: "الأطباء", icon: Stethoscope, badge: "10" },
+  { label: "المختبر", icon: FlaskConical, badge: "4" },
+  { label: "الأشعة والتصوير الطبي", icon: Activity, badge: "6" },
+  { label: "الصيدلية", icon: Package, badge: "24", section: "الصيدلية والوصفات" },
+  { label: "الأدوية والوصفات", icon: FileText },
+  { label: "صرف الأدوية", icon: ClipboardList, badge: "8" },
+  { label: "التأمين والمطالبات", icon: ShieldCheck, section: "المالية والتأمين" },
+  { label: "الفوترة والمدفوعات", icon: WalletCards },
+  { label: "الباقات", icon: Package },
+  { label: "الموظفون", icon: UserCog, badge: "63", section: "الإدارة" },
   { label: "الأمراض والتشخيص", icon: ClipboardList, badge: "10" },
   { label: "المحتوى", icon: Newspaper },
   { label: "التقارير", icon: BarChart3 },
@@ -98,6 +104,11 @@ const navIcons: Record<string, typeof LayoutDashboard> = {
   الطابور: Activity,
   "الفوترة والمدفوعات": WalletCards,
   المختبر: FlaskConical,
+  "الأشعة والتصوير الطبي": Activity,
+  الخدمات: ReceiptText,
+  الصيدلية: Package,
+  "الأدوية والوصفات": FileText,
+  "صرف الأدوية": ClipboardList,
   "التأمين والمطالبات": ShieldCheck,
   الباقات: Package,
   الأطباء: Stethoscope,
@@ -164,10 +175,10 @@ export default function Index() {
               {navigation.map((item) => {
                 const Icon = item.icon;
                 const active = item.label === activeItem;
-                return <button key={item.label} onClick={() => setActiveItem(item.label)} title={collapsed ? item.label : undefined} className={cn("group flex w-full items-center rounded-xl text-right text-[13px] font-semibold transition", collapsed ? "justify-center px-2 py-3" : "gap-3 px-3 py-3", active ? "bg-[#245d9b] text-white" : "text-[#b9c5d7] hover:bg-[#192943] hover:text-white")}>
+                return <div key={item.label}>{item.section && !collapsed && <div className="mb-1 mt-4 px-3 text-[10px] font-bold text-[#4f91c5]">{item.section}</div>}<button onClick={() => setActiveItem(item.label)} title={collapsed ? item.label : undefined} className={cn("group flex w-full items-center rounded-xl text-right text-[13px] font-semibold transition", collapsed ? "justify-center px-2 py-3" : "gap-3 px-3 py-3", active ? "bg-[#245d9b] text-white" : "text-[#b9c5d7] hover:bg-[#192943] hover:text-white")}>
                   <Icon className={cn("h-[18px] w-[18px] shrink-0", active ? "text-white" : "text-[#8092ac] group-hover:text-[#c5d2e3]")} strokeWidth={active ? 2.3 : 1.9} />
                   {!collapsed && <><span className="flex-1">{item.label}</span>{item.badge && <span className={cn("rounded-md px-1.5 py-0.5 text-[10px]", active ? "bg-white/15 text-white" : "bg-[#1b2a43] text-[#91a4be]")}>{item.badge}</span>}</>}
-                </button>;
+                </button></div>;
               })}
             </nav>
           </div>
@@ -291,6 +302,35 @@ function ReportCard({ title, detail, bars, tone }: { title: string; detail: stri
   return <section className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 sm:p-6"><h2 className="text-[16px] font-bold text-[#234b4b]">{title}</h2><p className="mt-1 text-[11px] text-[#96aaa8]">{detail}</p><div className="mt-6 flex h-28 items-end gap-3">{bars.map((height, index) => <div key={index} className={cn("flex-1 rounded-t-lg", tone === "teal" ? "bg-[#cdebe4]" : "bg-[#d7e8f3]", index === bars.length - 1 && (tone === "teal" ? "bg-[#0d857b]" : "bg-[#397fbd]"))} style={{ height: `${height}%` }} />)}</div></section>;
 }
 
+function ServicesView({ branch }: { branch: string }) {
+  const rows = [["استشارة جلدية أولية", "الجلدية والتجميل", "٣٠ دقيقة", "٢٠٠ ر.س", "الرياض · جدة", "نشطة"], ["جلسة ليزر", "التجميل", "٦٠ دقيقة", "٦٠٠ ر.س", "الرياض", "نشطة"], ["متابعة علاج", "طب عام", "٢٠ دقيقة", "١٥٠ ر.س", "كل الفروع", "نشطة"], ["زيارة طب أطفال", "طب الأطفال", "٣٠ دقيقة", "١٨٠ ر.س", "الرياض", "مسودة"]];
+  return <><ViewHeader eyebrow="الكتالوج الطبي" title="الخدمات والأسعار" description={`${branch} · الخدمات المتاحة للحجز والفوترة والتأمين`} action="إضافة خدمة" icon={ReceiptText} /><SummaryCards items={[{ label: "الخدمات النشطة", value: "١٨", note: "عبر ٣ فروع", tone: "bg-[#0d857b]" }, { label: "خدمات التأمين", value: "١٢", note: "مرتبطة برموز المطالبات", tone: "bg-[#397fbd]" }, { label: "الخدمات الرقمية", value: "٠٥", note: "متاحة للحجز الإلكتروني", tone: "bg-[#7654ba]" }, { label: "تحتاج مراجعة", value: "٠٢", note: "تسعير أو مدة ناقصة", tone: "bg-[#e5b15a]" }]} /><ModuleTable title="دليل الخدمات" description="السعر والمدة والفرع والتخصص" columns={["الخدمة", "التخصص", "المدة", "السعر", "الفروع", "الحالة"]} rows={rows} /></>;
+}
+
+function RadiologyView({ branch }: { branch: string }) {
+  const orders = [["RAD-1024", "سارة أحمد العتيبي", "أشعة سونار البطن", "د. ليان المطيري", "مجدول", "اليوم ١١:٠٠"], ["RAD-1023", "عبدالله سالم القحطاني", "أشعة سينية للصدر", "د. عمر الحربي", "قيد التنفيذ", "اليوم ١٠:٣٠"], ["RAD-1022", "نورة محمد الغامدي", "تصوير بالرنين المغناطيسي", "د. ريم الزهراني", "بانتظار التقرير", "أمس ١٦:٢٠"]];
+  return <><ViewHeader eyebrow="الأشعة والتصوير الطبي" title="مركز الأشعة" description={`${branch} · الطلبات والتقارير وجدولة أجهزة التصوير`} action="طلب أشعة" icon={Activity} /><SummaryCards items={[{ label: "طلبات اليوم", value: "١٦", note: "٤ مجدولة الآن", tone: "bg-[#397fbd]" }, { label: "قيد التنفيذ", value: "٠٤", note: "على الأجهزة", tone: "bg-[#0d857b]" }, { label: "بانتظار التقرير", value: "٠٣", note: "يحتاج مراجعة", tone: "bg-[#e5b15a]" }, { label: "الأجهزة المتاحة", value: "٠٦ / ٠٧", note: "جهاز واحد للصيانة", tone: "bg-[#7654ba]" }]} /><ModuleTable title="طلبات الأشعة" description="كل طلب مرتبط بالزيارة والطبيب والمريض" columns={["رقم الطلب", "المريض", "الفحص", "الطبيب", "الحالة", "الموعد"]} rows={orders} /></>;
+}
+
+function PharmacyView({ branch }: { branch: string }) {
+  const stock = [["باراسيتامول ٥٠٠ مج", "مسكن", "BTH-8821", "١٢٠", "يناير ٢٠٢٧", "متوفر"], ["أموكسيسيلين ٥٠٠ مج", "مضاد حيوي", "BTH-5510", "أكتوبر ٢٠٢٦", "منخفض"], ["كريم هيدروكورتيزون", "جلدية", "BTH-3009", "يونيو ٢٠٢٦", "متوفر"], ["محلول ملحي ٥٠٠ مل", "مستلزمات", "BTH-1022", "مارس ٢٠٢٧", "متوفر"]];
+  return <><ViewHeader eyebrow="الصيدلية والمخزون" title="الصيدلية" description={`${branch} · المخزون والدفعات والصرف بنظام FEFO`} action="إضافة دواء" icon={Package} /><SummaryCards items={[{ label: "الأصناف النشطة", value: "٢٤", note: "أدوية ومستلزمات", tone: "bg-[#0d857b]" }, { label: "منخفض المخزون", value: "٠٣", note: "تحتاج طلب شراء", tone: "bg-[#e5b15a]" }, { label: "تنتهي قريبًا", value: "٠٢", note: "خلال ٩٠ يومًا", tone: "bg-[#d36c83]" }, { label: "قيمة المخزون", value: "٤٨٬٢٠٠", note: "ر.س تقديرية", tone: "bg-[#397fbd]" }]} /><ModuleTable title="مخزون الصيدلية" description="تتبع الدفعات والصلاحية وصرف الأقدم أولاً" columns={["الدواء", "التصنيف", "رقم الدفعة", "الكمية", "الصلاحية", "الحالة"]} rows={stock} /></>;
+}
+
+function PrescriptionsView({ branch }: { branch: string }) {
+  const prescriptions = [["RX-2025-0841", "سارة أحمد العتيبي", "د. ليان المطيري", "٣ أصناف", "معتمدة", "اليوم ٠٩:٤٥"], ["RX-2025-0840", "عبدالله سالم القحطاني", "د. عمر الحربي", "٢ صنف", "تم الصرف", "اليوم ٠٩:١٠"], ["RX-2025-0839", "نورة محمد الغامدي", "د. ليان المطيري", "٤ أصناف", "بانتظار الصرف", "أمس ١٧:٢٠"]];
+  return <><ViewHeader eyebrow="الأدوية والوصفات" title="الوصفات الطبية" description={`${branch} · وصفات ثنائية اللغة جاهزة للطباعة والصرف`} action="وصفة جديدة" icon={FileText} /><SummaryCards items={[{ label: "وصفات اليوم", value: "٢٨", note: "١٨ مكتملة", tone: "bg-[#0d857b]" }, { label: "بانتظار الصرف", value: "٠٨", note: "في طابور الصيدلية", tone: "bg-[#e5b15a]" }, { label: "أدوية موصوفة", value: "٧٢", note: "من ٢٨ وصفة", tone: "bg-[#397fbd]" }, { label: "وصفات فيديو", value: "٠٥", note: "وصفة إلكترونية", tone: "bg-[#7654ba]" }]} /><ModuleTable title="آخر الوصفات" description="التوقيع الطبي وحالة الصرف لكل وصفة" columns={["رقم الوصفة", "المريض", "الطبيب", "الأصناف", "الحالة", "التاريخ"]} rows={prescriptions} /></>;
+}
+
+function DispensingView({ branch }: { branch: string }) {
+  const queueRows = [["RX-2025-0841", "سارة أحمد العتيبي", "٣ أصناف", "تأمين", "بانتظار التجهيز"], ["RX-2025-0839", "نورة محمد الغامدي", "٤ أصناف", "نقدي", "جاري التجهيز"], ["RX-2025-0838", "خالد إبراهيم الشهري", "١ صنف", "باقة", "جاهز للتسليم"]];
+  return <><ViewHeader eyebrow="الصيدلية والوصفات" title="صرف الأدوية" description={`${branch} · طابور الوصفات والتسليم للمريض`} action="مسح وصفة QR" icon={ClipboardList} /><div className="mb-6 rounded-[22px] border border-[#cfe3ee] bg-[#edf6fb] p-5"><div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center"><div><div className="text-[12px] font-bold text-[#315d77]">طابور الصرف الحالي</div><div className="mt-1 text-[10px] text-[#7794a5]">يتم تحديث الحالة عند استلام المريض</div></div><div className="flex gap-6"><MiniStat value="٠٨" label="بانتظار التجهيز" icon={Clock3} /><MiniStat value="٠٣" label="جاهز" icon={CheckCircle2} /></div></div></div><ModuleTable title="وصفات بانتظار الصرف" description="تحقق من هوية المريض والدواء والدفعة قبل التسليم" columns={["الوصفة", "المريض", "الأصناف", "الدفع", "الحالة"]} rows={queueRows} /></>;
+}
+
+function ModuleTable({ title, description, columns, rows }: { title: string; description: string; columns: string[]; rows: string[][] }) {
+  return <div className="rounded-[22px] border border-[#e3eeeb] bg-white p-5 shadow-[0_4px_18px_rgba(30,73,72,0.025)] sm:p-6"><div className="mb-5 flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><h2 className="text-[16px] font-bold text-[#234b4b]">{title}</h2><p className="mt-1 text-[11px] text-[#96aaa8]">{description}</p></div><div className="flex gap-2"><div className="flex h-10 items-center rounded-xl border border-[#dfebe8] px-3"><Search className="ml-2 h-4 w-4 text-[#9bb1ae]" /><input className="w-36 bg-transparent text-xs outline-none" placeholder="بحث..." /></div><button className="rounded-xl border border-[#dfebe8] px-3 text-[11px] font-bold text-[#6d8b88]"><Download className="h-4 w-4" /></button></div></div><div className="overflow-x-auto"><table className="w-full min-w-[720px] text-right"><thead><tr className="border-b border-[#dbeaf0] bg-[#eaf6fb] text-[10px] font-bold text-[#5d7f91]">{columns.map((column) => <th key={column} className="px-3 py-3">{column}</th>)}<th className="px-3 py-3">إجراء</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row[0]}-${index}`} className="border-b border-[#f0f4f3] text-[11px] last:border-0 hover:bg-[#fbfdfd]">{row.map((cell, cellIndex) => <td key={`${cell}-${cellIndex}`} className={cn("px-3 py-3.5 text-[#66817f]", cellIndex === 0 && "font-mono text-[10px] text-[#436f86]", cellIndex === row.length - 1 && "font-bold text-[#426765]")}>{cellIndex === row.length - 1 ? <StatusPill tone={cell.includes("منخفض") || cell.includes("انتظار") || cell.includes("معلق") ? "amber" : cell.includes("مسودة") ? "purple" : "teal"}>{cell}</StatusPill> : cell}</td>)}<td className="px-3 py-3.5"><button className="text-[10px] font-bold text-[#0d716a]">عرض</button></td></tr>)}</tbody></table></div></div>;
+}
+
 type ModuleViewProps = { activeItem: string; branch: string; onPatient: () => void; onAppointment: () => void; onClinic: () => void; newPatient: string; patientCount: number };
 
 function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, newPatient, patientCount }: ModuleViewProps) {
@@ -301,6 +341,11 @@ function ModuleView({ activeItem, branch, onPatient, onAppointment, onClinic, ne
   if (activeItem === "المختبر") return <LabView branch={branch} />;
   if (activeItem === "التأمين والمطالبات") return <InsuranceView branch={branch} />;
   if (activeItem === "الباقات") return <PackagesView branch={branch} />;
+  if (activeItem === "الخدمات") return <ServicesView branch={branch} />;
+  if (activeItem === "الأشعة والتصوير الطبي") return <RadiologyView branch={branch} />;
+  if (activeItem === "الصيدلية") return <PharmacyView branch={branch} />;
+  if (activeItem === "الأدوية والوصفات") return <PrescriptionsView branch={branch} />;
+  if (activeItem === "صرف الأدوية") return <DispensingView branch={branch} />;
   if (["الأطباء", "الأقسام والعيادات", "الموظفون", "الأمراض والتشخيص"].includes(activeItem)) return <DirectoryView activeItem={activeItem} branch={branch} />;
   if (activeItem === "المحتوى") return <ContentView branch={branch} />;
   if (activeItem === "التقارير") return <ReportsView branch={branch} />;
