@@ -37,7 +37,7 @@ export default function Onboarding() {
       : await supabase.auth.signUp({ email, password });
     setBusy(false);
     if (result.error) {
-      setError(result.error.message);
+      setError(describeAuthError(result.error.message));
       return;
     }
     if (!result.data.session) {
@@ -103,6 +103,15 @@ export default function Onboarding() {
       </div>
     </div>
   </main>;
+}
+
+function describeAuthError(rawMessage: string) {
+  if (/failed to fetch|network|load failed/i.test(rawMessage)) {
+    return "تعذّر الوصول إلى خادم قاعدة البيانات. تأكد من أن مشروع Supabase يعمل وأن رابط المشروع في إعدادات البيئة صحيح ثم أعد المحاولة.";
+  }
+  if (/invalid login credentials/i.test(rawMessage)) return "البريد الإلكتروني أو كلمة المرور غير صحيحة.";
+  if (/email not confirmed/i.test(rawMessage)) return "لم يتم تأكيد البريد الإلكتروني بعد. افتح رسالة التأكيد ثم سجّل الدخول.";
+  return rawMessage;
 }
 
 const controlClass = "h-12 w-full rounded-xl border border-[#dce9e7] bg-[#fbfdfc] px-3 text-sm outline-none transition focus:border-[#72bbb2] focus:ring-4 focus:ring-[#eaf7f4]";

@@ -179,7 +179,7 @@ export default function CustomReports() {
 
       const { data, error } = await query;
       if (error) throw error;
-      const rows = (data ?? []) as Record<string, unknown>[];
+      const rows = (data ?? []) as unknown as Record<string, unknown>[];
 
       if (groupByField && aggregation) {
         const map = new Map<string, number>();
