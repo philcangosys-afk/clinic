@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
   Bell,
   ChevronDown,
@@ -41,6 +41,7 @@ function initialsOf(name: string | undefined | null) {
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { canAccess, organization, branch } = useOrganizationAccess();
+  const location = useLocation();
 
   const groups = useMemo(() => {
     const accessible = filterAccessibleModules(moduleRegistry, canAccess);
@@ -49,43 +50,124 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
 
   const settingsAccessible = canAccess(settingsModule.featureKey, settingsModule.requiredPermission);
 
+  // القسم الذي يحتوي المسار الحالي يبقى مفتوحًا افتراضيًا؛ البقية مطوية لتقليل الطول.
+  const activeSection = useMemo(() => {
+    const currentId = location.pathname === "/" ? "dashboard" : location.pathname.slice(1).split("/")[0];
+    return groups.find((g) => g.items.some((i) => i.id === currentId))?.section;
+  }, [groups, location.pathname]);
+
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (activeSection) {
+      setOpenSections((prev) => (prev.has(activeSection) ? prev : new Set(prev).add(activeSection)));
+    }
+  }, [activeSection]);
+
+  const toggleSection = (section: string) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(section)) next.delete(section);
+      else next.add(section);
+      return next;
+    });
+  };
+
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 px-4 py-4">
-        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold">
+    <div className="flex h-full flex-col bg-sidebar text-sidebar-foreground">
+      <div className="flex items-center gap-2.5 px-4 py-4">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground text-sm font-bold shadow-sm">
           ز
         </div>
-        <div className="flex flex-col leading-tight">
-          <span className="text-sm font-bold">{organization?.name ?? "نظام العيادة"}</span>
-          <span className="text-xs text-muted-foreground">{branch?.name ?? "المنشأة الرئيسية"}</span>
+        <div className="flex min-w-0 flex-col leading-tight">
+          <span className="truncate text-sm font-bold">{organization?.name ?? "نظام العيادة"}</span>
+          <span className="truncate text-xs text-muted-foreground">{branch?.name ?? "المنشأة الرئيسية"}</span>
         </div>
       </div>
       <Separator />
-      <ScrollArea className="flex-1 px-2 py-3">
-        <nav className="flex flex-col gap-4">
+      <ScrollArea className="flex-1 px-2.5 py-3">
+        <nav className="flex flex-col gap-1">
           {groups.map((group) => (
-            <div key={group.section}>
-              <p className="px-3 pb-1 text-xs font-semibold text-muted-foreground">{group.section}</p>
-              <div className="flex flex-col gap-0.5">
-                {group.items.map((item) => (
-                  <SidebarLink key={item.id} id={item.id} label={item.label} icon={item.icon} badge={item.badge} onNavigate={onNavigate} />
-                ))}
-              </div>
-            </div>
+            <SidebarGroup
+              key={group.section}
+              section={group.section}
+              items={group.items}
+              isOpen={openSections.has(group.section)}
+              onToggle={() => toggleSection(group.section)}
+              onNavigate={onNavigate}
+            />
           ))}
           {settingsAccessible && (
-            <div>
-              <p className="px-3 pb-1 text-xs font-semibold text-muted-foreground">{settingsModule.category}</p>
-              <SidebarLink
-                id={settingsModule.id}
-                label={settingsModule.label}
-                icon={settingsModule.icon}
-                onNavigate={onNavigate}
-              />
-            </div>
+            <SidebarGroup
+              section={settingsModule.category}
+              items={[settingsModule]}
+              isOpen={openSections.has(settingsModule.category)}
+              onToggle={() => toggleSection(settingsModule.category)}
+              onNavigate={onNavigate}
+            />
           )}
         </nav>
       </ScrollArea>
+    </div>
+  );
+}
+
+function SidebarGroup({
+  section,
+  items,
+  isOpen,
+  onToggle,
+  onNavigate,
+}: {
+  section: string;
+  items: { id: string; label: string; icon: LucideIcon; badge?: string }[];
+  isOpen: boolean;
+  onToggle: () => void;
+  onNavigate?: () => void;
+}) {
+  const totalBadge = items.reduce((sum, i) => {
+    const n = Number(String(i.badge ?? "").replace(/[^0-9]/g, ""));
+    return sum + (Number.isFinite(n) ? n : 0);
+  }, 0);
+
+  return (
+    <div className="pb-0.5">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={isOpen}
+        className="group flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-right transition-colors hover:bg-sidebar-accent"
+      >
+        <ChevronDown
+          className={cn(
+            "h-3.5 w-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-200",
+            !isOpen && "-rotate-90",
+          )}
+        />
+        <span className="flex-1 truncate text-[11px] font-semibold uppercase tracking-wide text-muted-foreground group-hover:text-foreground">
+          {section}
+        </span>
+        {!isOpen && totalBadge > 0 && (
+          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums">
+            {totalBadge}
+          </span>
+        )}
+      </button>
+
+      <div
+        className={cn(
+          "grid overflow-hidden transition-all duration-200 ease-out",
+          isOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0",
+        )}
+      >
+        <div className="min-h-0 overflow-hidden">
+          <div className="flex flex-col gap-0.5 py-0.5 pe-0.5 ps-4">
+            {items.map((item) => (
+              <SidebarLink key={item.id} id={item.id} label={item.label} icon={item.icon} badge={item.badge} onNavigate={onNavigate} />
+            ))}
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -109,17 +191,17 @@ function SidebarLink({
       onClick={onNavigate}
       className={({ isActive }) =>
         cn(
-          "flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
+          "relative flex items-center gap-2.5 rounded-lg border-e-2 border-transparent px-3 py-2 text-sm font-medium transition-colors",
           isActive
-            ? "bg-primary/10 text-primary"
-            : "text-foreground/80 hover:bg-muted hover:text-foreground",
+            ? "border-e-primary bg-primary/10 text-primary"
+            : "text-foreground/75 hover:bg-muted hover:text-foreground",
         )
       }
     >
       <Icon className="h-4 w-4 shrink-0" />
       <span className="flex-1 truncate">{label}</span>
       {badge && (
-        <Badge variant="secondary" className="px-1.5 py-0 text-[10px]">
+        <Badge variant="secondary" className="px-1.5 py-0 text-[10px] tabular-nums">
           {badge}
         </Badge>
       )}
