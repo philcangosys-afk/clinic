@@ -1,0 +1,366 @@
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Gauge, Plus } from "lucide-react";
+import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { supabase } from "@/lib/supabase";
+import type { PerformanceReviewCriterionRow, PerformanceReviewCycleRow } from "@/lib/database.types";
+import { useToast } from "@/hooks/use-toast";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+function useCycles(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["perf-cycles", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("performance_review_cycles")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("period_start", { ascending: false });
+      if (error) throw error;
+      return (data as PerformanceReviewCycleRow[]) ?? [];
+    },
+  });
+}
+
+function useCriteria(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["perf-criteria", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("performance_review_criteria")
+        .select("*")
+        .or(`organization_id.is.null,organization_id.eq.${organizationId}`)
+        .order("name_ar");
+      if (error) throw error;
+      return (data as PerformanceReviewCriterionRow[]) ?? [];
+    },
+  });
+}
+
+function useEmployeesList(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["employees-simple", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("employees")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .eq("status", "active")
+        .order("name_ar");
+      if (error) throw error;
+      return (data as { id: string; name_ar: string }[]) ?? [];
+    },
+  });
+}
+
+function useReviews(organizationId: string | undefined, cycleId: string) {
+  return useQuery({
+    queryKey: ["perf-reviews", organizationId, cycleId],
+    enabled: Boolean(organizationId) && Boolean(cycleId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("performance_reviews")
+        .select("*, employees(name_ar)")
+        .eq("organization_id", organizationId)
+        .eq("cycle_id", cycleId)
+        .order("overall_score", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
+function CyclesTab({ organizationId }: { organizationId: string | undefined }) {
+  const cycles = useCycles(organizationId);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+
+  const create = useMutation({
+    mutationFn: async () => {
+      if (!organizationId || !name.trim() || !start || !end) throw new Error("كل الحقول مطلوبة");
+      const { error } = await supabase.from("performance_review_cycles").insert({
+        organization_id: organizationId,
+        name_ar: name.trim(),
+        period_start: start,
+        period_end: end,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["perf-cycles", organizationId] });
+      toast({ title: "تم إنشاء دورة التقييم" });
+      setOpen(false);
+    },
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <CardTitle className="text-base">دورات التقييم</CardTitle>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild>
+            <Button size="sm">
+              <Plus className="ms-1 h-4 w-4" /> دورة جديدة
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>دورة تقييم جديدة</DialogTitle>
+            </DialogHeader>
+            <div className="grid gap-3">
+              <div>
+                <Label>الاسم</Label>
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="تقييم الربع الأول 2026" />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>من</Label>
+                  <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
+                </div>
+                <div>
+                  <Label>إلى</Label>
+                  <Input type="date" value={end} onChange={(e) => setEnd(e.target.value)} />
+                </div>
+              </div>
+            </div>
+            <DialogFooter>
+              <Button onClick={() => create.mutate()} disabled={create.isPending}>
+                حفظ
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>الاسم</TableHead>
+              <TableHead>الفترة</TableHead>
+              <TableHead>الحالة</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(cycles.data ?? []).map((c) => (
+              <TableRow key={c.id}>
+                <TableCell className="font-medium">{c.name_ar}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {c.period_start} → {c.period_end}
+                </TableCell>
+                <TableCell>
+                  <Badge variant={c.status === "open" ? "success" : "secondary"}>{c.status === "open" ? "مفتوحة" : "مغلقة"}</Badge>
+                </TableCell>
+              </TableRow>
+            ))}
+            {(cycles.data ?? []).length === 0 && (
+              <TableRow>
+                <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
+                  لا توجد دورات تقييم بعد.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function ReviewsTab({ organizationId }: { organizationId: string | undefined }) {
+  const cycles = useCycles(organizationId);
+  const employees = useEmployeesList(organizationId);
+  const criteria = useCriteria(organizationId);
+  const [cycleId, setCycleId] = useState("");
+  const reviews = useReviews(organizationId, cycleId);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [employeeId, setEmployeeId] = useState("");
+  const [scores, setScores] = useState<Record<string, number>>({});
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["perf-reviews", organizationId, cycleId] });
+
+  const createReview = useMutation({
+    mutationFn: async () => {
+      if (!organizationId || !cycleId || !employeeId) throw new Error("اختر الدورة والموظف");
+      const { data, error } = await supabase
+        .from("performance_reviews")
+        .insert({ organization_id: organizationId, cycle_id: cycleId, employee_id: employeeId })
+        .select("id")
+        .single();
+      if (error) throw error;
+      const reviewId = data.id as string;
+      const criteriaIds = Object.keys(scores).filter((id) => scores[id] > 0);
+      if (criteriaIds.length > 0) {
+        const rows = criteriaIds.map((criterionId) => ({ review_id: reviewId, criterion_id: criterionId, score: scores[criterionId] }));
+        const { error: scoreError } = await supabase.from("performance_review_scores").insert(rows);
+        if (scoreError) throw scoreError;
+      }
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "تم حفظ التقييم" });
+      setOpen(false);
+      setScores({});
+    },
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="text-base">تقييمات الموظفين</CardTitle>
+          <CardDescription>الدرجة الكلية تُحسَب تلقائيًا من متوسط المعايير المرجَّح بالوزن — لا تُدخَل يدويًا</CardDescription>
+        </div>
+        <div className="flex items-center gap-2">
+          <Select value={cycleId} onValueChange={setCycleId}>
+            <SelectTrigger className="w-48">
+              <SelectValue placeholder="اختر دورة تقييم" />
+            </SelectTrigger>
+            <SelectContent>
+              {(cycles.data ?? []).map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name_ar}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Dialog open={open} onOpenChange={setOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" disabled={!cycleId}>
+                <Plus className="ms-1 h-4 w-4" /> تقييم جديد
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>تقييم موظف جديد</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-3">
+                <div>
+                  <Label>الموظف</Label>
+                  <Select value={employeeId} onValueChange={setEmployeeId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="اختر موظفًا" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(employees.data ?? []).map((e) => (
+                        <SelectItem key={e.id} value={e.id}>
+                          {e.name_ar}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="grid gap-2">
+                  <Label>الدرجات (1-5) لكل معيار</Label>
+                  {(criteria.data ?? []).map((c) => (
+                    <div key={c.id} className="flex items-center justify-between gap-2">
+                      <span className="text-sm">{c.name_ar}</span>
+                      <Select
+                        value={String(scores[c.id] ?? "")}
+                        onValueChange={(v) => setScores((prev) => ({ ...prev, [c.id]: Number(v) }))}
+                      >
+                        <SelectTrigger className="w-20">
+                          <SelectValue placeholder="—" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {[1, 2, 3, 4, 5].map((n) => (
+                            <SelectItem key={n} value={String(n)}>
+                              {n}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <DialogFooter>
+                <Button onClick={() => createReview.mutate()} disabled={createReview.isPending}>
+                  حفظ التقييم
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {!cycleId && <p className="py-8 text-center text-sm text-muted-foreground">اختر دورة تقييم لعرض تقييماتها.</p>}
+        {cycleId && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>الموظف</TableHead>
+                <TableHead>الدرجة الكلية</TableHead>
+                <TableHead>الحالة</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(reviews.data ?? []).map((r: any) => (
+                <TableRow key={r.id}>
+                  <TableCell className="font-medium">{r.employees?.name_ar ?? "—"}</TableCell>
+                  <TableCell>
+                    <Badge variant={r.overall_score >= 4 ? "success" : r.overall_score >= 2.5 ? "default" : "destructive"}>
+                      {r.overall_score} / 5
+                    </Badge>
+                  </TableCell>
+                  <TableCell>{r.status === "submitted" ? "مُرسَل" : "مسودة"}</TableCell>
+                </TableRow>
+              ))}
+              {(reviews.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
+                    لا توجد تقييمات في هذه الدورة بعد.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export default function Performance() {
+  const { organization } = useOrganizationAccess();
+  return (
+    <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
+      <div>
+        <h1 className="flex items-center gap-2 text-2xl font-bold">
+          <Gauge className="h-6 w-6" /> تقييم الأداء
+        </h1>
+        <p className="text-sm text-muted-foreground">دورات تقييم بمعايير قابلة للتخصيص — الدرجة الكلية محسوبة تلقائيًا من قاعدة البيانات</p>
+      </div>
+      <Tabs defaultValue="reviews">
+        <TabsList>
+          <TabsTrigger value="cycles">الدورات</TabsTrigger>
+          <TabsTrigger value="reviews">التقييمات</TabsTrigger>
+        </TabsList>
+        <TabsContent value="cycles" className="mt-4">
+          <CyclesTab organizationId={organization?.id} />
+        </TabsContent>
+        <TabsContent value="reviews" className="mt-4">
+          <ReviewsTab organizationId={organization?.id} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}

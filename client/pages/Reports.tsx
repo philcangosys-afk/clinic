@@ -1,0 +1,597 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { BarChart3, Percent, ReceiptText, TrendingUp, Wallet } from "lucide-react";
+import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { supabase } from "@/lib/supabase";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+function toDateInputValue(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+function defaultFrom() {
+  const date = new Date();
+  date.setDate(date.getDate() - 29);
+  return toDateInputValue(date);
+}
+
+const money = (value: number | null | undefined) => Number(value ?? 0).toLocaleString("ar-SA", { maximumFractionDigits: 2 });
+
+export default function Reports() {
+  const { organization } = useOrganizationAccess();
+  const [from, setFrom] = useState(defaultFrom());
+  const [to, setTo] = useState(toDateInputValue(new Date()));
+
+  return (
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">التقارير</h1>
+          <p className="text-sm text-muted-foreground">كل التقارير محسوبة مباشرة من البيانات الحيّة — لا تقارير مخزَّنة قد تفقد التزامن</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">من</Label>
+            <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="w-36" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">إلى</Label>
+            <Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="w-36" />
+          </div>
+        </div>
+      </div>
+
+      <KpiStrip organizationId={organization?.id} from={from} to={to} />
+
+      <Tabs defaultValue="revenue">
+        <TabsList>
+          <TabsTrigger value="revenue">الإيراد</TabsTrigger>
+          <TabsTrigger value="sales">المبيعات والعروض</TabsTrigger>
+          <TabsTrigger value="profitability">الربحية</TabsTrigger>
+          <TabsTrigger value="vat">الضرائب والمرتجعات</TabsTrigger>
+        </TabsList>
+        <TabsContent value="revenue">
+          <RevenueTab organizationId={organization?.id} from={from} to={to} />
+        </TabsContent>
+        <TabsContent value="sales">
+          <SalesTab organizationId={organization?.id} />
+        </TabsContent>
+        <TabsContent value="profitability">
+          <ProfitabilityTab organizationId={organization?.id} from={from} to={to} />
+        </TabsContent>
+        <TabsContent value="vat">
+          <VatReturnsTab organizationId={organization?.id} from={from} to={to} />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+function useInvoiceKpis(organizationId: string | undefined, from: string, to: string) {
+  return useQuery({
+    queryKey: ["report-kpis", organizationId, from, to],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_invoice_kpis", {
+        p_organization_id: organizationId,
+        p_date_from: from,
+        p_date_to: to,
+      });
+      if (error) throw error;
+      return (data?.[0] as Record<string, number>) ?? null;
+    },
+  });
+}
+
+function KpiStrip({ organizationId, from, to }: { organizationId: string | undefined; from: string; to: string }) {
+  const kpis = useInvoiceKpis(organizationId, from, to);
+
+  if (kpis.isLoading) {
+    return (
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {Array.from({ length: 4 }).map((_, index) => (
+          <Skeleton key={index} className="h-20 w-full" />
+        ))}
+      </div>
+    );
+  }
+
+  const data = kpis.data;
+  return (
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <KpiCard icon={Wallet} label="الإيراد الإجمالي" value={`${money(data?.gross_amount)} ر.س`} />
+      <KpiCard icon={ReceiptText} label="الصافي" value={`${money(data?.net_amount)} ر.س`} />
+      <KpiCard icon={Percent} label="نسبة الخصم" value={`${money(data?.discount_rate_percent)}%`} tone="warning" />
+      <KpiCard icon={TrendingUp} label="نسبة التحصيل" value={`${money(data?.collection_rate_percent)}%`} tone="success" />
+    </div>
+  );
+}
+
+function KpiCard({
+  icon: Icon,
+  label,
+  value,
+  tone,
+}: {
+  icon: typeof Wallet;
+  label: string;
+  value: string;
+  tone?: "warning" | "success";
+}) {
+  const toneClass =
+    tone === "warning" ? "bg-amber-100 text-amber-700" : tone === "success" ? "bg-emerald-100 text-emerald-700" : "bg-primary/10 text-primary";
+  return (
+    <Card>
+      <CardContent className="flex items-center gap-3 py-4">
+        <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${toneClass}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">{label}</p>
+          <p className="text-base font-bold">{value}</p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function useDailyRevenue(organizationId: string | undefined, from: string, to: string) {
+  return useQuery({
+    queryKey: ["v-daily-revenue", organizationId, from, to],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_daily_revenue")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .gte("revenue_date", from)
+        .lte("revenue_date", to)
+        .order("revenue_date");
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
+function useRevenueByDoctor(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["v-revenue-doctor", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_revenue_by_doctor")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("net_amount", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
+function useRevenueByClinic(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["v-revenue-clinic", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_revenue_by_clinic")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("net_amount", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
+function RevenueTab({ organizationId, from, to }: { organizationId: string | undefined; from: string; to: string }) {
+  const daily = useDailyRevenue(organizationId, from, to);
+  const byDoctor = useRevenueByDoctor(organizationId);
+  const byClinic = useRevenueByClinic(organizationId);
+
+  const chartData = (daily.data ?? []).map((row) => ({
+    date: new Date(row.revenue_date).toLocaleDateString("ar-SA", { day: "2-digit", month: "2-digit" }),
+    net_amount: Number(row.net_amount),
+  }));
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <BarChart3 className="h-4 w-4" />
+            الإيراد اليومي (الصافي)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {daily.isLoading && <Skeleton className="h-56 w-full" />}
+          {!daily.isLoading && chartData.length === 0 && (
+            <p className="py-10 text-center text-sm text-muted-foreground">لا توجد فواتير في هذا المدى.</p>
+          )}
+          {!daily.isLoading && chartData.length > 0 && (
+            <ResponsiveContainer width="100%" height={220}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="date" fontSize={11} />
+                <YAxis fontSize={11} width={50} />
+                <Tooltip formatter={(value: number) => `${money(value)} ر.س`} />
+                <Line type="monotone" dataKey="net_amount" stroke="#0d716a" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>الإيراد حسب الطبيب</CardTitle>
+            <CardDescription>نقدي مقابل تأمين</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>الطبيب</TableHead>
+                  <TableHead>نقدي</TableHead>
+                  <TableHead>تأمين</TableHead>
+                  <TableHead>الصافي</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(byDoctor.data ?? []).map((row) => (
+                  <TableRow key={row.doctor_id}>
+                    <TableCell className="font-medium">د. {row.doctor_name}</TableCell>
+                    <TableCell>{money(row.cash_amount)}</TableCell>
+                    <TableCell>{money(row.insurance_amount)}</TableCell>
+                    <TableCell className="font-semibold">{money(row.net_amount)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>الإيراد حسب العيادة/القسم</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>العيادة</TableHead>
+                  <TableHead>عدد الفواتير</TableHead>
+                  <TableHead>المواعيد</TableHead>
+                  <TableHead>الصافي</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(byClinic.data ?? []).map((row) => (
+                  <TableRow key={row.clinic_id}>
+                    <TableCell className="font-medium">{row.clinic_name}</TableCell>
+                    <TableCell>{row.invoice_count}</TableCell>
+                    <TableCell>{row.appointment_count}</TableCell>
+                    <TableCell className="font-semibold">{money(row.net_amount)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+}
+
+function SalesTab({ organizationId }: { organizationId: string | undefined }) {
+  const sales = useQuery({
+    queryKey: ["v-sales-by-item", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_sales_by_item")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .gt("qty_sold", 0)
+        .order("net_revenue", { ascending: false })
+        .limit(20);
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+  const offers = useQuery({
+    queryKey: ["v-offers-totals", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_offers_totals")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("total_discount_amount", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>الأصناف الأكثر مبيعًا</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {sales.isLoading && <Skeleton className="h-40 w-full" />}
+          {!sales.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>الصنف</TableHead>
+                  <TableHead>الكمية المباعة</TableHead>
+                  <TableHead>الإيراد الصافي</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(sales.data ?? []).map((row) => (
+                  <TableRow key={row.item_id}>
+                    <TableCell className="font-medium">{row.item_name}</TableCell>
+                    <TableCell>{row.qty_sold}</TableCell>
+                    <TableCell className="font-semibold">{money(row.net_revenue)}</TableCell>
+                  </TableRow>
+                ))}
+                {(sales.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} className="py-8 text-center text-sm text-muted-foreground">
+                      لا توجد بيانات مبيعات بعد.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>إجماليات العروض</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>العرض</TableHead>
+                <TableHead>عدد الفواتير المطبَّق عليها</TableHead>
+                <TableHead>إجمالي الخصم</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(offers.data ?? []).map((row) => (
+                <TableRow key={row.offer_id}>
+                  <TableCell className="font-medium">{row.title}</TableCell>
+                  <TableCell>{row.applied_invoice_count}</TableCell>
+                  <TableCell className="font-semibold text-amber-700">{money(row.total_discount_amount)}</TableCell>
+                </TableRow>
+              ))}
+              {(offers.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={3} className="py-8 text-center text-sm text-muted-foreground">
+                    لا توجد عروض مسجّلة بعد.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function ProfitabilityTab({ organizationId, from, to }: { organizationId: string | undefined; from: string; to: string }) {
+  const profitability = useQuery({
+    queryKey: ["v-invoice-profitability", organizationId, from, to],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_invoice_profitability")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .gte("created_at", `${from}T00:00:00`)
+        .lte("created_at", `${to}T23:59:59`)
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+  const totals = (profitability.data ?? []).reduce(
+    (acc, row) => ({
+      revenue: acc.revenue + Number(row.gross_revenue),
+      cost: acc.cost + Number(row.estimated_cost),
+      profit: acc.profit + Number(row.estimated_profit),
+    }),
+    { revenue: 0, cost: 0, profit: 0 },
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardContent className="grid grid-cols-3 gap-4 py-4 text-center">
+          <div>
+            <p className="text-xs text-muted-foreground">الإيراد</p>
+            <p className="text-lg font-bold">{money(totals.revenue)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">التكلفة التقديرية</p>
+            <p className="text-lg font-bold text-rose-600">{money(totals.cost)}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">الربح التقديري</p>
+            <p className="text-lg font-bold text-emerald-700">{money(totals.profit)}</p>
+          </div>
+        </CardContent>
+      </Card>
+      <p className="text-xs text-muted-foreground">
+        ملاحظة: التكلفة التقديرية مبنية على سعر تكلفة الصنف الحالي (items.cost_price)، وهي تبسيط متعمد قابل للترقية لاحقًا
+        لتكلفة فعلية من دفعات المخزون وقت البيع.
+      </p>
+      <Card>
+        <CardHeader>
+          <CardTitle>آخر 100 فاتورة في المدى المحدد</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {profitability.isLoading && <Skeleton className="h-40 w-full" />}
+          {!profitability.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>التاريخ</TableHead>
+                  <TableHead>الإيراد</TableHead>
+                  <TableHead>التكلفة</TableHead>
+                  <TableHead>الربح</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(profitability.data ?? []).map((row) => (
+                  <TableRow key={row.invoice_id}>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {new Date(row.created_at).toLocaleDateString("ar-SA")}
+                    </TableCell>
+                    <TableCell>{money(row.gross_revenue)}</TableCell>
+                    <TableCell>{money(row.estimated_cost)}</TableCell>
+                    <TableCell className="font-semibold">{money(row.estimated_profit)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function VatReturnsTab({ organizationId, from, to }: { organizationId: string | undefined; from: string; to: string }) {
+  const vatInvoices = useQuery({
+    queryKey: ["v-vat-invoices", organizationId, from, to],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_vat_statement_sales_invoices")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .gte("invoice_date", from)
+        .lte("invoice_date", to);
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+  const returns = useQuery({
+    queryKey: ["v-returns-items", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_returns_statement_items")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("return_date", { ascending: false })
+        .limit(30);
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+  const vatTotal = (vatInvoices.data ?? []).reduce((sum, row) => sum + Number(row.vat_amount), 0);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>كشف ضريبة القيمة المضافة — الفواتير</CardTitle>
+          <CardDescription>إجمالي الضريبة في المدى المحدد: {money(vatTotal)} ر.س</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {vatInvoices.isLoading && <Skeleton className="h-32 w-full" />}
+          {!vatInvoices.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>#الفاتورة</TableHead>
+                  <TableHead>التاريخ</TableHead>
+                  <TableHead>الإجمالي الفرعي</TableHead>
+                  <TableHead>الضريبة</TableHead>
+                  <TableHead>الصافي</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(vatInvoices.data ?? []).map((row) => (
+                  <TableRow key={row.invoice_id}>
+                    <TableCell className="font-mono text-xs">#{row.invoice_number}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {new Date(row.invoice_date).toLocaleDateString("ar-SA")}
+                    </TableCell>
+                    <TableCell>{money(row.subtotal_amount)}</TableCell>
+                    <TableCell>{money(row.vat_amount)}</TableCell>
+                    <TableCell className="font-semibold">{money(row.net_amount)}</TableCell>
+                  </TableRow>
+                ))}
+                {(vatInvoices.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                      لا توجد فواتير خاضعة للضريبة في هذا المدى.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>كشف المرتجعات</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>تاريخ الإرجاع</TableHead>
+                <TableHead>الصنف</TableHead>
+                <TableHead>الكمية</TableHead>
+                <TableHead>المبلغ</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(returns.data ?? []).map((row, index) => (
+                <TableRow key={`${row.return_invoice_id}-${index}`}>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {new Date(row.return_date).toLocaleDateString("ar-SA")}
+                  </TableCell>
+                  <TableCell>{row.item_name ?? "—"}</TableCell>
+                  <TableCell>{row.qty}</TableCell>
+                  <TableCell className="font-semibold">{money(row.net_amount)}</TableCell>
+                </TableRow>
+              ))}
+              {(returns.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
+                    لا توجد مرتجعات مسجّلة بعد.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

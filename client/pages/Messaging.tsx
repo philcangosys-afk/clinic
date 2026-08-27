@@ -1,0 +1,844 @@
+import { useEffect, useRef, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Mail, MessageSquare, Plus, Send, Smartphone, Users } from "lucide-react";
+import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { supabase } from "@/lib/supabase";
+import type {
+  CannedTextRow,
+  InternalConversationRow,
+  InternalUnreadCountView,
+  MessageChannel,
+  MessageLogRow,
+  MessageLogStatus,
+  MessageTemplateRow,
+  OrganizationMemberDirectoryView,
+  SmsCreditTransactionRow,
+} from "@/lib/database.types";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useToast } from "@/hooks/use-toast";
+
+const CHANNEL_ICON: Record<MessageChannel, typeof Mail> = { sms: Smartphone, email: Mail, internal: MessageSquare };
+const CHANNEL_LABELS: Record<MessageChannel, string> = { sms: "رسالة نصية", email: "بريد إلكتروني", internal: "داخلي" };
+const STATUS_BADGE: Record<MessageLogStatus, "secondary" | "default" | "destructive" | "success"> = {
+  queued: "secondary",
+  sent: "default",
+  delivered: "success",
+  failed: "destructive",
+};
+const STATUS_LABELS: Record<MessageLogStatus, string> = {
+  queued: "في الانتظار",
+  sent: "أُرسلت",
+  delivered: "تم التسليم",
+  failed: "فشلت",
+};
+
+export default function Messaging() {
+  return (
+    <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
+      <div>
+        <h1 className="text-2xl font-bold">الرسائل والتنبيهات</h1>
+        <p className="text-sm text-muted-foreground">سجل الرسائل الموحَّد، قوالب الأحداث، النصوص الجاهزة، ورصيد الرسائل النصية</p>
+      </div>
+
+      <Tabs defaultValue="log">
+        <TabsList>
+          <TabsTrigger value="log">سجل الرسائل</TabsTrigger>
+          <TabsTrigger value="templates">القوالب</TabsTrigger>
+          <TabsTrigger value="canned">النصوص الجاهزة</TabsTrigger>
+          <TabsTrigger value="sms">رصيد SMS</TabsTrigger>
+          <TabsTrigger value="chat">الدردشة الداخلية</TabsTrigger>
+        </TabsList>
+        <TabsContent value="log" className="mt-4">
+          <MessageLogTab />
+        </TabsContent>
+        <TabsContent value="templates" className="mt-4">
+          <TemplatesTab />
+        </TabsContent>
+        <TabsContent value="canned" className="mt-4">
+          <CannedTextsTab />
+        </TabsContent>
+        <TabsContent value="sms" className="mt-4">
+          <SmsLedgerTab />
+        </TabsContent>
+        <TabsContent value="chat" className="mt-4">
+          <InternalChatTab />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// سجل الرسائل
+// ---------------------------------------------------------------------------
+function useMessageLog(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["message-log", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("message_log")
+        .select("id, channel, event_key, message_text, status, sent_at, created_at, patient:patients(name_ar)")
+        .eq("organization_id", organizationId)
+        .order("created_at", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
+function MessageLogTab() {
+  const { organization } = useOrganizationAccess();
+  const log = useMessageLog(organization?.id);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>آخر 100 رسالة</CardTitle>
+        <CardDescription>يشمل تذكيرات المواعيد التلقائية، إشعارات الفواتير، والتنبيهات الداخلية لمالك المؤسسة</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {log.isLoading && <Skeleton className="h-40 w-full" />}
+        {!log.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>القناة</TableHead>
+                <TableHead>المريض/المستلم</TableHead>
+                <TableHead>النص</TableHead>
+                <TableHead>الحالة</TableHead>
+                <TableHead>التاريخ</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(log.data ?? []).map((msg) => {
+                const Icon = CHANNEL_ICON[msg.channel as MessageChannel];
+                const patient = Array.isArray(msg.patient) ? msg.patient[0] : msg.patient;
+                return (
+                  <TableRow key={msg.id}>
+                    <TableCell>
+                      <span className="flex items-center gap-1.5 text-xs">
+                        <Icon className="h-3.5 w-3.5 text-muted-foreground" />
+                        {CHANNEL_LABELS[msg.channel as MessageChannel]}
+                      </span>
+                    </TableCell>
+                    <TableCell>{patient?.name_ar ?? "—"}</TableCell>
+                    <TableCell className="max-w-xs truncate text-sm">{msg.message_text}</TableCell>
+                    <TableCell>
+                      <Badge variant={STATUS_BADGE[msg.status as MessageLogStatus]}>{STATUS_LABELS[msg.status as MessageLogStatus]}</Badge>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{new Date(msg.created_at).toLocaleString("ar-SA")}</TableCell>
+                  </TableRow>
+                );
+              })}
+              {(log.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                    لا توجد رسائل مسجَّلة بعد.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// القوالب
+// ---------------------------------------------------------------------------
+const EVENT_KEY_LABELS: Record<string, string> = {
+  file_opened: "فتح ملف مريض",
+  appointment_reminder: "تذكير بموعد",
+  lab_results_ready: "جاهزية نتائج التحاليل",
+  invoice_notification: "إشعار فاتورة",
+  notes_reminder: "تذكير بالملاحظات",
+  document_expiry_alert: "انتهاء وثيقة",
+  owner_notification: "تبليغ المالك",
+  sms_balance_low: "انخفاض رصيد SMS",
+};
+
+function useMessageTemplates(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["message-templates", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("message_templates")
+        .select("id, event_key, channel, template_text, is_disabled")
+        .eq("organization_id", organizationId)
+        .order("event_key");
+      if (error) throw error;
+      return (data ?? []) as MessageTemplateRow[];
+    },
+  });
+}
+
+function TemplatesTab() {
+  const { organization } = useOrganizationAccess();
+  const templates = useMessageTemplates(organization?.id);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+
+  const saveTemplate = useMutation({
+    mutationFn: async ({ id, text }: { id: string; text: string }) => {
+      const { error } = await supabase.from("message_templates").update({ template_text: text }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["message-templates", organization?.id] });
+      toast({ title: "تم حفظ القالب" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ — التعديل مقيَّد بصفة مدير المؤسسة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const toggleDisabled = useMutation({
+    mutationFn: async ({ id, disabled }: { id: string; disabled: boolean }) => {
+      const { error } = await supabase.from("message_templates").update({ is_disabled: disabled }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["message-templates", organization?.id] }),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>قوالب الرسائل</CardTitle>
+        <CardDescription>8 قوالب نظامية زُرعت تلقائيًا عند إنشاء المؤسسة — التعديل مقيَّد بصفة مدير المؤسسة من قاعدة البيانات</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        {templates.isLoading && <Skeleton className="h-40 w-full" />}
+        {!templates.isLoading &&
+          (templates.data ?? []).map((template) => (
+            <div key={template.id} className="flex flex-col gap-2 rounded-md border p-3">
+              <div className="flex items-center justify-between">
+                <span className="font-medium">
+                  {EVENT_KEY_LABELS[template.event_key] ?? template.event_key} — {CHANNEL_LABELS[template.channel]}
+                </span>
+                <Button
+                  size="sm"
+                  variant={template.is_disabled ? "outline" : "ghost"}
+                  onClick={() => toggleDisabled.mutate({ id: template.id, disabled: !template.is_disabled })}
+                >
+                  {template.is_disabled ? "معطَّل — تفعيل" : "نشط — تعطيل"}
+                </Button>
+              </div>
+              <Textarea
+                rows={2}
+                value={drafts[template.id] ?? template.template_text}
+                onChange={(e) => setDrafts((d) => ({ ...d, [template.id]: e.target.value }))}
+              />
+              <Button
+                size="sm"
+                variant="outline"
+                className="self-start"
+                disabled={saveTemplate.isPending}
+                onClick={() => saveTemplate.mutate({ id: template.id, text: drafts[template.id] ?? template.template_text })}
+              >
+                حفظ النص
+              </Button>
+            </div>
+          ))}
+        {!templates.isLoading && (templates.data ?? []).length === 0 && (
+          <p className="py-8 text-center text-sm text-muted-foreground">لا توجد قوالب — هذا غير متوقَّع لأنها تُزرَع تلقائيًا عند إنشاء المؤسسة.</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// النصوص الجاهزة
+// ---------------------------------------------------------------------------
+const LOCATION_LABELS: Record<string, string> = {
+  dental_board: "لوحة الأسنان",
+  medical_reports: "التقارير الطبية",
+  referral_report: "تقرير التحويل",
+  derma_clinic: "عيادة الجلدية",
+  appointment_note: "ملاحظة الموعد",
+  invoice_dosage_field: "حقل الجرعة في الفاتورة",
+  invoice_usage_field: "حقل الاستخدام في الفاتورة",
+};
+
+function useCannedTexts(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["canned-texts", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("canned_texts")
+        .select("id, location_key, text_ar, is_disabled")
+        .eq("organization_id", organizationId)
+        .order("location_key")
+        .order("sort_order");
+      if (error) throw error;
+      return (data ?? []) as CannedTextRow[];
+    },
+  });
+}
+
+function CannedTextsTab() {
+  const { organization } = useOrganizationAccess();
+  const texts = useCannedTexts(organization?.id);
+  const [createOpen, setCreateOpen] = useState(false);
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-3">
+        <div>
+          <CardTitle>النصوص الجاهزة</CardTitle>
+          <CardDescription>عبارات سريعة الإدراج حسب موقعها في الواجهة (لوحة الأسنان، التقارير، ملاحظات المواعيد...)</CardDescription>
+        </div>
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-4 w-4" />
+          نص جديد
+        </Button>
+      </CardHeader>
+      <CardContent>
+        {texts.isLoading && <Skeleton className="h-40 w-full" />}
+        {!texts.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>الموقع</TableHead>
+                <TableHead>النص</TableHead>
+                <TableHead>الحالة</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(texts.data ?? []).map((text) => (
+                <TableRow key={text.id}>
+                  <TableCell>{LOCATION_LABELS[text.location_key] ?? text.location_key}</TableCell>
+                  <TableCell>{text.text_ar}</TableCell>
+                  <TableCell>
+                    <Badge variant={text.is_disabled ? "secondary" : "success"}>{text.is_disabled ? "معطّل" : "نشط"}</Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {(texts.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={3} className="py-8 text-center text-sm text-muted-foreground">
+                    لا توجد نصوص جاهزة بعد.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+      <NewCannedTextDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
+    </Card>
+  );
+}
+
+function NewCannedTextDialog({
+  open,
+  onOpenChange,
+  organizationId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  organizationId: string | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [locationKey, setLocationKey] = useState("appointment_note");
+  const [textAr, setTextAr] = useState("");
+
+  const createText = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      const { error } = await supabase.from("canned_texts").insert({
+        organization_id: organizationId,
+        location_key: locationKey,
+        text_ar: textAr.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["canned-texts", organizationId] });
+      toast({ title: "تم حفظ النص" });
+      setTextAr("");
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>نص جاهز جديد</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>الموقع</Label>
+            <select
+              className="rounded-md border bg-background px-3 py-2 text-sm"
+              value={locationKey}
+              onChange={(e) => setLocationKey(e.target.value)}
+            >
+              {Object.entries(LOCATION_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>النص *</Label>
+            <Textarea value={textAr} onChange={(e) => setTextAr(e.target.value)} rows={2} autoFocus />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button disabled={!textAr.trim() || createText.isPending} onClick={() => createText.mutate()}>
+            {createText.isPending ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// رصيد SMS وسجل حركاته
+// ---------------------------------------------------------------------------
+function useSmsBalance(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["sms-balance", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sms_credit_balance")
+        .select("balance, low_balance_alert_threshold")
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      if (error) throw error;
+      return data;
+    },
+  });
+}
+
+function useSmsTransactions(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["sms-transactions", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sms_credit_transactions")
+        .select("id, transaction_type, amount, note, created_at")
+        .eq("organization_id", organizationId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return (data ?? []) as SmsCreditTransactionRow[];
+    },
+  });
+}
+
+const SMS_TX_LABELS: Record<string, string> = { top_up: "تعبئة", consumption: "استهلاك", adjustment: "تسوية" };
+
+function SmsLedgerTab() {
+  const { organization } = useOrganizationAccess();
+  const balance = useSmsBalance(organization?.id);
+  const transactions = useSmsTransactions(organization?.id);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [topUpOpen, setTopUpOpen] = useState(false);
+  const [amount, setAmount] = useState("100");
+
+  const topUp = useMutation({
+    mutationFn: async () => {
+      if (!organization?.id) throw new Error("لا توجد مؤسسة نشطة");
+      const { error } = await supabase.from("sms_credit_transactions").insert({
+        organization_id: organization.id,
+        transaction_type: "top_up",
+        amount: Number(amount) || 0,
+        note: "تعبئة رصيد يدوية",
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["sms-balance", organization?.id] });
+      queryClient.invalidateQueries({ queryKey: ["sms-transactions", organization?.id] });
+      toast({ title: "تمت تعبئة الرصيد" });
+      setTopUpOpen(false);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذرت التعبئة — مقيَّدة بصفة مدير المؤسسة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardContent className="flex items-center justify-between py-4">
+          <span>الرصيد الحالي: <strong>{(balance.data?.balance ?? 0).toLocaleString("ar-SA")}</strong> رسالة</span>
+          <Button size="sm" onClick={() => setTopUpOpen(true)}>
+            <Plus className="h-4 w-4" />
+            تعبئة رصيد
+          </Button>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle>سجل حركات الرصيد</CardTitle>
+          <CardDescription>سجل غير قابل للتعديل أو الحذف — كل استهلاك رسالة يُسجَّل تلقائيًا عند تغيّر حالتها إلى "أُرسلت"</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {transactions.isLoading && <Skeleton className="h-40 w-full" />}
+          {!transactions.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>النوع</TableHead>
+                  <TableHead>الكمية</TableHead>
+                  <TableHead>ملاحظة</TableHead>
+                  <TableHead>التاريخ</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(transactions.data ?? []).map((tx) => (
+                  <TableRow key={tx.id}>
+                    <TableCell>{SMS_TX_LABELS[tx.transaction_type] ?? tx.transaction_type}</TableCell>
+                    <TableCell className={Number(tx.amount) >= 0 ? "text-emerald-700" : "text-red-700"}>
+                      {Number(tx.amount) >= 0 ? "+" : ""}
+                      {tx.amount}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{tx.note ?? "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{new Date(tx.created_at).toLocaleString("ar-SA")}</TableCell>
+                  </TableRow>
+                ))}
+                {(transactions.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
+                      لا توجد حركات بعد.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Dialog open={topUpOpen} onOpenChange={setTopUpOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>تعبئة رصيد SMS</DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label>عدد الرسائل</Label>
+            <Input type="number" min={1} value={amount} onChange={(e) => setAmount(e.target.value)} />
+          </div>
+          <DialogFooter>
+            <Button disabled={!amount || topUp.isPending} onClick={() => topUp.mutate()}>
+              {topUp.isPending ? "جارٍ التعبئة..." : "تأكيد التعبئة"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// الدردشة الداخلية — المرحلة 7.2 (معالجة فجوة موثَّقة منذ المرحلة 5.3):
+// محادثات/رسائل فعلية بين المستخدمين، مفصولة تمامًا عن سجل الإشعارات أعلاه
+// ---------------------------------------------------------------------------
+function useConversations(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["internal-conversations", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("internal_conversations")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("last_message_at", { ascending: false });
+      if (error) throw error;
+      return (data as InternalConversationRow[]) ?? [];
+    },
+  });
+}
+
+function useMembersDirectory(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["members-directory", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_organization_members_directory")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("display_name");
+      if (error) throw error;
+      return (data as OrganizationMemberDirectoryView[]) ?? [];
+    },
+  });
+}
+
+function useUnreadCounts(organizationId: string | undefined, userId: string | undefined) {
+  return useQuery({
+    queryKey: ["internal-unread", organizationId, userId],
+    enabled: Boolean(organizationId) && Boolean(userId),
+    refetchInterval: 15_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_internal_unread_counts")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .eq("user_id", userId);
+      if (error) throw error;
+      return (data as InternalUnreadCountView[]) ?? [];
+    },
+  });
+}
+
+function useConversationMessages(conversationId: string) {
+  return useQuery({
+    queryKey: ["internal-messages", conversationId],
+    enabled: Boolean(conversationId),
+    refetchInterval: 10_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("internal_messages")
+        .select("id, sender_id, body, created_at, deleted_at")
+        .eq("conversation_id", conversationId)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: true });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
+function InternalChatTab() {
+  const { organization, session } = useOrganizationAccess();
+  const currentUserId = session?.user.id;
+  const conversations = useConversations(organization?.id);
+  const members = useMembersDirectory(organization?.id);
+  const unread = useUnreadCounts(organization?.id, currentUserId);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  const [draft, setDraft] = useState("");
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const messages = useConversationMessages(selectedConversationId ?? "");
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages.data]);
+
+  const startConversation = useMutation({
+    mutationFn: async (otherUserId: string) => {
+      if (!organization?.id || !currentUserId) throw new Error("لا توجد جلسة نشطة");
+      const { data: existingId, error: findError } = await supabase.rpc("app_find_or_note_direct_conversation", {
+        p_organization_id: organization.id,
+        p_user_a: currentUserId,
+        p_user_b: otherUserId,
+      });
+      if (findError) throw findError;
+      if (existingId) return existingId as string;
+
+      const { data: conv, error: convError } = await supabase
+        .from("internal_conversations")
+        .insert({ organization_id: organization.id, is_group: false, created_by: currentUserId })
+        .select("id")
+        .single();
+      if (convError) throw convError;
+      const { error: partError } = await supabase.from("internal_conversation_participants").insert([
+        { conversation_id: conv.id, user_id: currentUserId },
+        { conversation_id: conv.id, user_id: otherUserId },
+      ]);
+      if (partError) throw partError;
+      return conv.id as string;
+    },
+    onSuccess: (conversationId) => {
+      queryClient.invalidateQueries({ queryKey: ["internal-conversations", organization?.id] });
+      setSelectedConversationId(conversationId);
+      setNewChatOpen(false);
+    },
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
+  });
+
+  const sendMessage = useMutation({
+    mutationFn: async () => {
+      if (!organization?.id || !currentUserId || !selectedConversationId || !draft.trim()) return;
+      const { error } = await supabase.from("internal_messages").insert({
+        organization_id: organization.id,
+        conversation_id: selectedConversationId,
+        sender_id: currentUserId,
+        body: draft.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      setDraft("");
+      queryClient.invalidateQueries({ queryKey: ["internal-messages", selectedConversationId] });
+      queryClient.invalidateQueries({ queryKey: ["internal-conversations", organization?.id] });
+    },
+    onError: (error: Error) => toast({ title: "تعذّر إرسال الرسالة", description: error.message, variant: "destructive" }),
+  });
+
+  useEffect(() => {
+    if (!selectedConversationId || !currentUserId) return;
+    supabase
+      .from("internal_conversation_participants")
+      .update({ last_read_at: new Date().toISOString() })
+      .eq("conversation_id", selectedConversationId)
+      .eq("user_id", currentUserId)
+      .then(() => queryClient.invalidateQueries({ queryKey: ["internal-unread", organization?.id, currentUserId] }));
+  }, [selectedConversationId, currentUserId, organization?.id, queryClient]);
+
+  const nameFor = (userId: string) => members.data?.find((m) => m.user_id === userId)?.display_name ?? "مستخدم";
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle>الدردشة الداخلية</CardTitle>
+          <CardDescription>محادثات فعلية بين فريق العمل — مفصولة تمامًا عن سجل الإشعارات الخارجية للمرضى</CardDescription>
+        </div>
+        <Dialog open={newChatOpen} onOpenChange={setNewChatOpen}>
+          <DialogTrigger asChild>
+            <Button size="sm">
+              <Plus className="h-4 w-4" />
+              محادثة جديدة
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>بدء محادثة مع</DialogTitle>
+            </DialogHeader>
+            <div className="flex max-h-80 flex-col gap-1 overflow-y-auto">
+              {(members.data ?? [])
+                .filter((m) => m.user_id !== currentUserId)
+                .map((m) => (
+                  <button
+                    key={m.user_id}
+                    type="button"
+                    onClick={() => startConversation.mutate(m.user_id)}
+                    className="flex items-center gap-2 rounded-md px-3 py-2 text-right text-sm hover:bg-muted"
+                  >
+                    <Users className="h-4 w-4 text-muted-foreground" />
+                    {m.display_name}
+                  </button>
+                ))}
+              {(members.data ?? []).filter((m) => m.user_id !== currentUserId).length === 0 && (
+                <p className="py-4 text-center text-sm text-muted-foreground">لا يوجد أعضاء آخرون في المؤسسة.</p>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-3 sm:grid-cols-[220px_1fr]">
+          <div className="flex flex-col gap-1 border-l-0 sm:border-l sm:pl-3">
+            {(conversations.data ?? []).map((c) => {
+              const unreadCount = unread.data?.find((u) => u.conversation_id === c.id)?.unread_count ?? 0;
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSelectedConversationId(c.id)}
+                  className={`flex items-center justify-between rounded-md px-3 py-2 text-right text-sm ${
+                    selectedConversationId === c.id ? "bg-muted font-medium" : "hover:bg-muted/50"
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5">
+                    <MessageSquare className="h-3.5 w-3.5 text-muted-foreground" />
+                    {c.name_ar ?? "محادثة"}
+                  </span>
+                  {unreadCount > 0 && (
+                    <Badge variant="destructive" className="text-[10px]">
+                      {unreadCount}
+                    </Badge>
+                  )}
+                </button>
+              );
+            })}
+            {(conversations.data ?? []).length === 0 && (
+              <p className="py-6 text-center text-xs text-muted-foreground">لا توجد محادثات — ابدأ محادثة جديدة.</p>
+            )}
+          </div>
+
+          <div className="flex flex-col gap-2">
+            {!selectedConversationId && (
+              <p className="flex h-64 items-center justify-center text-sm text-muted-foreground">اختر محادثة لعرضها.</p>
+            )}
+            {selectedConversationId && (
+              <>
+                <div className="flex h-64 flex-col gap-2 overflow-y-auto rounded-md border p-3">
+                  {(messages.data ?? []).map((m: any) => (
+                    <div
+                      key={m.id}
+                      className={`max-w-xs rounded-lg px-3 py-1.5 text-sm ${
+                        m.sender_id === currentUserId ? "self-start bg-primary text-primary-foreground" : "self-end bg-muted"
+                      }`}
+                    >
+                      <p className="text-[10px] opacity-70">{nameFor(m.sender_id)}</p>
+                      <p>{m.body}</p>
+                    </div>
+                  ))}
+                  {(messages.data ?? []).length === 0 && (
+                    <p className="flex flex-1 items-center justify-center text-xs text-muted-foreground">لا توجد رسائل بعد.</p>
+                  )}
+                  <div ref={messagesEndRef} />
+                </div>
+                <div className="flex gap-2">
+                  <Input
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    placeholder="اكتب رسالة..."
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && draft.trim()) sendMessage.mutate();
+                    }}
+                  />
+                  <Button size="sm" disabled={!draft.trim() || sendMessage.isPending} onClick={() => sendMessage.mutate()}>
+                    <Send className="h-4 w-4" />
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}

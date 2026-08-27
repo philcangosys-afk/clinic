@@ -1,0 +1,92 @@
+import { useEffect, useState } from "react";
+import { Search, UserRound } from "lucide-react";
+import { supabase } from "@/lib/supabase";
+import type { PatientRow } from "@/lib/database.types";
+import { Input } from "@/components/ui/input";
+import { cn } from "@/lib/utils";
+
+type PatientSearchResult = Pick<PatientRow, "id" | "name_ar" | "name_en" | "mobile_number" | "file_number">;
+
+/**
+ * حقل بحث عن مريض موجود بالاسم أو رقم الجوال أو رقم الملف — يُستخدم في الاستقبال
+ * والمواعيد والفوترة بدل تكرار منطق البحث في كل شاشة على حدة.
+ */
+export default function PatientPicker({
+  onSelect,
+  placeholder = "البحث بالاسم أو رقم الجوال أو رقم الملف...",
+}: {
+  onSelect: (patient: PatientSearchResult) => void;
+  placeholder?: string;
+}) {
+  const [term, setTerm] = useState("");
+  const [results, setResults] = useState<PatientSearchResult[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (term.trim().length < 2) {
+      setResults([]);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      setLoading(true);
+      const isNumeric = /^\d+$/.test(term.trim());
+      const query = supabase
+        .from("patients")
+        .select("id, name_ar, name_en, mobile_number, file_number")
+        .limit(8);
+      const { data } = isNumeric
+        ? await query.or(`mobile_number.ilike.%${term.trim()}%,file_number.eq.${term.trim()}`)
+        : await query.ilike("name_ar", `%${term.trim()}%`);
+      setResults((data as PatientSearchResult[]) ?? []);
+      setLoading(false);
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [term]);
+
+  return (
+    <div className="relative">
+      <div className="flex items-center gap-2 rounded-md border bg-background px-3 py-1.5">
+        <Search className="h-4 w-4 text-muted-foreground" />
+        <Input
+          value={term}
+          onChange={(event) => {
+            setTerm(event.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          placeholder={placeholder}
+          className="h-7 border-0 p-0 shadow-none focus-visible:ring-0"
+        />
+      </div>
+      {open && term.trim().length >= 2 && (
+        <div className="absolute z-20 mt-1 w-full rounded-md border bg-popover shadow-lg">
+          {loading && <p className="px-3 py-2 text-xs text-muted-foreground">جارٍ البحث...</p>}
+          {!loading && results.length === 0 && (
+            <p className="px-3 py-2 text-xs text-muted-foreground">لا توجد نتائج مطابقة.</p>
+          )}
+          {results.map((patient) => (
+            <button
+              key={patient.id}
+              type="button"
+              onClick={() => {
+                onSelect(patient);
+                setTerm(patient.name_ar);
+                setOpen(false);
+              }}
+              className={cn(
+                "flex w-full items-center gap-2 px-3 py-2 text-right text-sm hover:bg-muted",
+              )}
+            >
+              <UserRound className="h-4 w-4 text-muted-foreground" />
+              <span className="flex-1">{patient.name_ar}</span>
+              <span className="text-xs text-muted-foreground">
+                #{patient.file_number} · {patient.mobile_number ?? "—"}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
