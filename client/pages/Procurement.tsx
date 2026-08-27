@@ -76,11 +76,14 @@ function useDistributors(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("distributors")
-        .select("id, file_number, name_ar, mobile_1, is_dental_lab, is_disabled")
+        .select("id, file_number, name_ar, name_en, sales_rep_name, mobile_1, tax_number, is_dental_lab, is_disabled")
         .eq("organization_id", organizationId)
         .order("name_ar");
       if (error) throw error;
-      return (data ?? []) as Pick<DistributorRow, "id" | "file_number" | "name_ar" | "mobile_1" | "is_dental_lab" | "is_disabled">[];
+      return (data ?? []) as Pick<
+        DistributorRow,
+        "id" | "file_number" | "name_ar" | "name_en" | "sales_rep_name" | "mobile_1" | "tax_number" | "is_dental_lab" | "is_disabled"
+      >[];
     },
   });
 }
@@ -110,7 +113,10 @@ function DistributorsTab() {
               <TableRow>
                 <TableHead>#الملف</TableHead>
                 <TableHead>الاسم</TableHead>
+                <TableHead>الاسم الإنجليزي</TableHead>
+                <TableHead>المندوب</TableHead>
                 <TableHead>الجوال</TableHead>
+                <TableHead>الرقم الضريبي</TableHead>
                 <TableHead>النوع</TableHead>
                 <TableHead>الحالة</TableHead>
               </TableRow>
@@ -123,7 +129,10 @@ function DistributorsTab() {
                     <Truck className="h-4 w-4 text-muted-foreground" />
                     {d.name_ar}
                   </TableCell>
+                  <TableCell className="text-muted-foreground">{d.name_en ?? "—"}</TableCell>
+                  <TableCell>{d.sales_rep_name ?? "—"}</TableCell>
                   <TableCell>{d.mobile_1 ?? "—"}</TableCell>
+                  <TableCell>{d.tax_number ?? "—"}</TableCell>
                   <TableCell>{d.is_dental_lab ? <Badge variant="default">معمل أسنان</Badge> : "مورد عام"}</TableCell>
                   <TableCell>
                     <Badge variant={d.is_disabled ? "secondary" : "success"}>{d.is_disabled ? "معطّل" : "نشط"}</Badge>
@@ -132,7 +141,7 @@ function DistributorsTab() {
               ))}
               {(distributors.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
                     لا يوجد موردون بعد.
                   </TableCell>
                 </TableRow>
@@ -158,9 +167,40 @@ function NewDistributorDialog({
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [nameAr, setNameAr] = useState("");
+  const [nameEn, setNameEn] = useState("");
+  const [salesRepName, setSalesRepName] = useState("");
+  const [salesRepMobile, setSalesRepMobile] = useState("");
+  const [nationalityId, setNationalityId] = useState("");
+  const [idNumber, setIdNumber] = useState("");
+  const [taxNumber, setTaxNumber] = useState("");
+  const [glnNumber, setGlnNumber] = useState("");
   const [mobile, setMobile] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [cityId, setCityId] = useState("");
+  const [address, setAddress] = useState("");
+  const [note, setNote] = useState("");
   const [typeValueId, setTypeValueId] = useState("");
   const [isDentalLab, setIsDentalLab] = useState(false);
+
+  const resetForm = () => {
+    setNameAr("");
+    setNameEn("");
+    setSalesRepName("");
+    setSalesRepMobile("");
+    setNationalityId("");
+    setIdNumber("");
+    setTaxNumber("");
+    setGlnNumber("");
+    setMobile("");
+    setPhone("");
+    setEmail("");
+    setCityId("");
+    setAddress("");
+    setNote("");
+    setTypeValueId("");
+    setIsDentalLab(false);
+  };
 
   const createDistributor = useMutation({
     mutationFn: async () => {
@@ -168,7 +208,19 @@ function NewDistributorDialog({
       const { error } = await supabase.from("distributors").insert({
         organization_id: organizationId,
         name_ar: nameAr.trim(),
+        name_en: nameEn.trim() || null,
+        sales_rep_name: salesRepName.trim() || null,
+        sales_rep_mobile: salesRepMobile.trim() || null,
+        nationality_value_id: nationalityId || null,
+        id_number: idNumber.trim() || null,
+        tax_number: taxNumber.trim() || null,
+        gln_number: glnNumber.trim() || null,
         mobile_1: mobile.trim() || null,
+        phone_1: phone.trim() || null,
+        email_1: email.trim() || null,
+        city_value_id: cityId || null,
+        address: address.trim() || null,
+        note: note.trim() || null,
         distributor_type_value_id: typeValueId || null,
         is_dental_lab: isDentalLab,
       });
@@ -177,10 +229,7 @@ function NewDistributorDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["distributors", organizationId] });
       toast({ title: "تم حفظ المورد" });
-      setNameAr("");
-      setMobile("");
-      setTypeValueId("");
-      setIsDentalLab(false);
+      resetForm();
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -197,20 +246,68 @@ function NewDistributorDialog({
         <DialogHeader>
           <DialogTitle>مورد جديد</DialogTitle>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-col gap-1.5">
-            <Label>الاسم *</Label>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label>الاسم بالعربية *</Label>
             <Input value={nameAr} onChange={(e) => setNameAr(e.target.value)} autoFocus />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الاسم بالإنجليزية</Label>
+            <Input value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>نوع المورد</Label>
+            <LookupSelect categoryKey="distributor_types" value={typeValueId} onChange={setTypeValueId} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>اسم المندوب</Label>
+            <Input value={salesRepName} onChange={(e) => setSalesRepName(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>جوال المندوب</Label>
+            <Input value={salesRepMobile} onChange={(e) => setSalesRepMobile(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الجنسية</Label>
+            <LookupSelect categoryKey="nationalities" value={nationalityId} onChange={setNationalityId} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>رقم الهوية</Label>
+            <Input value={idNumber} onChange={(e) => setIdNumber(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الرقم الضريبي</Label>
+            <Input value={taxNumber} onChange={(e) => setTaxNumber(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>GLN</Label>
+            <Input value={glnNumber} onChange={(e) => setGlnNumber(e.target.value)} />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>الجوال</Label>
             <Input value={mobile} onChange={(e) => setMobile(e.target.value)} />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label>نوع المورد</Label>
-            <LookupSelect categoryKey="distributor_types" value={typeValueId} onChange={setTypeValueId} />
+            <Label>هاتف</Label>
+            <Input value={phone} onChange={(e) => setPhone(e.target.value)} />
           </div>
-          <label className="flex items-center gap-2 text-sm">
+          <div className="flex flex-col gap-1.5">
+            <Label>البريد الإلكتروني</Label>
+            <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>المدينة</Label>
+            <LookupSelect categoryKey="cities" value={cityId} onChange={setCityId} />
+          </div>
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label>العنوان</Label>
+            <Input value={address} onChange={(e) => setAddress(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label>ملاحظة</Label>
+            <Input value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+          <label className="flex items-center gap-2 text-sm sm:col-span-2">
             <input type="checkbox" checked={isDentalLab} onChange={(e) => setIsDentalLab(e.target.checked)} />
             معمل أسنان
           </label>

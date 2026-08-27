@@ -107,6 +107,7 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [reason, setReason] = useState("");
+  const [rejectionReasons, setRejectionReasons] = useState<Record<string, string>>({});
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["leave-requests", organizationId] });
@@ -139,7 +140,10 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
 
   const decide = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: "approved" | "rejected" }) => {
-      const { error } = await supabase.from("leave_requests").update({ status }).eq("id", id);
+      const { error } = await supabase
+        .from("leave_requests")
+        .update({ status, rejection_reason: status === "rejected" ? rejectionReasons[id]?.trim() || null : null })
+        .eq("id", id);
       if (error) throw error;
     },
     onSuccess: (_, vars) => {
@@ -246,7 +250,13 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
                 </TableCell>
                 <TableCell>
                   {r.status === "pending" && (
-                    <div className="flex gap-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        className="h-8 w-32"
+                        placeholder="سبب الرفض"
+                        value={rejectionReasons[r.id] ?? ""}
+                        onChange={(e) => setRejectionReasons((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                      />
                       <Button size="sm" variant="outline" onClick={() => decide.mutate({ id: r.id, status: "approved" })}>
                         <Check className="h-3.5 w-3.5 text-emerald-600" />
                       </Button>
@@ -254,6 +264,9 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
                         <X className="h-3.5 w-3.5 text-destructive" />
                       </Button>
                     </div>
+                  )}
+                  {r.status === "rejected" && r.rejection_reason && (
+                    <p className="text-xs text-muted-foreground">السبب: {r.rejection_reason}</p>
                   )}
                 </TableCell>
               </TableRow>
@@ -325,6 +338,7 @@ function TypesTab({ organizationId }: { organizationId: string | undefined }) {
   const [nameAr, setNameAr] = useState("");
   const [days, setDays] = useState("0");
   const [isPaid, setIsPaid] = useState(true);
+  const [requiresApproval, setRequiresApproval] = useState(true);
 
   const createType = useMutation({
     mutationFn: async () => {
@@ -334,6 +348,7 @@ function TypesTab({ organizationId }: { organizationId: string | undefined }) {
         name_ar: nameAr.trim(),
         annual_entitlement_days: Number(days) || 0,
         is_paid: isPaid,
+        requires_approval: requiresApproval,
       });
       if (error) throw error;
     },
@@ -342,6 +357,7 @@ function TypesTab({ organizationId }: { organizationId: string | undefined }) {
       toast({ title: "تم إضافة نوع الإجازة" });
       setOpen(false);
       setNameAr("");
+      setRequiresApproval(true);
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
@@ -376,6 +392,10 @@ function TypesTab({ organizationId }: { organizationId: string | undefined }) {
                 <input type="checkbox" checked={isPaid} onChange={(e) => setIsPaid(e.target.checked)} />
                 <Label className="font-normal">مدفوعة الأجر</Label>
               </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" checked={requiresApproval} onChange={(e) => setRequiresApproval(e.target.checked)} />
+                <Label className="font-normal">تتطلب موافقة قبل الاعتماد</Label>
+              </div>
             </div>
             <DialogFooter>
               <Button onClick={() => createType.mutate()} disabled={createType.isPending}>
@@ -392,6 +412,7 @@ function TypesTab({ organizationId }: { organizationId: string | undefined }) {
               <TableHead>الاسم</TableHead>
               <TableHead>المستحق سنويًا</TableHead>
               <TableHead>مدفوعة</TableHead>
+              <TableHead>تتطلب موافقة</TableHead>
               <TableHead>النطاق</TableHead>
             </TableRow>
           </TableHeader>
@@ -401,6 +422,7 @@ function TypesTab({ organizationId }: { organizationId: string | undefined }) {
                 <TableCell className="font-medium">{t.name_ar}</TableCell>
                 <TableCell>{t.annual_entitlement_days}</TableCell>
                 <TableCell>{t.is_paid ? "نعم" : "لا"}</TableCell>
+                <TableCell>{t.requires_approval ? "نعم" : "لا"}</TableCell>
                 <TableCell>
                   <Badge variant={t.organization_id === null ? "secondary" : "outline"}>
                     {t.organization_id === null ? "نظامي عام" : "خاص بمؤسستك"}

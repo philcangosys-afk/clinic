@@ -39,25 +39,25 @@
 
     --border: 210 24% 87%;
     --input: 210 24% 87%;
-    --ring: 258 78% 58%;
+    --ring: 172 58% 30%;
 
     --radius: 0.75rem;
 
-    --sidebar-background: 0 0% 100%;
+    --sidebar-background: 210 33% 98%;
 
-    --sidebar-foreground: 240 5.3% 26.1%;
+    --sidebar-foreground: 218 36% 16%;
 
-    --sidebar-primary: 240 5.9% 10%;
+    --sidebar-primary: 172 58% 30%;
 
-    --sidebar-primary-foreground: 0 0% 98%;
+    --sidebar-primary-foreground: 0 0% 100%;
 
-    --sidebar-accent: 240 4.8% 95.9%;
+    --sidebar-accent: 170 30% 92%;
 
-    --sidebar-accent-foreground: 240 5.9% 10%;
+    --sidebar-accent-foreground: 172 58% 22%;
 
-    --sidebar-border: 220 13% 91%;
+    --sidebar-border: 210 24% 87%;
 
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --sidebar-ring: 172 58% 30%;
   }
 
   .dark {
@@ -107,6 +107,7 @@
   html {
     font-family: "IBM Plex Sans Arabic", "Inter", sans-serif;
     background: hsl(var(--background));
+    direction: rtl;
   }
 
   body {

@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import PatientPicker from "@/components/shared/PatientPicker";
+import ItemPicker from "@/components/shared/ItemPicker";
 import { useToast } from "@/hooks/use-toast";
 
 const FORM_TYPE_LABELS: Record<InsuranceClaimFormType, string> = {
@@ -58,7 +59,14 @@ function usePatientMemberships(patientId: string | undefined) {
 }
 
 type FormField = { key: string; label: string; value: string };
-type ClaimLine = { key: string; description: string; qty: string; amount: string };
+type ClaimLine = {
+  key: string;
+  itemId: string | null;
+  serviceCode: string;
+  description: string;
+  qty: string;
+  amount: string;
+};
 
 /**
  * إنشاء نموذج مطالبة تأمين يدويًا (UCAF/DCAF/OCAF). معظم النماذج تُنشأ تلقائيًا
@@ -96,10 +104,31 @@ export default function NewClaimFormDialog({
     setFields((prev) => prev.map((field) => (field.key === key ? { ...field, ...patch } : field)));
   const removeField = (key: string) => setFields((prev) => prev.filter((field) => field.key !== key));
 
-  const addLine = () => setLines((prev) => [...prev, { key: `${Date.now()}`, description: "", qty: "1", amount: "0" }]);
+  const addLine = () =>
+    setLines((prev) => [
+      ...prev,
+      { key: `${Date.now()}`, itemId: null, serviceCode: "", description: "", qty: "1", amount: "0" },
+    ]);
   const updateLine = (key: string, patch: Partial<ClaimLine>) =>
     setLines((prev) => prev.map((line) => (line.key === key ? { ...line, ...patch } : line)));
   const removeLine = (key: string) => setLines((prev) => prev.filter((line) => line.key !== key));
+
+  const selectItemForLine = (
+    key: string,
+    item: { id: string; code: string | null; name_ar: string; price: number },
+  ) => {
+    const duplicate = lines.some((line) => line.key !== key && line.itemId === item.id);
+    if (duplicate) {
+      toast({ variant: "destructive", title: "هذه الخدمة مضافة مسبقًا في هذا النموذج" });
+      return;
+    }
+    updateLine(key, {
+      itemId: item.id,
+      serviceCode: item.code ?? "",
+      description: item.name_ar,
+      amount: String(item.price ?? 0),
+    });
+  };
 
   const createForm = useMutation({
     mutationFn: async () => {
@@ -127,6 +156,8 @@ export default function NewClaimFormDialog({
         const { error: linesError } = await supabase.from("insurance_claim_form_items").insert(
           validLines.map((line) => ({
             form_id: form.id,
+            item_id: line.itemId || null,
+            service_code: line.serviceCode.trim() || null,
             description: line.description.trim(),
             qty: Number(line.qty) || 1,
             amount: Number(line.amount) || 0,
@@ -258,32 +289,46 @@ export default function NewClaimFormDialog({
                 إضافة بند
               </Button>
             </div>
-            <div className="flex flex-col gap-2">
+            <div className="flex flex-col gap-3">
               {lines.map((line) => (
-                <div key={line.key} className="grid grid-cols-12 gap-2">
-                  <Input
-                    placeholder="وصف الخدمة"
-                    value={line.description}
-                    onChange={(e) => updateLine(line.key, { description: e.target.value })}
-                    className="col-span-6"
-                  />
-                  <Input
-                    type="number"
-                    placeholder="الكمية"
-                    value={line.qty}
-                    onChange={(e) => updateLine(line.key, { qty: e.target.value })}
-                    className="col-span-2"
-                  />
-                  <Input
-                    type="number"
-                    placeholder="المبلغ"
-                    value={line.amount}
-                    onChange={(e) => updateLine(line.key, { amount: e.target.value })}
-                    className="col-span-3"
-                  />
-                  <Button size="sm" variant="ghost" className="col-span-1" onClick={() => removeLine(line.key)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
+                <div key={line.key} className="flex flex-col gap-1.5 rounded-md border p-2">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <ItemPicker onSelect={(item) => selectItemForLine(line.key, item)} />
+                    </div>
+                    <Button size="sm" variant="ghost" onClick={() => removeLine(line.key)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-12 gap-2">
+                    <Input
+                      placeholder="وصف الخدمة"
+                      value={line.description}
+                      onChange={(e) => updateLine(line.key, { description: e.target.value })}
+                      className="col-span-5"
+                    />
+                    <Input
+                      placeholder="كود الخدمة"
+                      value={line.serviceCode}
+                      onChange={(e) => updateLine(line.key, { serviceCode: e.target.value })}
+                      className="col-span-2"
+                    />
+                    <Input
+                      type="number"
+                      placeholder="الكمية"
+                      value={line.qty}
+                      onChange={(e) => updateLine(line.key, { qty: e.target.value })}
+                      className="col-span-2"
+                    />
+                    <Input
+                      type="number"
+                      placeholder="المبلغ"
+                      value={line.amount}
+                      onChange={(e) => updateLine(line.key, { amount: e.target.value })}
+                      className="col-span-3"
+                    />
+                  </div>
+                  {line.itemId && <p className="text-xs text-emerald-700">مرتبط بصنف من الكتالوج</p>}
                 </div>
               ))}
               {lines.length === 0 && <p className="text-xs text-muted-foreground">لم تُضف بنود بعد.</p>}

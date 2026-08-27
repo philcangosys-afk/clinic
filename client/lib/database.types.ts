@@ -101,12 +101,23 @@ export interface DoctorRow {
   name_en: string | null;
   job_title: string | null;
   specialty_value_id: UUID | null;
+  address: string | null;
+  id_number: string | null;
   gender: "male" | "female" | null;
+  nationality_value_id: UUID | null;
   mobile_number: string | null;
   email: string | null;
+  birth_date: string | null;
   is_enabled: boolean;
   disabled_from_booking: boolean;
+  receive_appointment_confirmation_sms: boolean;
+  consultation_fee_renewal_days: number | null;
+  free_reviews_count: number | null;
   default_appointment_duration_minutes: number | null;
+  patient_waiting_minutes: number | null;
+  invoice_source_value_id: UUID | null;
+  specialty_authority: string | null;
+  specialty_authority_number: string | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -123,16 +134,57 @@ export interface PatientRow {
   birth_date: string | null;
   gender: "male" | "female" | null;
   nationality_value_id: UUID | null;
-  mobile_number: string | null;
-  phone_1: string | null;
-  phone_2: string | null;
+  profession_value_id: UUID | null;
+  marital_status: string | null;
+  city_value_id: UUID | null;
+  address: string | null;
+  district: string | null;
+  street: string | null;
+  building_number: string | null;
+  postal_code: string | null;
   id_type: string | null;
   id_number: string | null;
+  mobile_number: string | null;
+  emergency_number: string | null;
+  phone_1: string | null;
+  phone_2: string | null;
+  work_entity_value_id: UUID | null;
+  tax_number: string | null;
+  is_tax_registered: boolean;
+  customer_type_value_id: UUID | null;
+  source_value_id: UUID | null;
+  source_details: string | null;
   treating_doctor_id: UUID | null;
+  participating_doctor_ids: UUID[];
+  children_count: number | null;
+  educational_qualification_value_id: UUID | null;
+  email_1: string | null;
+  email_2: string | null;
+  father_whatsapp: string | null;
+  facebook: string | null;
+  website: string | null;
   default_discount_percent: number;
   general_note: string | null;
   insurance_company_name: string | null;
   insurance_policy_number: string | null;
+  insurance_policy_category: string | null;
+  insurance_membership_number: string | null;
+  insurance_relation: string | null;
+  insurance_membership_expiry: string | null;
+  file_type_value_id: UUID | null;
+  passport_number: string | null;
+  father_id_number: string | null;
+  mother_id_number: string | null;
+  blood_type: string | null;
+  other_id_type: string | null;
+  other_id_number: string | null;
+  guarantor_name: string | null;
+  guarantor_number: string | null;
+  guarantor_details: string | null;
+  nearest_person_name: string | null;
+  nearest_person_number: string | null;
+  gln_number: string | null;
+  local_order_weight_kg: number | null;
   block_invoices: boolean;
   block_invoices_reason: string | null;
   block_appointments: boolean;
@@ -141,10 +193,37 @@ export interface PatientRow {
   block_sms_reason: string | null;
   block_file: boolean;
   block_file_reason: string | null;
+  e_signature_enabled: boolean;
+  electronic_signature_url: string | null;
   is_newborn: boolean;
   created_by: UUID | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface HealthConditionRow {
+  id: UUID;
+  organization_id: UUID | null;
+  name_ar: string;
+  name_en: string;
+  sort_order: number;
+}
+
+export interface PatientHealthConditionRow {
+  patient_id: UUID;
+  condition_id: UUID;
+  is_checked: boolean;
+  note: string | null;
+}
+
+export interface PatientNoteRow {
+  id: UUID;
+  patient_id: UUID;
+  title: string | null;
+  body: string;
+  created_by: UUID | null;
+  created_at: string;
+  is_disabled: boolean;
 }
 
 export type AppointmentStatus =
@@ -273,12 +352,38 @@ export interface FinancialVoucherRow {
   voucher_date: string;
   amount: number;
   payment_method_value_id: UUID | null;
+  cash_register_id: UUID | null;
+  bank_transfer_ref: string | null;
+  transfer_to_account_value_id: UUID | null;
   related_sales_invoice_id: UUID | null;
   patient_id: UUID | null;
+  distributor_id: UUID | null;
   employee_ref_id: UUID | null;
   employee_name: string | null;
+  expense_category_value_id: UUID | null;
+  expense_source_document: string | null;
+  expense_source_number: string | null;
   payee_name: string | null;
   description: string | null;
+  vat_rate: number | null;
+  vat_amount: number | null;
+  requires_vat: boolean;
+  supplier_tax_number: string | null;
+  clinic_id: UUID | null;
+  doctor_id: UUID | null;
+  dental_lab_order_id: UUID | null;
+  created_by: UUID | null;
+  created_at: string;
+}
+
+export interface CashRegisterRow {
+  id: UUID;
+  organization_id: UUID;
+  branch_id: UUID | null;
+  name: string;
+  is_doctor_custody: boolean;
+  assigned_doctor_id: UUID | null;
+  is_disabled: boolean;
   created_at: string;
 }
 
@@ -357,6 +462,33 @@ export interface InsurancePreauthorizationRow {
   requested_at: string;
   responded_at: string | null;
   note: string | null;
+}
+
+export type InsuranceClaimBatchStatus = "draft" | "submitted" | "accepted" | "rejected" | "partially_paid";
+
+export interface InsuranceClaimBatchRow {
+  id: UUID;
+  organization_id: UUID;
+  company_id: UUID;
+  batch_number: number;
+  period_start: string | null;
+  period_end: string | null;
+  total_amount: number;
+  status: InsuranceClaimBatchStatus;
+  submitted_at: string | null;
+  note: string | null;
+  created_by: UUID | null;
+  created_at: string;
+}
+
+export type InsuranceClaimBatchItemStatus = "pending" | "accepted" | "rejected";
+
+export interface InsuranceClaimBatchItemRow {
+  id: UUID;
+  batch_id: UUID;
+  sales_invoice_id: UUID;
+  amount: number;
+  status: InsuranceClaimBatchItemStatus;
 }
 
 // ---------------------------------------------------------------------------
@@ -891,14 +1023,106 @@ export interface DistributorRow {
   name_en: string | null;
   sales_rep_name: string | null;
   sales_rep_mobile: string | null;
-  phone_1: string | null;
-  mobile_1: string | null;
-  email_1: string | null;
+  lab_technician_name: string | null;
+  lab_technician_mobile: string | null;
+  nationality_value_id: UUID | null;
+  profession_value_id: UUID | null;
+  id_number: string | null;
   tax_number: string | null;
+  gln_number: string | null;
+  phone_1: string | null;
+  phone_2: string | null;
+  mobile_1: string | null;
+  mobile_2: string | null;
+  email_1: string | null;
+  email_2: string | null;
+  fax: string | null;
+  city_value_id: UUID | null;
   address: string | null;
   note: string | null;
   is_disabled: boolean;
   created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// 0007 — معامل الأسنان (Dental Lab)
+// ---------------------------------------------------------------------------
+export interface ToothShadeGuideRow {
+  id: UUID;
+  organization_id: UUID;
+  name: string;
+  created_at: string;
+}
+
+export interface ToothShadeRow {
+  id: UUID;
+  shade_guide_id: UUID;
+  code: string;
+  sort_order: number;
+}
+
+export interface DentalLabItemRow {
+  id: UUID;
+  organization_id: UUID;
+  distributor_id: UUID;
+  name_ar: string;
+  name_en: string | null;
+  price: number;
+  is_disabled: boolean;
+  created_at: string;
+}
+
+export type DentalLabOrderStatus = "pending" | "in_progress" | "delivered" | "cancelled";
+
+export interface DentalLabOrderRow {
+  id: UUID;
+  organization_id: UUID;
+  distributor_id: UUID;
+  order_number: number;
+  order_date: string;
+  delivery_date: string | null;
+  lab_invoice_number: string | null;
+  patient_id: UUID | null;
+  doctor_id: UUID | null;
+  visit_id: UUID | null;
+  shade_guide_id: UUID | null;
+  shade_id: UUID | null;
+  total_amount: number;
+  paid_amount: number;
+  remaining_amount: number;
+  status: DentalLabOrderStatus;
+  received_date: string | null;
+  received_by: string | null;
+  note: string | null;
+  created_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DentalLabOrderItemRow {
+  id: UUID;
+  order_id: UUID;
+  dental_lab_item_id: UUID | null;
+  description: string | null;
+  tooth_numbers: string[];
+  shade_id: UUID | null;
+  price: number;
+  qty: number;
+  discount_percent: number;
+  discount_amount: number;
+  vat_rate: number;
+  vat_amount: number;
+  net_amount: number;
+  created_at: string;
+}
+
+export interface DentalLabBalanceRow {
+  distributor_id: UUID;
+  organization_id: UUID;
+  name_ar: string;
+  total_orders: number;
+  total_paid: number;
+  balance_due: number;
 }
 
 export type PurchasePaymentTerm = "cash" | "credit";
@@ -1061,7 +1285,9 @@ export interface MessageLogRow {
   event_key: MessageEventKey | null;
   message_text: string;
   status: MessageLogStatus;
+  provider_message_id: string | null;
   sent_at: string | null;
+  created_by: UUID | null;
   created_at: string;
 }
 
@@ -1178,6 +1404,8 @@ export interface TodayAttendanceView {
   check_out_at: string | null;
   status: AttendanceStatus;
   late_minutes: number;
+  early_leave_minutes: number;
+  note: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1500,4 +1728,157 @@ export interface AppointmentWithRelations extends AppointmentRow {
 
 export interface SalesInvoiceWithPatient extends SalesInvoiceRow {
   patient?: Pick<PatientRow, "id" | "name_ar" | "file_number"> | null;
+}
+
+export interface TreatmentAgreementRow {
+  id: UUID;
+  organization_id: UUID;
+  agreement_number: number;
+  patient_id: UUID;
+  doctor_id: UUID | null;
+  clinic_id: UUID | null;
+  agreement_date: string;
+  vat_amount: number;
+  total_amount: number;
+  invoiced_amount: number;
+  remaining_amount: number;
+  note: string | null;
+  is_disabled: boolean;
+  created_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TreatmentAgreementItemRow {
+  id: UUID;
+  agreement_id: UUID;
+  item_id: UUID | null;
+  description: string | null;
+  qty: number;
+  unit_price: number;
+  discount_percent: number;
+  net_amount: number;
+  created_at: string;
+}
+
+export interface TreatmentAgreementWithRelations extends TreatmentAgreementRow {
+  patient?: Pick<PatientRow, "id" | "name_ar" | "file_number"> | null;
+  doctor?: Pick<DoctorRow, "id" | "name_ar"> | null;
+  clinic?: Pick<ClinicRow, "id" | "name"> | null;
+}
+
+// ---------------------------------------------------------------------------
+// مكتبة قوالب/نماذج المستندات — 0032_document_templates.sql
+// ---------------------------------------------------------------------------
+export type DocumentTemplateAppliesTo = "patient" | "employee" | "generic";
+
+export interface DocumentTemplateRow {
+  id: UUID;
+  organization_id: UUID | null;
+  system_key: string | null;
+  category_value_id: UUID | null;
+  name_ar: string;
+  name_en: string | null;
+  applies_to: DocumentTemplateAppliesTo;
+  body_html: string;
+  note: string | null;
+  is_disabled: boolean;
+  created_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface GeneratedDocumentRow {
+  id: UUID;
+  organization_id: UUID;
+  template_id: UUID | null;
+  template_name_snapshot: string;
+  patient_id: UUID | null;
+  employee_id: UUID | null;
+  title: string;
+  body_html: string;
+  extra_fields: Record<string, string>;
+  created_by: UUID | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// تقارير الفحوصات المهنية — 0033_occupational_health.sql
+// ---------------------------------------------------------------------------
+export type OccupationalExamPurpose = "pre_employment" | "periodic" | "return_to_work" | "exit";
+export type OccupationalFitnessStatus = "fit" | "fit_with_restrictions" | "unfit" | "pending";
+
+export interface OccupationalExamResultRow {
+  id: UUID;
+  organization_id: UUID;
+  patient_id: UUID;
+  visit_id: UUID;
+  exam_purpose: OccupationalExamPurpose;
+  fitness_status: OccupationalFitnessStatus;
+  employer_value_id: UUID | null;
+  restrictions_note: string | null;
+  certificate_number: string | null;
+  exam_date: string;
+  next_exam_due_date: string | null;
+  created_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OccupationalExamReportView {
+  id: UUID;
+  organization_id: UUID;
+  visit_id: UUID;
+  patient_id: UUID;
+  patient_name: string;
+  patient_file_number: number;
+  doctor_id: UUID | null;
+  doctor_name: string | null;
+  exam_purpose: OccupationalExamPurpose;
+  fitness_status: OccupationalFitnessStatus;
+  employer_value_id: UUID | null;
+  employer_name: string | null;
+  restrictions_note: string | null;
+  certificate_number: string | null;
+  exam_date: string;
+  next_exam_due_date: string | null;
+  patient_id_number: string | null;
+  patient_mobile_number: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// العملاء الخارجيون — 0035_external_clients.sql
+// ---------------------------------------------------------------------------
+export interface ExternalClientRow {
+  id: UUID;
+  organization_id: UUID;
+  name: string;
+  mobile_1: string | null;
+  mobile_2: string | null;
+  phone_1: string | null;
+  phone_2: string | null;
+  registered_at: string;
+  note: string | null;
+  is_disabled: boolean;
+  created_by: UUID | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// مصمم التقارير المخصص — 0036_custom_reports.sql
+// ---------------------------------------------------------------------------
+export interface CustomReportRow {
+  id: UUID;
+  organization_id: UUID;
+  name: string;
+  source_key: string;
+  selected_fields: string[];
+  filters: { field: string; operator: string; value: string }[];
+  group_by_field: string | null;
+  aggregation: "count" | "sum" | null;
+  aggregation_field: string | null;
+  created_by: UUID | null;
+  created_at: string;
+  updated_at: string;
 }

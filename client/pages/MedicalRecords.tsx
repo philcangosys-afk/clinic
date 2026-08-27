@@ -28,7 +28,22 @@ import {
 } from "@/components/ui/dialog";
 import PatientPicker from "@/components/shared/PatientPicker";
 import IcdPicker from "@/components/shared/IcdPicker";
+import LookupSelect from "@/components/shared/LookupSelect";
+import type { OccupationalExamPurpose, OccupationalFitnessStatus } from "@/lib/database.types";
 import { useToast } from "@/hooks/use-toast";
+
+const EXAM_PURPOSE_LABELS: Record<OccupationalExamPurpose, string> = {
+  pre_employment: "ما قبل التوظيف",
+  periodic: "دوري",
+  return_to_work: "العودة للعمل",
+  exit: "مغادرة العمل",
+};
+const FITNESS_STATUS_LABELS: Record<OccupationalFitnessStatus, string> = {
+  fit: "لائق",
+  fit_with_restrictions: "لائق بقيود",
+  unfit: "غير لائق",
+  pending: "قيد المراجعة",
+};
 
 function useRecentVisits(organizationId: string | undefined) {
   return useQuery({
@@ -133,14 +148,14 @@ function useTemplateForSpecialty(specialtyValueId: string | null | undefined, or
 
       const { data: templates, error: templatesError } = await supabase
         .from("clinic_exam_templates")
-        .select("id, canvas_type, schema_definition")
+        .select("id, specialty_code, canvas_type, schema_definition")
         .eq("specialty_code", specialtyCode)
         .or(`organization_id.eq.${organizationId},organization_id.is.null`)
         .order("organization_id", { ascending: false, nullsFirst: false })
         .limit(1)
         .maybeSingle();
       if (templatesError) throw templatesError;
-      return templates as { id: string; canvas_type: string; schema_definition: ExamTemplateSchema } | null;
+      return templates as { id: string; specialty_code: string; canvas_type: string; schema_definition: ExamTemplateSchema } | null;
     },
   });
 }
@@ -156,6 +171,7 @@ function NewVisitDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { session } = useOrganizationAccess();
   const doctors = useDoctorsList(organizationId);
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [doctorId, setDoctorId] = useState("");
@@ -164,13 +180,32 @@ function NewVisitDialog({
   const [nextVisitPlan, setNextVisitPlan] = useState("");
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [diagnoses, setDiagnoses] = useState<{ id: string; code: string; name_ar: string | null; name_en: string }[]>([]);
+  const [examPurpose, setExamPurpose] = useState<OccupationalExamPurpose>("periodic");
+  const [fitnessStatus, setFitnessStatus] = useState<OccupationalFitnessStatus>("pending");
+  const [employerValueId, setEmployerValueId] = useState("");
+  const [restrictionsNote, setRestrictionsNote] = useState("");
+  const [certificateNumber, setCertificateNumber] = useState("");
+  const [nextExamDueDate, setNextExamDueDate] = useState("");
 
   const selectedDoctor = (doctors.data ?? []).find((doctor) => doctor.id === doctorId);
   const template = useTemplateForSpecialty(selectedDoctor?.specialty_value_id, organizationId);
+  const isOccupational = template.data?.specialty_code === "occupational_health";
 
   useEffect(() => {
     setFieldValues({});
   }, [template.data?.id]);
+
+  // تعبئة جهة العمل تلقائيًا من ملف المريض عند اختيار قالب الفحص المهني — نفس
+  // حقل patients.work_entity_value_id المستخدم أصلًا في ملف المريض (0028)
+  useEffect(() => {
+    if (!isOccupational || !patient) return;
+    supabase
+      .from("patients")
+      .select("work_entity_value_id")
+      .eq("id", patient.id)
+      .maybeSingle()
+      .then(({ data }) => setEmployerValueId((data as { work_entity_value_id: string | null } | null)?.work_entity_value_id ?? ""));
+  }, [isOccupational, patient?.id]);
 
   const groupSections = useMemo(
     () => (template.data?.schema_definition.sections ?? []).filter((section) => section.type === "group"),
@@ -203,9 +238,26 @@ function NewVisitDialog({
         );
         if (diagnosesError) throw diagnosesError;
       }
+
+      if (isOccupational) {
+        const { error: occError } = await supabase.from("occupational_exam_results").insert({
+          organization_id: organizationId,
+          patient_id: patient.id,
+          visit_id: visit.id,
+          exam_purpose: examPurpose,
+          fitness_status: fitnessStatus,
+          employer_value_id: employerValueId || null,
+          restrictions_note: restrictionsNote.trim() || null,
+          certificate_number: certificateNumber.trim() || null,
+          next_exam_due_date: nextExamDueDate || null,
+          created_by: session?.user.id ?? null,
+        });
+        if (occError) throw occError;
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["medical-visits"] });
+      queryClient.invalidateQueries({ queryKey: ["occupational-exam-report"] });
       toast({ title: "تم حفظ زيارة الفحص" });
       setPatient(null);
       setDoctorId("");
@@ -214,6 +266,12 @@ function NewVisitDialog({
       setNextVisitPlan("");
       setFieldValues({});
       setDiagnoses([]);
+      setExamPurpose("periodic");
+      setFitnessStatus("pending");
+      setEmployerValueId("");
+      setRestrictionsNote("");
+      setCertificateNumber("");
+      setNextExamDueDate("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -282,6 +340,60 @@ function NewVisitDialog({
               </div>
             </div>
           ))}
+
+          {isOccupational && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-3">
+              <p className="mb-2 text-sm font-semibold">نتيجة الفحص المهني</p>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs font-normal text-muted-foreground">الغرض من الفحص</Label>
+                  <Select value={examPurpose} onValueChange={(v) => setExamPurpose(v as OccupationalExamPurpose)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(EXAM_PURPOSE_LABELS).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs font-normal text-muted-foreground">حالة اللياقة</Label>
+                  <Select value={fitnessStatus} onValueChange={(v) => setFitnessStatus(v as OccupationalFitnessStatus)}>
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(FITNESS_STATUS_LABELS).map(([value, label]) => (
+                        <SelectItem key={value} value={value}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs font-normal text-muted-foreground">جهة العمل</Label>
+                  <LookupSelect categoryKey="work_entities" value={employerValueId} onChange={setEmployerValueId} />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs font-normal text-muted-foreground">رقم الشهادة</Label>
+                  <Input value={certificateNumber} onChange={(e) => setCertificateNumber(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs font-normal text-muted-foreground">تاريخ الفحص القادم</Label>
+                  <Input type="date" value={nextExamDueDate} onChange={(e) => setNextExamDueDate(e.target.value)} />
+                </div>
+              </div>
+              <div className="mt-2 flex flex-col gap-1">
+                <Label className="text-xs font-normal text-muted-foreground">قيود/ملاحظات اللياقة (إن وُجدت)</Label>
+                <Textarea value={restrictionsNote} onChange={(e) => setRestrictionsNote(e.target.value)} />
+              </div>
+            </div>
+          )}
 
           <div className="flex flex-col gap-1.5">
             <Label>التشخيص (ICD10)</Label>

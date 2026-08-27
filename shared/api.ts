@@ -44,6 +44,7 @@ export type FeatureKey =
   | "settings"
   | "nursing"
   | "emergency"
+  | "dental_lab"
   | "inpatient"
   | "procedures"
   | "referrals";

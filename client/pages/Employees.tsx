@@ -145,6 +145,10 @@ function NewEmployeeDialog({
   const [basicSalary, setBasicSalary] = useState("0");
   const [housing, setHousing] = useState("0");
   const [transport, setTransport] = useState("0");
+  const [otherAllowances, setOtherAllowances] = useState("0");
+  const [nationalId, setNationalId] = useState("");
+  const [birthDate, setBirthDate] = useState("");
+  const [nationalityId, setNationalityId] = useState("");
 
   const createEmployee = useMutation({
     mutationFn: async () => {
@@ -158,6 +162,10 @@ function NewEmployeeDialog({
         basic_salary: Number(basicSalary) || 0,
         housing_allowance: Number(housing) || 0,
         transportation_allowance: Number(transport) || 0,
+        other_allowances: Number(otherAllowances) || 0,
+        national_id: nationalId.trim() || null,
+        birth_date: birthDate || null,
+        nationality_value_id: nationalityId || null,
       });
       if (error) throw error;
     },
@@ -171,6 +179,10 @@ function NewEmployeeDialog({
       setBasicSalary("0");
       setHousing("0");
       setTransport("0");
+      setOtherAllowances("0");
+      setNationalId("");
+      setBirthDate("");
+      setNationalityId("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -218,6 +230,22 @@ function NewEmployeeDialog({
             <Label>بدل النقل</Label>
             <Input type="number" value={transport} onChange={(e) => setTransport(e.target.value)} />
           </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>بدلات أخرى</Label>
+            <Input type="number" value={otherAllowances} onChange={(e) => setOtherAllowances(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>رقم الهوية الوطنية</Label>
+            <Input value={nationalId} onChange={(e) => setNationalId(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>تاريخ الميلاد</Label>
+            <Input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الجنسية</Label>
+            <LookupSelect categoryKey="nationalities" value={nationalityId} onChange={setNationalityId} />
+          </div>
         </div>
 
         <DialogFooter>
@@ -243,7 +271,9 @@ function EmployeeDocumentsDialog({
   const { toast } = useToast();
   const [docTypeId, setDocTypeId] = useState("");
   const [documentNumber, setDocumentNumber] = useState("");
+  const [issueDate, setIssueDate] = useState("");
   const [expiryDate, setExpiryDate] = useState("");
+  const [note, setNote] = useState("");
 
   const documents = useQuery({
     queryKey: ["employee-documents", employee?.id],
@@ -251,7 +281,7 @@ function EmployeeDocumentsDialog({
     queryFn: async () => {
       const { data, error } = await supabase
         .from("employee_documents")
-        .select("id, document_number, expiry_date, document_type_value_id")
+        .select("id, document_number, issue_date, expiry_date, document_type_value_id, note")
         .eq("employee_id", employee?.id)
         .order("expiry_date");
       if (error) throw error;
@@ -267,7 +297,9 @@ function EmployeeDocumentsDialog({
         employee_id: employee.id,
         document_type_value_id: docTypeId || null,
         document_number: documentNumber.trim() || null,
+        issue_date: issueDate || null,
         expiry_date: expiryDate || null,
+        note: note.trim() || null,
       });
       if (error) throw error;
     },
@@ -276,7 +308,9 @@ function EmployeeDocumentsDialog({
       toast({ title: "تم حفظ الوثيقة" });
       setDocTypeId("");
       setDocumentNumber("");
+      setIssueDate("");
       setExpiryDate("");
+      setNote("");
     },
     onError: (error: unknown) =>
       toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
@@ -293,8 +327,12 @@ function EmployeeDocumentsDialog({
         <div className="flex flex-col gap-2">
           {(documents.data ?? []).map((doc) => (
             <div key={doc.id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-sm">
-              <span>{doc.document_number ?? "بلا رقم"}</span>
+              <div className="flex flex-col">
+                <span>{doc.document_number ?? "بلا رقم"}</span>
+                {doc.note && <span className="text-xs text-muted-foreground">{doc.note}</span>}
+              </div>
               <span className="text-xs text-muted-foreground">
+                {doc.issue_date ? `إصدار: ${new Date(doc.issue_date).toLocaleDateString("ar-SA")} — ` : ""}
                 {doc.expiry_date ? `ينتهي: ${new Date(doc.expiry_date).toLocaleDateString("ar-SA")}` : "بلا تاريخ انتهاء"}
               </span>
             </div>
@@ -314,8 +352,16 @@ function EmployeeDocumentsDialog({
             <Input value={documentNumber} onChange={(e) => setDocumentNumber(e.target.value)} />
           </div>
           <div className="flex flex-col gap-1.5">
+            <Label className="text-xs">تاريخ الإصدار</Label>
+            <Input type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
             <Label className="text-xs">تاريخ الانتهاء</Label>
             <Input type="date" value={expiryDate} onChange={(e) => setExpiryDate(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5 sm:col-span-3">
+            <Label className="text-xs">ملاحظة</Label>
+            <Input value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </div>
 

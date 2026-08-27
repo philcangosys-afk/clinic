@@ -44,6 +44,8 @@ import {
   type ConsultationFeeSettingsRow,
   type InsuranceSettingsRow,
   type InternalMessagingSettingsRow,
+  type LookupCategoryRow,
+  type LookupValueRow,
   type OrganizationDiscountSettingsRow,
   type OrganizationVatSettingsRow,
   type PrintSettingsRow,
@@ -144,6 +146,7 @@ export default function OperationsSettings() {
           <TabsTrigger value="insurance">التأمين</TabsTrigger>
           <TabsTrigger value="messaging">المراسلة الداخلية</TabsTrigger>
           <TabsTrigger value="sms">رصيد SMS</TabsTrigger>
+          <TabsTrigger value="lookups">القوائم المرجعية</TabsTrigger>
         </TabsList>
 
         <TabsContent value="print">
@@ -166,6 +169,9 @@ export default function OperationsSettings() {
         </TabsContent>
         <TabsContent value="sms">
           <SmsSettingsTab organizationId={organization?.id} readOnly={!isAdmin} />
+        </TabsContent>
+        <TabsContent value="lookups">
+          <LookupsTab organizationId={organization?.id} readOnly={!isAdmin} />
         </TabsContent>
       </Tabs>
     </div>
@@ -859,6 +865,333 @@ function SmsSettingsTab({ organizationId, readOnly }: { organizationId: string |
           >
             {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
           </Button>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// القوائم المرجعية (lookup_categories / lookup_values)
+// شاشة إدارية واحدة تغطي كل القوائم المشتركة (مصادر المرضى، أنواع العملاء،
+// المؤهلات العلمية، الأحياء، طرق الدفع، فئات الأصناف والمصاريف، أنواع
+// المستندات...) بدل بناء شاشة CRUD مستقلة لكل قائمة — ومع إمكانية إنشاء
+// قائمة جديدة خاصة بالمؤسسة لتغطية ما لم يُهيَّأ مسبقًا (صناديق البيع،
+// لائحة التقارير الإضافية، إلخ).
+// ---------------------------------------------------------------------------
+function LookupsTab({ organizationId, readOnly }: { organizationId: string | undefined; readOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const categories = useQuery({
+    queryKey: ["lookup_categories", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("lookup_categories")
+        .select("*")
+        .or(`organization_id.is.null,organization_id.eq.${organizationId}`)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as LookupCategoryRow[];
+    },
+  });
+
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string>("");
+  useEffect(() => {
+    if (!selectedCategoryId && categories.data && categories.data.length > 0) {
+      setSelectedCategoryId(categories.data[0].id);
+    }
+  }, [categories.data, selectedCategoryId]);
+
+  const selectedCategory = categories.data?.find((c) => c.id === selectedCategoryId);
+
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const addCategory = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      const trimmed = newCategoryName.trim();
+      if (!trimmed) throw new Error("اكتب اسم القائمة");
+      const key = `custom_${trimmed
+        .toLowerCase()
+        .replace(/[^a-z0-9أ-ي]+/gi, "_")
+        .replace(/^_+|_+$/g, "")}_${Date.now().toString(36)}`;
+      const { data, error } = await supabase
+        .from("lookup_categories")
+        .insert({ organization_id: organizationId, key, name_ar: trimmed, name_en: trimmed })
+        .select()
+        .single();
+      if (error) throw error;
+      return data as LookupCategoryRow;
+    },
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: ["lookup_categories", organizationId] });
+      setNewCategoryName("");
+      setSelectedCategoryId(created.id);
+      toast({ title: "تمت إضافة القائمة" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الإضافة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <div className="flex flex-col gap-5">
+      <Card>
+        <CardHeader>
+          <CardTitle>القوائم المرجعية (البيانات الأساسية)</CardTitle>
+          <CardDescription>
+            إدارة موحّدة لكل القوائم المستخدمة كقوائم منسدلة في شاشات النظام — مصادر المرضى، أنواع العملاء، المؤهلات
+            العلمية، الأحياء، طرق الدفع، فئات الأصناف والمصاريف، أنواع المستندات، وغيرها. يمكنك أيضًا إنشاء قائمة جديدة
+            خاصة بمؤسستك لأي مفهوم غير موجود بعد.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          {categories.isLoading && <Skeleton className="h-10 w-64" />}
+          {!categories.isLoading && (
+            <div className="flex flex-col gap-1.5">
+              <Label>القائمة</Label>
+              <Select value={selectedCategoryId} onValueChange={setSelectedCategoryId}>
+                <SelectTrigger className="w-72">
+                  <SelectValue placeholder="اختر قائمة..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {(categories.data ?? []).map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name_ar}
+                      {c.organization_id ? " (خاصة بالمؤسسة)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {!readOnly && (
+            <div className="flex flex-wrap items-end gap-3 rounded-md border p-3">
+              <div className="flex flex-col gap-1.5">
+                <Label>إنشاء قائمة جديدة خاصة بمؤسستك</Label>
+                <Input
+                  className="w-64"
+                  placeholder="مثال: صناديق البيع"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                />
+              </div>
+              <Button disabled={addCategory.isPending || !newCategoryName.trim()} onClick={() => addCategory.mutate()}>
+                <Plus className="h-4 w-4" />
+                إنشاء القائمة
+              </Button>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {selectedCategory && <LookupValuesEditor category={selectedCategory} readOnly={readOnly} />}
+    </div>
+  );
+}
+
+function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRow; readOnly: boolean }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const isPaymentMethods = category.key === "payment_methods";
+
+  const values = useQuery({
+    queryKey: ["lookup_values", category.id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("lookup_values")
+        .select("*")
+        .eq("category_id", category.id)
+        .order("sort_order");
+      if (error) throw error;
+      return (data ?? []) as LookupValueRow[];
+    },
+  });
+
+  const [nameAr, setNameAr] = useState("");
+  const [nameEn, setNameEn] = useState("");
+  const [iban, setIban] = useState("");
+  const [commission, setCommission] = useState("0");
+  const [maxAmount, setMaxAmount] = useState("");
+  const [isAtm, setIsAtm] = useState(false);
+
+  const resetForm = () => {
+    setNameAr("");
+    setNameEn("");
+    setIban("");
+    setCommission("0");
+    setMaxAmount("");
+    setIsAtm(false);
+  };
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["lookup_values", category.id] });
+
+  const addValue = useMutation({
+    mutationFn: async () => {
+      const trimmed = nameAr.trim();
+      if (!trimmed) throw new Error("اكتب اسم القيمة");
+      const extra: Record<string, unknown> = {};
+      if (isPaymentMethods) {
+        extra.iban = iban || null;
+        extra.commission_percent = Number(commission) || 0;
+        extra.max_amount = maxAmount ? Number(maxAmount) : null;
+        extra.is_atm = isAtm;
+      }
+      const { error } = await supabase.from("lookup_values").insert({
+        category_id: category.id,
+        name_ar: trimmed,
+        name_en: nameEn.trim() || null,
+        extra,
+        sort_order: (values.data?.length ?? 0) * 10 + 10,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      resetForm();
+      toast({ title: "تمت الإضافة" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الإضافة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const toggleDisabled = useMutation({
+    mutationFn: async (row: LookupValueRow) => {
+      const { error } = await supabase
+        .from("lookup_values")
+        .update({ is_disabled: !row.is_disabled })
+        .eq("id", row.id);
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+  });
+
+  const removeValue = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("lookup_values").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+    onError: () =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحذف",
+        description: "قد تكون هذه القيمة مستخدَمة في سجلات موجودة — جرّب تعطيلها بدلًا من حذفها",
+      }),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>قيم قائمة: {category.name_ar}</CardTitle>
+        <CardDescription>
+          {isPaymentMethods
+            ? "لكل طريقة دفع: نسبة العمولة، الحد الأقصى للمبلغ، رقم الآيبان، وهل هي جهاز نقطة بيع (ATM/POS)"
+            : "ترتيب الظهور في كل القوائم المنسدلة المرتبطة بهذه الفئة في النظام يتبع ترتيب الإضافة"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {!readOnly && (
+          <div className="flex flex-wrap items-end gap-3 rounded-md border p-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>الاسم بالعربي</Label>
+              <Input className="w-48" value={nameAr} onChange={(e) => setNameAr(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>الاسم بالإنجليزي (اختياري)</Label>
+              <Input className="w-48" value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
+            </div>
+            {isPaymentMethods && (
+              <>
+                <div className="flex flex-col gap-1.5">
+                  <Label>رقم الآيبان</Label>
+                  <Input className="w-48" value={iban} onChange={(e) => setIban(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>نسبة العمولة %</Label>
+                  <Input type="number" className="w-24" value={commission} onChange={(e) => setCommission(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>الحد الأقصى للمبلغ</Label>
+                  <Input type="number" className="w-32" value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} />
+                </div>
+                <ToggleRow label="جهاز نقطة بيع (ATM/POS)" checked={isAtm} disabled={false} onChange={setIsAtm} />
+              </>
+            )}
+            <Button disabled={addValue.isPending || !nameAr.trim()} onClick={() => addValue.mutate()}>
+              <Plus className="h-4 w-4" />
+              إضافة
+            </Button>
+          </div>
+        )}
+
+        {values.isLoading && <Skeleton className="h-24 w-full" />}
+        {!values.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>الاسم</TableHead>
+                <TableHead>الحالة</TableHead>
+                {isPaymentMethods && <TableHead>تفاصيل</TableHead>}
+                {!readOnly && <TableHead />}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(values.data ?? []).map((row) => {
+                const extra = (row.extra ?? {}) as Record<string, unknown>;
+                return (
+                  <TableRow key={row.id}>
+                    <TableCell>
+                      {row.name_ar}
+                      {row.name_en && <span className="text-muted-foreground"> · {row.name_en}</span>}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={row.is_disabled ? "secondary" : "success"}>
+                        {row.is_disabled ? "معطّلة" : "مفعّلة"}
+                      </Badge>
+                    </TableCell>
+                    {isPaymentMethods && (
+                      <TableCell className="text-xs text-muted-foreground">
+                        {extra.iban ? `آيبان: ${String(extra.iban)}` : ""}
+                        {typeof extra.commission_percent === "number" && extra.commission_percent > 0
+                          ? ` · عمولة ${extra.commission_percent}%`
+                          : ""}
+                        {extra.is_atm ? " · ATM/POS" : ""}
+                      </TableCell>
+                    )}
+                    {!readOnly && (
+                      <TableCell>
+                        <div className="flex gap-1">
+                          <Button size="sm" variant="outline" onClick={() => toggleDisabled.mutate(row)}>
+                            {row.is_disabled ? "تفعيل" : "تعطيل"}
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => removeValue.mutate(row.id)}>
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      </TableCell>
+                    )}
+                  </TableRow>
+                );
+              })}
+              {(values.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={isPaymentMethods ? 4 : 3} className="py-6 text-center text-sm text-muted-foreground">
+                    لا توجد قيم في هذه القائمة بعد.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
         )}
       </CardContent>
     </Card>

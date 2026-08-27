@@ -87,6 +87,7 @@ function ProgramsTab({ organizationId }: { organizationId: string | undefined })
   const { toast } = useToast();
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
+  const [nameEn, setNameEn] = useState("");
   const [hours, setHours] = useState("0");
   const [description, setDescription] = useState("");
 
@@ -96,6 +97,7 @@ function ProgramsTab({ organizationId }: { organizationId: string | undefined })
       const { error } = await supabase.from("training_programs").insert({
         organization_id: organizationId,
         name_ar: name.trim(),
+        name_en: nameEn.trim() || null,
         hours: Number(hours) || 0,
         description: description.trim() || null,
       });
@@ -106,6 +108,7 @@ function ProgramsTab({ organizationId }: { organizationId: string | undefined })
       toast({ title: "تم إنشاء البرنامج" });
       setOpen(false);
       setName("");
+      setNameEn("");
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
@@ -126,8 +129,12 @@ function ProgramsTab({ organizationId }: { organizationId: string | undefined })
             </DialogHeader>
             <div className="grid gap-3">
               <div>
-                <Label>الاسم</Label>
+                <Label>الاسم (عربي)</Label>
                 <Input value={name} onChange={(e) => setName(e.target.value)} />
+              </div>
+              <div>
+                <Label>الاسم (إنجليزي)</Label>
+                <Input value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
               </div>
               <div>
                 <Label>عدد الساعات</Label>
@@ -184,6 +191,7 @@ function EnrollmentsTab({ organizationId }: { organizationId: string | undefined
   const [open, setOpen] = useState(false);
   const [programId, setProgramId] = useState("");
   const [employeeId, setEmployeeId] = useState("");
+  const [note, setNote] = useState("");
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["training-enrollments", organizationId] });
@@ -197,6 +205,7 @@ function EnrollmentsTab({ organizationId }: { organizationId: string | undefined
         organization_id: organizationId,
         program_id: programId,
         employee_id: employeeId,
+        note: note.trim() || null,
       });
       if (error) throw error;
     },
@@ -204,6 +213,7 @@ function EnrollmentsTab({ organizationId }: { organizationId: string | undefined
       invalidate();
       toast({ title: "تم تسجيل الموظف في البرنامج" });
       setOpen(false);
+      setNote("");
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
@@ -263,6 +273,10 @@ function EnrollmentsTab({ organizationId }: { organizationId: string | undefined
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div>
+                <Label>ملاحظة (اختياري)</Label>
+                <Textarea value={note} onChange={(e) => setNote(e.target.value)} />
               </div>
             </div>
             <DialogFooter>

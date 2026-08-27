@@ -6,10 +6,17 @@ import { supabase } from "@/lib/supabase";
 import type {
   AccountBalanceView,
   AccountType,
+  CashRegisterRow,
   ChartOfAccountRow,
+  FinancialVoucherRow,
   JournalEntryRow,
+  TreatmentAgreementWithRelations,
   TrialBalanceView,
+  VoucherType,
 } from "@/lib/database.types";
+import LookupSelect from "@/components/shared/LookupSelect";
+import PatientPicker from "@/components/shared/PatientPicker";
+import ItemPicker from "@/components/shared/ItemPicker";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,12 +52,20 @@ export default function Accounting() {
         <p className="text-sm text-muted-foreground">دفتر أستاذ عام بقيود مزدوجة مصاحب — لا يُعدِّل الفوترة أو السندات الموجودة</p>
       </div>
 
-      <Tabs defaultValue="chart">
+      <Tabs defaultValue="vouchers">
         <TabsList>
+          <TabsTrigger value="vouchers">سندات القبض والصرف</TabsTrigger>
+          <TabsTrigger value="agreements">اتفاقيات العلاج</TabsTrigger>
           <TabsTrigger value="chart">دليل الحسابات</TabsTrigger>
           <TabsTrigger value="entries">القيود اليومية</TabsTrigger>
           <TabsTrigger value="trial-balance">ميزان المراجعة</TabsTrigger>
         </TabsList>
+        <TabsContent value="vouchers" className="mt-4">
+          <VouchersTab />
+        </TabsContent>
+        <TabsContent value="agreements" className="mt-4">
+          <AgreementsTab />
+        </TabsContent>
         <TabsContent value="chart" className="mt-4">
           <ChartOfAccountsTab />
         </TabsContent>
@@ -62,6 +77,700 @@ export default function Accounting() {
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// سندات القبض والصرف — شاشة مستقلة (كانت السندات تُنشأ فقط كأثر جانبي داخل
+// نافذة "تسجيل دفعة" في شاشة الفوترة، بلا أي شاشة بحث/عرض/إنشاء مباشر لها)
+// ---------------------------------------------------------------------------
+const VOUCHER_TYPE_LABELS: Record<VoucherType, string> = {
+  receipt: "سند قبض",
+  expense: "سند صرف",
+  salary: "صرف راتب",
+  bank_deposit: "إيداع بنكي",
+  bank_withdrawal: "سحب بنكي",
+  bank_transfer: "تحويل بين حسابات",
+};
+
+function useVouchers(organizationId: string | undefined, typeFilter: VoucherType | "all") {
+  return useQuery({
+    queryKey: ["financial-vouchers", organizationId, typeFilter],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      let query = supabase
+        .from("financial_vouchers")
+        .select(
+          "id, voucher_number, voucher_type, voucher_date, amount, payee_name, description, patient:patients(name_ar), distributor:distributors(name_ar)",
+        )
+        .eq("organization_id", organizationId)
+        .order("voucher_date", { ascending: false })
+        .limit(100);
+      if (typeFilter !== "all") query = query.eq("voucher_type", typeFilter);
+      const { data, error } = await query;
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
+function VouchersTab() {
+  const { organization } = useOrganizationAccess();
+  const [typeFilter, setTypeFilter] = useState<VoucherType | "all">("all");
+  const [createOpen, setCreateOpen] = useState(false);
+  const [registersOpen, setRegistersOpen] = useState(false);
+  const vouchers = useVouchers(organization?.id, typeFilter);
+
+  const totals: Record<string, number> = (vouchers.data ?? []).reduce(
+    (acc: Record<string, number>, v: any) => {
+      acc[v.voucher_type] = (acc[v.voucher_type] ?? 0) + Number(v.amount);
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {(["all", "receipt", "expense", "salary"] as const).map((t) => (
+          <Button key={t} size="sm" variant={typeFilter === t ? "default" : "outline"} onClick={() => setTypeFilter(t)}>
+            {t === "all" ? "الكل" : VOUCHER_TYPE_LABELS[t]}
+          </Button>
+        ))}
+        <div className="flex-1" />
+        <Button size="sm" variant="outline" onClick={() => setRegistersOpen(true)}>
+          صناديق البيع والعهدة
+        </Button>
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-4 w-4" />
+          سند جديد
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap gap-2 text-sm">
+        {Object.entries(totals).map(([type, amount]) => (
+          <Badge key={type} variant="secondary">
+            {VOUCHER_TYPE_LABELS[type as VoucherType]}: {Number(amount).toLocaleString("ar-SA")} ر.س
+          </Badge>
+        ))}
+      </div>
+
+      <Card>
+        <CardContent className="pt-4">
+          {vouchers.isLoading && <Skeleton className="h-40 w-full" />}
+          {!vouchers.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>#السند</TableHead>
+                  <TableHead>النوع</TableHead>
+                  <TableHead>التاريخ</TableHead>
+                  <TableHead>البيان / يصرف لـ</TableHead>
+                  <TableHead>المريض/المورّد</TableHead>
+                  <TableHead>المبلغ</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(vouchers.data ?? []).map((v: any) => (
+                  <TableRow key={v.id}>
+                    <TableCell className="font-mono text-xs">#{v.voucher_number}</TableCell>
+                    <TableCell>
+                      <Badge variant={v.voucher_type === "receipt" ? "success" : "secondary"}>
+                        {VOUCHER_TYPE_LABELS[v.voucher_type as VoucherType]}
+                      </Badge>
+                    </TableCell>
+                    <TableCell>{new Date(v.voucher_date).toLocaleDateString("ar-SA")}</TableCell>
+                    <TableCell>{v.payee_name ?? v.description ?? "—"}</TableCell>
+                    <TableCell>{v.patient?.name_ar ?? v.distributor?.name_ar ?? "—"}</TableCell>
+                    <TableCell className="font-semibold">{Number(v.amount).toLocaleString("ar-SA")}</TableCell>
+                  </TableRow>
+                ))}
+                {(vouchers.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                      لا توجد سندات مطابقة.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <NewVoucherDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
+      <CashRegistersDialog open={registersOpen} onOpenChange={setRegistersOpen} organizationId={organization?.id} />
+    </div>
+  );
+}
+
+function NewVoucherDialog({
+  open,
+  onOpenChange,
+  organizationId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  organizationId: string | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [voucherType, setVoucherType] = useState<VoucherType>("receipt");
+  const [amount, setAmount] = useState("");
+  const [voucherDate, setVoucherDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [cashRegisterId, setCashRegisterId] = useState("");
+  const [payeeName, setPayeeName] = useState("");
+  const [description, setDescription] = useState("");
+  const [expenseCategoryId, setExpenseCategoryId] = useState("");
+  const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
+  const [bankTransferRef, setBankTransferRef] = useState("");
+  const [transferToAccountId, setTransferToAccountId] = useState("");
+
+  const isBankVoucher = voucherType === "bank_deposit" || voucherType === "bank_withdrawal" || voucherType === "bank_transfer";
+
+  const registers = useQuery({
+    queryKey: ["cash-registers-select", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cash_registers")
+        .select("id, name")
+        .eq("is_disabled", false)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as Pick<CashRegisterRow, "id" | "name">[];
+    },
+  });
+
+  const resetForm = () => {
+    setVoucherType("receipt");
+    setAmount("");
+    setVoucherDate(new Date().toISOString().slice(0, 10));
+    setCashRegisterId("");
+    setPayeeName("");
+    setDescription("");
+    setExpenseCategoryId("");
+    setPatient(null);
+    setBankTransferRef("");
+    setTransferToAccountId("");
+  };
+
+  const createVoucher = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      const { error } = await supabase.from("financial_vouchers").insert({
+        organization_id: organizationId,
+        voucher_type: voucherType,
+        voucher_date: voucherDate,
+        amount: Number(amount) || 0,
+        cash_register_id: cashRegisterId || null,
+        payee_name: payeeName.trim() || null,
+        description: description.trim() || null,
+        expense_category_value_id: voucherType === "expense" ? expenseCategoryId || null : null,
+        patient_id: voucherType === "receipt" ? patient?.id || null : null,
+        bank_transfer_ref: isBankVoucher ? bankTransferRef.trim() || null : null,
+        transfer_to_account_value_id: isBankVoucher ? transferToAccountId || null : null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["financial-vouchers", organizationId] });
+      toast({ title: "تم إنشاء السند" });
+      resetForm();
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر إنشاء السند",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>سند جديد</DialogTitle>
+          <DialogDescription>سند القبض يُسجَّل غالبًا من شاشة الفوترة عند استلام دفعة — هذه الشاشة لأي سند مستقل</DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Label>نوع السند</Label>
+            <Select value={voucherType} onValueChange={(v) => setVoucherType(v as VoucherType)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(VOUCHER_TYPE_LABELS).map(([key, label]) => (
+                  <SelectItem key={key} value={key}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>التاريخ</Label>
+            <Input type="date" value={voucherDate} onChange={(e) => setVoucherDate(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>المبلغ *</Label>
+            <Input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>{isBankVoucher ? "الصندوق/الحساب المصدر" : "الصندوق"}</Label>
+            <Select value={cashRegisterId} onValueChange={setCashRegisterId}>
+              <SelectTrigger>
+                <SelectValue placeholder="اختر صندوقًا" />
+              </SelectTrigger>
+              <SelectContent>
+                {(registers.data ?? []).map((r) => (
+                  <SelectItem key={r.id} value={r.id}>
+                    {r.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {voucherType === "expense" && (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <Label>يصرف لـ</Label>
+                <Input value={payeeName} onChange={(e) => setPayeeName(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>فئة المصروف</Label>
+                <LookupSelect categoryKey="expense_categories" value={expenseCategoryId} onChange={setExpenseCategoryId} />
+              </div>
+            </>
+          )}
+          {voucherType === "receipt" && (
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <Label>المريض (اختياري)</Label>
+              <PatientPicker onSelect={(p) => setPatient({ id: p.id, name_ar: p.name_ar })} />
+              {patient && <p className="text-xs text-muted-foreground">المحدَّد: {patient.name_ar}</p>}
+            </div>
+          )}
+          {isBankVoucher && (
+            <>
+              <div className="flex flex-col gap-1.5">
+                <Label>رقم مرجع التحويل</Label>
+                <Input value={bankTransferRef} onChange={(e) => setBankTransferRef(e.target.value)} />
+              </div>
+              {voucherType === "bank_transfer" && (
+                <div className="flex flex-col gap-1.5">
+                  <Label>الحساب المحوَّل إليه</Label>
+                  <LookupSelect categoryKey="bank_accounts" value={transferToAccountId} onChange={setTransferToAccountId} />
+                </div>
+              )}
+            </>
+          )}
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label>البيان</Label>
+            <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button disabled={!amount || createVoucher.isPending} onClick={() => createVoucher.mutate()}>
+            {createVoucher.isPending ? "جارٍ الحفظ..." : "حفظ السند"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CashRegistersDialog({
+  open,
+  onOpenChange,
+  organizationId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  organizationId: string | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [name, setName] = useState("");
+  const [isDoctorCustody, setIsDoctorCustody] = useState(false);
+  const [assignedDoctorId, setAssignedDoctorId] = useState("");
+
+  const registers = useQuery({
+    queryKey: ["cash-registers", organizationId],
+    enabled: Boolean(organizationId) && open,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cash_registers")
+        .select("*, doctor:doctors(name_ar)")
+        .order("name");
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+  const doctors = useQuery({
+    queryKey: ["doctors-select-registers", organizationId],
+    enabled: Boolean(organizationId) && open && isDoctorCustody,
+    queryFn: async () => {
+      const { data, error } = await supabase.from("doctors").select("id, name_ar").order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
+
+  const addRegister = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      const { error } = await supabase.from("cash_registers").insert({
+        organization_id: organizationId,
+        name: name.trim(),
+        is_doctor_custody: isDoctorCustody,
+        assigned_doctor_id: isDoctorCustody ? assignedDoctorId || null : null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["cash-registers", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["cash-registers-select", organizationId] });
+      toast({ title: "تمت الإضافة" });
+      setName("");
+      setIsDoctorCustody(false);
+      setAssignedDoctorId("");
+    },
+  });
+
+  const toggleDisabled = useMutation({
+    mutationFn: async (register: CashRegisterRow) => {
+      const { error } = await supabase
+        .from("cash_registers")
+        .update({ is_disabled: !register.is_disabled })
+        .eq("id", register.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["cash-registers", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["cash-registers-select", organizationId] });
+    },
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>صناديق البيع والعهدة</DialogTitle>
+          <DialogDescription>مثل "صندوق المجمع" أو "عهدة الدكتور" — تُختار عند تسجيل أي سند</DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>اسم الصندوق</Label>
+            <Input className="w-40" value={name} onChange={(e) => setName(e.target.value)} />
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={isDoctorCustody} onChange={(e) => setIsDoctorCustody(e.target.checked)} />
+            عهدة طبيب
+          </label>
+          {isDoctorCustody && (
+            <Select value={assignedDoctorId} onValueChange={setAssignedDoctorId}>
+              <SelectTrigger className="w-40">
+                <SelectValue placeholder="الطبيب" />
+              </SelectTrigger>
+              <SelectContent>
+                {(doctors.data ?? []).map((d) => (
+                  <SelectItem key={d.id} value={d.id}>
+                    د. {d.name_ar}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button size="sm" disabled={!name.trim() || addRegister.isPending} onClick={() => addRegister.mutate()}>
+            <Plus className="h-4 w-4" />
+            إضافة
+          </Button>
+        </div>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>الاسم</TableHead>
+              <TableHead>النوع</TableHead>
+              <TableHead>الحالة</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(registers.data ?? []).map((r: any) => (
+              <TableRow key={r.id}>
+                <TableCell>{r.name}</TableCell>
+                <TableCell>{r.is_doctor_custody ? `عهدة د. ${r.doctor?.name_ar ?? "—"}` : "صندوق عام"}</TableCell>
+                <TableCell>
+                  <Badge variant={r.is_disabled ? "secondary" : "success"}>{r.is_disabled ? "معطّل" : "نشط"}</Badge>
+                </TableCell>
+                <TableCell>
+                  <Button size="sm" variant="outline" onClick={() => toggleDisabled.mutate(r)}>
+                    {r.is_disabled ? "تفعيل" : "تعطيل"}
+                  </Button>
+                </TableCell>
+              </TableRow>
+            ))}
+            {(registers.data ?? []).length === 0 && (
+              <TableRow>
+                <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
+                  لا توجد صناديق بعد.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// اتفاقيات العلاج (Treatment Agreements) — عقد علاج بعدة بنود وسداد تراكمي عبر
+// فواتير مرتبطة بالاتفاقية؛ invoiced_amount/remaining_amount محسوبة من القاعدة
+// ---------------------------------------------------------------------------
+function useAgreements(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["treatment-agreements", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("treatment_agreements")
+        .select(
+          "id, agreement_number, agreement_date, total_amount, invoiced_amount, remaining_amount, is_disabled, note, patient:patients(id, name_ar, file_number), doctor:doctors(id, name_ar), clinic:clinics(id, name)",
+        )
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return (data ?? []) as unknown as TreatmentAgreementWithRelations[];
+    },
+  });
+}
+
+function AgreementsTab() {
+  const { organization } = useOrganizationAccess();
+  const [createOpen, setCreateOpen] = useState(false);
+  const agreements = useAgreements(organization?.id);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">عقود علاج متعددة البنود بسداد تراكمي عبر فواتير مرتبطة</p>
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-4 w-4" />
+          اتفاقية جديدة
+        </Button>
+      </div>
+
+      <Card>
+        <CardContent className="pt-4">
+          {agreements.isLoading && <Skeleton className="h-40 w-full" />}
+          {!agreements.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>#الاتفاقية</TableHead>
+                  <TableHead>المريض</TableHead>
+                  <TableHead>الطبيب</TableHead>
+                  <TableHead>التاريخ</TableHead>
+                  <TableHead>الإجمالي</TableHead>
+                  <TableHead>المفوتر</TableHead>
+                  <TableHead>المتبقي</TableHead>
+                  <TableHead>الحالة</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(agreements.data ?? []).map((a) => (
+                  <TableRow key={a.id}>
+                    <TableCell className="font-mono text-xs">#{a.agreement_number}</TableCell>
+                    <TableCell>{a.patient?.name_ar ?? "—"}</TableCell>
+                    <TableCell>{a.doctor?.name_ar ?? "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {new Date(a.agreement_date).toLocaleDateString("ar-SA")}
+                    </TableCell>
+                    <TableCell>{Number(a.total_amount).toLocaleString("ar-SA")}</TableCell>
+                    <TableCell>{Number(a.invoiced_amount).toLocaleString("ar-SA")}</TableCell>
+                    <TableCell className={Number(a.remaining_amount) > 0 ? "text-rose-600" : ""}>
+                      {Number(a.remaining_amount).toLocaleString("ar-SA")}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={a.is_disabled ? "secondary" : "success"}>{a.is_disabled ? "معطّلة" : "نشطة"}</Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(agreements.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                      لا توجد اتفاقيات علاج بعد.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <NewAgreementDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
+    </div>
+  );
+}
+
+type AgreementLine = {
+  key: string;
+  item_id: string | null;
+  description: string;
+  unit_price: number;
+  qty: number;
+  discount_percent: number;
+};
+
+function NewAgreementDialog({
+  open,
+  onOpenChange,
+  organizationId,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  organizationId: string | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
+  const [note, setNote] = useState("");
+  const [lines, setLines] = useState<AgreementLine[]>([]);
+
+  const addLine = (item: { id: string; name_ar: string; price: number }) => {
+    setLines((prev) => [
+      ...prev,
+      { key: `${item.id}-${Date.now()}`, item_id: item.id, description: item.name_ar, unit_price: Number(item.price), qty: 1, discount_percent: 0 },
+    ]);
+  };
+  const updateLine = (key: string, patch: Partial<AgreementLine>) =>
+    setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
+  const removeLine = (key: string) => setLines((prev) => prev.filter((l) => l.key !== key));
+
+  const computed = lines.map((l) => {
+    const subtotal = l.unit_price * l.qty;
+    const net = subtotal - (subtotal * l.discount_percent) / 100;
+    return { ...l, net };
+  });
+  const total = computed.reduce((sum, l) => sum + l.net, 0);
+
+  const createAgreement = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد منشأة نشطة");
+      if (!patient) throw new Error("اختر مريضًا");
+      if (lines.length === 0) throw new Error("أضف بندًا واحدًا على الأقل");
+
+      const { data: agreement, error: agreementError } = await supabase
+        .from("treatment_agreements")
+        .insert({ organization_id: organizationId, patient_id: patient.id, total_amount: total, note: note.trim() || null })
+        .select("id")
+        .single();
+      if (agreementError) throw agreementError;
+
+      const itemsPayload = computed.map((l) => ({
+        agreement_id: agreement.id,
+        item_id: l.item_id,
+        description: l.description,
+        qty: l.qty,
+        unit_price: l.unit_price,
+        discount_percent: l.discount_percent,
+        net_amount: l.net,
+      }));
+      const { error: itemsError } = await supabase.from("treatment_agreement_items").insert(itemsPayload);
+      if (itemsError) throw itemsError;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["treatment-agreements"] });
+      toast({ title: "تم إنشاء اتفاقية العلاج" });
+      setPatient(null);
+      setNote("");
+      setLines([]);
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر إنشاء الاتفاقية",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>اتفاقية علاج جديدة</DialogTitle>
+          <DialogDescription>يمكن فوترة بنود الاتفاقية تدريجيًا على أكثر من فاتورة لاحقًا</DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>المريض</Label>
+            <PatientPicker onSelect={(p) => setPatient({ id: p.id, name_ar: p.name_ar })} />
+            {patient && <p className="text-xs text-emerald-700">المحدد: {patient.name_ar}</p>}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>إضافة بند</Label>
+            <ItemPicker onSelect={addLine} />
+          </div>
+
+          <div className="flex flex-col gap-2 rounded-lg border p-2">
+            {computed.length === 0 && <p className="py-3 text-center text-xs text-muted-foreground">لم تُضف بنود بعد.</p>}
+            {computed.map((line) => (
+              <div key={line.key} className="grid grid-cols-12 items-center gap-2 text-sm">
+                <span className="col-span-4 truncate">{line.description}</span>
+                <Input
+                  className="col-span-2 h-8"
+                  type="number"
+                  value={line.unit_price}
+                  onChange={(e) => updateLine(line.key, { unit_price: Number(e.target.value) })}
+                />
+                <Input
+                  className="col-span-2 h-8"
+                  type="number"
+                  min={1}
+                  value={line.qty}
+                  onChange={(e) => updateLine(line.key, { qty: Number(e.target.value) })}
+                />
+                <Input
+                  className="col-span-2 h-8"
+                  type="number"
+                  min={0}
+                  max={100}
+                  value={line.discount_percent}
+                  onChange={(e) => updateLine(line.key, { discount_percent: Number(e.target.value) })}
+                  title="نسبة الخصم %"
+                />
+                <span className="col-span-1 text-left text-xs font-semibold">{line.net.toFixed(2)}</span>
+                <Button variant="ghost" size="sm" className="col-span-1" onClick={() => removeLine(line.key)}>
+                  حذف
+                </Button>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>ملاحظة</Label>
+            <Input value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+
+          <div className="text-end text-base font-bold">الإجمالي: {total.toFixed(2)} ر.س</div>
+        </div>
+
+        <DialogFooter>
+          <Button disabled={createAgreement.isPending || lines.length === 0} onClick={() => createAgreement.mutate()}>
+            <Plus className="h-4 w-4" />
+            {createAgreement.isPending ? "جارٍ الحفظ..." : "حفظ الاتفاقية"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

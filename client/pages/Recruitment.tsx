@@ -195,7 +195,10 @@ function CandidatesTab({ organizationId }: { organizationId: string | undefined 
   const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
+  const [email, setEmail] = useState("");
+  const [source, setSource] = useState("");
   const [jobPostingId, setJobPostingId] = useState("");
+  const [interviewsFor, setInterviewsFor] = useState<{ id: string; name_ar: string } | null>(null);
 
   const create = useMutation({
     mutationFn: async () => {
@@ -204,6 +207,8 @@ function CandidatesTab({ organizationId }: { organizationId: string | undefined 
         organization_id: organizationId,
         name_ar: name.trim(),
         mobile: mobile.trim() || null,
+        email: email.trim() || null,
+        source: source.trim() || null,
         job_posting_id: jobPostingId || null,
       });
       if (error) throw error;
@@ -214,6 +219,8 @@ function CandidatesTab({ organizationId }: { organizationId: string | undefined 
       setOpen(false);
       setName("");
       setMobile("");
+      setEmail("");
+      setSource("");
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
@@ -263,6 +270,14 @@ function CandidatesTab({ organizationId }: { organizationId: string | undefined 
                 <Input value={mobile} onChange={(e) => setMobile(e.target.value)} />
               </div>
               <div>
+                <Label>البريد الإلكتروني</Label>
+                <Input value={email} onChange={(e) => setEmail(e.target.value)} />
+              </div>
+              <div>
+                <Label>مصدر الترشيح</Label>
+                <Input value={source} onChange={(e) => setSource(e.target.value)} placeholder="توصية، موقع توظيف، ..." />
+              </div>
+              <div>
                 <Label>الوظيفة المتقدَّم لها (اختياري)</Label>
                 <Select value={jobPostingId} onValueChange={setJobPostingId}>
                   <SelectTrigger>
@@ -294,6 +309,7 @@ function CandidatesTab({ organizationId }: { organizationId: string | undefined 
               <TableHead>الوظيفة</TableHead>
               <TableHead>الجوال</TableHead>
               <TableHead>الحالة</TableHead>
+              <TableHead>إجراءات</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -319,11 +335,16 @@ function CandidatesTab({ organizationId }: { organizationId: string | undefined 
                     </SelectContent>
                   </Select>
                 </TableCell>
+                <TableCell>
+                  <Button size="sm" variant="outline" onClick={() => setInterviewsFor({ id: c.id, name_ar: c.name_ar })}>
+                    المقابلات
+                  </Button>
+                </TableCell>
               </TableRow>
             ))}
             {(candidates.data ?? []).length === 0 && (
               <TableRow>
-                <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={5} className="py-6 text-center text-sm text-muted-foreground">
                   لا يوجد مرشحون بعد.
                 </TableCell>
               </TableRow>
@@ -331,7 +352,154 @@ function CandidatesTab({ organizationId }: { organizationId: string | undefined 
           </TableBody>
         </Table>
       </CardContent>
+      <CandidateInterviewsDialog
+        candidate={interviewsFor}
+        onOpenChange={() => setInterviewsFor(null)}
+        organizationId={organizationId}
+      />
     </Card>
+  );
+}
+
+const INTERVIEW_STAGE_LABELS: Record<string, string> = { phone_screen: "فحص هاتفي", technical: "فنية", final: "نهائية" };
+const INTERVIEW_OUTCOME_LABELS: Record<string, string> = { pending: "قيد الانتظار", passed: "نجح", failed: "لم ينجح" };
+
+function CandidateInterviewsDialog({
+  candidate,
+  onOpenChange,
+  organizationId,
+}: {
+  candidate: { id: string; name_ar: string } | null;
+  onOpenChange: () => void;
+  organizationId: string | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [stage, setStage] = useState("phone_screen");
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [interviewerName, setInterviewerName] = useState("");
+  const [notes, setNotes] = useState("");
+
+  const interviews = useQuery({
+    queryKey: ["candidate-interviews", candidate?.id],
+    enabled: Boolean(candidate?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("candidate_interviews")
+        .select("*")
+        .eq("candidate_id", candidate!.id)
+        .order("scheduled_at", { ascending: true });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["candidate-interviews", candidate?.id] });
+
+  const createInterview = useMutation({
+    mutationFn: async () => {
+      if (!organizationId || !candidate) throw new Error("بيانات غير مكتملة");
+      const { error } = await supabase.from("candidate_interviews").insert({
+        organization_id: organizationId,
+        candidate_id: candidate.id,
+        stage,
+        scheduled_at: scheduledAt || null,
+        interviewer_name: interviewerName.trim() || null,
+        notes: notes.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "تم جدولة المقابلة" });
+      setScheduledAt("");
+      setInterviewerName("");
+      setNotes("");
+    },
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
+  });
+
+  const setOutcome = useMutation({
+    mutationFn: async ({ id, outcome }: { id: string; outcome: string }) => {
+      const { error } = await supabase.from("candidate_interviews").update({ outcome }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+  });
+
+  return (
+    <Dialog open={Boolean(candidate)} onOpenChange={(next) => !next && onOpenChange()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>مقابلات — {candidate?.name_ar}</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-2">
+          {(interviews.data ?? []).map((iv: any) => (
+            <div key={iv.id} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
+              <div>
+                <p className="font-medium">
+                  {INTERVIEW_STAGE_LABELS[iv.stage] ?? iv.stage}
+                  {iv.interviewer_name && ` · ${iv.interviewer_name}`}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {iv.scheduled_at ? new Date(iv.scheduled_at).toLocaleString("ar-SA") : "بلا موعد محدد"}
+                  {iv.notes && ` · ${iv.notes}`}
+                </p>
+              </div>
+              <Select value={iv.outcome} onValueChange={(v) => setOutcome.mutate({ id: iv.id, outcome: v })}>
+                <SelectTrigger className="h-8 w-28 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(INTERVIEW_OUTCOME_LABELS).map(([value, label]) => (
+                    <SelectItem key={value} value={value}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ))}
+          {(interviews.data ?? []).length === 0 && (
+            <p className="py-4 text-center text-xs text-muted-foreground">لا توجد مقابلات مجدولة بعد.</p>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-2 border-t pt-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>المرحلة</Label>
+            <Select value={stage} onValueChange={setStage}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(INTERVIEW_STAGE_LABELS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الموعد</Label>
+            <Input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>اسم المُقابِل</Label>
+            <Input value={interviewerName} onChange={(e) => setInterviewerName(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>ملاحظات</Label>
+            <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button disabled={createInterview.isPending} onClick={() => createInterview.mutate()}>
+            {createInterview.isPending ? "جارٍ الحفظ..." : "جدولة مقابلة"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -193,6 +194,7 @@ function ReviewsTab({ organizationId }: { organizationId: string | undefined }) 
   const [open, setOpen] = useState(false);
   const [employeeId, setEmployeeId] = useState("");
   const [scores, setScores] = useState<Record<string, number>>({});
+  const [comments, setComments] = useState("");
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["perf-reviews", organizationId, cycleId] });
 
@@ -201,7 +203,7 @@ function ReviewsTab({ organizationId }: { organizationId: string | undefined }) 
       if (!organizationId || !cycleId || !employeeId) throw new Error("اختر الدورة والموظف");
       const { data, error } = await supabase
         .from("performance_reviews")
-        .insert({ organization_id: organizationId, cycle_id: cycleId, employee_id: employeeId })
+        .insert({ organization_id: organizationId, cycle_id: cycleId, employee_id: employeeId, comments: comments.trim() || null })
         .select("id")
         .single();
       if (error) throw error;
@@ -218,8 +220,20 @@ function ReviewsTab({ organizationId }: { organizationId: string | undefined }) 
       toast({ title: "تم حفظ التقييم" });
       setOpen(false);
       setScores({});
+      setComments("");
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
+  });
+
+  const submitReview = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("performance_reviews").update({ status: "submitted" }).eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "تم إرسال التقييم" });
+    },
   });
 
   return (
@@ -291,6 +305,10 @@ function ReviewsTab({ organizationId }: { organizationId: string | undefined }) 
                     </div>
                   ))}
                 </div>
+                <div>
+                  <Label>ملاحظات المقيّم (اختياري)</Label>
+                  <Textarea value={comments} onChange={(e) => setComments(e.target.value)} />
+                </div>
               </div>
               <DialogFooter>
                 <Button onClick={() => createReview.mutate()} disabled={createReview.isPending}>
@@ -310,23 +328,34 @@ function ReviewsTab({ organizationId }: { organizationId: string | undefined }) 
                 <TableHead>الموظف</TableHead>
                 <TableHead>الدرجة الكلية</TableHead>
                 <TableHead>الحالة</TableHead>
+                <TableHead>إجراءات</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {(reviews.data ?? []).map((r: any) => (
                 <TableRow key={r.id}>
-                  <TableCell className="font-medium">{r.employees?.name_ar ?? "—"}</TableCell>
+                  <TableCell className="font-medium">
+                    {r.employees?.name_ar ?? "—"}
+                    {r.comments && <p className="text-xs text-muted-foreground">{r.comments}</p>}
+                  </TableCell>
                   <TableCell>
                     <Badge variant={r.overall_score >= 4 ? "success" : r.overall_score >= 2.5 ? "default" : "destructive"}>
                       {r.overall_score} / 5
                     </Badge>
                   </TableCell>
                   <TableCell>{r.status === "submitted" ? "مُرسَل" : "مسودة"}</TableCell>
+                  <TableCell>
+                    {r.status !== "submitted" && (
+                      <Button size="sm" variant="outline" onClick={() => submitReview.mutate(r.id)}>
+                        إرسال
+                      </Button>
+                    )}
+                  </TableCell>
                 </TableRow>
               ))}
               {(reviews.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
                     لا توجد تقييمات في هذه الدورة بعد.
                   </TableCell>
                 </TableRow>
@@ -334,6 +363,95 @@ function ReviewsTab({ organizationId }: { organizationId: string | undefined }) 
             </TableBody>
           </Table>
         )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function CriteriaTab({ organizationId }: { organizationId: string | undefined }) {
+  const criteria = useCriteria(organizationId);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [nameAr, setNameAr] = useState("");
+  const [weight, setWeight] = useState("1");
+
+  const create = useMutation({
+    mutationFn: async () => {
+      if (!organizationId || !nameAr.trim()) throw new Error("اسم المعيار مطلوب");
+      const { error } = await supabase
+        .from("performance_review_criteria")
+        .insert({ organization_id: organizationId, name_ar: nameAr.trim(), weight: Number(weight) || 1 });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["perf-criteria", organizationId] });
+      toast({ title: "تمت إضافة المعيار" });
+      setOpen(false);
+      setNameAr("");
+      setWeight("1");
+    },
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
+  });
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-center justify-between">
+        <div>
+          <CardTitle className="text-base">معايير التقييم</CardTitle>
+          <CardDescription>المعايير النظامية العامة متاحة لكل المؤسسات — يمكن إضافة معايير خاصة بمؤسستك بوزن مختلف</CardDescription>
+        </div>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger asChild>
+            <Button size="sm">
+              <Plus className="ms-1 h-4 w-4" /> معيار جديد
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>معيار تقييم جديد</DialogTitle>
+            </DialogHeader>
+            <div className="grid gap-3">
+              <div>
+                <Label>الاسم</Label>
+                <Input value={nameAr} onChange={(e) => setNameAr(e.target.value)} />
+              </div>
+              <div>
+                <Label>الوزن</Label>
+                <Input type="number" value={weight} onChange={(e) => setWeight(e.target.value)} />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button onClick={() => create.mutate()} disabled={create.isPending}>
+                حفظ
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>الاسم</TableHead>
+              <TableHead>الوزن</TableHead>
+              <TableHead>النطاق</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(criteria.data ?? []).map((c) => (
+              <TableRow key={c.id}>
+                <TableCell className="font-medium">{c.name_ar}</TableCell>
+                <TableCell>{c.weight}</TableCell>
+                <TableCell>
+                  <Badge variant={c.organization_id === null ? "secondary" : "outline"}>
+                    {c.organization_id === null ? "نظامي عام" : "خاص بمؤسستك"}
+                  </Badge>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
       </CardContent>
     </Card>
   );
@@ -353,12 +471,16 @@ export default function Performance() {
         <TabsList>
           <TabsTrigger value="cycles">الدورات</TabsTrigger>
           <TabsTrigger value="reviews">التقييمات</TabsTrigger>
+          <TabsTrigger value="criteria">المعايير</TabsTrigger>
         </TabsList>
         <TabsContent value="cycles" className="mt-4">
           <CyclesTab organizationId={organization?.id} />
         </TabsContent>
         <TabsContent value="reviews" className="mt-4">
           <ReviewsTab organizationId={organization?.id} />
+        </TabsContent>
+        <TabsContent value="criteria" className="mt-4">
+          <CriteriaTab organizationId={organization?.id} />
         </TabsContent>
       </Tabs>
     </div>

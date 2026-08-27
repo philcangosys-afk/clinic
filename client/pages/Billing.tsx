@@ -43,19 +43,20 @@ const STATUS_BADGE: Record<SalesInvoiceStatus, string> = {
   void: "bg-slate-100 text-slate-500",
 };
 
-function useInvoices(organizationId: string | undefined, status: string) {
+function useInvoices(organizationId: string | undefined, status: string, quotesOnly: boolean) {
   return useQuery({
-    queryKey: ["invoices-list", organizationId, status],
+    queryKey: ["invoices-list", organizationId, status, quotesOnly],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       let query = supabase
         .from("sales_invoices")
         .select(
-          "id, invoice_number, created_at, status, net_amount, paid_amount, remaining_amount, external_customer_name, patient:patients(id, name_ar, file_number)",
+          "id, invoice_number, created_at, status, is_temporary, net_amount, paid_amount, remaining_amount, external_customer_name, patient:patients(id, name_ar, file_number)",
         )
         .order("created_at", { ascending: false })
         .limit(50);
       if (status !== "all") query = query.eq("status", status);
+      query = query.eq("is_temporary", quotesOnly);
       const { data, error } = await query;
       if (error) throw error;
       return (data ?? []) as unknown as SalesInvoiceWithPatient[];
@@ -66,9 +67,29 @@ function useInvoices(organizationId: string | undefined, status: string) {
 export default function Billing() {
   const { organization } = useOrganizationAccess();
   const [statusFilter, setStatusFilter] = useState("all");
+  const [quotesOnly, setQuotesOnly] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState<SalesInvoiceWithPatient | null>(null);
-  const invoices = useInvoices(organization?.id, statusFilter);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const invoices = useInvoices(organization?.id, statusFilter, quotesOnly);
+
+  const convertToInvoice = useMutation({
+    mutationFn: async (invoiceId: string) => {
+      const { error } = await supabase.from("sales_invoices").update({ is_temporary: false }).eq("id", invoiceId);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+      toast({ title: "تم تحويل عرض السعر إلى فاتورة" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التحويل",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
 
   const totals = useMemo(() => {
     const rows = invoices.data ?? [];
@@ -84,32 +105,42 @@ export default function Billing() {
         <div>
           <h1 className="text-2xl font-bold">الفوترة والمدفوعات</h1>
           <p className="text-sm text-muted-foreground">
-            إجمالي الفواتير: {totals.net.toLocaleString("ar-SA")} ر.س · متبقي: {totals.remaining.toLocaleString("ar-SA")} ر.س
+            إجمالي {quotesOnly ? "عروض الأسعار" : "الفواتير"}: {totals.net.toLocaleString("ar-SA")} ر.س · متبقي: {totals.remaining.toLocaleString("ar-SA")} ر.س
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-44">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">كل الحالات</SelectItem>
-              <SelectItem value="unpaid">غير مدفوعة</SelectItem>
-              <SelectItem value="partial">مدفوعة جزئيًا</SelectItem>
-              <SelectItem value="paid">مدفوعة بالكامل</SelectItem>
-            </SelectContent>
-          </Select>
+          <div className="flex rounded-lg border p-0.5">
+            <Button size="sm" variant={!quotesOnly ? "default" : "ghost"} onClick={() => setQuotesOnly(false)}>
+              الفواتير
+            </Button>
+            <Button size="sm" variant={quotesOnly ? "default" : "ghost"} onClick={() => setQuotesOnly(true)}>
+              عروض الأسعار
+            </Button>
+          </div>
+          {!quotesOnly && (
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">كل الحالات</SelectItem>
+                <SelectItem value="unpaid">غير مدفوعة</SelectItem>
+                <SelectItem value="partial">مدفوعة جزئيًا</SelectItem>
+                <SelectItem value="paid">مدفوعة بالكامل</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
           <Button onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" />
-            فاتورة جديدة
+            {quotesOnly ? "عرض سعر جديد" : "فاتورة جديدة"}
           </Button>
         </div>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>الفواتير</CardTitle>
-          <CardDescription>آخر 50 فاتورة</CardDescription>
+          <CardTitle>{quotesOnly ? "عروض الأسعار" : "الفواتير"}</CardTitle>
+          <CardDescription>آخر 50 {quotesOnly ? "عرض سعر" : "فاتورة"}</CardDescription>
         </CardHeader>
         <CardContent>
           {invoices.isLoading && (
@@ -145,14 +176,31 @@ export default function Billing() {
                       {Number(invoice.remaining_amount).toLocaleString("ar-SA")}
                     </TableCell>
                     <TableCell>
-                      <Badge className={STATUS_BADGE[invoice.status]}>{STATUS_LABELS[invoice.status]}</Badge>
+                      {invoice.is_temporary ? (
+                        <Badge className="bg-indigo-100 text-indigo-700">عرض سعر</Badge>
+                      ) : (
+                        <Badge className={STATUS_BADGE[invoice.status]}>{STATUS_LABELS[invoice.status]}</Badge>
+                      )}
                     </TableCell>
-                    <TableCell>
-                      {invoice.status !== "paid" && invoice.status !== "void" && (
-                        <Button size="sm" variant="outline" onClick={() => setPaymentTarget(invoice)}>
-                          <WalletCards className="h-3.5 w-3.5" />
-                          تسجيل دفعة
+                    <TableCell className="flex items-center gap-2">
+                      {invoice.is_temporary ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={convertToInvoice.isPending}
+                          onClick={() => convertToInvoice.mutate(invoice.id)}
+                        >
+                          <Receipt className="h-3.5 w-3.5" />
+                          تحويل لفاتورة
                         </Button>
+                      ) : (
+                        invoice.status !== "paid" &&
+                        invoice.status !== "void" && (
+                          <Button size="sm" variant="outline" onClick={() => setPaymentTarget(invoice)}>
+                            <WalletCards className="h-3.5 w-3.5" />
+                            تسجيل دفعة
+                          </Button>
+                        )
                       )}
                     </TableCell>
                   </TableRow>
@@ -170,7 +218,13 @@ export default function Billing() {
         </CardContent>
       </Card>
 
-      <NewInvoiceDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} vatRate={organization?.default_vat_rate ?? 15} />
+      <NewInvoiceDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        organizationId={organization?.id}
+        vatRate={organization?.default_vat_rate ?? 15}
+        isQuote={quotesOnly}
+      />
       <RecordPaymentDialog invoice={paymentTarget} onOpenChange={() => setPaymentTarget(null)} organizationId={organization?.id} />
     </div>
   );
@@ -191,11 +245,13 @@ function NewInvoiceDialog({
   onOpenChange,
   organizationId,
   vatRate,
+  isQuote,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   organizationId: string | undefined;
   vatRate: number;
+  isQuote?: boolean;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -255,6 +311,7 @@ function NewInvoiceDialog({
           discount_amount: totals.discount,
           vat_amount: totals.vat,
           net_amount: totals.net,
+          is_temporary: Boolean(isQuote),
         })
         .select("id")
         .single();
@@ -278,7 +335,7 @@ function NewInvoiceDialog({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
-      toast({ title: "تم إنشاء الفاتورة" });
+      toast({ title: isQuote ? "تم إنشاء عرض السعر" : "تم إنشاء الفاتورة" });
       setPatient(null);
       setExternalName("");
       setLines([]);
@@ -296,8 +353,12 @@ function NewInvoiceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>فاتورة مبيعات جديدة</DialogTitle>
-          <DialogDescription>الضريبة محسوبة تلقائيًا بنسبة {vatRate}% (إعداد المؤسسة الافتراضي)</DialogDescription>
+          <DialogTitle>{isQuote ? "عرض سعر جديد" : "فاتورة مبيعات جديدة"}</DialogTitle>
+          <DialogDescription>
+            {isQuote
+              ? "عرض السعر لا يُعد فاتورة فعلية ولا يؤثر على المخزون أو السندات حتى يتم تحويله."
+              : `الضريبة محسوبة تلقائيًا بنسبة ${vatRate}% (إعداد المؤسسة الافتراضي)`}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-3">

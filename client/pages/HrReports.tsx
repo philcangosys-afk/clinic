@@ -4,10 +4,12 @@ import { BarChart3, Users, CalendarCheck2, FileCheck2, UserPlus, Gauge, Graduati
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type {
+  EmployeeTrainingSummaryView,
   HrAttendanceMonthlyView,
   HrDashboardSummaryView,
   HrLatestPerformanceView,
   LeaveBalanceCurrentYearView,
+  RecruitmentPipelineView,
 } from "@/lib/database.types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -93,6 +95,38 @@ function useExpiringContracts(organizationId: string | undefined) {
         .order("end_date");
       if (error) throw error;
       return data ?? [];
+    },
+  });
+}
+
+function useRecruitmentPipeline(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["hr-recruitment-pipeline", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_recruitment_pipeline")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("job_title");
+      if (error) throw error;
+      return (data as RecruitmentPipelineView[]) ?? [];
+    },
+  });
+}
+
+function useTrainingSummary(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["hr-training-summary", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_employee_training_summary")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("employee_name");
+      if (error) throw error;
+      return (data as EmployeeTrainingSummaryView[]) ?? [];
     },
   });
 }
@@ -299,6 +333,99 @@ function PerformanceReportTab({ organizationId }: { organizationId: string | und
   );
 }
 
+function RecruitmentReportTab({ organizationId }: { organizationId: string | undefined }) {
+  const pipeline = useRecruitmentPipeline(organizationId);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">تقرير مسار التوظيف</CardTitle>
+        <CardDescription>عدد المرشحين في كل حالة لكل وظيفة شاغرة — نفس عرض لوحة التوظيف</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>الوظيفة</TableHead>
+              <TableHead>الحالة</TableHead>
+              <TableHead>مُتقدِّم</TableHead>
+              <TableHead>فحص أولي</TableHead>
+              <TableHead>مقابلة</TableHead>
+              <TableHead>عرض</TableHead>
+              <TableHead>تعيين</TableHead>
+              <TableHead>مرفوض</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(pipeline.data ?? []).map((p) => (
+              <TableRow key={p.job_posting_id}>
+                <TableCell className="font-medium">{p.job_title}</TableCell>
+                <TableCell>
+                  <Badge variant={p.job_status === "open" ? "success" : "secondary"}>
+                    {p.job_status === "open" ? "مفتوحة" : p.job_status === "on_hold" ? "معلّقة" : "مغلقة"}
+                  </Badge>
+                </TableCell>
+                <TableCell>{p.applied_count}</TableCell>
+                <TableCell>{p.screening_count}</TableCell>
+                <TableCell>{p.interview_count}</TableCell>
+                <TableCell>{p.offer_count}</TableCell>
+                <TableCell className="text-emerald-600">{p.hired_count}</TableCell>
+                <TableCell className="text-red-600">{p.rejected_count}</TableCell>
+              </TableRow>
+            ))}
+            {(pipeline.data ?? []).length === 0 && (
+              <TableRow>
+                <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
+                  لا توجد وظائف شاغرة بعد.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function TrainingReportTab({ organizationId }: { organizationId: string | undefined }) {
+  const summary = useTrainingSummary(organizationId);
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">تقرير التدريب لكل موظف</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>الموظف</TableHead>
+              <TableHead>برامج مكتملة</TableHead>
+              <TableHead>برامج جارية</TableHead>
+              <TableHead>إجمالي ساعات التدريب المكتملة</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(summary.data ?? []).map((r) => (
+              <TableRow key={r.employee_id}>
+                <TableCell className="font-medium">{r.employee_name}</TableCell>
+                <TableCell className="text-emerald-600">{r.completed_programs}</TableCell>
+                <TableCell className="text-amber-600">{r.in_progress_programs}</TableCell>
+                <TableCell>{r.total_completed_hours}</TableCell>
+              </TableRow>
+            ))}
+            {(summary.data ?? []).length === 0 && (
+              <TableRow>
+                <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
+                  لا توجد سجلات تدريب بعد.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function HrReports() {
   const { organization } = useOrganizationAccess();
   return (
@@ -318,6 +445,8 @@ export default function HrReports() {
           <TabsTrigger value="leave">الإجازات</TabsTrigger>
           <TabsTrigger value="contracts">العقود</TabsTrigger>
           <TabsTrigger value="performance">الأداء</TabsTrigger>
+          <TabsTrigger value="recruitment">التوظيف</TabsTrigger>
+          <TabsTrigger value="training">التدريب</TabsTrigger>
         </TabsList>
         <TabsContent value="attendance" className="mt-4">
           <AttendanceReportTab organizationId={organization?.id} />
@@ -330,6 +459,12 @@ export default function HrReports() {
         </TabsContent>
         <TabsContent value="performance" className="mt-4">
           <PerformanceReportTab organizationId={organization?.id} />
+        </TabsContent>
+        <TabsContent value="recruitment" className="mt-4">
+          <RecruitmentReportTab organizationId={organization?.id} />
+        </TabsContent>
+        <TabsContent value="training" className="mt-4">
+          <TrainingReportTab organizationId={organization?.id} />
         </TabsContent>
       </Tabs>
     </div>

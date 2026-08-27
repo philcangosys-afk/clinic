@@ -37,7 +37,7 @@ function useEmployeesWithPayroll(organizationId: string | undefined) {
     queryFn: async () => {
       const { data: employees, error: employeesError } = await supabase
         .from("employees")
-        .select("id, file_number, name_ar, total_salary")
+        .select("id, file_number, name_ar, basic_salary, housing_allowance, transportation_allowance, other_allowances, total_salary")
         .eq("status", "active")
         .order("file_number");
       if (employeesError) throw employeesError;
@@ -55,10 +55,32 @@ function useEmployeesWithPayroll(organizationId: string | undefined) {
   });
 }
 
+function useSalaryHistory(organizationId: string | undefined, month: string) {
+  return useQuery({
+    queryKey: ["payroll-history", organizationId, month],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const start = `${month}-01`;
+      const { data, error } = await supabase
+        .from("financial_vouchers")
+        .select("id, voucher_number, voucher_date, amount, employee_name, description")
+        .eq("organization_id", organizationId)
+        .eq("voucher_type", "salary")
+        .gte("voucher_date", start)
+        .lte("voucher_date", `${month}-31`)
+        .order("voucher_date", { ascending: false });
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
+}
+
 export default function Payroll() {
   const { organization } = useOrganizationAccess();
   const [payTarget, setPayTarget] = useState<{ id: string; name_ar: string; total_salary: number } | null>(null);
   const employees = useEmployeesWithPayroll(organization?.id);
+  const [historyMonth, setHistoryMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const history = useSalaryHistory(organization?.id, historyMonth);
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
@@ -96,7 +118,15 @@ export default function Payroll() {
                   <TableRow key={employee.id}>
                     <TableCell className="font-mono text-xs">#{employee.file_number}</TableCell>
                     <TableCell className="font-medium">{employee.name_ar}</TableCell>
-                    <TableCell>{Number(employee.total_salary).toLocaleString("ar-SA")} ر.س</TableCell>
+                    <TableCell>
+                      <p>{Number(employee.total_salary).toLocaleString("ar-SA")} ر.س</p>
+                      <p className="text-xs text-muted-foreground">
+                        أساسي {Number(employee.basic_salary).toLocaleString("ar-SA")} + سكن{" "}
+                        {Number(employee.housing_allowance).toLocaleString("ar-SA")} + نقل{" "}
+                        {Number(employee.transportation_allowance).toLocaleString("ar-SA")} + أخرى{" "}
+                        {Number(employee.other_allowances).toLocaleString("ar-SA")}
+                      </p>
+                    </TableCell>
                     <TableCell>
                       {employee.paidThisMonth ? (
                         <Badge variant="success">
@@ -126,6 +156,50 @@ export default function Payroll() {
                   <TableRow>
                     <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
                       لا يوجد موظفون نشطون.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <div>
+            <CardTitle className="text-base">سجل صرف الرواتب</CardTitle>
+            <CardDescription>كل سندات صرف الراتب المسجّلة خلال الشهر المحدد</CardDescription>
+          </div>
+          <Input type="month" value={historyMonth} onChange={(e) => setHistoryMonth(e.target.value)} className="w-40" />
+        </CardHeader>
+        <CardContent>
+          {history.isLoading && <Skeleton className="h-32 w-full" />}
+          {!history.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>#السند</TableHead>
+                  <TableHead>التاريخ</TableHead>
+                  <TableHead>الموظف</TableHead>
+                  <TableHead>المبلغ</TableHead>
+                  <TableHead>البيان</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(history.data ?? []).map((voucher) => (
+                  <TableRow key={voucher.id}>
+                    <TableCell className="font-mono text-xs">#{voucher.voucher_number}</TableCell>
+                    <TableCell className="text-xs">{voucher.voucher_date}</TableCell>
+                    <TableCell className="font-medium">{voucher.employee_name ?? "—"}</TableCell>
+                    <TableCell>{Number(voucher.amount).toLocaleString("ar-SA")} ر.س</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{voucher.description ?? "—"}</TableCell>
+                  </TableRow>
+                ))}
+                {(history.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-6 text-center text-sm text-muted-foreground">
+                      لا توجد سندات صرف رواتب لهذا الشهر.
                     </TableCell>
                   </TableRow>
                 )}

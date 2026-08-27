@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Plus, Save } from "lucide-react";
+import { ArrowRight, Plus, Save, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import type { PatientRow } from "@/lib/database.types";
+import type { HealthConditionRow, PatientHealthConditionRow, PatientNoteRow, PatientRow } from "@/lib/database.types";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
 
 function usePatient(id: string | undefined) {
@@ -63,6 +64,7 @@ export default function PatientProfile() {
           </div>
         </div>
         <div className="flex gap-2">
+          {patient.data.block_file && <Badge variant="destructive">الملف محجوب بالكامل</Badge>}
           {patient.data.block_appointments && <Badge variant="destructive">محجوب عن المواعيد</Badge>}
           {patient.data.block_invoices && <Badge variant="destructive">محجوب عن الفوترة</Badge>}
           {patient.data.block_sms && <Badge variant="secondary">محجوب عن SMS</Badge>}
@@ -70,10 +72,12 @@ export default function PatientProfile() {
       </div>
 
       <Tabs defaultValue="overview">
-        <TabsList>
+        <TabsList className="flex h-auto flex-wrap justify-start gap-1">
           <TabsTrigger value="overview">نظرة عامة</TabsTrigger>
+          <TabsTrigger value="conditions">الحالة الصحية</TabsTrigger>
           <TabsTrigger value="history">السوابق الصحية</TabsTrigger>
           <TabsTrigger value="notes">الملاحظات</TabsTrigger>
+          <TabsTrigger value="blocking">الحجب</TabsTrigger>
           <TabsTrigger value="appointments">المواعيد</TabsTrigger>
           <TabsTrigger value="invoices">الفواتير</TabsTrigger>
         </TabsList>
@@ -81,11 +85,17 @@ export default function PatientProfile() {
         <TabsContent value="overview">
           <OverviewTab patient={patient.data} />
         </TabsContent>
+        <TabsContent value="conditions">
+          <HealthConditionsTab patientId={patient.data.id} />
+        </TabsContent>
         <TabsContent value="history">
           <MedicalHistoryTab patientId={patient.data.id} />
         </TabsContent>
         <TabsContent value="notes">
           <NotesTab patientId={patient.data.id} />
+        </TabsContent>
+        <TabsContent value="blocking">
+          <BlockingTab patient={patient.data} />
         </TabsContent>
         <TabsContent value="appointments">
           <AppointmentsTab patientId={patient.data.id} />
@@ -106,9 +116,21 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
     name_en: patient.name_en ?? "",
     mobile_number: patient.mobile_number ?? "",
     phone_1: patient.phone_1 ?? "",
+    emergency_number: patient.emergency_number ?? "",
+    email_1: patient.email_1 ?? "",
     id_number: patient.id_number ?? "",
+    passport_number: patient.passport_number ?? "",
+    nationality_value_id: patient.nationality_value_id ?? "",
+    profession_value_id: patient.profession_value_id ?? "",
+    blood_type: patient.blood_type ?? "",
+    guarantor_name: patient.guarantor_name ?? "",
+    guarantor_number: patient.guarantor_number ?? "",
+    nearest_person_name: patient.nearest_person_name ?? "",
+    nearest_person_number: patient.nearest_person_number ?? "",
+    gln_number: patient.gln_number ?? "",
     insurance_company_name: patient.insurance_company_name ?? "",
     insurance_policy_number: patient.insurance_policy_number ?? "",
+    insurance_membership_number: patient.insurance_membership_number ?? "",
     default_discount_percent: String(patient.default_discount_percent ?? 0),
     general_note: patient.general_note ?? "",
   });
@@ -122,9 +144,21 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
           name_en: form.name_en.trim() || null,
           mobile_number: form.mobile_number.trim() || null,
           phone_1: form.phone_1.trim() || null,
+          emergency_number: form.emergency_number.trim() || null,
+          email_1: form.email_1.trim() || null,
           id_number: form.id_number.trim() || null,
+          passport_number: form.passport_number.trim() || null,
+          nationality_value_id: form.nationality_value_id || null,
+          profession_value_id: form.profession_value_id || null,
+          blood_type: form.blood_type || null,
+          guarantor_name: form.guarantor_name.trim() || null,
+          guarantor_number: form.guarantor_number.trim() || null,
+          nearest_person_name: form.nearest_person_name.trim() || null,
+          nearest_person_number: form.nearest_person_number.trim() || null,
+          gln_number: form.gln_number.trim() || null,
           insurance_company_name: form.insurance_company_name.trim() || null,
           insurance_policy_number: form.insurance_policy_number.trim() || null,
+          insurance_membership_number: form.insurance_membership_number.trim() || null,
           default_discount_percent: Number(form.default_discount_percent) || 0,
           general_note: form.general_note.trim() || null,
         })
@@ -174,6 +208,58 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
           <Input value={form.id_number} onChange={(e) => set("id_number", e.target.value)} />
         </div>
         <div className="flex flex-col gap-1.5">
+          <Label>رقم الجواز</Label>
+          <Input value={form.passport_number} onChange={(e) => set("passport_number", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>جوال للطوارئ</Label>
+          <Input value={form.emergency_number} onChange={(e) => set("emergency_number", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>البريد الإلكتروني</Label>
+          <Input type="email" value={form.email_1} onChange={(e) => set("email_1", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>الجنسية</Label>
+          <LookupSelect
+            categoryKey="nationalities"
+            value={form.nationality_value_id}
+            onChange={(v) => set("nationality_value_id", v)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>المهنة</Label>
+          <LookupSelect
+            categoryKey="professions"
+            value={form.profession_value_id}
+            onChange={(v) => set("profession_value_id", v)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>فصيلة الدم</Label>
+          <Input value={form.blood_type} onChange={(e) => set("blood_type", e.target.value)} placeholder="مثال: O+" />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>GLN</Label>
+          <Input value={form.gln_number} onChange={(e) => set("gln_number", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>اسم الضامن / الكفيل</Label>
+          <Input value={form.guarantor_name} onChange={(e) => set("guarantor_name", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>رقم جوال الضامن / الكفيل</Label>
+          <Input value={form.guarantor_number} onChange={(e) => set("guarantor_number", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>اسم أقرب شخص</Label>
+          <Input value={form.nearest_person_name} onChange={(e) => set("nearest_person_name", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>رقم جوال أقرب شخص</Label>
+          <Input value={form.nearest_person_number} onChange={(e) => set("nearest_person_number", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
           <Label>نسبة خصم افتراضية %</Label>
           <Input
             type="number"
@@ -188,6 +274,13 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
         <div className="flex flex-col gap-1.5">
           <Label>رقم وثيقة التأمين</Label>
           <Input value={form.insurance_policy_number} onChange={(e) => set("insurance_policy_number", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>رقم العضوية التأمينية</Label>
+          <Input
+            value={form.insurance_membership_number}
+            onChange={(e) => set("insurance_membership_number", e.target.value)}
+          />
         </div>
         <div className="flex flex-col gap-1.5 sm:col-span-2">
           <Label>ملاحظة عامة</Label>
@@ -294,6 +387,8 @@ function MedicalHistoryTab({ patientId }: { patientId: string }) {
 
 function NotesTab({ patientId }: { patientId: string }) {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [newTitle, setNewTitle] = useState("");
   const [newNote, setNewNote] = useState("");
   const notes = useQuery({
     queryKey: ["patient-notes", patientId],
@@ -304,48 +399,300 @@ function NotesTab({ patientId }: { patientId: string }) {
         .eq("patient_id", patientId)
         .order("created_at", { ascending: false });
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []) as PatientNoteRow[];
     },
   });
 
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["patient-notes", patientId] });
+
   const addNote = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from("patient_notes").insert({ patient_id: patientId, body: newNote.trim() });
+      const { error } = await supabase
+        .from("patient_notes")
+        .insert({ patient_id: patientId, title: newTitle.trim() || null, body: newNote.trim() });
       if (error) throw error;
     },
     onSuccess: () => {
+      setNewTitle("");
       setNewNote("");
-      queryClient.invalidateQueries({ queryKey: ["patient-notes", patientId] });
+      invalidate();
     },
+  });
+
+  const toggleDisabled = useMutation({
+    mutationFn: async (note: PatientNoteRow) => {
+      const { error } = await supabase
+        .from("patient_notes")
+        .update({ is_disabled: !note.is_disabled })
+        .eq("id", note.id);
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+  });
+
+  const removeNote = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.from("patient_notes").delete().eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحذف",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>الملاحظات</CardTitle>
-        <CardDescription>سجل زمني للملاحظات والمتابعة</CardDescription>
+        <CardDescription>سجل زمني للملاحظات والمتابعة، بعنوان ونص وإمكانية تعطيل أو حذف كل ملاحظة</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
-        <div className="flex gap-2">
-          <Textarea value={newNote} onChange={(e) => setNewNote(e.target.value)} placeholder="أضف ملاحظة جديدة..." />
-          <Button disabled={!newNote.trim() || addNote.isPending} onClick={() => addNote.mutate()}>
-            <Plus className="h-4 w-4" />
-            إضافة
-          </Button>
+        <div className="flex flex-col gap-2 rounded-lg border p-3">
+          <Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="عنوان الملاحظة (اختياري)" />
+          <div className="flex gap-2">
+            <Textarea value={newNote} onChange={(e) => setNewNote(e.target.value)} placeholder="أضف ملاحظة جديدة..." />
+            <Button disabled={!newNote.trim() || addNote.isPending} onClick={() => addNote.mutate()}>
+              <Plus className="h-4 w-4" />
+              إضافة
+            </Button>
+          </div>
         </div>
         <div className="flex flex-col gap-2">
           {(notes.data ?? []).map((note) => (
             <div key={note.id} className="rounded-lg border px-3 py-2">
-              <p className="text-sm">{note.body}</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {new Date(note.created_at).toLocaleString("ar-SA")}
-              </p>
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  {note.title && <p className="text-sm font-semibold">{note.title}</p>}
+                  <p className="text-sm">{note.body}</p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {new Date(note.created_at).toLocaleString("ar-SA")}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  {note.is_disabled && <Badge variant="secondary">معطّلة</Badge>}
+                  <Button size="sm" variant="outline" onClick={() => toggleDisabled.mutate(note)}>
+                    {note.is_disabled ? "تفعيل" : "تعطيل"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => removeNote.mutate(note.id)}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                </div>
+              </div>
             </div>
           ))}
           {(notes.data ?? []).length === 0 && (
             <p className="py-6 text-center text-sm text-muted-foreground">لا توجد ملاحظات بعد.</p>
           )}
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// الحالة الصحية — قائمة تحقق بالأمراض المزمنة (checkbox + ملاحظة لكل حالة)
+// تستخدم جدولي health_conditions / patient_health_conditions الموجودين مسبقًا
+// في قاعدة البيانات دون أي واجهة — الفجوة كانت في الواجهة فقط، وليست في المخطط.
+// ---------------------------------------------------------------------------
+function HealthConditionsTab({ patientId }: { patientId: string }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const conditions = useQuery({
+    queryKey: ["health-conditions"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("health_conditions").select("*").order("sort_order");
+      if (error) throw error;
+      return (data ?? []) as HealthConditionRow[];
+    },
+  });
+
+  const patientConditions = useQuery({
+    queryKey: ["patient-conditions", patientId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patient_health_conditions")
+        .select("*")
+        .eq("patient_id", patientId);
+      if (error) throw error;
+      return (data ?? []) as PatientHealthConditionRow[];
+    },
+  });
+
+  const [notes, setNotes] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (patientConditions.data) {
+      const map: Record<string, string> = {};
+      for (const row of patientConditions.data) map[row.condition_id] = row.note ?? "";
+      setNotes(map);
+    }
+  }, [patientConditions.data]);
+
+  const checkedIds = new Set((patientConditions.data ?? []).filter((r) => r.is_checked).map((r) => r.condition_id));
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["patient-conditions", patientId] });
+
+  const toggle = useMutation({
+    mutationFn: async ({ conditionId, checked }: { conditionId: string; checked: boolean }) => {
+      const { error } = await supabase.from("patient_health_conditions").upsert({
+        patient_id: patientId,
+        condition_id: conditionId,
+        is_checked: checked,
+        note: notes[conditionId] ?? null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const saveNote = useMutation({
+    mutationFn: async (conditionId: string) => {
+      const { error } = await supabase.from("patient_health_conditions").upsert({
+        patient_id: patientId,
+        condition_id: conditionId,
+        is_checked: checkedIds.has(conditionId),
+        note: notes[conditionId]?.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>الحالة الصحية</CardTitle>
+        <CardDescription>حدِّد الحالات المزمنة المنطبقة على المريض، مع ملاحظة اختيارية لكل حالة</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {conditions.isLoading && <Skeleton className="h-40 w-full" />}
+        {!conditions.isLoading && (conditions.data ?? []).length === 0 && (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            لائحة الحالات الصحية غير مُهيَّأة بعد — نفّذ ملف هجرة 0028 على قاعدة بياناتك.
+          </p>
+        )}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          {(conditions.data ?? []).map((condition) => {
+            const isChecked = checkedIds.has(condition.id);
+            return (
+              <div key={condition.id} className="flex flex-col gap-1.5 rounded-lg border p-2.5">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 accent-primary"
+                    checked={isChecked}
+                    onChange={(e) => toggle.mutate({ conditionId: condition.id, checked: e.target.checked })}
+                  />
+                  {condition.name_ar}
+                </label>
+                {isChecked && (
+                  <Input
+                    className="h-8 text-xs"
+                    placeholder="ملاحظة (اختياري)"
+                    value={notes[condition.id] ?? ""}
+                    onChange={(e) => setNotes((prev) => ({ ...prev, [condition.id]: e.target.value }))}
+                    onBlur={() => saveNote.mutate(condition.id)}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// مركز حجوبات المريض — تفعيل/سبب لكل نوع حجب (الحقول موجودة في قاعدة البيانات
+// منذ 0002 لكنها كانت تُعرض فقط كشارات للقراءة، بلا أي شاشة للتفعيل)
+// ---------------------------------------------------------------------------
+const BLOCK_FIELDS: { key: "block_appointments" | "block_invoices" | "block_sms" | "block_file"; reasonKey: "block_appointments_reason" | "block_invoices_reason" | "block_sms_reason" | "block_file_reason"; label: string }[] = [
+  { key: "block_appointments", reasonKey: "block_appointments_reason", label: "حجب عن حجز المواعيد" },
+  { key: "block_invoices", reasonKey: "block_invoices_reason", label: "حجب عن عمل الفواتير" },
+  { key: "block_sms", reasonKey: "block_sms_reason", label: "حجب عن الرسائل النصية" },
+  { key: "block_file", reasonKey: "block_file_reason", label: "حجب الملف بالكامل" },
+];
+
+function BlockingTab({ patient }: { patient: PatientRow }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [form, setForm] = useState(() => {
+    const initial: Record<string, string | boolean> = {};
+    for (const f of BLOCK_FIELDS) {
+      initial[f.key] = patient[f.key];
+      initial[f.reasonKey] = patient[f.reasonKey] ?? "";
+    }
+    return initial;
+  });
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const patch: Record<string, unknown> = {};
+      for (const f of BLOCK_FIELDS) {
+        patch[f.key] = form[f.key];
+        patch[f.reasonKey] = form[f.key] ? (String(form[f.reasonKey] ?? "").trim() || null) : null;
+      }
+      const { error } = await supabase.from("patients").update(patch).eq("id", patient.id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["patient", patient.id] });
+      queryClient.invalidateQueries({ queryKey: ["patients-list"] });
+      toast({ title: "تم حفظ إعدادات الحجب" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>مركز حجوبات المريض</CardTitle>
+        <CardDescription>فعّل الحجب المطلوب واكتب السبب — يؤثر فورًا على الاستقبال والفوترة والمراسلة</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {BLOCK_FIELDS.map((f) => (
+          <div key={f.key} className="flex flex-col gap-2 rounded-lg border p-3">
+            <div className="flex items-center justify-between gap-4">
+              <Label>{f.label}</Label>
+              <Button
+                type="button"
+                size="sm"
+                variant={form[f.key] ? "destructive" : "outline"}
+                onClick={() => setForm((prev) => ({ ...prev, [f.key]: !prev[f.key] }))}
+              >
+                {form[f.key] ? "مفعّل" : "غير مفعّل"}
+              </Button>
+            </div>
+            {Boolean(form[f.key]) && (
+              <Input
+                placeholder="سبب الحجب"
+                value={String(form[f.reasonKey] ?? "")}
+                onChange={(e) => setForm((prev) => ({ ...prev, [f.reasonKey]: e.target.value }))}
+              />
+            )}
+          </div>
+        ))}
+        <Button className="self-start" onClick={() => save.mutate()} disabled={save.isPending}>
+          <Save className="h-4 w-4" />
+          {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
+        </Button>
       </CardContent>
     </Card>
   );

@@ -72,6 +72,7 @@ function NewContractDialog({
   const [endDate, setEndDate] = useState("");
   const [salary, setSalary] = useState(String(renewFrom?.basic_salary ?? 0));
   const [contractNumber, setContractNumber] = useState("");
+  const [note, setNote] = useState("");
 
   const create = useMutation({
     mutationFn: async () => {
@@ -85,6 +86,7 @@ function NewContractDialog({
         start_date: startDate,
         end_date: contractType === "permanent" ? null : endDate || null,
         basic_salary: Number(salary) || 0,
+        note: note.trim() || null,
       });
       if (error) throw error;
     },
@@ -92,6 +94,7 @@ function NewContractDialog({
       queryClient.invalidateQueries({ queryKey: ["employee-contracts", organizationId] });
       toast({ title: renewFrom ? "تم تجديد العقد" : "تم إنشاء العقد" });
       setOpen(false);
+      setNote("");
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
@@ -157,6 +160,10 @@ function NewContractDialog({
               <Label>رقم العقد (اختياري)</Label>
               <Input value={contractNumber} onChange={(e) => setContractNumber(e.target.value)} />
             </div>
+          </div>
+          <div>
+            <Label>ملاحظة (اختياري)</Label>
+            <Input value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </div>
         <DialogFooter>

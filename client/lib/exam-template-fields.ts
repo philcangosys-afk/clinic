@@ -21,6 +21,9 @@ export const EXAM_FIELD_LABELS: Record<string, string> = {
   heart: "القلب",
   nervous_system: "الجهاز العصبي",
   free_exam: "فحص حر",
+  vision_test: "فحص النظر",
+  hearing_test: "فحص السمع",
+  musculoskeletal: "الجهاز العضلي الهيكلي",
 };
 
 export function examFieldLabel(key: string) {

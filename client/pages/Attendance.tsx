@@ -111,6 +111,27 @@ export default function Attendance() {
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
 
+  const saveNote = useMutation({
+    mutationFn: async ({ employeeId, note }: { employeeId: string; note: string }) => {
+      if (!organization?.id) throw new Error("لا توجد مؤسسة");
+      const { error } = await supabase.from("attendance_records").upsert(
+        {
+          organization_id: organization.id,
+          employee_id: employeeId,
+          work_date: new Date().toISOString().slice(0, 10),
+          note: note.trim() || null,
+        },
+        { onConflict: "employee_id,work_date" },
+      );
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["today-attendance", organization?.id] });
+      toast({ title: "تم حفظ الملاحظة" });
+    },
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
+  });
+
   const markStatus = useMutation({
     mutationFn: async ({ employeeId, status }: { employeeId: string; status: AttendanceStatus }) => {
       if (!organization?.id) throw new Error("لا توجد مؤسسة");
@@ -194,6 +215,8 @@ export default function Attendance() {
                   <TableHead>الانصراف</TableHead>
                   <TableHead>الحالة</TableHead>
                   <TableHead>التأخير</TableHead>
+                  <TableHead>الانصراف المبكر</TableHead>
+                  <TableHead>ملاحظة</TableHead>
                   <TableHead>إجراءات</TableHead>
                 </TableRow>
               </TableHeader>
@@ -216,6 +239,22 @@ export default function Attendance() {
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {row.late_minutes > 0 ? `${row.late_minutes} د` : "—"}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {row.early_leave_minutes > 0 ? `${row.early_leave_minutes} د` : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        key={`${row.employee_id}-${row.note ?? ""}`}
+                        defaultValue={row.note ?? ""}
+                        placeholder="ملاحظة..."
+                        className="h-8 w-32 text-xs"
+                        onBlur={(e) => {
+                          if (e.target.value.trim() !== (row.note ?? "")) {
+                            saveNote.mutate({ employeeId: row.employee_id, note: e.target.value });
+                          }
+                        }}
+                      />
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1.5">
@@ -247,7 +286,7 @@ export default function Attendance() {
                 ))}
                 {(today.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
                       لا يوجد موظفون نشطون.
                     </TableCell>
                   </TableRow>
@@ -276,6 +315,8 @@ export default function Attendance() {
                 <TableHead>الانصراف</TableHead>
                 <TableHead>الحالة</TableHead>
                 <TableHead>التأخير</TableHead>
+                <TableHead>الانصراف المبكر</TableHead>
+                <TableHead>ملاحظة</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -289,11 +330,13 @@ export default function Attendance() {
                     <Badge variant={STATUS_BADGE[r.status as AttendanceStatus]}>{STATUS_LABELS[r.status as AttendanceStatus]}</Badge>
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{r.late_minutes > 0 ? `${r.late_minutes} د` : "—"}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{r.early_leave_minutes > 0 ? `${r.early_leave_minutes} د` : "—"}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{r.note ?? "—"}</TableCell>
                 </TableRow>
               ))}
               {(history.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-6 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
                     لا توجد سجلات لهذا الشهر.
                   </TableCell>
                 </TableRow>

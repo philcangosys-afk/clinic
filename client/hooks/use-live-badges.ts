@@ -1,0 +1,255 @@
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/lib/supabase";
+
+// كل دالة هنا تُرجع عددًا حقيقيًا من قاعدة البيانات بدل الأرقام الثابتة التي
+// كانت موضوعة كعرض توضيحي في module-registry.ts. أي استعلام يفشل (جدول/عرض
+// غير موجود بعد، أو لا صلاحية) يُعاد له null بصمت بدل كسر الشريط الجانبي كله.
+
+async function safeCount(
+  query: Promise<{ count: number | null; error: unknown }>,
+): Promise<number | null> {
+  try {
+    const { count, error } = await query;
+    if (error) return null;
+    return count ?? 0;
+  } catch {
+    return null;
+  }
+}
+
+function todayBounds() {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { startIso: start.toISOString(), endIso: end.toISOString() };
+}
+
+async function fetchLiveBadges(organizationId: string, userId?: string): Promise<Record<string, number | null>> {
+  const { startIso, endIso } = todayBounds();
+
+  const entries: [string, Promise<number | null>][] = [
+    [
+      "reception",
+      safeCount(
+        supabase
+          .from("appointments")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .gte("scheduled_start", startIso)
+          .lt("scheduled_start", endIso) as any,
+      ),
+    ],
+    [
+      "patients",
+      safeCount(
+        supabase.from("patients").select("id", { count: "exact", head: true }).eq("organization_id", organizationId) as any,
+      ),
+    ],
+    [
+      "medical-records",
+      safeCount(
+        supabase
+          .from("patient_visits")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .gte("visit_date", startIso)
+          .lt("visit_date", endIso) as any,
+      ),
+    ],
+    [
+      "services",
+      safeCount(
+        supabase
+          .from("items")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .in("item_type", ["service", "lab_service"])
+          .eq("is_disabled", false) as any,
+      ),
+    ],
+    [
+      "departments",
+      safeCount(
+        supabase
+          .from("clinics")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .eq("is_disabled", false) as any,
+      ),
+    ],
+    [
+      "doctors",
+      safeCount(
+        supabase
+          .from("doctors")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .eq("is_enabled", true) as any,
+      ),
+    ],
+    [
+      "laboratory",
+      safeCount(
+        supabase
+          .from("v_lab_pending_orders")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId) as any,
+      ),
+    ],
+    [
+      "radiology",
+      safeCount(
+        supabase
+          .from("v_radiology_unreported_orders")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId) as any,
+      ),
+    ],
+    [
+      "pharmacy",
+      safeCount(
+        supabase
+          .from("items")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .eq("item_type", "drug")
+          .eq("is_disabled", false) as any,
+      ),
+    ],
+    [
+      "dispensing",
+      safeCount(
+        supabase
+          .from("v_prescriptions_pending_dispensing")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId) as any,
+      ),
+    ],
+    [
+      "employees",
+      safeCount(
+        supabase
+          .from("employees")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .eq("status", "active") as any,
+      ),
+    ],
+    [
+      "attendance",
+      safeCount(
+        supabase
+          .from("v_today_attendance")
+          .select("employee_id", { count: "exact", head: true })
+          .eq("organization_id", organizationId) as any,
+      ),
+    ],
+    [
+      "leave",
+      safeCount(
+        supabase
+          .from("leave_requests")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .eq("status", "pending") as any,
+      ),
+    ],
+    [
+      "contracts",
+      safeCount(
+        supabase
+          .from("v_employee_contracts_status")
+          .select("employee_id", { count: "exact", head: true })
+          .eq("organization_id", organizationId) as any,
+      ),
+    ],
+    [
+      "recruitment",
+      safeCount(
+        supabase
+          .from("job_postings")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId) as any,
+      ),
+    ],
+    [
+      "training",
+      safeCount(
+        supabase
+          .from("training_programs")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId) as any,
+      ),
+    ],
+    [
+      "shifts",
+      safeCount(
+        supabase
+          .from("shift_templates")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId) as any,
+      ),
+    ],
+    [
+      "audit",
+      safeCount(
+        supabase
+          .from("audit_log")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .gte("occurred_at", startIso)
+          .lt("occurred_at", endIso) as any,
+      ),
+    ],
+    [
+      "procurement",
+      safeCount(
+        supabase
+          .from("purchase_invoices")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId) as any,
+      ),
+    ],
+  ];
+
+  if (userId) {
+    entries.push([
+      "messaging",
+      safeCount(
+        supabase
+          .from("v_internal_unread_counts")
+          .select("conversation_id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .eq("user_id", userId) as any,
+      ),
+    ]);
+  }
+
+  const results = await Promise.all(entries.map(([, p]) => p));
+  const out: Record<string, number | null> = {};
+  entries.forEach(([key], i) => {
+    out[key] = results[i];
+  });
+  return out;
+}
+
+/**
+ * أعداد حقيقية من قاعدة البيانات لاستخدامها كبديل للأرقام الثابتة في
+ * module-registry.ts. أي موديول غير مذكور هنا (مثل "رحلة المريض" أو
+ * "حركات المخزون" التي تحتاج عرضًا خاصًا بالمخزون المنخفض) يبقى على شارته
+ * الثابتة الأصلية أو بلا شارة.
+ */
+export function useLiveBadgeCounts(organizationId?: string | null, userId?: string | null) {
+  return useQuery({
+    queryKey: ["live-badge-counts", organizationId, userId],
+    queryFn: () => fetchLiveBadges(organizationId as string, userId ?? undefined),
+    enabled: Boolean(organizationId),
+    staleTime: 60_000,
+    refetchInterval: 120_000,
+  });
+}
+
+export function formatBadgeNumber(n: number): string {
+  if (n <= 0) return "0";
+  return n > 999 ? `${Math.floor(n / 1000)}k+` : String(n);
+}

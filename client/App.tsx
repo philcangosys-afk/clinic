@@ -32,6 +32,7 @@ import Packages from "./pages/Packages";
 import Accounting from "./pages/Accounting";
 import Procurement from "./pages/Procurement";
 import Inventory from "./pages/Inventory";
+import DentalLab from "./pages/DentalLab";
 import Messaging from "./pages/Messaging";
 import AuditLog from "./pages/AuditLog";
 import PatientJourney from "./pages/PatientJourney";
@@ -43,6 +44,9 @@ import Recruitment from "./pages/Recruitment";
 import Performance from "./pages/Performance";
 import Training from "./pages/Training";
 import HrReports from "./pages/HrReports";
+import DocumentTemplates from "./pages/DocumentTemplates";
+import ExternalClients from "./pages/ExternalClients";
+import CustomReports from "./pages/CustomReports";
 import { OrganizationAccessProvider } from "./contexts/OrganizationAccessContext";
 import AppShell from "./components/layout/AppShell";
 import RouteGuard from "./components/layout/RouteGuard";
@@ -80,6 +84,7 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   accounting: Accounting,
   procurement: Procurement,
   inventory: Inventory,
+  "dental-lab": DentalLab,
   messaging: Messaging,
   audit: AuditLog,
   "patient-journey": PatientJourney,
@@ -91,6 +96,9 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   performance: Performance,
   training: Training,
   "hr-reports": HrReports,
+  "document-templates": DocumentTemplates,
+  "external-clients": ExternalClients,
+  "custom-reports": CustomReports,
 };
 const routedModules = [...moduleRegistry.filter((item) => item.id !== "dashboard"), settingsModule];
 

@@ -10,11 +10,13 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { useLiveBadgeCounts, formatBadgeNumber } from "@/hooks/use-live-badges";
 import {
   filterAccessibleModules,
   groupModules,
   moduleRegistry,
   settingsModule,
+  type ModuleRegistryItem,
 } from "@/lib/module-registry";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -40,13 +42,19 @@ function initialsOf(name: string | undefined | null) {
 }
 
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
-  const { canAccess, organization, branch } = useOrganizationAccess();
+  const { canAccess, organization, branch, session } = useOrganizationAccess();
   const location = useLocation();
+  const liveBadges = useLiveBadgeCounts(organization?.id, session?.user.id);
 
   const groups = useMemo(() => {
     const accessible = filterAccessibleModules(moduleRegistry, canAccess);
-    return groupModules(accessible);
-  }, [canAccess]);
+    const withLiveBadges: ModuleRegistryItem[] = accessible.map((item) => {
+      const live = liveBadges.data?.[item.id];
+      if (live === null || live === undefined) return item;
+      return { ...item, badge: formatBadgeNumber(live) };
+    });
+    return groupModules(withLiveBadges);
+  }, [canAccess, liveBadges.data]);
 
   const settingsAccessible = canAccess(settingsModule.featureKey, settingsModule.requiredPermission);
 
@@ -193,8 +201,8 @@ function SidebarLink({
         cn(
           "relative flex items-center gap-2.5 rounded-lg border-e-2 border-transparent px-3 py-2 text-sm font-medium transition-colors",
           isActive
-            ? "border-e-primary bg-primary/10 text-primary"
-            : "text-foreground/75 hover:bg-muted hover:text-foreground",
+            ? "border-e-primary bg-primary text-primary-foreground shadow-sm"
+            : "text-foreground/75 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
         )
       }
     >

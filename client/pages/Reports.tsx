@@ -1,15 +1,39 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { BarChart3, Percent, ReceiptText, TrendingUp, Wallet } from "lucide-react";
+import { BarChart3, FileCheck2, Percent, ReceiptText, TrendingUp, Wallet } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import type { DocumentTemplateRow, OccupationalExamPurpose, OccupationalExamReportView, OccupationalFitnessStatus } from "@/lib/database.types";
+import { buildMergeContext, mergeTemplate, printHtml } from "@/lib/document-merge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useToast } from "@/hooks/use-toast";
+
+const EXAM_PURPOSE_LABELS: Record<OccupationalExamPurpose, string> = {
+  pre_employment: "ما قبل التوظيف",
+  periodic: "دوري",
+  return_to_work: "العودة للعمل",
+  exit: "مغادرة العمل",
+};
+const FITNESS_STATUS_LABELS: Record<OccupationalFitnessStatus, string> = {
+  fit: "لائق",
+  fit_with_restrictions: "لائق بقيود",
+  unfit: "غير لائق",
+  pending: "قيد المراجعة",
+};
+const FITNESS_STATUS_BADGE: Record<OccupationalFitnessStatus, "success" | "default" | "destructive" | "secondary"> = {
+  fit: "success",
+  fit_with_restrictions: "default",
+  unfit: "destructive",
+  pending: "secondary",
+};
 
 function toDateInputValue(date: Date) {
   return date.toISOString().slice(0, 10);
@@ -54,6 +78,7 @@ export default function Reports() {
           <TabsTrigger value="sales">المبيعات والعروض</TabsTrigger>
           <TabsTrigger value="profitability">الربحية</TabsTrigger>
           <TabsTrigger value="vat">الضرائب والمرتجعات</TabsTrigger>
+          <TabsTrigger value="occupational">الفحوصات المهنية</TabsTrigger>
         </TabsList>
         <TabsContent value="revenue">
           <RevenueTab organizationId={organization?.id} from={from} to={to} />
@@ -66,6 +91,9 @@ export default function Reports() {
         </TabsContent>
         <TabsContent value="vat">
           <VatReturnsTab organizationId={organization?.id} from={from} to={to} />
+        </TabsContent>
+        <TabsContent value="occupational">
+          <OccupationalExamsTab organizationId={organization?.id} from={from} to={to} />
         </TabsContent>
       </Tabs>
     </div>
@@ -593,5 +621,187 @@ function VatReturnsTab({ organizationId, from, to }: { organizationId: string | 
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function OccupationalExamsTab({ organizationId, from, to }: { organizationId: string | undefined; from: string; to: string }) {
+  const exams = useQuery({
+    queryKey: ["occupational-exam-report", organizationId, from, to],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_occupational_exam_report")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .gte("exam_date", from)
+        .lte("exam_date", to)
+        .order("exam_date", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as OccupationalExamReportView[];
+    },
+  });
+
+  const summary = {
+    total: (exams.data ?? []).length,
+    fit: (exams.data ?? []).filter((r) => r.fitness_status === "fit").length,
+    restricted: (exams.data ?? []).filter((r) => r.fitness_status === "fit_with_restrictions").length,
+    unfit: (exams.data ?? []).filter((r) => r.fitness_status === "unfit").length,
+  };
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardContent className="grid grid-cols-2 gap-4 py-4 text-center sm:grid-cols-4">
+          <div>
+            <p className="text-xs text-muted-foreground">إجمالي الفحوصات</p>
+            <p className="text-lg font-bold">{summary.total}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">لائق</p>
+            <p className="text-lg font-bold text-emerald-700">{summary.fit}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">لائق بقيود</p>
+            <p className="text-lg font-bold text-amber-600">{summary.restricted}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">غير لائق</p>
+            <p className="text-lg font-bold text-red-600">{summary.unfit}</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>تقرير الفحوصات المهنية</CardTitle>
+          <CardDescription>كل الفحوصات المهنية (ما قبل التوظيف/الدورية/العودة للعمل/المغادرة) في المدى المحدد</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {exams.isLoading && <Skeleton className="h-40 w-full" />}
+          {!exams.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>المريض</TableHead>
+                  <TableHead>جهة العمل</TableHead>
+                  <TableHead>الطبيب</TableHead>
+                  <TableHead>الغرض</TableHead>
+                  <TableHead>الحالة</TableHead>
+                  <TableHead>تاريخ الفحص</TableHead>
+                  <TableHead>الفحص القادم</TableHead>
+                  <TableHead>رقم الشهادة</TableHead>
+                  <TableHead>شهادة اللياقة</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(exams.data ?? []).map((row) => (
+                  <TableRow key={row.id}>
+                    <TableCell className="font-medium">{row.patient_name}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{row.employer_name ?? "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{row.doctor_name ? `د. ${row.doctor_name}` : "—"}</TableCell>
+                    <TableCell className="text-xs">{EXAM_PURPOSE_LABELS[row.exam_purpose]}</TableCell>
+                    <TableCell>
+                      <Badge variant={FITNESS_STATUS_BADGE[row.fitness_status]}>{FITNESS_STATUS_LABELS[row.fitness_status]}</Badge>
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{new Date(row.exam_date).toLocaleDateString("ar-SA")}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {row.next_exam_due_date ? new Date(row.next_exam_due_date).toLocaleDateString("ar-SA") : "—"}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{row.certificate_number ?? "—"}</TableCell>
+                    <TableCell>
+                      <FitnessCertificateButton row={row} organizationId={organizationId} />
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(exams.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={9} className="py-8 text-center text-sm text-muted-foreground">
+                      لا توجد فحوصات مهنية مسجَّلة في هذا المدى.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+function FitnessCertificateButton({ row, organizationId }: { row: OccupationalExamReportView; organizationId: string | undefined }) {
+  const { session } = useOrganizationAccess();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const generate = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      const { data: template, error: templateError } = await supabase
+        .from("document_templates")
+        .select("*")
+        .eq("system_key", "fitness_certificate")
+        .or(`organization_id.eq.${organizationId},organization_id.is.null`)
+        .order("organization_id", { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
+      if (templateError) throw templateError;
+      if (!template) throw new Error("لم يُعثر على قالب شهادة اللياقة — تحقق من تطبيق الترحيل 34");
+      const tpl = template as DocumentTemplateRow;
+
+      const { data: org, error: orgError } = await supabase
+        .from("organizations")
+        .select("name, tax_number")
+        .eq("id", organizationId)
+        .maybeSingle();
+      if (orgError) throw orgError;
+
+      const merged = mergeTemplate(
+        tpl.body_html,
+        buildMergeContext({
+          patient: { name_ar: row.patient_name, id_number: row.patient_id_number, mobile_number: row.patient_mobile_number },
+          organization: org,
+          exam: {
+            exam_purpose: row.exam_purpose,
+            fitness_status: row.fitness_status,
+            employer_name: row.employer_name,
+            restrictions_note: row.restrictions_note,
+            certificate_number: row.certificate_number,
+            exam_date: row.exam_date,
+            next_exam_due_date: row.next_exam_due_date,
+            doctor_name: row.doctor_name,
+          },
+        }),
+      );
+      const title = `شهادة لياقة — ${row.patient_name}`;
+
+      const { error: insertError } = await supabase.from("generated_documents").insert({
+        organization_id: organizationId,
+        template_id: tpl.id,
+        template_name_snapshot: tpl.name_ar,
+        patient_id: row.patient_id,
+        employee_id: null,
+        title,
+        body_html: merged,
+        extra_fields: {},
+        created_by: session?.user.id ?? null,
+      });
+      if (insertError) throw insertError;
+
+      return { title, merged };
+    },
+    onSuccess: ({ title, merged }) => {
+      queryClient.invalidateQueries({ queryKey: ["generated-documents", organizationId] });
+      printHtml(title, merged);
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذر إصدار الشهادة", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+  });
+
+  return (
+    <Button size="sm" variant="outline" disabled={generate.isPending} onClick={() => generate.mutate()}>
+      <FileCheck2 className="h-3.5 w-3.5" />
+      {generate.isPending ? "جارٍ الإصدار..." : "طباعة شهادة"}
+    </Button>
   );
 }
