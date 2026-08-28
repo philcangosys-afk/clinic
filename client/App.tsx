@@ -59,6 +59,7 @@ import BlockedContacts from "./pages/BlockedContacts";
 import PatientVisits from "./pages/PatientVisits";
 import DeviceSettings from "./pages/DeviceSettings";
 import OrganizationSettings from "./pages/OrganizationSettings";
+import Content from "./pages/Content";
 import Settings from "./pages/Settings";
 import ReferenceData from "./pages/ReferenceData";
 import { OrganizationAccessProvider } from "./contexts/OrganizationAccessContext";
@@ -126,6 +127,13 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   "patient-visits": PatientVisits,
   "device-settings": DeviceSettings,
   "organization-settings": OrganizationSettings,
+  content: Content,
+  // "الأمراض والتشخيص" و"البيانات المرجعية" عنصران في القائمة لمحتوى واحد:
+  // تبويبا "الأمراض والحالات" و"أكواد ICD-10" في `ReferenceData`. كان
+  // `/diagnoses` بلا مسار فيفتح بطاقة "قيد الإنشاء" رغم أن عدّاده يقرأ من
+  // القاعدة ويعرض 10 — عدّاد يعمل وشاشة لا وجود لها. يُوجَّه إلى الشاشة
+  // القائمة بدل بناء نسخة ثانية تكتب في نفس الجداول.
+  diagnoses: ReferenceData,
   settings: Settings,
 };
 const routedModules = [...moduleRegistry.filter((item) => item.id !== "dashboard"), settingsModule];
