@@ -9,7 +9,6 @@ import type {
   InternalMessagingSettingsRow,
   InternalUnreadCountView,
   MessageChannel,
-  MessageLogRow,
   MessageLogStatus,
   MessageTemplateRow,
   OrganizationMemberDirectoryView,
@@ -33,6 +32,7 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
+import SendMessageTab from "@/components/messaging/SendMessageTab";
 
 const CHANNEL_ICON: Record<MessageChannel, typeof Mail> = { sms: Smartphone, email: Mail, internal: MessageSquare };
 const CHANNEL_LABELS: Record<MessageChannel, string> = { sms: "رسالة نصية", email: "بريد إلكتروني", internal: "داخلي" };
@@ -59,6 +59,7 @@ export default function Messaging() {
 
       <Tabs defaultValue="log">
         <TabsList>
+          <TabsTrigger value="send">إرسال رسالة</TabsTrigger>
           <TabsTrigger value="log">سجل الرسائل</TabsTrigger>
           <TabsTrigger value="templates">القوالب</TabsTrigger>
           <TabsTrigger value="canned">النصوص الجاهزة</TabsTrigger>
@@ -66,6 +67,9 @@ export default function Messaging() {
           <TabsTrigger value="chat">الدردشة الداخلية</TabsTrigger>
           <TabsTrigger value="settings">إعدادات الدردشة</TabsTrigger>
         </TabsList>
+        <TabsContent value="send" className="mt-4">
+          <SendMessageTab />
+        </TabsContent>
         <TabsContent value="log" className="mt-4">
           <MessageLogTab />
         </TabsContent>
@@ -234,8 +238,17 @@ function TemplatesTab() {
 
   const saveTemplate = useMutation({
     mutationFn: async ({ id, text }: { id: string; text: string }) => {
-      const { error } = await supabase.from("message_templates").update({ template_text: text }).eq("id", id);
+      // `.select("id")` ليس تزيينًا: سياسة RLS من نوع USING تُخرج الصف من
+      // نطاق التحديث بلا خطأ — يعود PostgREST بـ204 و`error = null`، فتظهر
+      // رسالة "تم حفظ القالب" ولا يُحفظ شيء ويضيع التعديل عند التحديث.
+      const { data, error } = await supabase
+        .from("message_templates")
+        .update({ template_text: text })
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      if (!data || data.length === 0)
+        throw new Error("لم يُحفظ التعديل — تعديل القوالب مقيَّد بصفة مالك المنشأة أو مدير النظام");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["message-templates", organization?.id] });
@@ -251,8 +264,13 @@ function TemplatesTab() {
 
   const toggleDisabled = useMutation({
     mutationFn: async ({ id, disabled }: { id: string; disabled: boolean }) => {
-      const { error } = await supabase.from("message_templates").update({ is_disabled: disabled }).eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("message_templates").update({ is_disabled: disabled }).eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["message-templates", organization?.id] }),
   });
@@ -342,8 +360,13 @@ function CannedTextsTab() {
 
   const toggleDisabled = useMutation({
     mutationFn: async ({ id, is_disabled }: { id: string; is_disabled: boolean }) => {
-      const { error } = await supabase.from("canned_texts").update({ is_disabled }).eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("canned_texts").update({ is_disabled }).eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["canned-texts", organization?.id] }),
   });
@@ -537,11 +560,16 @@ function SmsLedgerTab() {
   const saveThreshold = useMutation({
     mutationFn: async () => {
       if (!organization?.id) throw new Error("لا توجد مؤسسة نشطة");
-      const { error } = await supabase
+      // كما في القوالب: تحديث لا يطابق صفًا ليس خطأً، فبلا هذا الفحص كان
+      // حد التنبيه يبقى على قيمته القديمة مع رسالة نجاح.
+      const { data, error } = await supabase
         .from("sms_credit_balance")
         .update({ low_balance_alert_threshold: Number(threshold) || 0 })
-        .eq("organization_id", organization.id);
+        .eq("organization_id", organization.id)
+        .select("organization_id");
       if (error) throw error;
+      if (!data || data.length === 0)
+        throw new Error("لم يُحفظ الحد — تعديله مقيَّد بصفة مالك المنشأة أو مدير النظام");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sms-balance", organization?.id] });

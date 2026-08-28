@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UserPlus, Plus } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
-import type { CandidateRow, CandidateStatus, JobPostingRow, RecruitmentPipelineView } from "@/lib/database.types";
+import type { CandidateStatus, JobPostingRow, RecruitmentPipelineView } from "@/lib/database.types";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -103,8 +103,13 @@ function JobPostingsTab({ organizationId }: { organizationId: string | undefined
 
   const toggleStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const { error } = await supabase.from("job_postings").update({ status }).eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("job_postings").update({ status }).eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["job-postings", organizationId] }),
   });
@@ -227,8 +232,13 @@ function CandidatesTab({ organizationId }: { organizationId: string | undefined 
 
   const moveStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: CandidateStatus }) => {
-      const { error } = await supabase.from("candidates").update({ status }).eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("candidates").update({ status }).eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["candidates", organizationId] });
@@ -421,8 +431,13 @@ function CandidateInterviewsDialog({
 
   const setOutcome = useMutation({
     mutationFn: async ({ id, outcome }: { id: string; outcome: string }) => {
-      const { error } = await supabase.from("candidate_interviews").update({ outcome }).eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("candidate_interviews").update({ outcome }).eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: invalidate,
   });

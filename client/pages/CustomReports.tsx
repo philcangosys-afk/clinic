@@ -11,11 +11,10 @@ import {
   type FilterOperator,
   type ReportFilter,
 } from "@/lib/report-builder-sources";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
@@ -217,8 +216,13 @@ export default function CustomReports() {
         created_by: session?.user.id ?? null,
       };
       if (loadedReportId) {
-        const { error } = await supabase.from("custom_reports").update(payload).eq("id", loadedReportId);
+        const { data: affectedRows, error } = await supabase.from("custom_reports").update(payload).eq("id", loadedReportId)
+          .select("id");
         if (error) throw error;
+        // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+        // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+        if (!affectedRows || affectedRows.length === 0)
+          throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
       } else {
         const { error } = await supabase.from("custom_reports").insert(payload);
         if (error) throw error;
@@ -236,8 +240,13 @@ export default function CustomReports() {
 
   const deleteReport = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("custom_reports").delete().eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("custom_reports").delete().eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["custom-reports", organization?.id] });

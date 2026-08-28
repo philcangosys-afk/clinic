@@ -1,0 +1,79 @@
+-- 0040: تصحيح مضاعفة كميات المخزون الناتجة عن خطأ في شاشة فاتورة الشراء
+--
+-- ═══════════════════════════════════════════════════════════════════
+-- ⚠️  اقرأ هذا كاملًا قبل التشغيل — هذه المهاجرة تعدّل بيانات فعلية
+-- ═══════════════════════════════════════════════════════════════════
+--
+-- الخطأ: كانت شاشة فاتورة الشراء تُنشئ دفعة المخزون بـ qty_remaining
+-- مساوية للكمية المستلمة، ثم تُدرج حركة استلام (purchase_in) لنفس الكمية.
+-- والمُحفِّز app_apply_inventory_movement (0003) يزيد qty_remaining تلقائيًا
+-- عند كل حركة وارد — فتُحتسب الكمية مرتين.
+--
+-- الأثر: كل فاتورة شراء ضاعفت الكمية المتاحة. شراء 10 قطع سجّل 20.
+-- تم إصلاح الكود المسبب، لكن الدفعات المُنشأة قبل الإصلاح لا تزال مضاعفة.
+--
+-- ═══════════════════════════════════════════════════════════════════
+-- الخطوة 1 (إلزامية): افحص قبل أن تصحّح
+-- ═══════════════════════════════════════════════════════════════════
+-- شغّل الاستعلام التالي وحده أولًا، وراجع النتيجة مع الجرد الفعلي في
+-- المخزن. لا تشغّل خطوة التصحيح قبل أن تتأكد أن الأرقام فعلًا مضاعفة.
+
+-- select
+--   l.id,
+--   i.name_ar                as الصنف,
+--   w.name                   as المستودع,
+--   l.qty_received           as المستلم,
+--   l.qty_remaining          as المسجل_حاليا,
+--   coalesce(m.moved_in, 0)  as مجموع_حركات_الوارد,
+--   coalesce(m.moved_out, 0) as مجموع_حركات_الصادر,
+--   (coalesce(m.moved_in, 0) - coalesce(m.moved_out, 0)) as الرصيد_الصحيح_المتوقع
+-- from inventory_lots l
+-- join items i      on i.id = l.item_id
+-- join warehouses w on w.id = l.warehouse_id
+-- left join (
+--   select
+--     lot_id,
+--     sum(case when movement_type in ('purchase_in','return_in','transfer_in','adjustment_in')
+--         then qty else 0 end) as moved_in,
+--     sum(case when movement_type in ('sale_out','return_out','transfer_out','adjustment_out','consumption_out')
+--         then qty else 0 end) as moved_out
+--   from inventory_movements
+--   where lot_id is not null
+--   group by lot_id
+-- ) m on m.lot_id = l.id
+-- where l.qty_remaining <> (coalesce(m.moved_in, 0) - coalesce(m.moved_out, 0))
+-- order by i.name_ar;
+
+-- ═══════════════════════════════════════════════════════════════════
+-- الخطوة 2: التصحيح — أزل التعليق عن الكتلة أدناه بعد الفحص فقط
+-- ═══════════════════════════════════════════════════════════════════
+-- المنطق: سجل الحركات (inventory_movements) هو المصدر الموثوق للحقيقة،
+-- لأنه سجل غير قابل للتعديل يوثّق كل استلام وصرف. يُعاد حساب qty_remaining
+-- من مجموع الحركات بدل الاعتماد على القيمة المخزّنة.
+--
+-- الدفعات التي لا حركات لها إطلاقًا (أُدخلت يدويًا في قاعدة البيانات مثلًا)
+-- تُترك كما هي ولا تُصفَّر — تصفيرها كان سيمحو مخزونًا حقيقيًا.
+
+-- begin;
+--
+-- update inventory_lots l
+-- set qty_remaining = m.correct_qty
+-- from (
+--   select
+--     lot_id,
+--     sum(case when movement_type in ('purchase_in','return_in','transfer_in','adjustment_in')
+--         then qty else -qty end) as correct_qty
+--   from inventory_movements
+--   where lot_id is not null
+--   group by lot_id
+-- ) m
+-- where m.lot_id = l.id
+--   and l.qty_remaining <> m.correct_qty;
+--
+-- -- راجع النتيجة قبل التثبيت. إن بدت خاطئة نفّذ rollback بدل commit.
+-- commit;
+
+-- ═══════════════════════════════════════════════════════════════════
+-- ملاحظة: لا تُشغَّل هذه المهاجرة تلقائيًا. الكتل معطَّلة بالتعليق عمدًا
+-- لأن تصحيح كميات مخزون فعلية قرار يحتاج مراجعة بشرية ومطابقة مع الجرد.
+-- ═══════════════════════════════════════════════════════════════════

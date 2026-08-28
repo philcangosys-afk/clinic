@@ -97,12 +97,17 @@ export default function Attendance() {
 
   const checkOut = useMutation({
     mutationFn: async (employeeId: string) => {
-      const { error } = await supabase
+      const { data: affectedRows, error } = await supabase
         .from("attendance_records")
         .update({ check_out_at: new Date().toISOString() })
         .eq("employee_id", employeeId)
-        .eq("work_date", new Date().toISOString().slice(0, 10));
+        .eq("work_date", new Date().toISOString().slice(0, 10))
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["today-attendance", organization?.id] });

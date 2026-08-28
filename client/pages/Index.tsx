@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   BadgeAlert,
   CalendarDays,
-  ReceiptText,
   Stethoscope,
   UsersRound,
   WalletCards,
@@ -33,12 +32,26 @@ function useDashboardStats(organizationId: string | undefined) {
     queryKey: ["dashboard-stats", organizationId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
+      /**
+       * كل عدّاد مقيَّد بالمؤسسة النشطة: سياسة RLS تسمح بكل مؤسسة **ينتمي
+       * إليها** المستخدم، فبلا هذا التقييد كانت لوحة تحكم عضوٍ في عيادتين
+       * تجمع أرقام العيادتين معًا — عدد المرضى وإجمالي المديونية وطابور
+       * اليوم — بلا أي إشارة إلى أن الأرقام ليست لهذه العيادة وحدها.
+       */
       const [patients, doctors, todayAppointments, unpaidInvoices, alerts] = await Promise.all([
-        supabase.from("patients").select("id", { count: "exact", head: true }),
-        supabase.from("doctors").select("id", { count: "exact", head: true }).eq("is_enabled", true),
+        supabase
+          .from("patients")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId),
+        supabase
+          .from("doctors")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .eq("is_enabled", true),
         supabase
           .from("appointments")
           .select("id, scheduled_start, status, patient:patients(name_ar, file_number), doctor:doctors(name_ar)")
+          .eq("organization_id", organizationId)
           .gte("scheduled_start", startOfTodayIso())
           .lte("scheduled_start", endOfTodayIso())
           .order("scheduled_start", { ascending: true })
@@ -46,8 +59,12 @@ function useDashboardStats(organizationId: string | undefined) {
         supabase
           .from("sales_invoices")
           .select("remaining_amount")
+          .eq("organization_id", organizationId)
           .in("status", ["unpaid", "partial"]),
-        supabase.from("expiring_alerts").select("alert_type", { count: "exact", head: true }),
+        supabase
+          .from("expiring_alerts")
+          .select("alert_type", { count: "exact", head: true })
+          .eq("organization_id", organizationId),
       ]);
 
       const unpaidTotal = (unpaidInvoices.data ?? []).reduce(

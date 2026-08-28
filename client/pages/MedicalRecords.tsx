@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ClipboardList, Plus, Save, Stethoscope } from "lucide-react";
+import { ClipboardList, Plus, Save } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import { examFieldLabel, type ExamTemplateSchema } from "@/lib/exam-template-fields";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
+import CannedTextPicker, { appendCannedText } from "@/components/shared/CannedTextPicker";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -31,6 +32,8 @@ import IcdPicker from "@/components/shared/IcdPicker";
 import LookupSelect from "@/components/shared/LookupSelect";
 import type { OccupationalExamPurpose, OccupationalFitnessStatus } from "@/lib/database.types";
 import { useToast } from "@/hooks/use-toast";
+import DentalChart from "@/components/medical/DentalChart";
+import BodyDiagram, { type BodyDiagramData } from "@/components/medical/BodyDiagram";
 
 const EXAM_PURPOSE_LABELS: Record<OccupationalExamPurpose, string> = {
   pre_employment: "ما قبل التوظيف",
@@ -55,6 +58,8 @@ function useRecentVisits(organizationId: string | undefined) {
         .select(
           "id, visit_date, main_complaint, patient:patients(id, name_ar, file_number), doctor:doctors(id, name_ar)",
         )
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organizationId)
         .order("visit_date", { ascending: false })
         .limit(40);
       if (error) throw error;
@@ -124,6 +129,10 @@ function useDoctorsList(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("doctors")
         .select("id, name_ar, specialty_value_id")
+        // مفتاح الاستعلام يذكر المؤسسة والاستعلام كان لا يقيّد بها — فقائمة
+        // عضوٍ في منشأتين تعرض أطباء الاثنتين والذاكرة المؤقتة مفهرسة بمؤسسة
+        // لا يحترمها الاستعلام.
+        .eq("organization_id", organizationId)
         .eq("is_enabled", true)
         .order("name_ar");
       if (error) throw error;
@@ -149,6 +158,9 @@ function useTemplateForSpecialty(specialtyValueId: string | null | undefined, or
       const { data: templates, error: templatesError } = await supabase
         .from("clinic_exam_templates")
         .select("id, specialty_code, canvas_type, schema_definition")
+        // القالب المعطَّل يجب ألّا يُستعمل: زر "تعطيل القالب" كان يكتب العلم
+        // ويعرض رسالة نجاح، ولا شيء يقرؤه — فيبقى الطبيب يرى القالب نفسه.
+        .eq("is_disabled", false)
         .eq("specialty_code", specialtyCode)
         .or(`organization_id.eq.${organizationId},organization_id.is.null`)
         .order("organization_id", { ascending: false, nullsFirst: false })
@@ -158,6 +170,55 @@ function useTemplateForSpecialty(specialtyValueId: string | null | undefined, or
       return templates as { id: string; specialty_code: string; canvas_type: string; schema_definition: ExamTemplateSchema } | null;
     },
   });
+}
+
+
+/**
+ * يستخرج المؤشرات الحيوية الرقمية من قيم حقول القالب.
+ *
+ * أسماء الحقول تتبع بذرة القالب الافتراضي في 0006 (مجموعة `biomarkers`).
+ * ضغط الدم يُكتب عادةً "120/80" فيُفصَل إلى عموديه.
+ *
+ * يعيد `null` إن لم توجد أي قيمة رقمية — فلا يُنشأ صف فارغ لكل زيارة.
+ */
+function extractVitals(values: Record<string, string>) {
+  const num = (raw: string | undefined, max?: number) => {
+    if (!raw) return null;
+    const parsed = Number(String(raw).replace(/[^\d.-]/g, ""));
+    if (!Number.isFinite(parsed) || parsed <= 0) return null;
+    /**
+     * الحدّ الأعلى ليس تجميلًا: `bmi` عمود محسوب من نوع `numeric(5,2)`، وطولٌ
+     * كُتب بالمتر (1.7 بدل 170) يجعل الحساب يتجاوز السعة ويُفشل **إدراج صف
+     * المؤشرات كله** — والفشل مبتلَع بـ`console.warn` فتختفي القياسات بصمت.
+     * القيمة خارج المدى المعقول تُترك فارغة لا تُقصّ: تصحيحها تخمين على
+     * بيانات سريرية.
+     */
+    if (max !== undefined && parsed > max) return null;
+    return parsed;
+  };
+
+  let systolic: number | null = null;
+  let diastolic: number | null = null;
+  const bp = values.blood_pressure;
+  if (bp && bp.includes("/")) {
+    const [high, low] = bp.split("/");
+    systolic = num(high);
+    diastolic = num(low);
+  }
+
+  const row = {
+    heart_rate: num(values.heart_rate),
+    blood_pressure_systolic: systolic,
+    blood_pressure_diastolic: diastolic,
+    temperature_celsius: num(values.temperature),
+    glucose_level: num(values.glucose_level),
+    // حدود فسيولوجية معقولة تمنع تجاوز سعة عمود bmi المحسوب
+    height_cm: num(values.height, 300),
+    weight_kg: num(values.weight, 700),
+    respiratory_rate: num(values.respiratory_rate),
+    // bmi عمود محسوب في القاعدة — لا يُكتب من هنا
+  };
+  return Object.values(row).some((value) => value !== null) ? row : null;
 }
 
 function NewVisitDialog({
@@ -187,9 +248,27 @@ function NewVisitDialog({
   const [certificateNumber, setCertificateNumber] = useState("");
   const [nextExamDueDate, setNextExamDueDate] = useState("");
 
+  // لوحة الأسنان ومخطط الجسم — القالب هو من يحدد أيهما يظهر عبر canvas_type
+  // (نفس الحقل الذي يُخزَّن على الزيارة كلقطة وقت الفحص).
+  const [toothType, setToothType] = useState<"permanent" | "primary">("permanent");
+  const [selectedTeeth, setSelectedTeeth] = useState<string[]>([]);
+  const [dentalComplications, setDentalComplications] = useState("");
+  const [dentalAnesthesia, setDentalAnesthesia] = useState("");
+  const [dentalAntibiotics, setDentalAntibiotics] = useState("");
+  const [dentalEducation, setDentalEducation] = useState("");
+  const [dentalProcedure, setDentalProcedure] = useState("");
+  const [isXray, setIsXray] = useState(false);
+  const [orthoUpper, setOrthoUpper] = useState(false);
+  const [orthoLower, setOrthoLower] = useState(false);
+  const [fullArch, setFullArch] = useState(false);
+  const [bodyDiagram, setBodyDiagram] = useState<BodyDiagramData>({ view: "front", strokes: [] });
+
   const selectedDoctor = (doctors.data ?? []).find((doctor) => doctor.id === doctorId);
   const template = useTemplateForSpecialty(selectedDoctor?.specialty_value_id, organizationId);
   const isOccupational = template.data?.specialty_code === "occupational_health";
+  const canvasType = template.data?.canvas_type ?? "none";
+  const isDental = canvasType === "dental_chart";
+  const isBodyDiagram = canvasType === "body_diagram";
 
   useEffect(() => {
     setFieldValues({});
@@ -215,6 +294,8 @@ function NewVisitDialog({
   const createVisit = useMutation({
     mutationFn: async () => {
       if (!organizationId || !patient || !doctorId) throw new Error("أكمل بيانات المريض والطبيب");
+      // حظر الملف يمنع فتح زيارة جديدة عليه — كان معروضًا في الملف بلا فرض
+      await assertPatientNotBlocked(patient.id, "file");
       const { data: visit, error: visitError } = await supabase
         .from("patient_visits")
         .insert({
@@ -237,6 +318,67 @@ function NewVisitDialog({
           diagnoses.map((code) => ({ visit_id: visit.id, icd10_code_id: code.id })),
         );
         if (diagnosesError) throw diagnosesError;
+      }
+
+      // لوحة الأسنان — تُحفظ فقط إذا اختار الطبيب سنًّا واحدًا على الأقل، حتى
+      // لا يُنشأ سجل فارغ لكل زيارة أسنان لم تُستخدم فيها اللوحة.
+      if (isDental && selectedTeeth.length > 0) {
+        const { error: dentalError } = await supabase.from("dental_chart_entries").insert({
+          visit_id: visit.id,
+          tooth_numbers: selectedTeeth,
+          tooth_type: toothType,
+          main_complaint: mainComplaint.trim() || null,
+          procedure_done: dentalProcedure.trim() || null,
+          diagnosis_icd10_id: diagnoses[0]?.id ?? null,
+          complications: dentalComplications.trim() || null,
+          anesthesia: dentalAnesthesia.trim() || null,
+          prophylactic_antibiotics: dentalAntibiotics.trim() || null,
+          patient_family_education: dentalEducation.trim() || null,
+          is_xray: isXray,
+          ortho_upper: orthoUpper,
+          ortho_lower: orthoLower,
+          full_arch: fullArch,
+          next_visit_plan: nextVisitPlan.trim() || null,
+          created_by: session?.user.id ?? null,
+        });
+        if (dentalError) throw dentalError;
+      }
+
+      /**
+       * المؤشرات الحيوية تُكتب **أيضًا** في `patient_vital_signs` المهيكل.
+       *
+       * القالب يخزّنها في `exam_data` كنص حر داخل jsonb — وهو كافٍ لعرض
+       * الزيارة نفسها، لكنه لا يصلح للتتبّع الزمني: لا يمكن رسم منحنى ضغط
+       * المريض عبر السنة من حقل نصّي داخل jsonb، ولا يُحسب مؤشر كتلة الجسم.
+       * الجدول المهيكل موجود منذ 0006 (وفيه `bmi` عمود محسوب) ولم يكن يُكتب
+       * فيه شيء إطلاقًا.
+       *
+       * القيم غير الرقمية تُترك فارغة لا صفرًا: طبيب كتب "طبيعي" في خانة
+       * النبض لا يعني أن نبض المريض صفر.
+       */
+      const vitals = extractVitals(fieldValues);
+      if (vitals) {
+        const { error: vitalsError } = await supabase.from("patient_vital_signs").insert({
+          organization_id: organizationId,
+          patient_id: patient.id,
+          visit_id: visit.id,
+          ...vitals,
+          created_by: session?.user.id ?? null,
+        });
+        // فشل حفظ المؤشرات لا يُبطل الزيارة نفسها — الزيارة محفوظة بالفعل
+        // وبياناتها في exam_data، والمؤشرات نسخة مهيكلة إضافية.
+        if (vitalsError) console.warn("تعذر حفظ المؤشرات الحيوية المهيكلة", vitalsError);
+      }
+
+      // مخطط الجسم — يُحفظ فقط إذا رُسم عليه شيء فعلًا.
+      if (isBodyDiagram && bodyDiagram.strokes.length > 0) {
+        const { error: diagramError } = await supabase.from("body_diagram_annotations").insert({
+          visit_id: visit.id,
+          diagram_view: bodyDiagram.view,
+          annotation_data: { strokes: bodyDiagram.strokes },
+          created_by: session?.user.id ?? null,
+        });
+        if (diagramError) throw diagramError;
       }
 
       if (isOccupational) {
@@ -272,6 +414,18 @@ function NewVisitDialog({
       setRestrictionsNote("");
       setCertificateNumber("");
       setNextExamDueDate("");
+      setSelectedTeeth([]);
+      setToothType("permanent");
+      setDentalComplications("");
+      setDentalAnesthesia("");
+      setDentalAntibiotics("");
+      setDentalEducation("");
+      setDentalProcedure("");
+      setIsXray(false);
+      setOrthoUpper(false);
+      setOrthoLower(false);
+      setFullArch(false);
+      setBodyDiagram({ view: "front", strokes: [] });
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -341,6 +495,82 @@ function NewVisitDialog({
             </div>
           ))}
 
+          {isDental && (
+            <div className="flex flex-col gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <p className="text-sm font-semibold">لوحة الأسنان</p>
+              <DentalChart
+                toothType={toothType}
+                onToothTypeChange={setToothType}
+                selectedTeeth={selectedTeeth}
+                onSelectedTeethChange={setSelectedTeeth}
+              />
+
+              <div className="flex flex-wrap gap-4 text-sm">
+                <label className="flex cursor-pointer items-center gap-1.5">
+                  <input type="checkbox" checked={isXray} onChange={(e) => setIsXray(e.target.checked)} />
+                  أشعة
+                </label>
+                <label className="flex cursor-pointer items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={orthoUpper}
+                    onChange={(e) => setOrthoUpper(e.target.checked)}
+                  />
+                  تقويم علوي
+                </label>
+                <label className="flex cursor-pointer items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={orthoLower}
+                    onChange={(e) => setOrthoLower(e.target.checked)}
+                  />
+                  تقويم سفلي
+                </label>
+                <label className="flex cursor-pointer items-center gap-1.5">
+                  <input type="checkbox" checked={fullArch} onChange={(e) => setFullArch(e.target.checked)} />
+                  قوس كامل
+                </label>
+              </div>
+
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <Label>الإجراء المنفَّذ</Label>
+                  <Input value={dentalProcedure} onChange={(e) => setDentalProcedure(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>التخدير</Label>
+                  <Input value={dentalAnesthesia} onChange={(e) => setDentalAnesthesia(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>المضادات الحيوية الوقائية</Label>
+                  <Input value={dentalAntibiotics} onChange={(e) => setDentalAntibiotics(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>المضاعفات</Label>
+                  <Input
+                    value={dentalComplications}
+                    onChange={(e) => setDentalComplications(e.target.value)}
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5 sm:col-span-2">
+                  <Label>تثقيف المريض وعائلته</Label>
+                  <Textarea
+                    value={dentalEducation}
+                    onChange={(e) => setDentalEducation(e.target.value)}
+                    rows={2}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {isBodyDiagram && (
+            <div className="flex flex-col gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <p className="text-sm font-semibold">مخطط الجسم</p>
+              <BodyDiagram value={bodyDiagram} onChange={setBodyDiagram} />
+            </div>
+          )}
+
           {isOccupational && (
             <div className="rounded-lg border border-amber-200 bg-amber-50/40 p-3">
               <p className="mb-2 text-sm font-semibold">نتيجة الفحص المهني</p>
@@ -401,11 +631,25 @@ function NewVisitDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label>ملاحظات عامة</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label>ملاحظات عامة</Label>
+              {/* النصوص الجاهزة تُلحَق ولا تستبدل ما كتبه الطبيب */}
+              <CannedTextPicker
+                locationKey="medical_reports"
+                onInsert={(text) => setNotes((prev) => appendCannedText(prev, text))}
+              />
+            </div>
             <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label>خطة المتابعة القادمة</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label>خطة المتابعة القادمة</Label>
+              <CannedTextPicker
+                locationKey="referral_report"
+                label="نص جاهز للخطة"
+                onInsert={(text) => setNextVisitPlan((prev) => appendCannedText(prev, text))}
+              />
+            </div>
             <Textarea value={nextVisitPlan} onChange={(e) => setNextVisitPlan(e.target.value)} />
           </div>
         </div>

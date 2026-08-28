@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Package, Plus } from "lucide-react";
+import { Download, Package, Plus, Upload } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type { ItemRow } from "@/lib/database.types";
@@ -21,6 +21,8 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDialog";
+import LookupSelect from "@/components/shared/LookupSelect";
 
 const ITEM_TYPE_LABELS: Record<ItemRow["item_type"], string> = {
   service: "خدمة طبية",
@@ -29,29 +31,128 @@ const ITEM_TYPE_LABELS: Record<ItemRow["item_type"], string> = {
   lab_service: "خدمة مخبرية",
 };
 
-function useItems(organizationId: string | undefined, search: string) {
+const ITEMS_CAP = 200;
+
+function useItems(
+  organizationId: string | undefined,
+  search: string,
+  categoryId: string,
+  typeFilter: string,
+  statusFilter: string,
+) {
   return useQuery({
-    queryKey: ["items-catalog", organizationId, search],
+    queryKey: ["items-catalog", organizationId, search, categoryId, typeFilter, statusFilter],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       let query = supabase
         .from("items")
-        .select("id, code, name_ar, item_type, price, is_vat_exempt, is_disabled")
+        .select(
+          "id, code, barcode, name_ar, item_type, category_value_id, price, cost_price, is_vat_exempt, is_disabled, category:lookup_values!items_category_value_id_fkey(name_ar)",
+        )
+        .eq("organization_id", organizationId)
         .order("name_ar")
-        .limit(100);
-      if (search.trim()) query = query.ilike("name_ar", `%${search.trim()}%`);
+        .limit(ITEMS_CAP);
+      const term = search.trim();
+      if (term) query = query.or(`name_ar.ilike.%${term}%,code.ilike.%${term}%,barcode.ilike.%${term}%`);
+      if (categoryId) query = query.eq("category_value_id", categoryId);
+      if (typeFilter !== "all") query = query.eq("item_type", typeFilter);
+      if (statusFilter !== "all") query = query.eq("is_disabled", statusFilter === "disabled");
       const { data, error } = await query;
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []) as any[];
     },
   });
 }
 
+/** تصدير الكتالوج المعروض — "لائحة الأسعار" في لقطة 10. */
+function exportItemsCsv(rows: any[]) {
+  const headers = ["الكود", "الباركود", "الاسم", "النوع", "الفئة", "سعر البيع", "التكلفة", "الحالة"];
+  const escape = (v: unknown) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lines = [
+    headers.join(","),
+    ...rows.map((row) => {
+      const category = Array.isArray(row.category) ? row.category[0] : row.category;
+      return [
+        row.code,
+        row.barcode,
+        row.name_ar,
+        ITEM_TYPE_LABELS[row.item_type as ItemRow["item_type"]] ?? row.item_type,
+        category?.name_ar,
+        row.price,
+        row.cost_price,
+        row.is_disabled ? "معطّل" : "نشط",
+      ]
+        .map(escape)
+        .join(",");
+    }),
+  ];
+  const blob = new Blob(["\ufeff" + lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `items-${new Date().toISOString().slice(0, 10)}.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * أعمدة استيراد الأصناف. `code` إلزامي لأن على الجدول قيد
+ * `unique (organization_id, code)` — صنف بلا كود يعني فشل الإدراج كله.
+ */
+const ITEM_IMPORT_COLUMNS: CsvColumn[] = [
+  { key: "code", header: "الكود", required: true },
+  { key: "name_ar", header: "الاسم", required: true },
+  { key: "name_en", header: "الاسم بالإنجليزي" },
+  {
+    key: "item_type",
+    header: "النوع",
+    parse: (raw) => {
+      const map: Record<string, string> = {
+        خدمة: "service",
+        منتج: "product",
+        دواء: "drug",
+        "خدمة مختبر": "lab_service",
+        service: "service",
+        product: "product",
+        drug: "drug",
+        lab_service: "lab_service",
+      };
+      const value = map[raw.trim()];
+      if (!value) throw new Error("النوع يجب أن يكون: خدمة / منتج / دواء / خدمة مختبر");
+      return value;
+    },
+  },
+  {
+    key: "price",
+    header: "السعر",
+    parse: (raw) => {
+      const value = Number(raw.replace(/,/g, ""));
+      if (!Number.isFinite(value) || value < 0) throw new Error("السعر يجب أن يكون رقمًا غير سالب");
+      return value;
+    },
+  },
+  {
+    key: "cost_price",
+    header: "التكلفة",
+    parse: (raw) => {
+      const value = Number(raw.replace(/,/g, ""));
+      if (!Number.isFinite(value) || value < 0) throw new Error("التكلفة يجب أن تكون رقمًا غير سالب");
+      return value;
+    },
+  },
+  { key: "unit", header: "الوحدة" },
+  { key: "barcode", header: "الباركود" },
+];
+
 export default function Services() {
   const { organization } = useOrganizationAccess();
   const [search, setSearch] = useState("");
+  const [categoryId, setCategoryId] = useState("");
+  const [typeFilter, setTypeFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
   const [createOpen, setCreateOpen] = useState(false);
-  const items = useItems(organization?.id, search);
+  const [importOpen, setImportOpen] = useState(false);
+  const items = useItems(organization?.id, search, categoryId, typeFilter, statusFilter);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
@@ -60,16 +161,72 @@ export default function Services() {
           <h1 className="text-2xl font-bold">الخدمات والكتالوج الطبي</h1>
           <p className="text-sm text-muted-foreground">الخدمات والمنتجات والأدوية القابلة للفوترة</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          صنف/خدمة جديدة
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setImportOpen(true)}>
+            <Upload className="h-4 w-4" />
+            استيراد
+          </Button>
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            صنف/خدمة جديدة
+          </Button>
+        </div>
       </div>
 
       <Card>
         <CardHeader>
-          <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="بحث بالاسم..." className="max-w-sm" />
-          <CardDescription>كل الأصناف القابلة للفوترة من مكان واحد</CardDescription>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="بحث بالاسم أو الكود أو الباركود..."
+              className="max-w-xs"
+            />
+            <div className="w-48">
+              <LookupSelect
+                categoryKey="item_categories"
+                value={categoryId}
+                onChange={setCategoryId}
+                placeholder="كل الفئات"
+              />
+            </div>
+            <Select value={typeFilter} onValueChange={setTypeFilter}>
+              <SelectTrigger className="w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">كل الأنواع</SelectItem>
+                {Object.entries(ITEM_TYPE_LABELS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">الكل</SelectItem>
+                <SelectItem value="active">النشط</SelectItem>
+                <SelectItem value="disabled">المعطّل</SelectItem>
+              </SelectContent>
+            </Select>
+            <Button
+              variant="outline"
+              onClick={() => exportItemsCsv(items.data ?? [])}
+              disabled={(items.data ?? []).length === 0}
+            >
+              <Download className="h-4 w-4" />
+              تصدير
+            </Button>
+          </div>
+          <CardDescription>
+            {(items.data ?? []).length >= ITEMS_CAP
+              ? `يُعرض أول ${ITEMS_CAP} صنف — ضيّق البحث`
+              : `${(items.data ?? []).length} صنف`}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {items.isLoading && (
@@ -84,7 +241,9 @@ export default function Services() {
               <TableHeader>
                 <TableRow>
                   <TableHead>الكود</TableHead>
+                  <TableHead>الباركود</TableHead>
                   <TableHead>الاسم</TableHead>
+                  <TableHead>الفئة</TableHead>
                   <TableHead>النوع</TableHead>
                   <TableHead>السعر</TableHead>
                   <TableHead>الضريبة</TableHead>
@@ -92,13 +251,17 @@ export default function Services() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(items.data ?? []).map((item) => (
+                {(items.data ?? []).map((item) => {
+                  const category = Array.isArray(item.category) ? item.category[0] : item.category;
+                  return (
                   <TableRow key={item.id}>
                     <TableCell className="font-mono text-xs">{item.code}</TableCell>
+                    <TableCell className="font-mono text-xs">{item.barcode ?? "—"}</TableCell>
                     <TableCell className="flex items-center gap-2 font-medium">
                       <Package className="h-4 w-4 text-muted-foreground" />
                       {item.name_ar}
                     </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{category?.name_ar ?? "—"}</TableCell>
                     <TableCell>{ITEM_TYPE_LABELS[item.item_type as ItemRow["item_type"]]}</TableCell>
                     <TableCell>{Number(item.price).toLocaleString("ar-SA")} ر.س</TableCell>
                     <TableCell>{item.is_vat_exempt ? "معفى" : "خاضع"}</TableCell>
@@ -108,10 +271,11 @@ export default function Services() {
                       </Badge>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
                 {(items.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
                       لا توجد أصناف مطابقة.
                     </TableCell>
                   </TableRow>
@@ -121,6 +285,16 @@ export default function Services() {
           )}
         </CardContent>
       </Card>
+
+      <CsvImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        table="items"
+        title="استيراد أصناف وخدمات من ملف CSV"
+        invalidateKey="items-catalog"
+        fixedValues={{ organization_id: organization?.id }}
+        columns={ITEM_IMPORT_COLUMNS}
+      />
 
       <NewItemDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
     </div>
@@ -143,6 +317,9 @@ function NewItemDialog({
   const [itemType, setItemType] = useState<ItemRow["item_type"]>("service");
   const [price, setPrice] = useState("0");
   const [isVatExempt, setIsVatExempt] = useState(false);
+  const [barcode, setBarcode] = useState("");
+  const [categoryValueId, setCategoryValueId] = useState("");
+  const [costPrice, setCostPrice] = useState("0");
 
   const createItem = useMutation({
     mutationFn: async () => {
@@ -153,6 +330,9 @@ function NewItemDialog({
         name_ar: nameAr.trim(),
         item_type: itemType,
         price: Number(price) || 0,
+        cost_price: Number(costPrice) || 0,
+        barcode: barcode.trim() || null,
+        category_value_id: categoryValueId || null,
         is_vat_exempt: isVatExempt,
       });
       if (error) throw error;
@@ -164,6 +344,9 @@ function NewItemDialog({
       setNameAr("");
       setItemType("service");
       setPrice("0");
+      setCostPrice("0");
+      setBarcode("");
+      setCategoryValueId("");
       setIsVatExempt(false);
       onOpenChange(false);
     },
@@ -206,6 +389,23 @@ function NewItemDialog({
                 ))}
               </SelectContent>
             </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الباركود</Label>
+            <Input value={barcode} onChange={(e) => setBarcode(e.target.value)} dir="ltr" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الفئة</Label>
+            <LookupSelect
+              categoryKey="item_categories"
+              value={categoryValueId}
+              onChange={setCategoryValueId}
+              placeholder="بدون فئة"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>سعر التكلفة</Label>
+            <Input type="number" min={0} value={costPrice} onChange={(e) => setCostPrice(e.target.value)} />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>السعر</Label>

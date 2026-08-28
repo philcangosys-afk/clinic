@@ -125,13 +125,50 @@ export function mergeTemplate(bodyHtml: string, context: Record<string, string>)
   });
 }
 
-/** يفتح نافذة جديدة بمحتوى HTML جاهز للطباعة — يُستخدم من أي شاشة تولّد مستندًا من قالب (قوالب المستندات، شهادة اللياقة من التقارير...). */
-export function printHtml(title: string, bodyHtml: string) {
+/** مقاسات الورق المدعومة — مطابقة لقيم `print_settings` في 0010. */
+export type PaperSize = "a4" | "thermal_80mm";
+
+/**
+ * تنسيق الطباعة لكل مقاس.
+ *
+ * الطابعة الحرارية 80mm عرض الورق فيها 80mm لكن **عرض الطباعة الفعلي 72mm**
+ * (هامش ميكانيكي لا يمكن الطباعة فيه)، فوضع 80 يقصّ الحافة اليمنى. كما أن
+ * `@page { margin: 0 }` ضروري: هامش المتصفح الافتراضي 1cm على ورق عرضه 8cm
+ * يبتلع ربع السطر. الخط أصغر وسُمك السطر أقل لأن كل ملّيمتر ورق محسوب.
+ */
+const PAPER_STYLES: Record<PaperSize, string> = {
+  a4: `@page{size:A4;margin:12mm}
+       body{font-family:Tahoma,Arial,sans-serif;padding:24px;line-height:1.8;font-size:14px}
+       table{width:100%;border-collapse:collapse}`,
+  thermal_80mm: `@page{size:72mm auto;margin:0}
+       body{font-family:Tahoma,Arial,sans-serif;width:72mm;padding:3mm;line-height:1.45;font-size:11px}
+       h1,h2,h3{font-size:13px;margin:0 0 4px}
+       table{width:100%;border-collapse:collapse;font-size:10px}
+       th,td{padding:1px 2px}
+       /* الحدود الكاملة تستهلك حبرًا وعرضًا بلا فائدة على شريط ضيق */
+       table,th,td{border:none}
+       tbody tr{border-bottom:1px dotted #999}`,
+};
+
+/**
+ * يفتح نافذة جديدة بمحتوى HTML جاهز للطباعة — يُستخدم من أي شاشة تولّد
+ * مستندًا (قوالب المستندات، شهادة اللياقة، الفواتير، الوصفات...).
+ *
+ * `paper` يأتي عادةً من `print_settings` للمؤسسة، فلا يُثبَّت في الشاشات.
+ */
+export function printHtml(title: string, bodyHtml: string, paper: PaperSize = "a4") {
   const win = window.open("", "_blank");
-  if (!win) return;
-  win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8" /><title>${title}</title>
-    <style>body{font-family:Tahoma,Arial,sans-serif;padding:24px;line-height:1.8;}</style>
-    </head><body>${bodyHtml}</body></html>`);
+  // حاجب النوافذ المنبثقة يُعيد null — الصمت هنا يترك المستخدم يظن أن
+  // الطباعة نجحت، فنُعلمه بأن عليه السماح بالنوافذ لهذا الموقع.
+  if (!win) {
+    window.alert("تعذّر فتح نافذة الطباعة — اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.");
+    return;
+  }
+  win.document.write(
+    `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8" /><title>${title}</title>` +
+      `<style>${PAPER_STYLES[paper] ?? PAPER_STYLES.a4}</style>` +
+      `</head><body>${bodyHtml}</body></html>`,
+  );
   win.document.close();
   win.focus();
   win.print();

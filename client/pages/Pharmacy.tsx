@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pill, Plus, X } from "lucide-react";
+import { Pill, Plus, X, Printer } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type {
@@ -30,6 +30,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
+import { printHtml } from "@/lib/document-merge";
 
 const DOSAGE_FORM_LABELS: Record<DrugDosageForm, string> = {
   tablet: "حبوب",
@@ -56,10 +57,18 @@ const ROUTE_LABELS: Record<PrescriptionRoute, string> = {
 };
 
 function useDoctorsList() {
+  const { organization } = useOrganizationAccess();
+  const organizationId = organization?.id;
   return useQuery({
-    queryKey: ["doctors-active-list"],
+    queryKey: ["doctors-active-list", organizationId],
+    enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("doctors").select("id, name_ar").eq("is_enabled", true).order("name_ar");
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .eq("is_enabled", true)
+        .order("name_ar");
       if (error) throw error;
       return data ?? [];
     },
@@ -370,22 +379,191 @@ function useDrugsList(organizationId: string | undefined) {
   });
 }
 
+/**
+ * قائمة الوصفات الكاملة — لا `v_prescriptions_pending_dispensing` وحده.
+ * العرض يقصر النتائج على الوصفات المعلّقة (`status in ('issued',
+ * 'partially_dispensed')`) ولا يحمل أعمدة التأمين ولا الفوترة ولا الأسعار،
+ * فكانت الوصفات المصروفة أو الملغاة غير قابلة للاستعراض أو الطباعة إطلاقًا.
+ */
+function usePrescriptionsList(organizationId: string | undefined, statusFilter: string) {
+  return useQuery({
+    queryKey: ["prescriptions-list", organizationId, statusFilter],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      let query = supabase
+        .from("prescriptions")
+        .select(
+          "id, status, issued_at, notes, insurance_company_name, insurance_policy_number, is_billed, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug:items(name_ar, price))",
+        )
+        .eq("organization_id", organizationId)
+        .order("issued_at", { ascending: false })
+        .limit(300);
+      if (statusFilter !== "all") query = query.eq("status", statusFilter);
+      const { data, error } = await query;
+      if (error) throw error;
+      return (data ?? []) as PrescriptionListRow[];
+    },
+  });
+}
+
+type PrescriptionListRow = {
+  id: string;
+  status: string;
+  issued_at: string;
+  notes: string | null;
+  insurance_company_name: string | null;
+  insurance_policy_number: string | null;
+  is_billed: boolean;
+  patient: { id: string; name_ar: string; file_number: string | null } | null;
+  doctor: { name_ar: string } | null;
+  prescription_items: {
+    id: string;
+    quantity_prescribed: number;
+    dispensed_quantity: number | null;
+    drug: { name_ar: string; price: number | null } | null;
+  }[];
+};
+
+const PRESCRIPTION_STATUS_LABELS: Record<string, string> = {
+  draft: "مسوّدة",
+  issued: "صادرة",
+  partially_dispensed: "صرف جزئي",
+  dispensed: "مصروفة",
+  cancelled: "ملغاة",
+};
+
+/** إجمالي سعر الوصفة = مجموع (الكمية الموصوفة × سعر الدواء) لكل بند. */
+function prescriptionTotal(row: PrescriptionListRow) {
+  return (row.prescription_items ?? []).reduce((sum, line) => {
+    const drug = Array.isArray(line.drug) ? line.drug[0] : line.drug;
+    return sum + Number(line.quantity_prescribed ?? 0) * Number(drug?.price ?? 0);
+  }, 0);
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"]/g, (ch) =>
+    ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : "&quot;",
+  );
+}
+
+function printPrescriptions(rows: PrescriptionListRow[], organizationName: string) {
+  const body = rows
+    .map((row) => {
+      const lines = (row.prescription_items ?? [])
+        .map((line) => {
+          const drug = Array.isArray(line.drug) ? line.drug[0] : line.drug;
+          const lineTotal = Number(line.quantity_prescribed ?? 0) * Number(drug?.price ?? 0);
+          return `<tr><td>${escapeHtml(drug?.name_ar ?? "—")}</td><td>${line.quantity_prescribed}</td><td>${Number(
+            drug?.price ?? 0,
+          ).toFixed(2)}</td><td>${lineTotal.toFixed(2)}</td></tr>`;
+        })
+        .join("");
+      return `<section style="page-break-inside:avoid;margin-bottom:24px;border-bottom:1px solid #ccc;padding-bottom:12px">
+        <h3 style="margin:0 0 6px">${escapeHtml(row.patient?.name_ar ?? "—")} — ملف ${escapeHtml(
+          row.patient?.file_number ?? "—",
+        )}</h3>
+        <p style="margin:0 0 6px;font-size:13px">
+          الطبيب: ${escapeHtml(row.doctor?.name_ar ?? "—")} ·
+          التاريخ: ${new Date(row.issued_at).toLocaleDateString("ar-SA")} ·
+          الحالة: ${escapeHtml(PRESCRIPTION_STATUS_LABELS[row.status] ?? row.status)}
+          ${row.is_billed ? " · تمت الفوترة" : ""}
+        </p>
+        ${
+          row.insurance_company_name
+            ? `<p style="margin:0 0 6px;font-size:13px">التأمين: ${escapeHtml(
+                row.insurance_company_name,
+              )}${row.insurance_policy_number ? ` — بوليصة ${escapeHtml(row.insurance_policy_number)}` : ""}</p>`
+            : ""
+        }
+        <table style="width:100%;border-collapse:collapse;font-size:13px" border="1" cellpadding="4">
+          <thead><tr><th>الدواء</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead>
+          <tbody>${lines}</tbody>
+        </table>
+        <p style="margin:6px 0 0;font-size:13px;font-weight:bold">إجمالي الوصفة: ${prescriptionTotal(row).toFixed(
+          2,
+        )}</p>
+      </section>`;
+    })
+    .join("");
+  printHtml(
+    "قائمة الوصفات",
+    `<h2 style="margin:0 0 4px">${escapeHtml(organizationName)}</h2>
+     <p style="margin:0 0 16px;font-size:13px">قائمة الوصفات — ${rows.length} وصفة · ${new Date().toLocaleDateString(
+       "ar-SA",
+     )}</p>${body}`,
+  );
+}
+
 function PrescriptionsTab() {
   const { organization } = useOrganizationAccess();
-  const prescriptions = usePendingPrescriptions(organization?.id);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [statusFilter, setStatusFilter] = useState("all");
+  const prescriptions = usePrescriptionsList(organization?.id, statusFilter);
   const [createOpen, setCreateOpen] = useState(false);
+
+  const toggleBilled = useMutation({
+    mutationFn: async (row: PrescriptionListRow) => {
+      const { data: affectedRows, error } = await supabase
+        .from("prescriptions")
+        .update({ is_billed: !row.is_billed })
+        .eq("id", row.id)
+        .select("id");
+      if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["prescriptions-list"] });
+      toast({ title: "تم تحديث حالة الفوترة" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التحديث",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const rows = prescriptions.data ?? [];
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-3">
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
         <div>
-          <CardTitle>الوصفات غير المصروفة بالكامل</CardTitle>
-          <CardDescription>تختفي من هذه القائمة تلقائيًا بمجرد صرف كل بنودها</CardDescription>
+          <CardTitle>الوصفات</CardTitle>
+          <CardDescription>كل الوصفات الصادرة مع حالة الصرف والفوترة وبيانات التأمين</CardDescription>
         </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          وصفة جديدة
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="w-40">
+              <SelectValue placeholder="كل الحالات" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">كل الحالات</SelectItem>
+              {Object.entries(PRESCRIPTION_STATUS_LABELS).map(([value, label]) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={rows.length === 0}
+            onClick={() => printPrescriptions(rows, organization?.name ?? "")}
+          >
+            <Printer className="h-4 w-4" />
+            طباعة القائمة
+          </Button>
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            وصفة جديدة
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
         {prescriptions.isLoading && <Skeleton className="h-40 w-full" />}
@@ -393,33 +571,65 @@ function PrescriptionsTab() {
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead>التاريخ</TableHead>
                 <TableHead>المريض</TableHead>
                 <TableHead>الطبيب</TableHead>
                 <TableHead>الحالة</TableHead>
-                <TableHead>عدد الأدوية</TableHead>
-                <TableHead>المصروف بالكامل</TableHead>
+                <TableHead>الأدوية</TableHead>
+                <TableHead>الإجمالي</TableHead>
+                <TableHead>التأمين</TableHead>
+                <TableHead>الفوترة</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(prescriptions.data ?? []).map((pr) => (
-                <TableRow key={pr.prescription_id}>
-                  <TableCell className="font-medium">{pr.patient_name}</TableCell>
-                  <TableCell>{pr.doctor_name ?? "—"}</TableCell>
-                  <TableCell>
-                    <Badge variant={pr.status === "partially_dispensed" ? "warning" : "secondary"}>
-                      {pr.status === "partially_dispensed" ? "صرف جزئي" : "لم يُصرَف"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>{pr.items_count}</TableCell>
-                  <TableCell>
-                    {pr.fully_dispensed_items_count} / {pr.items_count}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {(prescriptions.data ?? []).length === 0 && (
+              {rows.map((row) => {
+                const patient = Array.isArray(row.patient) ? row.patient[0] : row.patient;
+                const doctor = Array.isArray(row.doctor) ? row.doctor[0] : row.doctor;
+                const dispensed = (row.prescription_items ?? []).filter(
+                  (line) => Number(line.dispensed_quantity ?? 0) >= Number(line.quantity_prescribed ?? 0),
+                ).length;
+                return (
+                  <TableRow key={row.id}>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {new Date(row.issued_at).toLocaleDateString("ar-SA")}
+                    </TableCell>
+                    <TableCell className="font-medium">{patient?.name_ar ?? "—"}</TableCell>
+                    <TableCell>{doctor?.name_ar ?? "—"}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          row.status === "dispensed"
+                            ? "success"
+                            : row.status === "cancelled"
+                              ? "destructive"
+                              : row.status === "partially_dispensed"
+                                ? "warning"
+                                : "secondary"
+                        }
+                      >
+                        {PRESCRIPTION_STATUS_LABELS[row.status] ?? row.status}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs tabular-nums">
+                      {dispensed} / {(row.prescription_items ?? []).length}
+                    </TableCell>
+                    <TableCell className="tabular-nums">{prescriptionTotal(row).toFixed(2)}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {row.insurance_company_name ?? "—"}
+                      {row.insurance_policy_number ? ` · ${row.insurance_policy_number}` : ""}
+                    </TableCell>
+                    <TableCell>
+                      <Button size="sm" variant={row.is_billed ? "outline" : "ghost"} onClick={() => toggleBilled.mutate(row)}>
+                        {row.is_billed ? "تمت الفوترة" : "لم تُفوتَر"}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+              {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
-                    لا توجد وصفات معلّقة الصرف حاليًا.
+                  <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                    لا توجد وصفات مطابقة.
                   </TableCell>
                 </TableRow>
               )}
@@ -447,6 +657,14 @@ function NewPrescriptionDialog({
   const drugs = useDrugsList(organizationId);
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [doctorId, setDoctorId] = useState("");
+  /**
+   * بيانات التأمين تُنسَخ إلى الوصفة لا تُقرَأ من ملف المريض وقت العرض:
+   * المريض قد يغيّر شركته أو بوليصته لاحقًا، والوصفة مستند مؤرَّخ يجب أن
+   * يبقى معبّرًا عن حالته يوم إصداره (0042).
+   */
+  const [insuranceCompany, setInsuranceCompany] = useState("");
+  const [insurancePolicy, setInsurancePolicy] = useState("");
+  const [isBilled, setIsBilled] = useState(false);
   const [lines, setLines] = useState<
     { drugId: string; instructions: string; frequency: string; durationDays: string; quantity: string; route: PrescriptionRoute }[]
   >([]);
@@ -462,7 +680,15 @@ function NewPrescriptionDialog({
 
       const { data: prescription, error: prescriptionError } = await supabase
         .from("prescriptions")
-        .insert({ organization_id: organizationId, patient_id: patient.id, doctor_id: doctorId || null, status: "issued" })
+        .insert({
+          organization_id: organizationId,
+          patient_id: patient.id,
+          doctor_id: doctorId || null,
+          status: "issued",
+          insurance_company_name: insuranceCompany.trim() || null,
+          insurance_policy_number: insurancePolicy.trim() || null,
+          is_billed: isBilled,
+        })
         .select("id")
         .single();
       if (prescriptionError) throw prescriptionError;
@@ -482,9 +708,13 @@ function NewPrescriptionDialog({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["pending-prescriptions", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["prescriptions-list"] });
       toast({ title: "تم إصدار الوصفة" });
       setPatient(null);
       setDoctorId("");
+      setInsuranceCompany("");
+      setInsurancePolicy("");
+      setIsBilled(false);
       setLines([]);
       onOpenChange(false);
     },
@@ -532,6 +762,30 @@ function NewPrescriptionDialog({
               </SelectContent>
             </Select>
           </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label>شركة التأمين</Label>
+              <Input
+                value={insuranceCompany}
+                onChange={(e) => setInsuranceCompany(e.target.value)}
+                placeholder="اختياري"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>رقم البوليصة</Label>
+              <Input
+                value={insurancePolicy}
+                onChange={(e) => setInsurancePolicy(e.target.value)}
+                placeholder="اختياري"
+                dir="ltr"
+              />
+            </div>
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input type="checkbox" className="h-4 w-4" checked={isBilled} onChange={(e) => setIsBilled(e.target.checked)} />
+            تمت الفوترة
+          </label>
 
           <Separator />
           <div className="flex items-center justify-between">

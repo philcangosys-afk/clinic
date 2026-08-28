@@ -29,6 +29,8 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import ExamCategoryManager, { ExamCategorySelect } from "@/components/shared/ExamCategoryManager";
+import ResultAttachments from "@/components/shared/ResultAttachments";
 import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
 
@@ -61,7 +63,7 @@ function useLabTests(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("lab_tests")
-        .select("id, code, name_ar, unit, specimen_type, normal_range_text, normal_range_min, normal_range_max, turnaround_hours, is_active")
+        .select("id, code, name_ar, unit, specimen_type, normal_range_text, normal_range_min, normal_range_max, turnaround_hours, is_active, category_id, category:lab_test_categories(name_ar)")
         .eq("organization_id", organizationId)
         .order("name_ar");
       if (error) throw error;
@@ -109,6 +111,7 @@ export default function Laboratory() {
         <TabsList>
           <TabsTrigger value="orders">الطلبات الحالية</TabsTrigger>
           <TabsTrigger value="catalog">كتالوج الفحوصات</TabsTrigger>
+          <TabsTrigger value="categories">التصنيفات</TabsTrigger>
         </TabsList>
 
         <TabsContent value="orders" className="mt-4">
@@ -188,6 +191,13 @@ export default function Laboratory() {
         <TabsContent value="catalog" className="mt-4">
           <LabTestsCatalog organizationId={organization?.id} />
         </TabsContent>
+        <TabsContent value="categories" className="mt-4">
+          <ExamCategoryManager
+            table="lab_test_categories"
+            title="تصنيفات فحوصات المختبر"
+            description="تنظّم الكتالوج (كيمياء حيوية، أمصال، دم...) — الفحص بلا تصنيف يبقى صالحًا للاستعمال"
+          />
+        </TabsContent>
       </Tabs>
 
       <NewLabOrderDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
@@ -222,6 +232,7 @@ function LabTestsCatalog({ organizationId }: { organizationId: string | undefine
             <TableHeader>
               <TableRow>
                 <TableHead>الاسم</TableHead>
+                <TableHead>التصنيف</TableHead>
                 <TableHead>نوع العيّنة</TableHead>
                 <TableHead>الوحدة</TableHead>
                 <TableHead>المدى الطبيعي</TableHead>
@@ -234,6 +245,9 @@ function LabTestsCatalog({ organizationId }: { organizationId: string | undefine
                   <TableCell className="flex items-center gap-2 font-medium">
                     <FlaskConical className="h-4 w-4 text-muted-foreground" />
                     {test.name_ar}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {(Array.isArray(test.category) ? test.category[0] : test.category)?.name_ar ?? "—"}
                   </TableCell>
                   <TableCell>{test.specimen_type}</TableCell>
                   <TableCell>{test.unit ?? "—"}</TableCell>
@@ -249,7 +263,7 @@ function LabTestsCatalog({ organizationId }: { organizationId: string | undefine
               ))}
               {(tests.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
                     لا توجد فحوصات مُعرَّفة بعد. أضف أول فحص.
                   </TableCell>
                 </TableRow>
@@ -279,6 +293,8 @@ function NewLabTestDialog({
   const [rangeMin, setRangeMin] = useState("");
   const [rangeMax, setRangeMax] = useState("");
   const [rangeText, setRangeText] = useState("");
+  // التصنيف: عمود `category_id` موجود منذ 0013 ولم يكن له أي حقل إدخال
+  const [categoryId, setCategoryId] = useState("");
 
   const createTest = useMutation({
     mutationFn: async () => {
@@ -286,6 +302,7 @@ function NewLabTestDialog({
       const { error } = await supabase.from("lab_tests").insert({
         organization_id: organizationId,
         name_ar: nameAr.trim(),
+        category_id: categoryId || null,
         unit: unit.trim() || null,
         normal_range_min: rangeMin ? Number(rangeMin) : null,
         normal_range_max: rangeMax ? Number(rangeMax) : null,
@@ -301,6 +318,7 @@ function NewLabTestDialog({
       setRangeMin("");
       setRangeMax("");
       setRangeText("");
+      setCategoryId("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -322,6 +340,10 @@ function NewLabTestDialog({
           <div className="flex flex-col gap-1.5">
             <Label>اسم الفحص *</Label>
             <Input value={nameAr} onChange={(e) => setNameAr(e.target.value)} autoFocus />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>التصنيف</Label>
+            <ExamCategorySelect table="lab_test_categories" value={categoryId} onChange={setCategoryId} />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>وحدة القياس</Label>
@@ -356,10 +378,18 @@ function NewLabTestDialog({
 // طلب فحص جديد
 // ---------------------------------------------------------------------------
 function useDoctorsList() {
+  const { organization } = useOrganizationAccess();
+  const organizationId = organization?.id;
   return useQuery({
-    queryKey: ["doctors-active-list"],
+    queryKey: ["doctors-active-list", organizationId],
+    enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("doctors").select("id, name_ar").eq("is_enabled", true).order("name_ar");
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .eq("is_enabled", true)
+        .order("name_ar");
       if (error) throw error;
       return data ?? [];
     },
@@ -557,14 +587,19 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
   const saveResult = useMutation({
     mutationFn: async ({ itemId, value }: { itemId: string; value: string }) => {
       const numeric = Number(value);
-      const { error } = await supabase
+      const { data: affectedRows, error } = await supabase
         .from("lab_order_items")
         .update({
           result_value: value,
           result_numeric: Number.isFinite(numeric) && value.trim() !== "" ? numeric : null,
         })
-        .eq("id", itemId);
+        .eq("id", itemId)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["lab-order-details", orderId] });
@@ -581,11 +616,16 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
   const verifyOrder = useMutation({
     mutationFn: async () => {
       if (!orderId) return;
-      const { error } = await supabase
+      const { data: affectedRows, error } = await supabase
         .from("lab_orders")
         .update({ status: "verified", verified_at: new Date().toISOString() })
-        .eq("id", orderId);
+        .eq("id", orderId)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["lab-orders"] });
@@ -596,8 +636,13 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
 
   const toggleCritical = useMutation({
     mutationFn: async ({ itemId, critical }: { itemId: string; critical: boolean }) => {
-      const { error } = await supabase.from("lab_order_items").update({ is_critical: critical }).eq("id", itemId);
+      const { data: affectedRows, error } = await supabase.from("lab_order_items").update({ is_critical: critical }).eq("id", itemId)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["lab-order-details", orderId] }),
   });
@@ -656,6 +701,10 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
             })}
           </div>
         )}
+
+        <Separator />
+        {/* مرفقات النتيجة: ورقة التحليل الأصلية أو صورة الجهاز (دلو 0045) */}
+        {orderId && <ResultAttachments kind="lab" parentId={orderId} />}
 
         <Separator />
         <DialogFooter>

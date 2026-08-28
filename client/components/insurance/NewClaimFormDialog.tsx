@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Save, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { useFormRequirements } from "@/components/insurance/FormRequirementsTab";
+import { useInsuranceSettings } from "@/lib/insurance-settings";
 import type { InsuranceClaimFormType } from "@/lib/database.types";
 import {
   Dialog,
@@ -13,6 +16,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -32,10 +36,18 @@ const FORM_TYPE_LABELS: Record<InsuranceClaimFormType, string> = {
 };
 
 function useDoctorsList() {
+  const { organization } = useOrganizationAccess();
+  const organizationId = organization?.id;
   return useQuery({
-    queryKey: ["doctors-enabled"],
+    queryKey: ["doctors-enabled", organizationId],
+    enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("doctors").select("id, name_ar").eq("is_enabled", true).order("name_ar");
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .eq("is_enabled", true)
+        .order("name_ar");
       if (error) throw error;
       return data ?? [];
     },
@@ -91,7 +103,16 @@ export default function NewClaimFormDialog({
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [doctorId, setDoctorId] = useState("");
   const [membershipId, setMembershipId] = useState("");
-  const [fields, setFields] = useState<FormField[]>([{ key: "1", label: "", value: "" }]);
+  // المفتاح يبدأ بـ`free-` لأن منطق الاحتفاظ بالخانات الحرة يميّزها بذلك —
+  // مفتاح "1" كان سيُسقِط خانة كتبها المستخدم بنفسه عند أول تحميل للتعريفات.
+  const [fields, setFields] = useState<FormField[]>([{ key: "free-init", label: "", value: "" }]);
+  /**
+   * الخانات المعرَّفة لهذا النوع من النماذج (0005) — تُنشأ مسبقًا ولا تُحذف.
+   * كانت الخانات حرة بالكامل، فكان الموظف يخمّن ما تطلبه شركة التأمين، ويكتشف
+   * النقص مع خطاب الرفض بعد أسابيع.
+   */
+  const requirements = useFormRequirements(organizationId, formType);
+  const insuranceSettings = useInsuranceSettings(organizationId);
   const [lines, setLines] = useState<ClaimLine[]>([]);
   const memberships = usePatientMemberships(patient?.id);
 
@@ -99,7 +120,72 @@ export default function NewClaimFormDialog({
     setMembershipId("");
   }, [patient?.id]);
 
-  const addField = () => setFields((prev) => [...prev, { key: `${Date.now()}`, label: "", value: "" }]);
+  /**
+   * عند تغيير نوع النموذج تُعاد تعبئة الخانات المعرَّفة له.
+   *
+   * القيم المُدخَلة في خانة تحمل نفس الاسم تُحفَظ — الموظف الذي كتب "رقم
+   * الموافقة" ثم بدّل النوع لا يجب أن يفقد ما كتبه. والخانات الحرة التي
+   * أضافها بنفسه تبقى كما هي.
+   */
+  /**
+   * إعادة بناء الخانات من التعريفات — تُستدعى من التأثير أدناه وبعد الحفظ.
+   *
+   * لماذا دالة لا سطر مكرَّر: بعد الحفظ لا يتغيّر `requirements.data` مرجعيًا
+   * (react-query يعيد استعمال نفس الكائن حين لا تتغيّر البيانات)، فالتأثير
+   * لا يُعاد تشغيله. تصفير الخانات بلا إعادة بناء كان يترك النموذج الثاني
+   * بخانة فارغة واحدة بلا أي خانة معرَّفة — ويستحيل حفظه إن كانت هناك خانة
+   * إلزامية، لأن التحقّق يطلب خانة لا وجود لها في النموذج.
+   */
+  const resetFields = () => {
+    const defined = requirements.data ?? [];
+    setFields([
+      ...defined.map((requirement) => ({
+        key: `req-${requirement.id}`,
+        label: requirement.field_key,
+        value: "",
+      })),
+      { key: `free-${Date.now()}`, label: "", value: "" },
+    ]);
+  };
+
+  useEffect(() => {
+    // لا يُنتظَر تحميل التعريفات ولا يُتخطّى النوع بلا تعريفات: الخروج المبكر
+    // كان يُبقي حقول النوع السابق ظاهرةً وتُحفَظ في `form_data` الخاص بالنوع
+    // الجديد — فيصل إلى شركة التأمين نموذج DCAF يحمل خانات UCAF.
+    if (requirements.isLoading) return;
+    const defined = requirements.data ?? [];
+    setFields((prev) => {
+      const byLabel = new Map(prev.map((field) => [field.label.trim(), field.value]));
+      const fromRequirements: FormField[] = defined.map((requirement) => ({
+        key: `req-${requirement.id}`,
+        label: requirement.field_key,
+        value: byLabel.get(requirement.field_key) ?? "",
+      }));
+      const definedLabels = new Set(defined.map((requirement) => requirement.field_key));
+      /**
+       * الخانات الحرة تُحتفَظ بها فقط إن كانت من صنع المستخدم (مفتاحها يبدأ
+       * بـ`free-`). الخانة التي جاءت من تعريف النوع السابق (`req-`) تُسقَط:
+       * إبقاؤها كـ"خانة حرة" كان يمرّر خانات النوع السابق إلى النموذج الجديد.
+       */
+      const custom = prev.filter(
+        (field) =>
+          field.key.startsWith("free-") &&
+          field.label.trim() &&
+          !definedLabels.has(field.label.trim()),
+      );
+      return [...fromRequirements, ...custom, { key: `free-${Date.now()}`, label: "", value: "" }];
+    });
+  }, [requirements.data, formType]);
+
+  /** يُستعمل لمنع حذف خانة إلزامية ولتمييزها في العرض. */
+  const requirementByLabel = new Map(
+    (requirements.data ?? []).map((requirement) => [requirement.field_key, requirement]),
+  );
+
+  // بادئة `free-` إلزامية: منطق الاحتفاظ بالخانات الحرة يميّزها بها، وبدونها
+  // كانت الخانة التي يضيفها المستخدم تُحذف عند أول إعادة بناء للحقول.
+  const addField = () =>
+    setFields((prev) => [...prev, { key: `free-${Date.now()}`, label: "", value: "" }]);
   const updateField = (key: string, patch: Partial<FormField>) =>
     setFields((prev) => prev.map((field) => (field.key === key ? { ...field, ...patch } : field)));
   const removeField = (key: string) => setFields((prev) => prev.filter((field) => field.key !== key));
@@ -117,7 +203,12 @@ export default function NewClaimFormDialog({
     key: string,
     item: { id: string; code: string | null; name_ar: string; price: number },
   ) => {
-    const duplicate = lines.some((line) => line.key !== key && line.itemId === item.id);
+    // `prevent_duplicate_services_in_claim_line` كان يُحفَظ ولا يُنفَّذ. المنع
+    // كان مطبَّقًا هنا **بلا شرط**، فالمنشأة التي تعطّله (لخدمات تتكرر بحق،
+    // كجلسات متعددة في مطالبة واحدة) لم تكن تستطيع ذلك.
+    const duplicate =
+      insuranceSettings.data?.prevent_duplicate_services_in_claim_line !== false &&
+      lines.some((line) => line.key !== key && line.itemId === item.id);
     if (duplicate) {
       toast({ variant: "destructive", title: "هذه الخدمة مضافة مسبقًا في هذا النموذج" });
       return;
@@ -133,9 +224,46 @@ export default function NewClaimFormDialog({
   const createForm = useMutation({
     mutationFn: async () => {
       if (!organizationId || !patient) throw new Error("اختر مريضًا أولًا");
-      const formData = Object.fromEntries(
+
+      /**
+       * التحقق من الخانات الإلزامية قبل أي كتابة: نموذج ناقص تَرفضه شركة
+       * التأمين، والرفض يكلّف أسابيع. الفحص هنا لا في القاعدة لأن الخانات
+       * تُخزَّن في `form_data` jsonb ولا يمكن لقيدٍ أن يعرف ما بداخلها.
+       */
+      // التحقق يُرفض إن لم تُحمَّل التعريفات بعد أو فشل تحميلها: تخطّيه بصمت
+      // يعني حفظ نموذج ناقص برسالة نجاح — وهو الضرر نفسه الذي بُنيت الميزة
+      // لمنعه.
+      if (requirements.isLoading)
+        throw new Error("جارٍ تحميل خانات النموذج — أعد المحاولة بعد لحظة");
+      if (requirements.isError)
+        throw new Error("تعذّر تحميل خانات النموذج الإلزامية — لا يمكن الحفظ قبل التحقق منها");
+
+      for (const requirement of requirements.data ?? []) {
+        if (!requirement.is_required) continue;
+        const match = fields.find((field) => field.label.trim() === requirement.field_key);
+        const value = (match?.value ?? "").trim();
+        if (!value) throw new Error(`الخانة "${requirement.field_key}" إلزامية لهذا النموذج`);
+        if (requirement.field_type === "numeric" && !Number.isFinite(Number(value)))
+          throw new Error(`الخانة "${requirement.field_key}" يجب أن تكون رقمًا`);
+      }
+
+      const formData: Record<string, string> = Object.fromEntries(
         fields.filter((field) => field.label.trim()).map((field) => [field.label.trim(), field.value]),
       );
+      /**
+       * إصدار قالب CCHI المستخدم يُحفظ داخل `form_data`.
+       *
+       * `default_ucaf_template` و`default_dcaf_template` كانا يُحفَظان في
+       * الإعدادات ولا يُقرآن في أي مسار. وشركة التأمين تردّ النموذج المُقدَّم
+       * على إصدار قالب قديم، فحفظ الإصدار مع النموذج يجعل سبب الرفض معلومًا
+       * — ولا عمود مخصص له في `insurance_claim_forms`، و`form_data` من نوع
+       * jsonb فيتّسع له بلا هجرة.
+       */
+      const templateVersion =
+        formType === "dcaf"
+          ? insuranceSettings.data?.default_dcaf_template
+          : insuranceSettings.data?.default_ucaf_template;
+      if (templateVersion) formData["__template"] = templateVersion;
       const { data: form, error: formError } = await supabase
         .from("insurance_claim_forms")
         .insert({
@@ -172,7 +300,13 @@ export default function NewClaimFormDialog({
       setPatient(null);
       setDoctorId("");
       setMembershipId("");
-      setFields([{ key: "1", label: "", value: "" }]);
+      // المفتاح يجب أن يبدأ بـ`free-`: منطق إعادة البناء (سطر 130) يميّز
+      // الخانات الحرة بهذه البادئة، ومفتاح "1" كان يجعل السطر يبدو خانة
+      // معرَّفة قديمة فيُسقَط. والأسوأ أن مصفوفة التعريفات لا تتغيّر مرجعيًا
+      // بعد الحفظ (react-query structural sharing)، فلا يُعاد بناء الخانات
+      // إطلاقًا — فيبقى النموذج الثاني بخانة فارغة واحدة، ويستحيل حفظه إن
+      // كانت هناك خانة إلزامية. `resetFields()` يعيد البناء من التعريفات.
+      resetFields();
       setLines([]);
       onOpenChange(false);
     },
@@ -209,6 +343,15 @@ export default function NewClaimFormDialog({
                 ))}
               </SelectContent>
             </Select>
+            {insuranceSettings.data && (
+              <span className="text-xs text-muted-foreground">
+                إصدار القالب:{" "}
+                {formType === "dcaf"
+                  ? insuranceSettings.data.default_dcaf_template
+                  : insuranceSettings.data.default_ucaf_template}{" "}
+                — يُضبط من إعدادات التأمين ويُحفظ مع النموذج
+              </span>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">
@@ -259,25 +402,46 @@ export default function NewClaimFormDialog({
               </Button>
             </div>
             <div className="flex flex-col gap-2">
-              {fields.map((field) => (
-                <div key={field.key} className="flex items-center gap-2">
-                  <Input
-                    placeholder="اسم الحقل"
-                    value={field.label}
-                    onChange={(e) => updateField(field.key, { label: e.target.value })}
-                    className="flex-1"
-                  />
-                  <Input
-                    placeholder="القيمة"
-                    value={field.value}
-                    onChange={(e) => updateField(field.key, { value: e.target.value })}
-                    className="flex-1"
-                  />
-                  <Button size="sm" variant="ghost" onClick={() => removeField(field.key)}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              ))}
+              {fields.map((field) => {
+                const requirement = requirementByLabel.get(field.label.trim());
+                const isDefined = Boolean(requirement);
+                const missing = requirement?.is_required && !field.value.trim();
+                return (
+                  <div key={field.key} className="flex items-center gap-2">
+                    <Input
+                      placeholder="اسم الحقل"
+                      value={field.label}
+                      onChange={(e) => updateField(field.key, { label: e.target.value })}
+                      className="flex-1"
+                      // اسم خانة معرَّفة لا يُعدَّل من هنا: تغييره يفكّ ارتباطها
+                      // بتعريفها فيسقط التحقق من إلزاميتها بلا أن يلاحظ أحد.
+                      readOnly={isDefined}
+                    />
+                    <Input
+                      placeholder={requirement?.is_required ? "إلزامي" : "القيمة"}
+                      value={field.value}
+                      onChange={(e) => updateField(field.key, { value: e.target.value })}
+                      className={`flex-1 ${missing ? "border-destructive" : ""}`}
+                      type={requirement?.field_type === "numeric" ? "number" : "text"}
+                    />
+                    {requirement?.is_required && (
+                      <Badge variant="secondary" className="shrink-0 text-[10px]">
+                        إلزامي
+                      </Badge>
+                    )}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      // الخانة المعرَّفة لا تُحذف — حذفها يلغي التحقق منها
+                      disabled={isDefined}
+                      title={isDefined ? "خانة معرَّفة في إعدادات النماذج" : "حذف"}
+                      onClick={() => removeField(field.key)}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                );
+              })}
             </div>
           </div>
 

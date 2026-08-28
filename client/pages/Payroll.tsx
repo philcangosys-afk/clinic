@@ -23,6 +23,18 @@ import { useToast } from "@/hooks/use-toast";
 function currentMonthLabel() {
   return new Date().toLocaleDateString("ar-SA", { year: "numeric", month: "long" });
 }
+/**
+ * أول يوم في الشهر التالي، لاستعماله مع `.lt` بدل `.lte` على آخر يوم.
+ *
+ * الحساب بـ `Date.UTC` لا بمُنشئ التاريخ المحلي: `new Date("2026-08-01")`
+ * يُفسَّر UTC بينما `new Date(2026, 7, 1)` محلي، والخلط بينهما يزيح الحدّ يومًا
+ * كاملًا في المناطق الشرقية — وهو ما يُسقِط رواتب آخر يوم في الشهر من الكشف.
+ */
+function nextMonthStart(month: string) {
+  const [year, monthIndex] = month.split("-").map(Number);
+  return new Date(Date.UTC(year, monthIndex, 1)).toISOString().slice(0, 10);
+}
+
 function startOfMonthIso() {
   const date = new Date();
   date.setDate(1);
@@ -38,6 +50,9 @@ function useEmployeesWithPayroll(organizationId: string | undefined) {
       const { data: employees, error: employeesError } = await supabase
         .from("employees")
         .select("id, file_number, name_ar, basic_salary, housing_allowance, transportation_allowance, other_allowances, total_salary")
+        // المرشّح كان مفقودًا: سياسة app_is_member تسمح بكل منشأة ينتمي إليها
+        // المستخدم، فكان كشف الرواتب يخلط موظفي منشأتين لمن يعمل في اثنتين.
+        .eq("organization_id", organizationId)
         .eq("status", "active")
         .order("file_number");
       if (employeesError) throw employeesError;
@@ -45,6 +60,7 @@ function useEmployeesWithPayroll(organizationId: string | undefined) {
       const { data: vouchers, error: vouchersError } = await supabase
         .from("financial_vouchers")
         .select("employee_ref_id, amount, voucher_date")
+        .eq("organization_id", organizationId)
         .eq("voucher_type", "salary")
         .gte("voucher_date", startOfMonthIso().slice(0, 10));
       if (vouchersError) throw vouchersError;
@@ -67,7 +83,10 @@ function useSalaryHistory(organizationId: string | undefined, month: string) {
         .eq("organization_id", organizationId)
         .eq("voucher_type", "salary")
         .gte("voucher_date", start)
-        .lte("voucher_date", `${month}-31`)
+        // `${month}-31` يُنتج 2026-02-31 و2026-04-31 — تواريخ لا وجود لها،
+        // فترفضها القاعدة ويفشل **الاستعلام كله**: كشف الرواتب يظهر فارغًا في
+        // فبراير وأبريل ويونيو وسبتمبر ونوفمبر بلا أي رسالة خطأ.
+        .lt("voucher_date", nextMonthStart(month))
         .order("voucher_date", { ascending: false });
       if (error) throw error;
       return data ?? [];

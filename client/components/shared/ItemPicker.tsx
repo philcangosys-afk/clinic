@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Package, Search } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import type { ItemRow } from "@/lib/database.types";
 import { Input } from "@/components/ui/input";
 
@@ -15,22 +16,27 @@ export default function ItemPicker({ onSelect }: { onSelect: (item: ItemSearchRe
   const [results, setResults] = useState<ItemSearchResult[]>([]);
   const [open, setOpen] = useState(false);
 
+  const { organization } = useOrganizationAccess();
+
   useEffect(() => {
-    if (term.trim().length < 1) {
+    if (term.trim().length < 1 || !organization?.id) {
       setResults([]);
       return;
     }
     const handle = setTimeout(async () => {
+      // التقييد بالمؤسسة النشطة: RLS يسمح بكل مؤسسة ينتمي إليها المستخدم،
+      // فبدونه كان صنف مؤسسة أخرى يُضاف كبند في فاتورة هذه المؤسسة.
       const { data } = await supabase
         .from("items")
         .select("id, code, name_ar, price, is_vat_exempt")
+        .eq("organization_id", organization.id)
         .eq("is_disabled", false)
         .or(`name_ar.ilike.%${term.trim()}%,code.ilike.%${term.trim()}%,barcode.ilike.%${term.trim()}%`)
         .limit(8);
       setResults((data as ItemSearchResult[]) ?? []);
     }, 250);
     return () => clearTimeout(handle);
-  }, [term]);
+  }, [term, organization?.id]);
 
   return (
     <div className="relative">

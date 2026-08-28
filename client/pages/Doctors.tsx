@@ -1,10 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Stethoscope } from "lucide-react";
+import { Plus, Stethoscope, Pencil, CalendarClock, Trash2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
-import type { DoctorRow } from "@/lib/database.types";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -23,6 +22,35 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
 
+/** الحقول التي يقرأها/يكتبها نموذج الطبيب (إنشاء وتعديل). */
+export type DoctorFormRow = {
+  id: string;
+  name_ar: string;
+  name_en: string | null;
+  job_title: string | null;
+  clinic_id: string | null;
+  specialty_value_id: string | null;
+  gender: string | null;
+  nationality_value_id: string | null;
+  id_number: string | null;
+  mobile_number: string | null;
+  email: string | null;
+  birth_date: string | null;
+  default_appointment_duration_minutes: number | null;
+  consultation_fee_renewal_days: number | null;
+  free_reviews_count: number | null;
+  patient_waiting_minutes: number | null;
+  notes: string | null;
+  address: string | null;
+  specialty_authority: string | null;
+  specialty_authority_number: string | null;
+  disabled_from_booking: boolean;
+  receive_appointment_confirmation_sms: boolean;
+  hide_patient_messages: boolean;
+  force_session_selection: boolean;
+  is_enabled: boolean;
+};
+
 function useDoctors(organizationId: string | undefined) {
   return useQuery({
     queryKey: ["doctors-list", organizationId],
@@ -31,8 +59,11 @@ function useDoctors(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("doctors")
         .select(
-          "id, file_number, name_ar, name_en, job_title, mobile_number, is_enabled, disabled_from_booking, default_appointment_duration_minutes, clinic:clinics(id, name)",
+          "id, file_number, name_ar, name_en, job_title, clinic_id, specialty_value_id, gender, nationality_value_id, id_number, mobile_number, email, birth_date, notes, address, specialty_authority, specialty_authority_number, consultation_fee_renewal_days, free_reviews_count, patient_waiting_minutes, is_enabled, disabled_from_booking, receive_appointment_confirmation_sms, hide_patient_messages, force_session_selection, default_appointment_duration_minutes, clinic:clinics(id, name)",
         )
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
+        // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
+        .eq("organization_id", organizationId)
         .order("file_number");
       if (error) throw error;
       return data ?? [];
@@ -45,7 +76,14 @@ function useClinicsList(organizationId: string | undefined) {
     queryKey: ["clinics-select", organizationId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("clinics").select("id, name").order("name");
+      const { data, error } = await supabase
+        .from("clinics")
+        .select("id, name")
+        // العيادة تُكتب في `doctors.clinic_id` بلا قيد يربطها بنفس المنشأة —
+        // فبلا هذا الفلتر يمكن إسناد طبيب منشأة إلى عيادة منشأة أخرى.
+        .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
+        .order("name");
       if (error) throw error;
       return (data ?? []) as { id: string; name: string }[];
     },
@@ -55,14 +93,21 @@ function useClinicsList(organizationId: string | undefined) {
 export default function Doctors() {
   const { organization } = useOrganizationAccess();
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<DoctorFormRow | null>(null);
+  const [hoursTarget, setHoursTarget] = useState<{ id: string; name: string } | null>(null);
   const doctors = useDoctors(organization?.id);
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
   const toggleEnabled = useMutation({
     mutationFn: async ({ id, is_enabled }: { id: string; is_enabled: boolean }) => {
-      const { error } = await supabase.from("doctors").update({ is_enabled }).eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("doctors").update({ is_enabled }).eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["doctors-list"] }),
     onError: (error: unknown) =>
@@ -80,7 +125,10 @@ export default function Doctors() {
           <h1 className="text-2xl font-bold">الأطباء</h1>
           <p className="text-sm text-muted-foreground">ملفات الأطباء وإعدادات الحجز الخاصة بكل طبيب</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
+        <Button onClick={() => {
+            setEditing(null);
+            setCreateOpen(true);
+          }}>
           <Plus className="h-4 w-4" />
           طبيب جديد
         </Button>
@@ -132,13 +180,34 @@ export default function Doctors() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => toggleEnabled.mutate({ id: doctor.id, is_enabled: !doctor.is_enabled })}
-                      >
-                        {doctor.is_enabled ? "تعطيل" : "تفعيل"}
-                      </Button>
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="تعديل"
+                          onClick={() => {
+                            setEditing(doctor as unknown as DoctorFormRow);
+                            setCreateOpen(true);
+                          }}
+                        >
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="أوقات الدوام"
+                          onClick={() => setHoursTarget({ id: doctor.id, name: doctor.name_ar })}
+                        >
+                          <CalendarClock className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => toggleEnabled.mutate({ id: doctor.id, is_enabled: !doctor.is_enabled })}
+                        >
+                          {doctor.is_enabled ? "تعطيل" : "تفعيل"}
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -155,7 +224,26 @@ export default function Doctors() {
         </CardContent>
       </Card>
 
-      <NewDoctorDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
+      {createOpen && (
+        <NewDoctorDialog
+          key={editing?.id ?? "new"}
+          open={createOpen}
+          onOpenChange={(next) => {
+            setCreateOpen(next);
+            if (!next) setEditing(null);
+          }}
+          organizationId={organization?.id}
+          initial={editing}
+        />
+      )}
+
+      {hoursTarget && (
+        <WorkingHoursDialog
+          doctorId={hoursTarget.id}
+          doctorName={hoursTarget.name}
+          onClose={() => setHoursTarget(null)}
+        />
+      )}
     </div>
   );
 }
@@ -164,30 +252,49 @@ function NewDoctorDialog({
   open,
   onOpenChange,
   organizationId,
+  initial,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   organizationId: string | undefined;
+  /** عند تمريره تتحول النافذة لوضع التعديل بدل الإنشاء. */
+  initial?: DoctorFormRow | null;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const clinics = useClinicsList(organizationId);
-  const [nameAr, setNameAr] = useState("");
-  const [nameEn, setNameEn] = useState("");
-  const [jobTitle, setJobTitle] = useState("");
-  const [clinicId, setClinicId] = useState("");
-  const [specialtyId, setSpecialtyId] = useState("");
-  const [gender, setGender] = useState<"male" | "female" | "">("");
-  const [nationalityId, setNationalityId] = useState("");
-  const [idNumber, setIdNumber] = useState("");
-  const [mobile, setMobile] = useState("");
-  const [email, setEmail] = useState("");
-  const [birthDate, setBirthDate] = useState("");
-  const [duration, setDuration] = useState("30");
-  const [renewalDays, setRenewalDays] = useState("");
-  const [freeReviews, setFreeReviews] = useState("0");
-  const [waitingMinutes, setWaitingMinutes] = useState("");
-  const [notes, setNotes] = useState("");
+  const [nameAr, setNameAr] = useState(initial?.name_ar ?? "");
+  const [nameEn, setNameEn] = useState(initial?.name_en ?? "");
+  const [jobTitle, setJobTitle] = useState(initial?.job_title ?? "");
+  const [clinicId, setClinicId] = useState(initial?.clinic_id ?? "");
+  const [specialtyId, setSpecialtyId] = useState(initial?.specialty_value_id ?? "");
+  const [gender, setGender] = useState<"male" | "female" | "">((initial?.gender as "male" | "female") ?? "");
+  const [nationalityId, setNationalityId] = useState(initial?.nationality_value_id ?? "");
+  const [idNumber, setIdNumber] = useState(initial?.id_number ?? "");
+  const [mobile, setMobile] = useState(initial?.mobile_number ?? "");
+  const [email, setEmail] = useState(initial?.email ?? "");
+  const [birthDate, setBirthDate] = useState(initial?.birth_date ?? "");
+  const [duration, setDuration] = useState(String(initial?.default_appointment_duration_minutes ?? 30));
+  const [renewalDays, setRenewalDays] = useState(
+    initial?.consultation_fee_renewal_days != null ? String(initial.consultation_fee_renewal_days) : "",
+  );
+  const [freeReviews, setFreeReviews] = useState(String(initial?.free_reviews_count ?? 0));
+  const [waitingMinutes, setWaitingMinutes] = useState(
+    initial?.patient_waiting_minutes != null ? String(initial.patient_waiting_minutes) : "",
+  );
+  const [notes, setNotes] = useState(initial?.notes ?? "");
+  // حقول كانت في جدول doctors منذ 0002 بلا إدخال في الواجهة (لقطة 4)
+  const [address, setAddress] = useState(initial?.address ?? "");
+  const [authority, setAuthority] = useState(initial?.specialty_authority ?? "");
+  const [authorityNumber, setAuthorityNumber] = useState(initial?.specialty_authority_number ?? "");
+  const [disabledFromBooking, setDisabledFromBooking] = useState(Boolean(initial?.disabled_from_booking));
+  const [receiveConfirmationSms, setReceiveConfirmationSms] = useState(
+    Boolean(initial?.receive_appointment_confirmation_sms),
+  );
+  const [hidePatientMessages, setHidePatientMessages] = useState(Boolean(initial?.hide_patient_messages));
+  const [forceSessionSelection, setForceSessionSelection] = useState(
+    Boolean(initial?.force_session_selection),
+  );
 
   const resetForm = () => {
     setNameAr("");
@@ -206,12 +313,19 @@ function NewDoctorDialog({
     setFreeReviews("0");
     setWaitingMinutes("");
     setNotes("");
+    setAddress("");
+    setAuthority("");
+    setAuthorityNumber("");
+    setDisabledFromBooking(false);
+    setReceiveConfirmationSms(false);
+    setHidePatientMessages(false);
+    setForceSessionSelection(false);
   };
 
   const createDoctor = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
-      const { error } = await supabase.from("doctors").insert({
+      const payload = {
         organization_id: organizationId,
         name_ar: nameAr.trim(),
         name_en: nameEn.trim() || null,
@@ -229,13 +343,34 @@ function NewDoctorDialog({
         free_reviews_count: Number(freeReviews) || 0,
         patient_waiting_minutes: waitingMinutes ? Number(waitingMinutes) : null,
         notes: notes.trim() || null,
-      });
-      if (error) throw error;
+        address: address.trim() || null,
+        specialty_authority: authority.trim() || null,
+        specialty_authority_number: authorityNumber.trim() || null,
+        disabled_from_booking: disabledFromBooking,
+        receive_appointment_confirmation_sms: receiveConfirmationSms,
+        hide_patient_messages: hidePatientMessages,
+        force_session_selection: forceSessionSelection,
+      };
+      if (initial) {
+        const { data: affectedRows, error } = await supabase
+          .from("doctors")
+          .update({ ...payload, updated_at: new Date().toISOString() })
+          .eq("id", initial.id)
+          .select("id");
+        if (error) throw error;
+        // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+        // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+        if (!affectedRows || affectedRows.length === 0)
+          throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+      } else {
+        const { error } = await supabase.from("doctors").insert(payload);
+        if (error) throw error;
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["doctors-list"] });
       queryClient.invalidateQueries({ queryKey: ["doctors-enabled"] });
-      toast({ title: "تم حفظ ملف الطبيب" });
+      toast({ title: initial ? "تم تحديث ملف الطبيب" : "تم حفظ ملف الطبيب" });
       resetForm();
       onOpenChange(false);
     },
@@ -336,6 +471,58 @@ function NewDoctorDialog({
             <Input type="number" min={0} value={waitingMinutes} onChange={(e) => setWaitingMinutes(e.target.value)} />
           </div>
           <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label>العنوان</Label>
+            <Input value={address} onChange={(e) => setAddress(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الهيئة المانحة للتخصص</Label>
+            <Input value={authority} onChange={(e) => setAuthority(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>رقم التصنيف بالهيئة</Label>
+            <Input value={authorityNumber} onChange={(e) => setAuthorityNumber(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-2 rounded-lg border p-3 sm:col-span-2">
+            <p className="text-sm font-semibold">إعدادات الحجز والرسائل</p>
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={disabledFromBooking}
+                onChange={(e) => setDisabledFromBooking(e.target.checked)}
+                className="h-4 w-4"
+              />
+              محجوب عن الحجز (لا تظهر له مواعيد جديدة)
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={receiveConfirmationSms}
+                onChange={(e) => setReceiveConfirmationSms(e.target.checked)}
+                className="h-4 w-4"
+              />
+              يستلم رسالة تأكيد المواعيد
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={hidePatientMessages}
+                onChange={(e) => setHidePatientMessages(e.target.checked)}
+                className="h-4 w-4"
+              />
+              حجب المرضى عن رسائل المواعيد
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={forceSessionSelection}
+                onChange={(e) => setForceSessionSelection(e.target.checked)}
+                className="h-4 w-4"
+              />
+              فرض اختيار جلسة عند الحجز
+            </label>
+          </div>
+
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
             <Label>ملاحظات</Label>
             <Input value={notes} onChange={(e) => setNotes(e.target.value)} />
           </div>
@@ -345,6 +532,192 @@ function NewDoctorDialog({
           <Button disabled={!nameAr.trim() || createDoctor.isPending} onClick={() => createDoctor.mutate()}>
             <Stethoscope className="h-4 w-4" />
             {createDoctor.isPending ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// أوقات دوام الطبيب (لقطة 5) — جدول doctor_working_hours كان موجودًا منذ 0002
+// بلا أي واجهة، فلم يكن ممكنًا تحديد أوقات عمل طبيب أو حجب فترة من جدوله
+// ---------------------------------------------------------------------------
+
+type WorkingHourRow = {
+  id: string;
+  doctor_id: string;
+  starts_at: string;
+  ends_at: string;
+  note: string | null;
+  is_blocked: boolean;
+};
+
+
+function WorkingHoursDialog({
+  doctorId,
+  doctorName,
+  onClose,
+}: {
+  doctorId: string;
+  doctorName: string;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [startsAt, setStartsAt] = useState("");
+  const [endsAt, setEndsAt] = useState("");
+  const [note, setNote] = useState("");
+  const [isBlocked, setIsBlocked] = useState(false);
+
+  const hours = useQuery({
+    queryKey: ["doctor-working-hours", doctorId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctor_working_hours")
+        .select("*")
+        .eq("doctor_id", doctorId)
+        .order("starts_at");
+      if (error) throw error;
+      return (data ?? []) as WorkingHourRow[];
+    },
+  });
+
+  const addSlot = useMutation({
+    mutationFn: async () => {
+      if (!startsAt || !endsAt) throw new Error("حدّد وقت البداية والنهاية");
+      if (new Date(startsAt) >= new Date(endsAt))
+        throw new Error("وقت البداية يجب أن يسبق وقت النهاية");
+      // التداخل مع فترة قائمة يُرفض هنا لا في القاعدة، لأن الجدول يسمح به
+      // تقنيًا — وفترتا عمل متداخلتان تُربكان حساب المواعيد المتاحة.
+      const overlapping = (hours.data ?? []).some(
+        (row) => new Date(startsAt) < new Date(row.ends_at) && new Date(endsAt) > new Date(row.starts_at),
+      );
+      if (overlapping) throw new Error("هذه الفترة تتداخل مع فترة مسجَّلة بالفعل");
+
+      const { error } = await supabase.from("doctor_working_hours").insert({
+        doctor_id: doctorId,
+        starts_at: new Date(startsAt).toISOString(),
+        ends_at: new Date(endsAt).toISOString(),
+        note: note.trim() || null,
+        is_blocked: isBlocked,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["doctor-working-hours", doctorId] });
+      toast({ title: "تمت إضافة الفترة" });
+      setNote("");
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const removeSlot = useMutation({
+    mutationFn: async (id: string) => {
+      const { data: affectedRows, error } = await supabase.from("doctor_working_hours").delete().eq("id", id)
+        .select("id");
+      if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["doctor-working-hours", doctorId] }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>أوقات الدوام — د. {doctorName}</DialogTitle>
+          <DialogDescription>
+            فترات العمل تحدد المواعيد المتاحة للحجز، وفترات الحجب تمنع الحجز فيها (إجازة، اجتماع، عملية)
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-3 rounded-lg border p-3">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label>من *</Label>
+              <Input type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>إلى *</Label>
+              <Input type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <Label>ملاحظة</Label>
+              <Input value={note} onChange={(e) => setNote(e.target.value)} />
+            </div>
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={isBlocked}
+              onChange={(e) => setIsBlocked(e.target.checked)}
+              className="h-4 w-4"
+            />
+            فترة حجب (غير متاحة للحجز)
+          </label>
+          <Button className="self-start" disabled={addSlot.isPending} onClick={() => addSlot.mutate()}>
+            <Plus className="h-4 w-4" />
+            إضافة فترة
+          </Button>
+        </div>
+
+        {hours.isLoading && <Skeleton className="h-32 w-full" />}
+        {!hours.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>من</TableHead>
+                <TableHead>إلى</TableHead>
+                <TableHead>النوع</TableHead>
+                <TableHead>ملاحظة</TableHead>
+                <TableHead className="w-16" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(hours.data ?? []).map((row) => (
+                <TableRow key={row.id}>
+                  <TableCell className="text-xs">
+                    {new Date(row.starts_at).toLocaleString("ar-SA")}
+                  </TableCell>
+                  <TableCell className="text-xs">{new Date(row.ends_at).toLocaleString("ar-SA")}</TableCell>
+                  <TableCell>
+                    <Badge variant={row.is_blocked ? "destructive" : "success"}>
+                      {row.is_blocked ? "محجوبة" : "عمل"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="max-w-[10rem] truncate text-sm text-muted-foreground">
+                    {row.note ?? "—"}
+                  </TableCell>
+                  <TableCell>
+                    <Button size="sm" variant="ghost" onClick={() => removeSlot.mutate(row.id)}>
+                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {(hours.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                    لا توجد فترات دوام مسجَّلة لهذا الطبيب.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            إغلاق
           </Button>
         </DialogFooter>
       </DialogContent>
