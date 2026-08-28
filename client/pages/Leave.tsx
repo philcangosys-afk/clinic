@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarCheck2, Check, Plus, X } from "lucide-react";
+import { CalendarCheck2, Check, Plus, X, AlertTriangle } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type { LeaveBalanceCurrentYearView, LeaveRequestStatus, LeaveTypeRow } from "@/lib/database.types";
@@ -11,9 +11,18 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogTrigger,
+  DialogFooter,
+} from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 const STATUS_LABELS: Record<LeaveRequestStatus, string> = {
@@ -140,11 +149,16 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
 
   const decide = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: "approved" | "rejected" }) => {
-      const { error } = await supabase
+      const { data: affectedRows, error } = await supabase
         .from("leave_requests")
         .update({ status, rejection_reason: status === "rejected" ? rejectionReasons[id]?.trim() || null : null })
-        .eq("id", id);
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: (_, vars) => {
       invalidate();
@@ -285,48 +299,287 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
   );
 }
 
+/**
+ * أرصدة الإجازات (لقطة 88).
+ *
+ * **خلل حقيقي كان قائمًا**: مُحفِّز `app_validate_leave_request` (0020)
+ * **يرفض** أي طلب إجازة مدفوعة لا رصيد مُعرَّف له:
+ * «لا يوجد رصيد إجازات مُعرَّف لهذا الموظف لنوع الإجازة "..." لسنة ...».
+ * ولم تكن هناك أي واجهة لإنشاء رصيد — فكانت الإجازات المدفوعة **معطَّلة
+ * بالكامل** في النظام. وكانت الشاشة تقول للمستخدم العكس تمامًا: «تُنشَأ
+ * تلقائيًا عند اعتماد أول طلب إجازة». تحقّقت من الرفض بتنفيذ الحالة فعليًا.
+ *
+ * **`used_days` غير قابل للتعديل من هنا** — يملكه المُحفِّز وحده. تعديله
+ * يدويًا يجعل الرصيد يخالف مجموع الطلبات المعتمَدة فعلًا.
+ */
 function BalancesTab({ organizationId }: { organizationId: string | undefined }) {
   const balances = useLeaveBalances(organizationId);
+  const leaveTypes = useLeaveTypes(organizationId);
+  const employees = useEmployeesList(organizationId);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [generateOpen, setGenerateOpen] = useState(false);
+  const [editing, setEditing] = useState<LeaveBalanceCurrentYearView | null>(null);
+
+  const currentYear = new Date().getFullYear();
+  const paidTypes = (leaveTypes.data ?? []).filter((type) => type.is_paid);
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["leave-balances", organizationId] });
+
+  /**
+   * توليد أرصدة السنة لكل الموظفين النشطين × أنواع الإجازات المدفوعة.
+   *
+   * `ignoreDuplicates` مقصود: القيد الفريد (موظف، نوع، سنة) يمنع التكرار،
+   * والتجاهل يحمي رصيدًا عُدِّل استحقاقه يدويًا من أن يُعاد لقيمة النوع
+   * الافتراضية عند إعادة التوليد — والأهم أنه يمنع لمس `used_days` لصف قائم.
+   */
+  const generate = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد منشأة نشطة");
+      const staff = employees.data ?? [];
+      if (staff.length === 0) throw new Error("لا يوجد موظفون نشطون");
+      if (paidTypes.length === 0)
+        throw new Error("لا توجد أنواع إجازات مدفوعة — عرّف نوعًا في تبويب الأنواع أولًا");
+
+      const rows = staff.flatMap((employee) =>
+        paidTypes.map((type) => ({
+          organization_id: organizationId,
+          employee_id: employee.id,
+          leave_type_id: type.id,
+          year: currentYear,
+          entitled_days: Number(type.annual_entitlement_days) || 0,
+          // used_days يُترك لقيمته الافتراضية (0) — لا يُكتب أبدًا من الواجهة
+        })),
+      );
+
+      const { error } = await supabase
+        .from("leave_balances")
+        .upsert(rows, { onConflict: "employee_id,leave_type_id,year", ignoreDuplicates: true });
+      if (error) throw error;
+      return rows.length;
+    },
+    onSuccess: (count) => {
+      invalidate();
+      toast({
+        title: `عولجت ${count} حالة رصيد لسنة ${currentYear}`,
+        description: "الأرصدة الموجودة مسبقًا تُركت كما هي ولم تُستبدل.",
+      });
+      setGenerateOpen(false);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التوليد",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const saveEntitlement = useMutation({
+    mutationFn: async ({ row, days }: { row: LeaveBalanceCurrentYearView; days: number }) => {
+      if (!Number.isFinite(days) || days < 0) throw new Error("عدد الأيام يجب أن يكون رقمًا غير سالب");
+
+      /**
+       * `used_days` يُقرأ من القاعدة لحظة الحفظ لا من الصف المعروض: القيمة
+       * المعروضة قد تكون قديمة لدقائق، وقد يكون مديرٌ اعتمد طلبًا بينها
+       * وبين الآن. الاعتماد على القيمة القديمة كان يسمح بمستحق أقل من
+       * المستخدَم فعلًا فيصير الرصيد سالبًا — ولا قيد في القاعدة يمنع ذلك.
+       */
+      const { data: current, error: readError } = await supabase
+        .from("leave_balances")
+        .select("used_days")
+        .eq("employee_id", row.employee_id)
+        .eq("leave_type_id", row.leave_type_id)
+        .eq("year", currentYear)
+        .maybeSingle();
+      if (readError) throw readError;
+      const usedNow = Number(current?.used_days ?? row.used_days);
+      if (days < usedNow)
+        throw new Error(
+          `لا يمكن جعل المستحق (${days}) أقل من المستخدَم فعلًا (${usedNow}) — الرصيد سيصبح سالبًا`,
+        );
+      const { data, error } = await supabase
+        .from("leave_balances")
+        .update({ entitled_days: days, updated_at: new Date().toISOString() })
+        .eq("employee_id", row.employee_id)
+        .eq("leave_type_id", row.leave_type_id)
+        .eq("year", currentYear)
+        .select("id");
+      if (error) throw error;
+      // تحديث لا يطابق صفًا ليس خطأً في PostgREST — بلا الفحص تظهر رسالة نجاح كاذبة
+      if (!data || data.length === 0)
+        throw new Error("لم يُحفظ التعديل — تعديل الأرصدة مقيَّد بصفة مدير الموارد البشرية");
+      return days;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "تم تحديث الرصيد المستحق" });
+      setEditing(null);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const rows = balances.data ?? [];
+
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-base">أرصدة الإجازات (السنة الحالية)</CardTitle>
-        <CardDescription>تُحدَّث تلقائيًا عند اعتماد أو رفض طلبات الإجازة — لا تُعدَّل يدويًا</CardDescription>
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
+        <div>
+          <CardTitle className="text-base">أرصدة الإجازات (سنة {currentYear})</CardTitle>
+          <CardDescription>
+            المستحق يُحدَّد هنا، والمستخدَم يُحدِّثه النظام وحده عند اعتماد الطلبات أو إلغائها
+          </CardDescription>
+        </div>
+        <Button size="sm" onClick={() => setGenerateOpen(true)}>
+          <Plus className="h-4 w-4" />
+          توليد أرصدة السنة
+        </Button>
       </CardHeader>
-      <CardContent>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>الموظف</TableHead>
-              <TableHead>نوع الإجازة</TableHead>
-              <TableHead>المستحق</TableHead>
-              <TableHead>المستخدم</TableHead>
-              <TableHead>المتبقي</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(balances.data ?? []).map((b) => (
-              <TableRow key={`${b.employee_id}-${b.leave_type_id}`}>
-                <TableCell className="font-medium">{b.employee_name}</TableCell>
-                <TableCell>{b.leave_type_name}</TableCell>
-                <TableCell>{b.entitled_days}</TableCell>
-                <TableCell>{b.used_days}</TableCell>
-                <TableCell className={b.remaining_days <= 0 ? "text-destructive" : "text-emerald-600"}>
-                  {b.remaining_days}
-                </TableCell>
-              </TableRow>
-            ))}
-            {(balances.data ?? []).length === 0 && (
+      <CardContent className="flex flex-col gap-4">
+        {rows.length === 0 && !balances.isLoading && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>
+              <strong>لا يمكن تقديم أي طلب إجازة مدفوعة قبل تعريف الأرصدة.</strong> النظام يرفض
+              الطلب إن لم يكن للموظف رصيد مُعرَّف لنوع الإجازة في هذه السنة. اضغط «توليد أرصدة
+              السنة» لإنشائها لكل الموظفين النشطين حسب الاستحقاق السنوي المُعرَّف في كل نوع.
+            </span>
+          </div>
+        )}
+
+        {balances.isLoading && <Skeleton className="h-32 w-full" />}
+        {!balances.isLoading && rows.length > 0 && (
+          <Table>
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={5} className="py-6 text-center text-sm text-muted-foreground">
-                  لا توجد أرصدة مُعرَّفة بعد — تُنشَأ تلقائيًا عند اعتماد أول طلب إجازة لكل موظف.
-                </TableCell>
+                <TableHead>الموظف</TableHead>
+                <TableHead>نوع الإجازة</TableHead>
+                <TableHead>المستحق</TableHead>
+                <TableHead>المستخدم</TableHead>
+                <TableHead>المتبقي</TableHead>
+                <TableHead className="w-24" />
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {rows.map((b) => (
+                <TableRow key={`${b.employee_id}-${b.leave_type_id}`}>
+                  <TableCell className="font-medium">{b.employee_name}</TableCell>
+                  <TableCell>{b.leave_type_name}</TableCell>
+                  <TableCell className="tabular-nums">{b.entitled_days}</TableCell>
+                  <TableCell className="tabular-nums text-muted-foreground">{b.used_days}</TableCell>
+                  <TableCell
+                    className={`tabular-nums ${Number(b.remaining_days) <= 0 ? "text-destructive" : "text-emerald-600"}`}
+                  >
+                    {b.remaining_days}
+                  </TableCell>
+                  <TableCell>
+                    <Button size="sm" variant="ghost" onClick={() => setEditing(b)}>
+                      تعديل المستحق
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
       </CardContent>
+
+      <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>توليد أرصدة سنة {currentYear}</DialogTitle>
+            <DialogDescription>
+              يُنشأ رصيد لكل موظف نشط لكل نوع إجازة مدفوعة، بالاستحقاق السنوي المُعرَّف في النوع
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2 text-sm">
+            <p>
+              الموظفون النشطون: <strong>{(employees.data ?? []).length}</strong>
+            </p>
+            <p>
+              أنواع الإجازات المدفوعة: <strong>{paidTypes.length}</strong>
+              {paidTypes.length > 0 && (
+                <span className="text-muted-foreground">
+                  {" "}
+                  ({paidTypes.map((type) => `${type.name_ar} ${type.annual_entitlement_days} يومًا`).join("، ")})
+                </span>
+              )}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              الأرصدة الموجودة مسبقًا لن تتغيّر — لا استحقاقها ولا ما استُخدم منها.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setGenerateOpen(false)}>
+              إلغاء
+            </Button>
+            <Button
+              disabled={generate.isPending || paidTypes.length === 0 || (employees.data ?? []).length === 0}
+              onClick={() => generate.mutate()}
+            >
+              {generate.isPending ? "جارٍ التوليد..." : "توليد"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {editing && (
+        <EditEntitlementDialog
+          key={`${editing.employee_id}-${editing.leave_type_id}`}
+          row={editing}
+          onCancel={() => setEditing(null)}
+          onSave={(days) => saveEntitlement.mutate({ row: editing, days })}
+          saving={saveEntitlement.isPending}
+        />
+      )}
     </Card>
+  );
+}
+
+function EditEntitlementDialog({
+  row,
+  onCancel,
+  onSave,
+  saving,
+}: {
+  row: LeaveBalanceCurrentYearView;
+  onCancel: () => void;
+  onSave: (days: number) => void;
+  saving: boolean;
+}) {
+  const [days, setDays] = useState(String(row.entitled_days));
+  return (
+    <Dialog open onOpenChange={onCancel}>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>تعديل المستحق</DialogTitle>
+          <DialogDescription>
+            {row.employee_name} — {row.leave_type_name}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>الأيام المستحقة</Label>
+            <Input type="number" min={0} step="0.5" value={days} onChange={(e) => setDays(e.target.value)} />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            المستخدَم حاليًا {row.used_days} يومًا — لا يمكن جعل المستحق أقل منه.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>
+            إلغاء
+          </Button>
+          <Button disabled={saving} onClick={() => onSave(Number(days))}>
+            {saving ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

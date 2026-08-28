@@ -92,7 +92,9 @@ async function fetchLiveBadges(organizationId: string, userId?: string): Promise
       safeCount(
         supabase
           .from("v_lab_pending_orders")
-          .select("id", { count: "exact", head: true })
+          // مفتاح هذا العرض اسمه `lab_order_id` لا `id` — طلب عمود
+          // غير موجود كان يُفشل العدّاد بصمت فيبقى الشارة صفرًا دائمًا.
+          .select("lab_order_id", { count: "exact", head: true })
           .eq("organization_id", organizationId) as any,
       ),
     ],
@@ -101,7 +103,9 @@ async function fetchLiveBadges(organizationId: string, userId?: string): Promise
       safeCount(
         supabase
           .from("v_radiology_unreported_orders")
-          .select("id", { count: "exact", head: true })
+          // مفتاح هذا العرض اسمه `radiology_order_id` لا `id` — طلب عمود
+          // غير موجود كان يُفشل العدّاد بصمت فيبقى الشارة صفرًا دائمًا.
+          .select("radiology_order_id", { count: "exact", head: true })
           .eq("organization_id", organizationId) as any,
       ),
     ],
@@ -121,7 +125,9 @@ async function fetchLiveBadges(organizationId: string, userId?: string): Promise
       safeCount(
         supabase
           .from("v_prescriptions_pending_dispensing")
-          .select("id", { count: "exact", head: true })
+          // مفتاح هذا العرض اسمه `prescription_id` لا `id` — طلب عمود
+          // غير موجود كان يُفشل العدّاد بصمت فيبقى الشارة صفرًا دائمًا.
+          .select("prescription_id", { count: "exact", head: true })
           .eq("organization_id", organizationId) as any,
       ),
     ],

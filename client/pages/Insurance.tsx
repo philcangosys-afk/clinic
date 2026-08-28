@@ -1,13 +1,12 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, Check, Plus, ShieldCheck, X } from "lucide-react";
+import { Building2, Check, Plus, Printer, ShieldCheck, X } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type {
   InsuranceClaimBatchStatus,
   InsuranceClaimFormType,
   InsuranceClaimStatus,
-  InsuranceSettingsRow,
   PreauthorizationStatus,
 } from "@/lib/database.types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -29,11 +28,13 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
-  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import PatientPicker from "@/components/shared/PatientPicker";
 import NewClaimFormDialog from "@/components/insurance/NewClaimFormDialog";
+import { useInsuranceSettings } from "@/lib/insurance-settings";
+import { InsuranceSettingsTab } from "@/pages/OperationsSettings";
+import FormRequirementsTab from "@/components/insurance/FormRequirementsTab";
 import { useToast } from "@/hooks/use-toast";
 
 const CLAIM_STATUS_LABELS: Record<InsuranceClaimStatus, string> = {
@@ -57,6 +58,11 @@ const PREAUTH_STATUS_LABELS: Record<PreauthorizationStatus, string> = {
 };
 
 export default function Insurance() {
+  const { organization, membership } = useOrganizationAccess();
+  // نفس فحص شاشة إعدادات التشغيل: التعديل مقصور على المالك ومدير المنشأة،
+  // وهو مطبَّق في RLS أيضًا لا في الواجهة وحدها.
+  const isOrgAdmin =
+    membership?.role_key === "owner" || membership?.role_key === "organization_admin";
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
       <div>
@@ -70,6 +76,7 @@ export default function Insurance() {
           <TabsTrigger value="claims">المطالبات</TabsTrigger>
           <TabsTrigger value="batches">دفعات المطالبات</TabsTrigger>
           <TabsTrigger value="preauth">الموافقات المسبقة</TabsTrigger>
+          <TabsTrigger value="form-fields">خانات النماذج</TabsTrigger>
           <TabsTrigger value="settings">إعدادات التأمين</TabsTrigger>
         </TabsList>
         <TabsContent value="companies">
@@ -84,8 +91,11 @@ export default function Insurance() {
         <TabsContent value="preauth">
           <PreauthTab />
         </TabsContent>
+        <TabsContent value="form-fields">
+          <FormRequirementsTab organizationId={organization?.id} />
+        </TabsContent>
         <TabsContent value="settings">
-          <InsuranceSettingsTab />
+          <InsuranceSettingsTab organizationId={organization?.id} readOnly={!isOrgAdmin} />
         </TabsContent>
       </Tabs>
     </div>
@@ -102,6 +112,7 @@ function useCompanies(organizationId: string | undefined) {
         .select(
           "id, name_ar, name_en, phone, email, tax_number, address, is_disabled, insurance_policies(id, policy_name, policy_number, default_copay_percent, is_disabled)",
         )
+        .eq("organization_id", organizationId)
         .order("name_ar");
       if (error) throw error;
       return data ?? [];
@@ -119,16 +130,30 @@ function CompaniesTab() {
 
   const toggleCompanyDisabled = useMutation({
     mutationFn: async ({ id, is_disabled }: { id: string; is_disabled: boolean }) => {
-      const { error } = await supabase.from("insurance_companies").update({ is_disabled }).eq("id", id);
+      const { data, error } = await supabase
+        .from("insurance_companies")
+        .update({ is_disabled })
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة ويعود الصف لحالته عند أول تحديث للقائمة.
+      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insurance-companies"] }),
   });
 
   const togglePolicyDisabled = useMutation({
     mutationFn: async ({ id, is_disabled }: { id: string; is_disabled: boolean }) => {
-      const { error } = await supabase.from("insurance_policies").update({ is_disabled }).eq("id", id);
+      const { data, error } = await supabase
+        .from("insurance_policies")
+        .update({ is_disabled })
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة ويعود الصف لحالته عند أول تحديث للقائمة.
+      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insurance-companies"] }),
   });
@@ -233,6 +258,8 @@ function MembershipsList({ organizationId }: { organizationId: string | undefine
         .select(
           "id, membership_number, relation, expiry_date, eligibility_status, is_active, patient:patients(name_ar), policy:insurance_policies(policy_name, company:insurance_companies(name_ar))",
         )
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organizationId)
         .order("created_at", { ascending: false })
         .limit(50);
       if (error) throw error;
@@ -242,8 +269,15 @@ function MembershipsList({ organizationId }: { organizationId: string | undefine
 
   const toggleActive = useMutation({
     mutationFn: async ({ id, is_active }: { id: string; is_active: boolean }) => {
-      const { error } = await supabase.from("patient_insurance_memberships").update({ is_active }).eq("id", id);
+      const { data, error } = await supabase
+        .from("patient_insurance_memberships")
+        .update({ is_active })
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة ويعود الصف لحالته عند أول تحديث للقائمة.
+      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["patient-insurance-memberships"] }),
   });
@@ -395,10 +429,41 @@ function NewPolicyDialog({
   const [copay, setCopay] = useState("0");
   const [maxAmount, setMaxAmount] = useState("");
   const [consultationLimit, setConsultationLimit] = useState("");
+  const insuranceSettings = useInsuranceSettings(organizationId);
 
   const createPolicy = useMutation({
     mutationFn: async () => {
       if (!organizationId || !companyId) throw new Error("بيانات غير مكتملة");
+
+      /**
+       * `prevent_duplicate_policy_name` كان يُحفَظ ولا يُنفَّذ.
+       *
+       * الفحص هنا لا في القاعدة لأن القيد الفريد الموجود يشمل الفئة (Class)،
+       * فبوليصتان بنفس الاسم وفئتين مختلفتين تمرّان — وهو بالضبط ما يشتكي منه
+       * من فعّل هذا الإعداد: قائمة بوليصات فيها ثلاثة صفوف باسم واحد لا يفرّق
+       * بينها الموظف عند ربط المريض.
+       *
+       * لا يُتجاوز الفحص عند فشل القراءة: الإعداد حماية من خطأ إدخال، وتخطّيه
+       * صامتًا يعيد المشكلة التي فُعِّل من أجلها.
+       */
+      // `?.` كان يجعل الحارس يُتخطّى صامتًا بينما الاستعلام قيد التحميل أو بعد
+      // فشله — وهو ما ينفيه التعليق أعلاه. `!== false` يعني: امنع ما لم يكن
+      // الإعداد مُعطَّلًا صراحةً.
+      if (insuranceSettings.data?.prevent_duplicate_policy_name !== false) {
+        const { data: existing, error: checkError } = await supabase
+          .from("insurance_policies")
+          .select("id")
+          .eq("organization_id", organizationId)
+          .eq("company_id", companyId)
+          // `_` و`%` في اسم البوليصة محارف بدل في ilike: اسم "Class A_1" كان
+          // يطابق "Class A-1" الموجود فيُمنع حفظ بوليصة مشروعة. تُهرَّب أولًا.
+          .ilike("policy_name", policyName.trim().replace(/[\\%_]/g, "\\$&"))
+          .limit(1);
+        if (checkError) throw checkError;
+        if ((existing ?? []).length > 0)
+          throw new Error("توجد بوليصة بنفس الاسم لهذه الشركة — الإعداد يمنع التكرار");
+      }
+
       const { error } = await supabase.from("insurance_policies").insert({
         organization_id: organizationId,
         company_id: companyId,
@@ -456,10 +521,13 @@ function NewPolicyDialog({
               <Label>نسبة التحمل الافتراضية %</Label>
               <Input type="number" value={copay} onChange={(e) => setCopay(e.target.value)} />
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>الحد الأقصى (اختياري)</Label>
-              <Input type="number" value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} />
-            </div>
+            {/* `disable_patient_max_copay_field` كان يُحفَظ ولا يُنفَّذ */}
+            {!insuranceSettings.data?.disable_patient_max_copay_field && (
+              <div className="flex flex-col gap-1.5">
+                <Label>الحد الأقصى (اختياري)</Label>
+                <Input type="number" value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} />
+              </div>
+            )}
             <div className="flex flex-col gap-1.5">
               <Label>حد الكشفية (اختياري)</Label>
               <Input type="number" value={consultationLimit} onChange={(e) => setConsultationLimit(e.target.value)} />
@@ -503,6 +571,8 @@ function AddMembershipDialog({
       const { data, error } = await supabase
         .from("insurance_policies")
         .select("id, policy_name, company:insurance_companies(name_ar)")
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organizationId)
         .eq("is_disabled", false);
       if (error) throw error;
       return data ?? [];
@@ -642,8 +712,10 @@ function useClaimForms(organizationId: string | undefined, status: string) {
       let query = supabase
         .from("insurance_claim_forms")
         .select(
-          "id, form_type, status, auto_created, created_at, patient:patients(name_ar, file_number), doctor:doctors(name_ar)",
+          "id, form_type, status, auto_created, created_at, form_data, patient:patients(name_ar, file_number, id_number, birth_date, insurance_company_name, insurance_policy_number, insurance_membership_number), doctor:doctors(name_ar)",
         )
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organizationId)
         .order("created_at", { ascending: false })
         .limit(50);
       if (status !== "all") query = query.eq("status", status);
@@ -652,6 +724,74 @@ function useClaimForms(organizationId: string | undefined, status: string) {
       return data ?? [];
     },
   });
+}
+
+/**
+ * طباعة نموذج المطالبة UCAF/DCAF/OCAF (لقطة 62 — موصوفة بـ⭐).
+ *
+ * المواصفة تطلب "مخرجات طباعة قياسية" لكل نوع. النماذج تُخزَّن كحقول حرة في
+ * `form_data` (jsonb)، فالطباعة تعرض بيانات المريض والتأمين الثابتة أولًا ثم
+ * كل حقول النموذج المحفوظة — بدل قالب جامد يُسقط أي حقل أضافه المستخدم.
+ */
+function printClaimForm(form: any) {
+  const win = window.open("", "_blank", "width=900,height=1000");
+  if (!win) return;
+  const patient = Array.isArray(form.patient) ? form.patient[0] : form.patient;
+  const doctor = Array.isArray(form.doctor) ? form.doctor[0] : form.doctor;
+  const typeLabel = FORM_TYPE_LABELS[form.form_type as InsuranceClaimFormType] ?? form.form_type;
+  const esc = (v: unknown) =>
+    String(v ?? "—").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  // form_data قد يكون كائنًا أو مصفوفة {label,value} حسب ما حفظته الواجهة
+  const raw = form.form_data ?? {};
+  const entries: [string, unknown][] = Array.isArray(raw)
+    ? raw.map((f: any) => [f?.label ?? "", f?.value ?? ""])
+    : Object.entries(raw as Record<string, unknown>);
+  const extraRows = entries
+    .filter(([label]) => String(label).trim())
+    .map(([label, value]) => `<tr><th>${esc(label)}</th><td>${esc(value)}</td></tr>`)
+    .join("");
+
+  win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+    <title>${esc(typeLabel)} — ${esc(patient?.name_ar)}</title>
+    <style>
+      body{font-family:"IBM Plex Sans Arabic",Tahoma,sans-serif;padding:28px;color:#152f33}
+      h1{font-size:19px;margin:0 0 2px}
+      .muted{color:#5a6b70;font-size:12px;margin:0 0 16px}
+      h2{font-size:14px;margin:20px 0 6px;padding-bottom:4px;border-bottom:1px solid #d8e3e1}
+      table{width:100%;border-collapse:collapse}
+      th,td{border:1px solid #d8e3e1;padding:7px;text-align:right;font-size:13px}
+      th{background:#f0f6f5;width:34%}
+      .sign{margin-top:36px;display:flex;justify-content:space-between;font-size:13px}
+    </style></head><body>
+    <h1>نموذج ${esc(typeLabel)}</h1>
+    <p class="muted">رقم النموذج: ${esc(form.id)} · التاريخ: ${new Date(form.created_at).toLocaleDateString("ar-SA")}</p>
+
+    <h2>بيانات المريض</h2>
+    <table>
+      <tr><th>الاسم</th><td>${esc(patient?.name_ar)}</td></tr>
+      <tr><th>رقم الملف</th><td>${esc(patient?.file_number)}</td></tr>
+      <tr><th>رقم الهوية</th><td>${esc(patient?.id_number)}</td></tr>
+      <tr><th>تاريخ الميلاد</th><td>${esc(patient?.birth_date)}</td></tr>
+    </table>
+
+    <h2>بيانات التأمين</h2>
+    <table>
+      <tr><th>شركة التأمين</th><td>${esc(patient?.insurance_company_name)}</td></tr>
+      <tr><th>رقم الوثيقة</th><td>${esc(patient?.insurance_policy_number)}</td></tr>
+      <tr><th>رقم العضوية</th><td>${esc(patient?.insurance_membership_number)}</td></tr>
+      <tr><th>الطبيب المعالج</th><td>${esc(doctor?.name_ar)}</td></tr>
+    </table>
+
+    ${extraRows ? `<h2>بيانات النموذج</h2><table>${extraRows}</table>` : ""}
+
+    <div class="sign">
+      <span>توقيع الطبيب: ..............................</span>
+      <span>ختم المنشأة: ..............................</span>
+    </div>
+  </body></html>`);
+  win.document.close();
+  win.print();
 }
 
 function ClaimsTab() {
@@ -664,8 +804,15 @@ function ClaimsTab() {
 
   const updateStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: InsuranceClaimStatus }) => {
-      const { error } = await supabase.from("insurance_claim_forms").update({ status }).eq("id", id);
+      const { data, error } = await supabase
+        .from("insurance_claim_forms")
+        .update({ status })
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة ويعود الصف لحالته عند أول تحديث للقائمة.
+      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insurance-claim-forms"] }),
     onError: (error: unknown) =>
@@ -720,6 +867,9 @@ function ClaimsTab() {
                 <Badge className={CLAIM_STATUS_BADGE[form.status as InsuranceClaimStatus]}>
                   {CLAIM_STATUS_LABELS[form.status as InsuranceClaimStatus]}
                 </Badge>
+                <Button size="sm" variant="ghost" title="طباعة النموذج" onClick={() => printClaimForm(form)}>
+                  <Printer className="h-3.5 w-3.5" />
+                </Button>
                 {form.status === "draft" && (
                   <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: form.id, status: "submitted" })}>
                     إرسال
@@ -763,6 +913,8 @@ function usePreauths(organizationId: string | undefined) {
         .select(
           "id, service_description, requested_amount, status, requested_at, approval_number, note, patient:patients(name_ar), doctor:doctors(name_ar), clinic:clinics(name)",
         )
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organizationId)
         .order("requested_at", { ascending: false })
         .limit(50);
       if (error) throw error;
@@ -781,15 +933,19 @@ function PreauthTab() {
 
   const updateStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: PreauthorizationStatus }) => {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("insurance_preauthorizations")
         .update({
           status,
           responded_at: new Date().toISOString(),
           approval_number: status === "approved" ? approvalNumbers[id]?.trim() || null : null,
         })
-        .eq("id", id);
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر رسالة
+      // نجاح كاذبة ويعود الصف لحالته عند أول تحديث للقائمة.
+      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insurance-preauth"] }),
   });
@@ -880,7 +1036,12 @@ function NewPreauthDialog({
     queryKey: ["doctors-select-preauth", organizationId],
     enabled: open && Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("doctors").select("id, name_ar").eq("is_enabled", true).order("name_ar");
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .eq("is_enabled", true)
+        .order("name_ar");
       if (error) throw error;
       return data ?? [];
     },
@@ -889,7 +1050,12 @@ function NewPreauthDialog({
     queryKey: ["clinics-select-preauth", organizationId],
     enabled: open && Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("clinics").select("id, name").eq("is_disabled", false).order("name");
+      const { data, error } = await supabase
+        .from("clinics")
+        .select("id, name")
+        .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
+        .order("name");
       if (error) throw error;
       return data ?? [];
     },
@@ -1018,6 +1184,8 @@ function useClaimBatches(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("insurance_claim_batches")
         .select("*, company:insurance_companies(name_ar)")
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organizationId)
         .order("created_at", { ascending: false })
         .limit(50);
       if (error) throw error;
@@ -1038,7 +1206,12 @@ function ClaimBatchesTab() {
     queryKey: ["insurance-companies-flat", organization?.id],
     enabled: Boolean(organization?.id),
     queryFn: async () => {
-      const { data, error } = await supabase.from("insurance_companies").select("id, name_ar").eq("is_disabled", false).order("name_ar");
+      const { data, error } = await supabase
+        .from("insurance_companies")
+        .select("id, name_ar")
+        .eq("organization_id", organization?.id)
+        .eq("is_disabled", false)
+        .order("name_ar");
       if (error) throw error;
       return data ?? [];
     },
@@ -1046,11 +1219,15 @@ function ClaimBatchesTab() {
 
   const updateStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: InsuranceClaimBatchStatus }) => {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("insurance_claim_batches")
         .update({ status, submitted_at: status === "submitted" ? new Date().toISOString() : undefined })
-        .eq("id", id);
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة ويعود الصف لحالته عند أول تحديث للقائمة.
+      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insurance-claim-batches"] }),
   });
@@ -1221,6 +1398,7 @@ function BatchItemsDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { organization } = useOrganizationAccess();
   const [invoiceSearch, setInvoiceSearch] = useState("");
   const [invoiceResults, setInvoiceResults] = useState<any[]>([]);
 
@@ -1251,9 +1429,17 @@ function BatchItemsDialog({
 
   const searchInvoices = async () => {
     if (!invoiceSearch.trim()) return;
+    /**
+     * التقييد بالمؤسسة إلزامي: `invoice_number` فريد **داخل المؤسسة** فقط،
+     * وسياسة RLS تسمح بكل مؤسسة ينتمي إليها المستخدم. بدونه كان البحث عن
+     * الفاتورة 1001 يُظهر فاتورتين متطابقتين المظهر من منشأتين مختلفتين،
+     * وإضافة الخطأ منهما تُدرج مبلغ منشأة أخرى في دفعة مطالبات هذه المنشأة
+     * ثم يُرسَل الإجمالي إلى شركة التأمين.
+     */
     const { data } = await supabase
       .from("sales_invoices")
       .select("id, invoice_number, net_amount, is_insurance_invoice, patient:patients(name_ar)")
+      .eq("organization_id", organization?.id)
       .eq("invoice_number", Number(invoiceSearch) || 0)
       .limit(5);
     setInvoiceResults(data ?? []);
@@ -1280,8 +1466,15 @@ function BatchItemsDialog({
 
   const removeItem = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("insurance_claim_batch_items").delete().eq("id", id);
+      const { data, error } = await supabase
+        .from("insurance_claim_batch_items")
+        .delete()
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة ويعود الصف لحالته عند أول تحديث للقائمة.
+      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
       await recalcTotal();
     },
     onSuccess: invalidate,
@@ -1289,8 +1482,15 @@ function BatchItemsDialog({
 
   const setItemStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const { error } = await supabase.from("insurance_claim_batch_items").update({ status }).eq("id", id);
+      const { data, error } = await supabase
+        .from("insurance_claim_batch_items")
+        .update({ status })
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة ويعود الصف لحالته عند أول تحديث للقائمة.
+      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: invalidate,
   });
@@ -1363,171 +1563,10 @@ function BatchItemsDialog({
 }
 
 // ---------------------------------------------------------------------------
-// إعدادات التأمين (insurance_settings)
+// إعدادات التأمين — المحرِّر مشترك مع شاشة إعدادات التشغيل.
+//
+// كانت هنا نسخة ثانية كاملة من المحرِّر بقيم افتراضية معرَّفة مرتين، وكلتاهما
+// `upsert` على نفس الصف — فتعديل في شاشة يُظهِر قيمة قديمة في الأخرى، وأول
+// حفظ من إحداهما قد يدهس ما ضُبط في الأخرى. المكوّن الآن مستورد لا مكرَّر،
+// فيبقى مدخلا الوصول قائمَين ومصدر الحقيقة واحدًا.
 // ---------------------------------------------------------------------------
-const DEFAULT_INSURANCE_SETTINGS: Omit<InsuranceSettingsRow, "organization_id" | "updated_at"> = {
-  vat_responsibility: "patient",
-  default_ucaf_template: "UCAF-2",
-  default_dcaf_template: "DCAF-2",
-  prevent_duplicate_policy_name: true,
-  prevent_duplicate_services_in_claim_line: true,
-  notify_treating_doctor_on_changes: true,
-  notify_form_owner_on_changes: true,
-  disable_patient_max_copay_field: false,
-  auto_create_forms_on_consultation_invoice: true,
-  exclude_offer_discount_invoices_from_auto_create: true,
-  allow_doctor_edit_radiology_data: false,
-};
-
-function InsuranceSettingsTab() {
-  const { organization } = useOrganizationAccess();
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const [form, setForm] = useState(DEFAULT_INSURANCE_SETTINGS);
-
-  const settings = useQuery({
-    queryKey: ["insurance-settings", organization?.id],
-    enabled: Boolean(organization?.id),
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("insurance_settings")
-        .select("*")
-        .eq("organization_id", organization!.id)
-        .maybeSingle();
-      if (error) throw error;
-      return data as InsuranceSettingsRow | null;
-    },
-  });
-
-  useEffect(() => {
-    if (settings.data) {
-      setForm({
-        vat_responsibility: settings.data.vat_responsibility,
-        default_ucaf_template: settings.data.default_ucaf_template,
-        default_dcaf_template: settings.data.default_dcaf_template,
-        prevent_duplicate_policy_name: settings.data.prevent_duplicate_policy_name,
-        prevent_duplicate_services_in_claim_line: settings.data.prevent_duplicate_services_in_claim_line,
-        notify_treating_doctor_on_changes: settings.data.notify_treating_doctor_on_changes,
-        notify_form_owner_on_changes: settings.data.notify_form_owner_on_changes,
-        disable_patient_max_copay_field: settings.data.disable_patient_max_copay_field,
-        auto_create_forms_on_consultation_invoice: settings.data.auto_create_forms_on_consultation_invoice,
-        exclude_offer_discount_invoices_from_auto_create: settings.data.exclude_offer_discount_invoices_from_auto_create,
-        allow_doctor_edit_radiology_data: settings.data.allow_doctor_edit_radiology_data,
-      });
-    }
-  }, [settings.data]);
-
-  const save = useMutation({
-    mutationFn: async () => {
-      if (!organization?.id) throw new Error("لا توجد مؤسسة نشطة");
-      const { error } = await supabase.from("insurance_settings").upsert({ organization_id: organization.id, ...form });
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["insurance-settings", organization?.id] });
-      toast({ title: "تم حفظ إعدادات التأمين" });
-    },
-    onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
-  });
-
-  const toggle = (key: keyof typeof form) => (e: ChangeEvent<HTMLInputElement>) =>
-    setForm((prev) => ({ ...prev, [key]: e.target.checked }));
-
-  return (
-    <Card>
-      <CardHeader>
-        <CardTitle>إعدادات التأمين</CardTitle>
-        <CardDescription>تتحكم في مسؤولية الضريبة، إنشاء نماذج المطالبات تلقائيًا، وتنبيهات تعديلات الأطباء</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        {settings.isLoading && <Skeleton className="h-64 w-full" />}
-        {!settings.isLoading && (
-          <>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="flex flex-col gap-1.5">
-                <Label>مسؤولية الضريبة (VAT)</Label>
-                <select
-                  className="rounded-md border bg-background px-3 py-2 text-sm"
-                  value={form.vat_responsibility}
-                  onChange={(e) => setForm((prev) => ({ ...prev, vat_responsibility: e.target.value as InsuranceSettingsRow["vat_responsibility"] }))}
-                >
-                  <option value="patient">المريض</option>
-                  <option value="insurance_company">شركة التأمين</option>
-                  <option value="by_item_category">حسب فئة الخدمة</option>
-                </select>
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label>قالب UCAF الافتراضي</Label>
-                <Input
-                  value={form.default_ucaf_template}
-                  onChange={(e) => setForm((prev) => ({ ...prev, default_ucaf_template: e.target.value }))}
-                />
-              </div>
-              <div className="flex flex-col gap-1.5">
-                <Label>قالب DCAF الافتراضي</Label>
-                <Input
-                  value={form.default_dcaf_template}
-                  onChange={(e) => setForm((prev) => ({ ...prev, default_dcaf_template: e.target.value }))}
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2">
-                <input type="checkbox" checked={form.prevent_duplicate_policy_name} onChange={toggle("prevent_duplicate_policy_name")} />
-                <Label className="font-normal">منع تكرار اسم البوليصة لنفس الشركة</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={form.prevent_duplicate_services_in_claim_line}
-                  onChange={toggle("prevent_duplicate_services_in_claim_line")}
-                />
-                <Label className="font-normal">منع تكرار الخدمة في بنود نموذج المطالبة نفسه</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <input type="checkbox" checked={form.notify_treating_doctor_on_changes} onChange={toggle("notify_treating_doctor_on_changes")} />
-                <Label className="font-normal">تنبيه الطبيب المعالج عند تعديل نموذج مطالبته</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <input type="checkbox" checked={form.notify_form_owner_on_changes} onChange={toggle("notify_form_owner_on_changes")} />
-                <Label className="font-normal">تنبيه من أنشأ النموذج عند تعديله</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <input type="checkbox" checked={form.disable_patient_max_copay_field} onChange={toggle("disable_patient_max_copay_field")} />
-                <Label className="font-normal">تعطيل حقل "الحد الأقصى لتحمل المريض" في شاشات العضوية</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={form.auto_create_forms_on_consultation_invoice}
-                  onChange={toggle("auto_create_forms_on_consultation_invoice")}
-                />
-                <Label className="font-normal">إنشاء نموذج مطالبة تلقائيًا عند فوترة كشفية تأمين</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={form.exclude_offer_discount_invoices_from_auto_create}
-                  onChange={toggle("exclude_offer_discount_invoices_from_auto_create")}
-                />
-                <Label className="font-normal">استثناء فواتير العروض/الخصومات من الإنشاء التلقائي</Label>
-              </div>
-              <div className="flex items-center gap-2">
-                <input type="checkbox" checked={form.allow_doctor_edit_radiology_data} onChange={toggle("allow_doctor_edit_radiology_data")} />
-                <Label className="font-normal">السماح للطبيب بتعديل بيانات الأشعة في نموذج المطالبة</Label>
-              </div>
-            </div>
-
-            <div>
-              <Button disabled={save.isPending} onClick={() => save.mutate()}>
-                {save.isPending ? "جارٍ الحفظ..." : "حفظ الإعدادات"}
-              </Button>
-            </div>
-          </>
-        )}
-      </CardContent>
-    </Card>
-  );
-}

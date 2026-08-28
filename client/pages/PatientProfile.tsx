@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, Save, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import type { HealthConditionRow, PatientHealthConditionRow, PatientNoteRow, PatientRow } from "@/lib/database.types";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -13,7 +14,18 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LookupSelect from "@/components/shared/LookupSelect";
+import SessionsTab from "@/components/patients/SessionsTab";
+import VitalsTab from "@/components/patients/VitalsTab";
+import CbahiTab from "@/components/patients/CbahiTab";
+import {
+  PatientVisitsTab,
+  PatientPrescriptionsTab,
+  PatientAgreementsTab,
+} from "@/components/patients/PatientContextTabs";
+import WalletTab from "@/components/patients/WalletTab";
+import DocumentsTab from "@/components/patients/DocumentsTab";
 import { useToast } from "@/hooks/use-toast";
 
 function usePatient(id: string | undefined) {
@@ -71,46 +83,135 @@ export default function PatientProfile() {
         </div>
       </div>
 
-      <Tabs defaultValue="overview">
+      {/**
+        * تبويبات على مستويين بدل 12 تبويبًا مسطَّحًا.
+        *
+        * المواصفة تطلب أن يرى الموظف الفحص والوصفات والاتفاقيات **في سياق
+        * المريض**، وإضافتها مسطَّحةً كانت ستجعلها 15 تبويبًا في صف واحد يلتفّ
+        * على ثلاثة أسطر — فيصعب العثور على أي منها. التجميع في أربع مجموعات
+        * يجعل كل تبويب على بُعد نقرتين بدل مسح بصري لصفٍّ طويل.
+        */}
+      <Tabs defaultValue="file">
         <TabsList className="flex h-auto flex-wrap justify-start gap-1">
-          <TabsTrigger value="overview">نظرة عامة</TabsTrigger>
-          <TabsTrigger value="conditions">الحالة الصحية</TabsTrigger>
-          <TabsTrigger value="history">السوابق الصحية</TabsTrigger>
-          <TabsTrigger value="notes">الملاحظات</TabsTrigger>
-          <TabsTrigger value="blocking">الحجب</TabsTrigger>
-          <TabsTrigger value="appointments">المواعيد</TabsTrigger>
-          <TabsTrigger value="invoices">الفواتير</TabsTrigger>
+          <TabsTrigger value="file">الملف</TabsTrigger>
+          <TabsTrigger value="medical">الطبي</TabsTrigger>
+          <TabsTrigger value="financial">المالي</TabsTrigger>
+          <TabsTrigger value="admin">المواعيد والمستندات</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="overview">
-          <OverviewTab patient={patient.data} />
+        <TabsContent value="file" className="mt-4">
+          <Tabs defaultValue="overview">
+            <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+              <TabsTrigger value="overview">نظرة عامة</TabsTrigger>
+              <TabsTrigger value="conditions">الحالة الصحية</TabsTrigger>
+              <TabsTrigger value="history">السوابق الصحية</TabsTrigger>
+              <TabsTrigger value="notes">الملاحظات</TabsTrigger>
+              <TabsTrigger value="blocking">الحجب</TabsTrigger>
+            </TabsList>
+            <TabsContent value="overview" className="mt-4">
+              <OverviewTab patient={patient.data} />
+            </TabsContent>
+            <TabsContent value="conditions" className="mt-4">
+              <HealthConditionsTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="history" className="mt-4">
+              <MedicalHistoryTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="notes" className="mt-4">
+              <NotesTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="blocking" className="mt-4">
+              <BlockingTab patient={patient.data} />
+            </TabsContent>
+          </Tabs>
         </TabsContent>
-        <TabsContent value="conditions">
-          <HealthConditionsTab patientId={patient.data.id} />
+
+        <TabsContent value="medical" className="mt-4">
+          <Tabs defaultValue="visits">
+            <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+              <TabsTrigger value="visits">الزيارات والفحوصات</TabsTrigger>
+              <TabsTrigger value="vitals">المؤشرات الحيوية</TabsTrigger>
+              <TabsTrigger value="prescriptions">الوصفات</TabsTrigger>
+              <TabsTrigger value="sessions">الجلسات</TabsTrigger>
+              <TabsTrigger value="cbahi">الجودة والسلامة</TabsTrigger>
+            </TabsList>
+            <TabsContent value="visits" className="mt-4">
+              <PatientVisitsTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="vitals" className="mt-4">
+              <VitalsTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="prescriptions" className="mt-4">
+              <PatientPrescriptionsTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="sessions" className="mt-4">
+              <SessionsTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="cbahi" className="mt-4">
+              <CbahiTab patientId={patient.data.id} />
+            </TabsContent>
+          </Tabs>
         </TabsContent>
-        <TabsContent value="history">
-          <MedicalHistoryTab patientId={patient.data.id} />
+
+        <TabsContent value="financial" className="mt-4">
+          <Tabs defaultValue="invoices">
+            <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+              <TabsTrigger value="invoices">الفواتير</TabsTrigger>
+              <TabsTrigger value="agreements">الاتفاقيات</TabsTrigger>
+              <TabsTrigger value="wallet">المحفظة</TabsTrigger>
+            </TabsList>
+            <TabsContent value="invoices" className="mt-4">
+              <InvoicesTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="agreements" className="mt-4">
+              <PatientAgreementsTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="wallet" className="mt-4">
+              <WalletTab patientId={patient.data.id} />
+            </TabsContent>
+          </Tabs>
         </TabsContent>
-        <TabsContent value="notes">
-          <NotesTab patientId={patient.data.id} />
-        </TabsContent>
-        <TabsContent value="blocking">
-          <BlockingTab patient={patient.data} />
-        </TabsContent>
-        <TabsContent value="appointments">
-          <AppointmentsTab patientId={patient.data.id} />
-        </TabsContent>
-        <TabsContent value="invoices">
-          <InvoicesTab patientId={patient.data.id} />
+
+        <TabsContent value="admin" className="mt-4">
+          <Tabs defaultValue="appointments">
+            <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+              <TabsTrigger value="appointments">المواعيد</TabsTrigger>
+              <TabsTrigger value="documents">المستندات</TabsTrigger>
+            </TabsList>
+            <TabsContent value="appointments" className="mt-4">
+              <AppointmentsTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="documents" className="mt-4">
+              <DocumentsTab patientId={patient.data.id} />
+            </TabsContent>
+          </Tabs>
         </TabsContent>
       </Tabs>
     </div>
   );
 }
 
+/** قيمة "بدون" في قائمة الطبيب المعالج (Select لا يقبل قيمة فارغة). */
+const NO_DOCTOR = "__none__";
+
 function OverviewTab({ patient }: { patient: PatientRow }) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const doctors = useQuery({
+    queryKey: ["doctors-for-patient", patient.organization_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", patient.organization_id)
+        // عمود التفعيل في `doctors` اسمه `is_enabled` لا `is_disabled` (0002).
+        // الاستعلام القديم كان يفشل كليًا فتبقى قائمة الأطباء فارغة دائمًا.
+        .eq("is_enabled", true)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
   const [form, setForm] = useState({
     name_ar: patient.name_ar ?? "",
     name_en: patient.name_en ?? "",
@@ -122,6 +223,9 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
     passport_number: patient.passport_number ?? "",
     nationality_value_id: patient.nationality_value_id ?? "",
     profession_value_id: patient.profession_value_id ?? "",
+    // `city_value_id` كان عمودًا ميّتًا بمرشّح حيّ: شاشة المرضى تصفّي به
+    // (Patients.tsx:129) بلا أي حقل إدخال هنا — فالمرشّح لا يُرجع نتيجة أبدًا.
+    city_value_id: patient.city_value_id ?? "",
     blood_type: patient.blood_type ?? "",
     guarantor_name: patient.guarantor_name ?? "",
     guarantor_number: patient.guarantor_number ?? "",
@@ -133,11 +237,31 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
     insurance_membership_number: patient.insurance_membership_number ?? "",
     default_discount_percent: String(patient.default_discount_percent ?? 0),
     general_note: patient.general_note ?? "",
+    // حقول كانت في جدول patients منذ 0002 بلا أي إدخال في الواجهة (لقطة 1)
+    treating_doctor_id: patient.treating_doctor_id ?? "",
+    tax_number: patient.tax_number ?? "",
+    is_tax_registered: Boolean(patient.is_tax_registered),
+    children_count: String(patient.children_count ?? 0),
+    email_2: patient.email_2 ?? "",
+    father_whatsapp: patient.father_whatsapp ?? "",
+    website: patient.website ?? "",
+    district: patient.district ?? "",
+    street: patient.street ?? "",
+    building_number: patient.building_number ?? "",
+    postal_code: patient.postal_code ?? "",
+    father_id_number: patient.father_id_number ?? "",
+    mother_id_number: patient.mother_id_number ?? "",
+    guarantor_details: patient.guarantor_details ?? "",
+    insurance_policy_category: patient.insurance_policy_category ?? "",
+    insurance_relation: patient.insurance_relation ?? "",
+    insurance_membership_expiry: patient.insurance_membership_expiry ?? "",
+    local_order_weight_kg:
+      patient.local_order_weight_kg != null ? String(patient.local_order_weight_kg) : "",
   });
 
   const save = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase
+      const { data: affectedRows, error } = await supabase
         .from("patients")
         .update({
           name_ar: form.name_ar.trim(),
@@ -150,6 +274,7 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
           passport_number: form.passport_number.trim() || null,
           nationality_value_id: form.nationality_value_id || null,
           profession_value_id: form.profession_value_id || null,
+          city_value_id: form.city_value_id || null,
           blood_type: form.blood_type || null,
           guarantor_name: form.guarantor_name.trim() || null,
           guarantor_number: form.guarantor_number.trim() || null,
@@ -161,9 +286,34 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
           insurance_membership_number: form.insurance_membership_number.trim() || null,
           default_discount_percent: Number(form.default_discount_percent) || 0,
           general_note: form.general_note.trim() || null,
+          treating_doctor_id: form.treating_doctor_id || null,
+          tax_number: form.tax_number.trim() || null,
+          is_tax_registered: form.is_tax_registered,
+          children_count: Number(form.children_count) || 0,
+          email_2: form.email_2.trim() || null,
+          father_whatsapp: form.father_whatsapp.trim() || null,
+          website: form.website.trim() || null,
+          district: form.district.trim() || null,
+          street: form.street.trim() || null,
+          building_number: form.building_number.trim() || null,
+          postal_code: form.postal_code.trim() || null,
+          father_id_number: form.father_id_number.trim() || null,
+          mother_id_number: form.mother_id_number.trim() || null,
+          guarantor_details: form.guarantor_details.trim() || null,
+          insurance_policy_category: form.insurance_policy_category.trim() || null,
+          insurance_relation: form.insurance_relation.trim() || null,
+          insurance_membership_expiry: form.insurance_membership_expiry || null,
+          local_order_weight_kg: form.local_order_weight_kg.trim()
+            ? Number(form.local_order_weight_kg)
+            : null,
         })
-        .eq("id", patient.id);
+        .eq("id", patient.id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["patient", patient.id] });
@@ -178,7 +328,8 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
       }),
   });
 
-  const set = (key: keyof typeof form, value: string) => setForm((prev) => ({ ...prev, [key]: value }));
+  const set = (key: keyof typeof form, value: string | boolean) =>
+    setForm((prev) => ({ ...prev, [key]: value }));
 
   return (
     <Card>
@@ -236,6 +387,14 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
           />
         </div>
         <div className="flex flex-col gap-1.5">
+          <Label>المدينة</Label>
+          <LookupSelect
+            categoryKey="cities"
+            value={form.city_value_id}
+            onChange={(v) => set("city_value_id", v)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
           <Label>فصيلة الدم</Label>
           <Input value={form.blood_type} onChange={(e) => set("blood_type", e.target.value)} placeholder="مثال: O+" />
         </div>
@@ -282,6 +441,131 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
             onChange={(e) => set("insurance_membership_number", e.target.value)}
           />
         </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>فئة الوثيقة</Label>
+          <Input
+            value={form.insurance_policy_category}
+            onChange={(e) => set("insurance_policy_category", e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>صلة القرابة بحامل الوثيقة</Label>
+          <Input value={form.insurance_relation} onChange={(e) => set("insurance_relation", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>انتهاء العضوية التأمينية</Label>
+          <Input
+            type="date"
+            value={form.insurance_membership_expiry}
+            onChange={(e) => set("insurance_membership_expiry", e.target.value)}
+          />
+        </div>
+
+        <div className="sm:col-span-2">
+          <p className="border-t pt-3 text-sm font-semibold">الطبيب المعالج والعنوان التفصيلي</p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>الطبيب المعالج</Label>
+          <Select
+            value={form.treating_doctor_id || NO_DOCTOR}
+            onValueChange={(value) => set("treating_doctor_id", value === NO_DOCTOR ? "" : value)}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="بدون" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_DOCTOR}>بدون</SelectItem>
+              {(doctors.data ?? []).map((doctor) => (
+                <SelectItem key={doctor.id} value={doctor.id}>
+                  {doctor.name_ar}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>الحي</Label>
+          <Input value={form.district} onChange={(e) => set("district", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>الشارع</Label>
+          <Input value={form.street} onChange={(e) => set("street", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>رقم المبنى</Label>
+          <Input value={form.building_number} onChange={(e) => set("building_number", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>الرمز البريدي</Label>
+          <Input value={form.postal_code} onChange={(e) => set("postal_code", e.target.value)} />
+        </div>
+
+        <div className="sm:col-span-2">
+          <p className="border-t pt-3 text-sm font-semibold">بيانات إضافية</p>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>الرقم الضريبي</Label>
+          <Input value={form.tax_number} onChange={(e) => set("tax_number", e.target.value)} dir="ltr" />
+        </div>
+        <div className="flex items-end">
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={form.is_tax_registered}
+              onChange={(e) => set("is_tax_registered", e.target.checked)}
+              className="h-4 w-4"
+            />
+            مسجَّل ضريبيًا
+          </label>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>عدد الأولاد</Label>
+          <Input
+            type="number"
+            min={0}
+            value={form.children_count}
+            onChange={(e) => set("children_count", e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>الوزن (كجم)</Label>
+          <Input
+            type="number"
+            min={0}
+            step="0.01"
+            value={form.local_order_weight_kg}
+            onChange={(e) => set("local_order_weight_kg", e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>بريد إلكتروني 2</Label>
+          <Input value={form.email_2} onChange={(e) => set("email_2", e.target.value)} dir="ltr" />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>واتساب الأب</Label>
+          <Input value={form.father_whatsapp} onChange={(e) => set("father_whatsapp", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>الموقع الإلكتروني</Label>
+          <Input value={form.website} onChange={(e) => set("website", e.target.value)} dir="ltr" />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>هوية الأب</Label>
+          <Input value={form.father_id_number} onChange={(e) => set("father_id_number", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>هوية الأم</Label>
+          <Input value={form.mother_id_number} onChange={(e) => set("mother_id_number", e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1.5 sm:col-span-2">
+          <Label>بيانات الكفيل التفصيلية</Label>
+          <Textarea
+            value={form.guarantor_details}
+            onChange={(e) => set("guarantor_details", e.target.value)}
+            rows={2}
+          />
+        </div>
+
         <div className="flex flex-col gap-1.5 sm:col-span-2">
           <Label>ملاحظة عامة</Label>
           <Textarea value={form.general_note} onChange={(e) => set("general_note", e.target.value)} />
@@ -421,19 +705,29 @@ function NotesTab({ patientId }: { patientId: string }) {
 
   const toggleDisabled = useMutation({
     mutationFn: async (note: PatientNoteRow) => {
-      const { error } = await supabase
+      const { data: affectedRows, error } = await supabase
         .from("patient_notes")
         .update({ is_disabled: !note.is_disabled })
-        .eq("id", note.id);
+        .eq("id", note.id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: invalidate,
   });
 
   const removeNote = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("patient_notes").delete().eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("patient_notes").delete().eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: invalidate,
     onError: (error: unknown) =>
@@ -501,11 +795,20 @@ function NotesTab({ patientId }: { patientId: string }) {
 function HealthConditionsTab({ patientId }: { patientId: string }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { organization } = useOrganizationAccess();
+  const organizationId = organization?.id;
 
   const conditions = useQuery({
-    queryKey: ["health-conditions"],
+    queryKey: ["health-conditions", organizationId],
+    enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("health_conditions").select("*").order("sort_order");
+      // الأمراض المزمنة: صفوف نظامية (organization_id فارغ) + ما تضيفه
+      // المنشأة. بلا التقييد كان عضو منشأتين يرى أمراض المنشأة الأخرى أيضًا.
+      const { data, error } = await supabase
+        .from("health_conditions")
+        .select("*")
+        .or(`organization_id.is.null,organization_id.eq.${organizationId}`)
+        .order("sort_order");
       if (error) throw error;
       return (data ?? []) as HealthConditionRow[];
     },
@@ -644,8 +947,13 @@ function BlockingTab({ patient }: { patient: PatientRow }) {
         patch[f.key] = form[f.key];
         patch[f.reasonKey] = form[f.key] ? (String(form[f.reasonKey] ?? "").trim() || null) : null;
       }
-      const { error } = await supabase.from("patients").update(patch).eq("id", patient.id);
+      const { data: affectedRows, error } = await supabase.from("patients").update(patch).eq("id", patient.id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["patient", patient.id] });

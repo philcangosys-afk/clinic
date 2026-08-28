@@ -82,6 +82,7 @@ export interface LookupValueRow {
   category_id: UUID;
   name_ar: string;
   name_en: string | null;
+  code: string | null;
   parent_value_id: UUID | null;
   sort_order: number;
   extra: Record<string, unknown> | null;
@@ -300,7 +301,10 @@ export interface SalesInvoiceRow {
   external_customer_name: string | null;
   external_customer_mobile: string | null;
   invoice_number: number;
+  zatca_invoice_number: string | null;
   invoice_type: "sale" | "return";
+  nationality_value_id: UUID | null;
+  source_value_id: UUID | null;
   is_temporary: boolean;
   is_b2b: boolean;
   status: SalesInvoiceStatus;
@@ -519,6 +523,7 @@ export interface OrganizationVatSettingsRow {
   block_invoice_without_nationality_or_id: boolean;
   vat_exemption_disabled_for_customer_types: boolean;
   vat_exemption_disabled_for_items: boolean;
+  vat_exempt_nationality_value_ids: UUID[];
   updated_at: string;
 }
 
@@ -1728,6 +1733,10 @@ export interface AppointmentWithRelations extends AppointmentRow {
 
 export interface SalesInvoiceWithPatient extends SalesInvoiceRow {
   patient?: Pick<PatientRow, "id" | "name_ar" | "file_number"> | null;
+  /** يُجلب في قائمة الفواتير لعرض عمود الطبيب المعالج. */
+  doctor?: { name_ar: string } | null;
+  /** جنسية الفاتورة كما سُجِّلت وقت الإصدار (لا جنسية المريض اليوم). */
+  nationality?: { name_ar: string } | null;
 }
 
 export interface TreatmentAgreementRow {
@@ -1881,4 +1890,89 @@ export interface CustomReportRow {
   created_by: UUID | null;
   created_at: string;
   updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// سد فجوات تدقيق اللقطات — المرحلة الأولى (جداول جاهزة كانت بلا واجهة)
+// 0037_documents_storage_and_audit_view.sql
+// ---------------------------------------------------------------------------
+
+/** تراخيص المنشأة — الجدول موجود منذ 0001 وبقي بلا شاشة (لقطة 79). */
+export interface FacilityLicenseRow {
+  id: UUID;
+  organization_id: UUID;
+  authority_name: string;
+  license_number: string;
+  start_date: string | null;
+  end_date: string;
+  is_disabled: boolean;
+  created_at: string;
+}
+
+/** شركات زاتكا — تُستخدم لربط المستودعات والعيادات. */
+export interface ZatcaCompanyRow {
+  id: UUID;
+  organization_id: UUID;
+  name: string;
+  vat_number: string;
+  environment: "sandbox" | "simulation" | "production";
+  created_at: string;
+}
+
+/** محفظة المريض — الجدول موجود منذ 0001 وبقي بلا واجهة (لقطة 131). */
+export interface PatientWalletRow {
+  patient_id: UUID;
+  organization_id: UUID;
+  balance: number;
+  updated_at: string;
+}
+
+export type WalletTransactionType = "top_up" | "deduction" | "refund" | "adjustment";
+
+export interface PatientWalletTransactionRow {
+  id: number;
+  organization_id: UUID;
+  patient_id: UUID;
+  transaction_type: WalletTransactionType;
+  amount: number;
+  related_voucher_id: UUID | null;
+  related_invoice_id: UUID | null;
+  note: string | null;
+  created_by: UUID | null;
+  created_at: string;
+}
+
+/** مستندات المريض — الجدول موجود منذ 0006 وبقي بلا واجهة (لقطة 41). */
+export interface PatientDocumentRow {
+  id: UUID;
+  organization_id: UUID;
+  patient_id: UUID;
+  visit_id: UUID | null;
+  category: "image" | "document";
+  doc_type_value_id: UUID | null;
+  storage_path: string;
+  file_name: string | null;
+  note: string | null;
+  uploaded_by: UUID | null;
+  created_at: string;
+}
+
+/** قائمة انتظار المواعيد — الجدول موجود منذ 0002 وبقي بلا واجهة (لقطة 102). */
+export type WaitlistStatus = "waiting" | "booked" | "cancelled";
+
+export interface AppointmentWaitlistRow {
+  id: UUID;
+  organization_id: UUID;
+  patient_id: UUID;
+  doctor_id: UUID | null;
+  specialty_value_id: UUID | null;
+  registration_note: string | null;
+  status: WaitlistStatus;
+  created_by: UUID | null;
+  created_at: string;
+}
+
+/** سجل التدقيق مع بريد المستخدم — العرض v_audit_log_detail (0037). */
+export interface AuditLogDetailView extends AuditLogRow {
+  user_email: string | null;
 }

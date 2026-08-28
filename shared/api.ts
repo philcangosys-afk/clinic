@@ -69,6 +69,8 @@ export interface HealthcareOrganization {
   organization_type: HealthcareOrganizationType;
   created_by: string;
   legacy_full_access: boolean;
+  tax_number: string | null;
+  currency: string;
   default_vat_rate: number;
 }
 

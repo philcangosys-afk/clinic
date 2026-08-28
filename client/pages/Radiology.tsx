@@ -30,6 +30,8 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import ExamCategoryManager, { ExamCategorySelect } from "@/components/shared/ExamCategoryManager";
+import ResultAttachments from "@/components/shared/ResultAttachments";
 import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
 
@@ -49,6 +51,10 @@ const STATUS_BADGE: Record<RadiologyOrderStatus, "default" | "secondary" | "succ
   reported: "success",
   cancelled: "destructive",
 };
+type RadiologyExamWithCategory = RadiologyExamRow & {
+  category: { name_ar: string } | { name_ar: string }[] | null;
+};
+
 const PRIORITY_LABELS: Record<RadiologyOrderPriority, string> = {
   routine: "عادي",
   urgent: "عاجل",
@@ -71,11 +77,11 @@ function useRadiologyExams(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("radiology_exams")
-        .select("id, code, name_ar, modality, body_part, requires_contrast, preparation_instructions, is_active")
+        .select("id, code, name_ar, modality, body_part, requires_contrast, preparation_instructions, is_active, category_id, category:radiology_exam_categories(name_ar)")
         .eq("organization_id", organizationId)
         .order("name_ar");
       if (error) throw error;
-      return (data ?? []) as RadiologyExamRow[];
+      return (data ?? []) as unknown as RadiologyExamWithCategory[];
     },
   });
 }
@@ -119,6 +125,7 @@ export default function Radiology() {
         <TabsList>
           <TabsTrigger value="orders">الطلبات الحالية</TabsTrigger>
           <TabsTrigger value="catalog">كتالوج فحوصات الأشعة</TabsTrigger>
+          <TabsTrigger value="categories">التصنيفات</TabsTrigger>
         </TabsList>
 
         <TabsContent value="orders" className="mt-4">
@@ -198,6 +205,13 @@ export default function Radiology() {
         <TabsContent value="catalog" className="mt-4">
           <RadiologyExamsCatalog organizationId={organization?.id} />
         </TabsContent>
+        <TabsContent value="categories" className="mt-4">
+          <ExamCategoryManager
+            table="radiology_exam_categories"
+            title="تصنيفات فحوصات الأشعة"
+            description="تنظّم الكتالوج (صدر، عظام، بطن...) — الفحص بلا تصنيف يبقى صالحًا للاستعمال"
+          />
+        </TabsContent>
       </Tabs>
 
       <NewRadiologyOrderDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
@@ -232,6 +246,7 @@ function RadiologyExamsCatalog({ organizationId }: { organizationId: string | un
             <TableHeader>
               <TableRow>
                 <TableHead>الاسم</TableHead>
+                <TableHead>التصنيف</TableHead>
                 <TableHead>نوع الجهاز</TableHead>
                 <TableHead>العضو/المنطقة</TableHead>
                 <TableHead>يحتاج صبغة تباين</TableHead>
@@ -245,6 +260,9 @@ function RadiologyExamsCatalog({ organizationId }: { organizationId: string | un
                     <ScanLine className="h-4 w-4 text-muted-foreground" />
                     {exam.name_ar}
                   </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {(Array.isArray(exam.category) ? exam.category[0] : exam.category)?.name_ar ?? "—"}
+                  </TableCell>
                   <TableCell>{MODALITY_LABELS[exam.modality]}</TableCell>
                   <TableCell>{exam.body_part ?? "—"}</TableCell>
                   <TableCell>{exam.requires_contrast ? "نعم" : "لا"}</TableCell>
@@ -255,7 +273,7 @@ function RadiologyExamsCatalog({ organizationId }: { organizationId: string | un
               ))}
               {(exams.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
                     لا توجد فحوصات مُعرَّفة بعد. أضف أول فحص.
                   </TableCell>
                 </TableRow>
@@ -285,6 +303,8 @@ function NewRadiologyExamDialog({
   const [bodyPart, setBodyPart] = useState("");
   const [requiresContrast, setRequiresContrast] = useState(false);
   const [prep, setPrep] = useState("");
+  // التصنيف: عمود `category_id` موجود منذ 0014 ولم يكن له أي حقل إدخال
+  const [categoryId, setCategoryId] = useState("");
 
   const createExam = useMutation({
     mutationFn: async () => {
@@ -292,6 +312,7 @@ function NewRadiologyExamDialog({
       const { error } = await supabase.from("radiology_exams").insert({
         organization_id: organizationId,
         name_ar: nameAr.trim(),
+        category_id: categoryId || null,
         modality,
         body_part: bodyPart.trim() || null,
         requires_contrast: requiresContrast,
@@ -307,6 +328,7 @@ function NewRadiologyExamDialog({
       setBodyPart("");
       setRequiresContrast(false);
       setPrep("");
+      setCategoryId("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -327,6 +349,10 @@ function NewRadiologyExamDialog({
           <div className="flex flex-col gap-1.5">
             <Label>اسم الفحص *</Label>
             <Input value={nameAr} onChange={(e) => setNameAr(e.target.value)} autoFocus />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>التصنيف</Label>
+            <ExamCategorySelect table="radiology_exam_categories" value={categoryId} onChange={setCategoryId} />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>نوع الجهاز</Label>
@@ -370,10 +396,18 @@ function NewRadiologyExamDialog({
 // طلب تصوير جديد
 // ---------------------------------------------------------------------------
 function useDoctorsList() {
+  const { organization } = useOrganizationAccess();
+  const organizationId = organization?.id;
   return useQuery({
-    queryKey: ["doctors-active-list"],
+    queryKey: ["doctors-active-list", organizationId],
+    enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("doctors").select("id, name_ar").eq("is_enabled", true).order("name_ar");
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .eq("is_enabled", true)
+        .order("name_ar");
       if (error) throw error;
       return data ?? [];
     },
@@ -580,11 +614,16 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
 
   const markPerformed = useMutation({
     mutationFn: async (itemId: string) => {
-      const { error } = await supabase
+      const { data: affectedRows, error } = await supabase
         .from("radiology_order_items")
         .update({ performed_at: new Date().toISOString() })
-        .eq("id", itemId);
+        .eq("id", itemId)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["radiology-order-details", orderId] });
@@ -594,8 +633,13 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
 
   const saveReport = useMutation({
     mutationFn: async ({ itemId, findings, impression }: { itemId: string; findings: string; impression: string }) => {
-      const { error } = await supabase.from("radiology_order_items").update({ findings, impression }).eq("id", itemId);
+      const { data: affectedRows, error } = await supabase.from("radiology_order_items").update({ findings, impression }).eq("id", itemId)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["radiology-order-details", orderId] });
@@ -611,8 +655,13 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
 
   const toggleUrgent = useMutation({
     mutationFn: async ({ itemId, urgent }: { itemId: string; urgent: boolean }) => {
-      const { error } = await supabase.from("radiology_order_items").update({ is_urgent_finding: urgent }).eq("id", itemId);
+      const { data: affectedRows, error } = await supabase.from("radiology_order_items").update({ is_urgent_finding: urgent }).eq("id", itemId)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["radiology-order-details", orderId] }),
   });
@@ -620,11 +669,16 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
   const markReported = useMutation({
     mutationFn: async () => {
       if (!orderId) return;
-      const { error } = await supabase
+      const { data: affectedRows, error } = await supabase
         .from("radiology_orders")
         .update({ status: "reported", reported_at: new Date().toISOString() })
-        .eq("id", orderId);
+        .eq("id", orderId)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["radiology-orders"] });
@@ -708,6 +762,10 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
                           حفظ التقرير
                         </Button>
                       </div>
+
+                      {/* الصور مرتبطة ببند الطلب لا بالطلب كله: الطلب الواحد
+                          قد يشمل أكثر من فحص، ولكل فحص صوره (دلو 0045). */}
+                      <ResultAttachments kind="radiology" parentId={item.id} />
                     </>
                   )}
                 </div>

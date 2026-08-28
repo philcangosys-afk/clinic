@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Receipt, WalletCards } from "lucide-react";
+import { Plus, Printer, Receipt, WalletCards, Undo2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { assertPatientNotBlocked } from "@/lib/patient-blocks";
+import { useInsuranceSettings } from "@/lib/insurance-settings";
 import type { SalesInvoiceStatus, SalesInvoiceWithPatient } from "@/lib/database.types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import PatientPicker from "@/components/shared/PatientPicker";
 import ItemPicker from "@/components/shared/ItemPicker";
+import { printHtml, type PaperSize } from "@/lib/document-merge";
 import { useToast } from "@/hooks/use-toast";
 
 const STATUS_LABELS: Record<SalesInvoiceStatus, string> = {
@@ -51,8 +54,12 @@ function useInvoices(organizationId: string | undefined, status: string, quotesO
       let query = supabase
         .from("sales_invoices")
         .select(
-          "id, invoice_number, created_at, status, is_temporary, net_amount, paid_amount, remaining_amount, external_customer_name, patient:patients(id, name_ar, file_number)",
+          "id, invoice_number, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, external_customer_name, zatca_invoice_number, is_insurance_invoice, created_by, nationality_value_id, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar)",
         )
+        // التصفية بالمؤسسة إلزامية: سياسة RLS تسمح بكل مؤسسة **ينتمي إليها**
+        // المستخدم، لا بالمؤسسة النشطة وحدها — فبدونها كانت قائمة عضو في
+        // منشأتين تخلط فواتيرهما ويجمع الرأس إجماليَّ الاثنتين معًا.
+        .eq("organization_id", organizationId)
         .order("created_at", { ascending: false })
         .limit(50);
       if (status !== "all") query = query.eq("status", status);
@@ -64,20 +71,137 @@ function useInvoices(organizationId: string | undefined, status: string, quotesO
   });
 }
 
+/**
+ * اسم الموظف مُصدِر الفاتورة يأتي من `v_organization_members_directory`
+ * (0026): `sales_invoices.created_by` معرّف مستخدم، والعميل لا يقرأ
+ * `auth.users` مباشرة.
+ */
+function useMemberNames(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["member-names", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_organization_members_directory")
+        .select("user_id, display_name")
+        .eq("organization_id", organizationId);
+      if (error) throw error;
+      return new Map(
+        ((data ?? []) as { user_id: string; display_name: string }[]).map((row) => [
+          row.user_id,
+          row.display_name,
+        ]),
+      );
+    },
+  });
+}
+
+
+/**
+ * طباعة الفاتورة (لقطة 20). لم يكن هناك أي مسار طباعة للفواتير رغم أن
+ * `print_settings.invoice_paper_size` موجود منذ 0010 — أي أن الإعداد كان
+ * يُحفَظ ولا يقرؤه شيء.
+ *
+ * البنود تُجلب عند الضغط لا مع القائمة: تحميل بنود 50 فاتورة مقدّمًا لأجل
+ * فاتورة واحدة قد تُطبع هدرٌ لكل مستخدم في كل فتح للشاشة.
+ */
+async function printInvoice(
+  invoice: SalesInvoiceWithPatient,
+  organizationName: string,
+  taxNumber: string | null,
+  paper: PaperSize,
+  footerNote: string | null,
+) {
+  const { data: items, error } = await supabase
+    .from("sales_invoice_items")
+    .select("description, price, qty, discount_amount, vat_amount, net_amount")
+    .eq("invoice_id", invoice.id);
+  if (error) throw error;
+
+  const esc = (value: unknown) =>
+    String(value ?? "").replace(/[&<>"]/g, (ch) =>
+      ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : "&quot;",
+    );
+  const money = (value: unknown) => Number(value ?? 0).toFixed(2);
+
+  const rows = (items ?? [])
+    .map(
+      (line) =>
+        `<tr><td>${esc(line.description)}</td><td>${line.qty}</td><td>${money(line.price)}</td>` +
+        `<td>${money(line.discount_amount)}</td><td>${money(line.net_amount)}</td></tr>`,
+    )
+    .join("");
+
+  printHtml(
+    `فاتورة ${invoice.invoice_number}`,
+    `<h2>${esc(organizationName)}</h2>
+     ${taxNumber ? `<p>الرقم الضريبي: ${esc(taxNumber)}</p>` : ""}
+     <p>
+       ${invoice.invoice_type === "return" ? "فاتورة مرتجع" : "فاتورة مبيعات"} رقم
+       <strong>${invoice.invoice_number}</strong><br />
+       التاريخ: ${new Date(invoice.created_at).toLocaleString("ar-SA")}<br />
+       العميل: ${esc(invoice.patient?.name_ar ?? invoice.external_customer_name ?? "—")}
+       ${invoice.patient?.file_number ? ` · ملف ${invoice.patient.file_number}` : ""}
+       ${invoice.doctor?.name_ar ? `<br />الطبيب: ${esc(invoice.doctor.name_ar)}` : ""}
+       ${invoice.zatca_invoice_number ? `<br />زاتكا: ${esc(invoice.zatca_invoice_number)}` : ""}
+     </p>
+     <table border="1" cellpadding="4">
+       <thead><tr><th>البند</th><th>الكمية</th><th>السعر</th><th>الخصم</th><th>الصافي</th></tr></thead>
+       <tbody>${rows}</tbody>
+     </table>
+     <p>
+       الإجمالي قبل الضريبة: ${money(invoice.subtotal_amount)}<br />
+       الخصم: ${money(invoice.discount_amount)}<br />
+       ${Number(invoice.exemption_amount ?? 0) > 0 ? `الإعفاء: ${money(invoice.exemption_amount)}<br />` : ""}
+       الضريبة: ${money(invoice.vat_amount)}<br />
+       <strong>الصافي: ${money(invoice.net_amount)}</strong><br />
+       المدفوع: ${money(invoice.paid_amount)}<br />
+       المتبقي: ${money(invoice.remaining_amount)}
+     </p>
+     ${footerNote ? `<p>${esc(footerNote)}</p>` : ""}`,
+    paper,
+  );
+}
+
+/** إعدادات الطباعة للمؤسسة — مقاس الورق وتذييل الفاتورة (0010). */
+function usePrintSettings(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["print-settings", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("print_settings")
+        .select("invoice_paper_size, footer_note")
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as { invoice_paper_size: PaperSize; footer_note: string | null } | null;
+    },
+  });
+}
+
 export default function Billing() {
   const { organization } = useOrganizationAccess();
+  const memberNames = useMemberNames(organization?.id);
+  const printSettings = usePrintSettings(organization?.id);
   const [statusFilter, setStatusFilter] = useState("all");
   const [quotesOnly, setQuotesOnly] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState<SalesInvoiceWithPatient | null>(null);
+  const [returnTarget, setReturnTarget] = useState<SalesInvoiceWithPatient | null>(null);
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const invoices = useInvoices(organization?.id, statusFilter, quotesOnly);
 
   const convertToInvoice = useMutation({
     mutationFn: async (invoiceId: string) => {
-      const { error } = await supabase.from("sales_invoices").update({ is_temporary: false }).eq("id", invoiceId);
+      const { data, error } = await supabase
+        .from("sales_invoices")
+        .update({ is_temporary: false })
+        .eq("id", invoiceId)
+        .select("id");
       if (error) throw error;
+      if (!data || data.length === 0) throw new Error("لم يُحفظ التغيير — راجع صلاحيتك");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
@@ -137,6 +261,8 @@ export default function Billing() {
         </div>
       </div>
 
+      {!quotesOnly && <InvoiceKpiBar organizationId={organization?.id} />}
+
       <Card>
         <CardHeader>
           <CardTitle>{quotesOnly ? "عروض الأسعار" : "الفواتير"}</CardTitle>
@@ -155,9 +281,20 @@ export default function Billing() {
               <TableHeader>
                 <TableRow>
                   <TableHead>#الفاتورة</TableHead>
+                  <TableHead>النوع</TableHead>
                   <TableHead>العميل</TableHead>
+                  <TableHead>#الملف</TableHead>
+                  <TableHead>الطبيب</TableHead>
                   <TableHead>التاريخ</TableHead>
+                  <TableHead>الوقت</TableHead>
+                  <TableHead>الجنسية</TableHead>
+                  <TableHead>الموظف</TableHead>
+                  <TableHead>دون ضريبة</TableHead>
+                  <TableHead>الخصم</TableHead>
+                  <TableHead>الإعفاء</TableHead>
+                  <TableHead>الضريبة</TableHead>
                   <TableHead>الصافي</TableHead>
+                  <TableHead>المدفوع</TableHead>
                   <TableHead>المتبقي</TableHead>
                   <TableHead>الحالة</TableHead>
                   <TableHead />
@@ -166,12 +303,66 @@ export default function Billing() {
               <TableBody>
                 {(invoices.data ?? []).map((invoice) => (
                   <TableRow key={invoice.id}>
-                    <TableCell className="font-mono text-xs">#{invoice.invoice_number}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      #{invoice.invoice_number}
+                      {invoice.zatca_invoice_number && (
+                        <span className="block text-[10px] text-muted-foreground">
+                          زاتكا: {invoice.zatca_invoice_number}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-xs">
+                          {invoice.invoice_type === "return" ? "مرتجع" : "بيع"}
+                        </span>
+                        {invoice.is_insurance_invoice && (
+                          <Badge variant="secondary" className="w-fit px-1.5 text-[10px]">
+                            تأمين
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
                     <TableCell>{invoice.patient?.name_ar ?? invoice.external_customer_name ?? "—"}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {invoice.patient?.file_number ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {invoice.doctor?.name_ar ?? "—"}
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {new Date(invoice.created_at).toLocaleDateString("ar-SA")}
                     </TableCell>
-                    <TableCell>{Number(invoice.net_amount).toLocaleString("ar-SA")}</TableCell>
+                    <TableCell className="text-xs tabular-nums text-muted-foreground">
+                      {new Date(invoice.created_at).toLocaleTimeString("ar-SA", {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {invoice.nationality?.name_ar ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {invoice.created_by ? memberNames.data?.get(invoice.created_by) ?? "—" : "—"}
+                    </TableCell>
+                    <TableCell className="tabular-nums">
+                      {Number(invoice.subtotal_amount ?? 0).toLocaleString("ar-SA")}
+                    </TableCell>
+                    <TableCell className="tabular-nums text-amber-700">
+                      {Number(invoice.discount_amount ?? 0).toLocaleString("ar-SA")}
+                    </TableCell>
+                    <TableCell className="tabular-nums text-muted-foreground">
+                      {Number(invoice.exemption_amount ?? 0).toLocaleString("ar-SA")}
+                    </TableCell>
+                    <TableCell className="tabular-nums">
+                      {Number(invoice.vat_amount ?? 0).toLocaleString("ar-SA")}
+                    </TableCell>
+                    <TableCell className="font-medium tabular-nums">
+                      {Number(invoice.net_amount).toLocaleString("ar-SA")}
+                    </TableCell>
+                    <TableCell className="tabular-nums text-emerald-700">
+                      {Number(invoice.paid_amount ?? 0).toLocaleString("ar-SA")}
+                    </TableCell>
                     <TableCell className={Number(invoice.remaining_amount) > 0 ? "text-rose-600" : ""}>
                       {Number(invoice.remaining_amount).toLocaleString("ar-SA")}
                     </TableCell>
@@ -183,6 +374,28 @@ export default function Billing() {
                       )}
                     </TableCell>
                     <TableCell className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="طباعة"
+                        onClick={() =>
+                          printInvoice(
+                            invoice,
+                            organization?.name ?? "",
+                            organization?.tax_number ?? null,
+                            printSettings.data?.invoice_paper_size ?? "a4",
+                            printSettings.data?.footer_note ?? null,
+                          ).catch((error: unknown) =>
+                            toast({
+                              variant: "destructive",
+                              title: "تعذر تجهيز الفاتورة للطباعة",
+                              description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+                            }),
+                          )
+                        }
+                      >
+                        <Printer className="h-3.5 w-3.5" />
+                      </Button>
                       {invoice.is_temporary ? (
                         <Button
                           size="sm"
@@ -202,12 +415,25 @@ export default function Billing() {
                           </Button>
                         )
                       )}
+                      {/* المرتجع لا يُرتجع، وعرض السعر لم يُبَع أصلًا */}
+                      {!invoice.is_temporary &&
+                        invoice.invoice_type !== "return" &&
+                        invoice.status !== "void" && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            title="إنشاء مرتجع"
+                            onClick={() => setReturnTarget(invoice)}
+                          >
+                            <Undo2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                     </TableCell>
                   </TableRow>
                 ))}
                 {(invoices.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={18} className="py-8 text-center text-sm text-muted-foreground">
                       لا توجد فواتير مطابقة.
                     </TableCell>
                   </TableRow>
@@ -226,7 +452,330 @@ export default function Billing() {
         isQuote={quotesOnly}
       />
       <RecordPaymentDialog invoice={paymentTarget} onOpenChange={() => setPaymentTarget(null)} organizationId={organization?.id} />
+      <ReturnInvoiceDialog
+        invoice={returnTarget}
+        onOpenChange={() => setReturnTarget(null)}
+        organizationId={organization?.id}
+      />
     </div>
+  );
+}
+
+
+/**
+ * إنشاء فاتورة مرتجع من فاتورة مبيعات قائمة (لقطة 25).
+ *
+ * سبب وجودها: عمود `sales_invoices.invoice_type` موجود منذ 0003 بقيمتَي
+ * `sale` و`return`، وشاشة الفواتير **تعرضه** ومنشئ التقارير يصفّي به، وقيد
+ * المحاسبة في 0027 يعرف كيف يعكس جانبَي المدين والدائن للمرتجع — لكن التدقيق
+ * الشامل أثبت أن السلسلة `invoice_type:` **لا ترد ولا مرة واحدة** في المشروع
+ * كله. أي أن الحقل لم يكن يُكتب إطلاقًا: لا زر مرتجع، وكشف المرتجعات فارغ
+ * دائمًا، ولا سبيل لإلغاء فاتورة مدفوعة محاسبيًا.
+ *
+ * **المبالغ موجبة لا سالبة.** قيد 0027 يميّز المرتجع بـ `invoice_type` ويعكس
+ * الجانبين بنفسه؛ إدخال مبالغ سالبة كان سيعكسها مرتين فيصبح المرتجع زيادةً في
+ * الإيراد. والمنظورات في 0010 تصفّي `invoice_type = 'sale'` فلا تتلوث
+ * تقارير المبيعات بالمرتجعات أصلًا.
+ *
+ * `original_invoice_id` (موجود في الجدول ولم يكن يُكتب) هو ما يربط المرتجع
+ * بأصله — وبه يُحتسب المرتجَع سابقًا فيُمنع إرجاع أكثر مما بيع.
+ */
+function ReturnInvoiceDialog({
+  invoice,
+  onOpenChange,
+  organizationId,
+}: {
+  invoice: SalesInvoiceWithPatient | null;
+  onOpenChange: () => void;
+  organizationId: string | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { session } = useOrganizationAccess();
+  const [qtyByLine, setQtyByLine] = useState<Record<string, string>>({});
+  const [note, setNote] = useState("");
+
+  const lines = useQuery({
+    queryKey: ["return-source-lines", invoice?.id],
+    enabled: Boolean(invoice?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sales_invoice_items")
+        .select(
+          "id, item_id, description, price, qty, discount_percent, discount_amount, vat_rate, vat_amount, net_amount, doctor_id",
+        )
+        .eq("invoice_id", invoice!.id)
+        .order("created_at");
+      if (error) throw error;
+      return (data ?? []) as {
+        id: string;
+        item_id: string | null;
+        description: string | null;
+        price: number;
+        qty: number;
+        discount_percent: number;
+        discount_amount: number;
+        vat_rate: number;
+        vat_amount: number;
+        net_amount: number;
+        doctor_id: string | null;
+      }[];
+    },
+  });
+
+  /**
+   * ما أُرجع سابقًا من هذه الفاتورة. بدونه يمكن إرجاع نفس البند مرارًا حتى
+   * يتجاوز المرتجع قيمة البيع — وهو خطأ لا تكشفه القاعدة ولا تصححه.
+   */
+  const priorReturns = useQuery({
+    queryKey: ["prior-returns", invoice?.id],
+    enabled: Boolean(invoice?.id),
+    queryFn: async () => {
+      const { data: returnInvoices, error } = await supabase
+        .from("sales_invoices")
+        .select("id")
+        .eq("original_invoice_id", invoice!.id)
+        .eq("invoice_type", "return");
+      if (error) throw error;
+      const ids = (returnInvoices ?? []).map((row) => (row as { id: string }).id);
+      if (ids.length === 0) return new Map<string, number>();
+
+      const { data: returnedLines, error: linesError } = await supabase
+        .from("sales_invoice_items")
+        .select("description, item_id, qty")
+        .in("invoice_id", ids);
+      if (linesError) throw linesError;
+
+      // المطابقة بالصنف إن وُجد وإلا بالوصف: بند المرتجع لا يحمل مرجعًا لسطر
+      // الأصل (لا عمود لذلك في الجدول)، فهذا أدق ربط متاح بلا هجرة.
+      const map = new Map<string, number>();
+      for (const row of (returnedLines ?? []) as { description: string | null; item_id: string | null; qty: number }[]) {
+        const key = row.item_id ?? `desc:${row.description ?? ""}`;
+        map.set(key, (map.get(key) ?? 0) + (Number(row.qty) || 0));
+      }
+      return map;
+    },
+  });
+
+  const lineKey = (line: { item_id: string | null; description: string | null }) =>
+    line.item_id ?? `desc:${line.description ?? ""}`;
+
+  /**
+   * توزيع ما أُرجع سابقًا على أسطر الأصل بالترتيب، لا طرحه من كل سطر.
+   *
+   * بند المرتجع لا يحمل مرجعًا لسطر الأصل (لا عمود لذلك في الجدول)، فالمطابقة
+   * بالصنف/الوصف. الخطأ الذي كان: طرح **الإجمالي المرتجع** من **كل** سطر
+   * مطابق. فاتورة فيها الصنف نفسه على سطرين بكمية 1 لكل منهما، أُرجع منها
+   * واحد → كلا السطرين يحسبان `1 - 1 = 0` ويظهران "أُرجع بالكامل"، فتتعذّر
+   * إعادة الوحدة الثانية إلى الأبد. الصواب استهلاك الرصيد المرتجع سطرًا سطرًا.
+   */
+  const returnableByLineId = (() => {
+    // النوع صريح: `priorReturns.data ?? []` يُنتج `never[]` حين تكون البيانات
+    // غير محمَّلة، فيستنتج TypeScript `Map<{}, {}>` ويصبح `pool` من نوع `{}` —
+    // فيفشل `Math.min` و`pool - consumed` بخطأَي ترجمة (TS2345 و TS2362).
+    const remainingReturned = new Map<string, number>(priorReturns.data ?? []);
+    const result = new Map<string, number>();
+    for (const line of lines.data ?? []) {
+      const key = lineKey(line);
+      const pool = remainingReturned.get(key) ?? 0;
+      const consumed = Math.min(pool, Number(line.qty) || 0);
+      remainingReturned.set(key, pool - consumed);
+      result.set(line.id, Math.max((Number(line.qty) || 0) - consumed, 0));
+    }
+    return result;
+  })();
+
+  const returnableQty = (line: { id: string }) => returnableByLineId.get(line.id) ?? 0;
+
+  /**
+   * مبالغ سطر المرتجع تُحتسب **بنسبة الكمية المرتجعة من كمية الأصل** لا
+   * بإعادة حساب السعر والخصم من جديد: الخصم قد يكون مبلغًا مقطوعًا على السطر
+   * لا نسبة، وإعادة الحساب كانت ستُرجع للمريض مبلغًا يخالف ما دفعه فعلًا.
+   */
+  const computed = (lines.data ?? []).map((line) => {
+    const maxQty = returnableQty(line);
+    const raw = Number(qtyByLine[line.id] ?? 0);
+    const qty = Number.isFinite(raw) ? Math.min(Math.max(raw, 0), maxQty) : 0;
+    const ratio = Number(line.qty) > 0 ? qty / Number(line.qty) : 0;
+    return {
+      ...line,
+      maxQty,
+      returnQty: qty,
+      returnSubtotal: Number(line.price) * qty,
+      returnDiscount: Number(line.discount_amount ?? 0) * ratio,
+      returnVat: Number(line.vat_amount ?? 0) * ratio,
+      returnNet: Number(line.net_amount ?? 0) * ratio,
+    };
+  });
+
+  const round2 = (value: number) => Math.round(value * 100) / 100;
+
+  const selected = computed.filter((line) => line.returnQty > 0);
+  /**
+   * الرأس = مجموع الأسطر **بعد تقريب كل سطر**، لا تقريب مجموع القيم الخام.
+   *
+   * الأسطر تُحفظ مقرَّبة إلى هللتين، فتقريب المجموع الخام يُنتج رأسًا يخالف
+   * مجموع أسطره بهللة أو اثنتين متى وقعت النسب على أنصاف هللات — وفاتورة
+   * مطبوعة لا يساوي إجماليها مجموع بنودها تُرفض في المراجعة.
+   */
+  const totals = selected.reduce(
+    (acc, line) => ({
+      subtotal: acc.subtotal + round2(line.returnSubtotal),
+      discount: acc.discount + round2(line.returnDiscount),
+      vat: acc.vat + round2(line.returnVat),
+      net: acc.net + round2(line.returnNet),
+    }),
+    { subtotal: 0, discount: 0, vat: 0, net: 0 },
+  );
+
+  const createReturn = useMutation({
+    mutationFn: async () => {
+      if (!invoice || !organizationId) throw new Error("لا توجد فاتورة مصدر");
+      if (selected.length === 0) throw new Error("حدّد كمية مرتجعة لبند واحد على الأقل");
+
+      const { data: created, error } = await supabase
+        .from("sales_invoices")
+        .insert({
+          organization_id: organizationId,
+          invoice_type: "return",
+          original_invoice_id: invoice.id,
+          patient_id: invoice.patient?.id ?? null,
+          external_customer_name: invoice.patient ? null : invoice.external_customer_name,
+          subtotal_amount: round2(totals.subtotal),
+          discount_amount: round2(totals.discount),
+          vat_amount: round2(totals.vat),
+          net_amount: round2(totals.net),
+          // المرتجع يُنشأ مسدَّدًا: المبلغ رُدّ للمريض عند الإرجاع. تركه
+          // "غير مدفوع" كان سيُظهره كذمّة مدينة على المريض — عكس الحقيقة.
+          paid_amount: round2(totals.net),
+          status: "paid",
+          note: note.trim() || `مرتجع للفاتورة #${invoice.invoice_number}`,
+          created_by: session?.user.id ?? null,
+        })
+        .select("id")
+        .single();
+      if (error) throw error;
+
+      const payload = selected.map((line) => ({
+        invoice_id: (created as { id: string }).id,
+        item_id: line.item_id,
+        description: line.description,
+        price: line.price,
+        qty: line.returnQty,
+        discount_percent: line.discount_percent,
+        discount_amount: round2(line.returnDiscount),
+        vat_rate: line.vat_rate,
+        vat_amount: round2(line.returnVat),
+        net_amount: round2(line.returnNet),
+        doctor_id: line.doctor_id,
+      }));
+      const { error: linesError } = await supabase.from("sales_invoice_items").insert(payload);
+      if (linesError) throw linesError;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+      queryClient.invalidateQueries({ queryKey: ["prior-returns"] });
+      toast({ title: "تم إنشاء فاتورة المرتجع" });
+      setQtyByLine({});
+      setNote("");
+      onOpenChange();
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر إنشاء المرتجع",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const busy = lines.isLoading || priorReturns.isLoading;
+
+  return (
+    <Dialog open={Boolean(invoice)} onOpenChange={() => onOpenChange()}>
+      <DialogContent dir="rtl" className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>مرتجع للفاتورة #{invoice?.invoice_number}</DialogTitle>
+        </DialogHeader>
+
+        {busy && <Skeleton className="h-40 w-full" />}
+
+        {!busy && (
+          <div className="flex flex-col gap-3">
+            <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              حدّد الكمية المرتجعة من كل بند. المبالغ تُحتسب بنسبة الكمية من الأصل، فيُردّ للمريض
+              ما دفعه فعلًا بعد الخصم لا سعر القائمة.
+            </p>
+
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>البند</TableHead>
+                  <TableHead className="w-24">المباع</TableHead>
+                  <TableHead className="w-28">القابل للإرجاع</TableHead>
+                  <TableHead className="w-28">المرتجع</TableHead>
+                  <TableHead className="w-28">الصافي</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {computed.map((line) => (
+                  <TableRow key={line.id}>
+                    <TableCell className="text-sm">{line.description ?? "—"}</TableCell>
+                    <TableCell className="tabular-nums text-sm">{line.qty}</TableCell>
+                    <TableCell className="tabular-nums text-sm">
+                      {line.maxQty === 0 ? (
+                        <Badge variant="secondary">أُرجع بالكامل</Badge>
+                      ) : (
+                        line.maxQty
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Input
+                        className="h-8"
+                        type="number"
+                        min={0}
+                        max={line.maxQty}
+                        disabled={line.maxQty === 0}
+                        value={qtyByLine[line.id] ?? ""}
+                        onChange={(e) =>
+                          setQtyByLine((prev) => ({ ...prev, [line.id]: e.target.value }))
+                        }
+                      />
+                    </TableCell>
+                    <TableCell className="tabular-nums text-sm">
+                      {line.returnNet.toFixed(2)}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+
+            <div className="flex flex-col gap-1.5">
+              <Label>سبب الإرجاع</Label>
+              <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="اختياري" />
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-4 rounded-lg border p-3 text-sm tabular-nums">
+              <span>الإجمالي: {totals.subtotal.toFixed(2)}</span>
+              <span className="text-amber-700">الخصم: {totals.discount.toFixed(2)}</span>
+              <span>الضريبة: {totals.vat.toFixed(2)}</span>
+              <span className="font-bold">الصافي المرتجع: {totals.net.toFixed(2)}</span>
+            </div>
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange()}>
+            إلغاء
+          </Button>
+          <Button
+            disabled={createReturn.isPending || selected.length === 0}
+            onClick={() => createReturn.mutate()}
+          >
+            {createReturn.isPending ? "جارٍ الإنشاء..." : "إنشاء المرتجع"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -237,7 +786,222 @@ type DraftLine = {
   price: number;
   qty: number;
   discount_percent: number;
+  /** النسبة التي اقترحها app_resolve_discount — للتمييز بين الآلي واليدوي. */
+  auto_discount_percent: number;
   is_vat_exempt: boolean;
+  /**
+   * ربط السطر ببند اتفاقية علاجية. هذا هو المفتاح الذي يعتمد عليه المُحفِّز
+   * `app_recalc_agreement_invoiced` (0003) لتحديث `treatment_agreements.invoiced_amount`
+   * — وكان لا يُكتب من هذه الشاشة إطلاقًا، فبقي المبلغ المفوتَر صفرًا مهما
+   * فُوترت الاتفاقية، وظهر "المتبقي" خاطئًا في كل تقرير.
+   */
+  agreement_item_id: string | null;
+  /** رقم الاتفاقية — للعرض بجانب السطر فقط، لا يُكتب في القاعدة. */
+  agreement_label: string | null;
+};
+
+/** قيمة "بدون اختيار" في قوائم Select (لا تقبل قيمة فارغة). */
+const NONE = "__none__";
+
+type AgreementItemOption = {
+  itemId: string;
+  agreementItemId: string;
+  agreementNumber: number;
+  description: string;
+  qty: number;
+  unitPrice: number;
+  discountPercent: number;
+  invoicedQty: number;
+};
+
+/**
+ * بنود الاتفاقيات العلاجية القابلة للفوترة لمريض بعينه.
+ *
+ * سبب وجود هذا الاستعلام: التدقيق أثبت أن `sales_invoice_items.agreement_item_id`
+ * **لا يُكتب من شاشة الفوترة إطلاقًا** — يُكتب فقط من تبويب الجلسات. والمُحفِّز
+ * `app_recalc_agreement_invoiced` (0003) يجمع `net_amount` لبنود الفواتير
+ * المربوطة بهذا المفتاح ليحدّث `treatment_agreements.invoiced_amount`. فبلا
+ * الربط تبقى الاتفاقية "غير مفوترة" أبدًا مهما صُرف عليها، ويظهر المتبقّي
+ * مساويًا للإجمالي في كل تقرير.
+ *
+ * `invoicedQty` يُحتسب هنا لا في القاعدة: هو عدد ما فُوتر فعلًا من كل بند،
+ * ويُستخدم لمنع فوترة البند مرتين — وهو الخطأ الذي يجعل `invoiced_amount`
+ * يتجاوز `total_amount` فيظهر المتبقّي سالبًا.
+ */
+function useAgreementItemsForBilling(patientId: string | undefined, organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["billing-agreement-items", patientId, organizationId],
+    enabled: Boolean(patientId && organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("treatment_agreements")
+        .select(
+          "id, agreement_number, treatment_agreement_items(id, item_id, description, qty, unit_price, discount_percent)",
+        )
+        .eq("organization_id", organizationId)
+        .eq("patient_id", patientId)
+        .eq("is_disabled", false)
+        .order("agreement_number");
+      if (error) throw error;
+
+      const agreements = (data ?? []) as unknown as {
+        id: string;
+        agreement_number: number;
+        treatment_agreement_items: {
+          id: string;
+          item_id: string | null;
+          description: string | null;
+          qty: number;
+          unit_price: number;
+          discount_percent: number;
+        }[];
+      }[];
+
+      const options: AgreementItemOption[] = [];
+      for (const agreement of agreements) {
+        for (const item of agreement.treatment_agreement_items ?? []) {
+          if (!item.item_id) continue;
+          options.push({
+            itemId: item.item_id,
+            agreementItemId: item.id,
+            agreementNumber: agreement.agreement_number,
+            description: item.description ?? "بند اتفاقية",
+            qty: Number(item.qty) || 1,
+            unitPrice: Number(item.unit_price) || 0,
+            discountPercent: Number(item.discount_percent) || 0,
+            invoicedQty: 0,
+          });
+        }
+      }
+      if (options.length === 0) return options;
+
+      /**
+       * كم فُوتر من كل بند حتى الآن — استعلام واحد لكل البنود لا استعلام لكل بند.
+       *
+       * **الرأس يُجلب مع البند ويُصفّى به.** بلا ذلك كان عرض السعر
+       * (`is_temporary = true`) والفاتورة الملغاة (`status = 'void'`) يُحسبان
+       * فوترةً: يبني الموظف عرض سعر يحوي بند اتفاقية، فيُقفل البند إلى الأبد
+       * ("مفوتَر بالكامل") ولا يمكن فوترته مربوطًا أبدًا — فلا يعمل المُحفِّز
+       * ويبقى المتبقّي خاطئًا. أي أن الميزة كانت تُعطّل نفسها بالاستعمال.
+       */
+      const { data: billed, error: billedError } = await supabase
+        .from("sales_invoice_items")
+        .select("agreement_item_id, qty, invoice:sales_invoices!inner(is_temporary, status)")
+        .in(
+          "agreement_item_id",
+          options.map((option) => option.agreementItemId),
+        );
+      if (billedError) throw billedError;
+
+      const billedQty = new Map<string, number>();
+      for (const raw of billed ?? []) {
+        const row = raw as {
+          agreement_item_id: string | null;
+          qty: number;
+          invoice: { is_temporary: boolean; status: string } | { is_temporary: boolean; status: string }[] | null;
+        };
+        if (!row.agreement_item_id) continue;
+        const invoice = Array.isArray(row.invoice) ? row.invoice[0] : row.invoice;
+        if (!invoice || invoice.is_temporary || invoice.status === "void") continue;
+        billedQty.set(row.agreement_item_id, (billedQty.get(row.agreement_item_id) ?? 0) + (Number(row.qty) || 0));
+      }
+      return options.map((option) => ({
+        ...option,
+        invoicedQty: billedQty.get(option.agreementItemId) ?? 0,
+      }));
+    },
+  });
+}
+
+function useBillingDoctors(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["billing-doctors", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        // عمود التفعيل في `doctors` اسمه `is_enabled` لا `is_disabled` (0002).
+        // الاستعلام القديم كان يفشل كليًا فتبقى قائمة الأطباء فارغة دائمًا.
+        .eq("is_enabled", true)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
+}
+
+function useBillingClinics(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["billing-clinics", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      // عمود العيادة اسمه `name` لا `name_ar` (0001) — الاستعلام القديم كان
+      // يفشل بالكامل فتظهر قائمة العيادات فارغة دائمًا في نافذة الفاتورة.
+      const { data, error } = await supabase
+        .from("clinics")
+        .select("id, name")
+        .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
+}
+
+function useBillingWarehouses(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["billing-warehouses", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("warehouses")
+        .select("id, name")
+        .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
+}
+
+/**
+ * مجموعات الفوترة السريعة (لقطة 22) — أزرار تُضيف عدة أصناف دفعةً واحدة.
+ * ليست عروضًا (`offers`): العرض كيان تسعيري له نسبة خصم ومدة صلاحية، وهذه
+ * اختصار إدخال بلا أي أثر مالي. جداولها في 0042.
+ */
+function useQuickGroups(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["quick-invoice-groups", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("quick_invoice_groups")
+        .select(
+          "id, name_ar, color, sort_order, quick_invoice_group_items(id, qty, item:items(id, name_ar, price, is_vat_exempt))",
+        )
+        .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
+        .order("sort_order");
+      if (error) throw error;
+      return (data ?? []) as unknown as QuickGroupRow[];
+    },
+  });
+}
+
+type QuickGroupRow = {
+  id: string;
+  name_ar: string;
+  color: string | null;
+  sort_order: number;
+  quick_invoice_group_items: {
+    id: string;
+    qty: number;
+    item: { id: string; name_ar: string; price: number; is_vat_exempt: boolean } | null;
+  }[];
 };
 
 function NewInvoiceDialog({
@@ -255,23 +1019,131 @@ function NewInvoiceDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { session } = useOrganizationAccess();
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [externalName, setExternalName] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([]);
 
-  const addLine = (item: { id: string; name_ar: string; price: number; is_vat_exempt: boolean }) => {
+  // رأس الفاتورة — كانت هذه الحقول كلها موجودة في جدول sales_invoices منذ
+  // 0003 لكن النافذة لم تكن تُدخل أيًا منها (8 أعمدة من 48).
+  const [doctorId, setDoctorId] = useState(NONE);
+  const [clinicId, setClinicId] = useState(NONE);
+  const [warehouseId, setWarehouseId] = useState(NONE);
+  const [idNumber, setIdNumber] = useState("");
+  const [note, setNote] = useState("");
+
+  // قسم التأمين — كان غائبًا بالكامل رغم وجود 10 أعمدة له في الجدول،
+  // فلم يكن ممكنًا إصدار فاتورة تأمين صحيحة من الواجهة إطلاقًا.
+  const [isInsurance, setIsInsurance] = useState(false);
+  const [insCompany, setInsCompany] = useState("");
+  const [insPolicy, setInsPolicy] = useState("");
+  const [insClass, setInsClass] = useState("");
+  const [insMembership, setInsMembership] = useState("");
+  const [insCopayPercent, setInsCopayPercent] = useState("");
+  const [insMaxAmount, setInsMaxAmount] = useState("");
+  const [insApprovalNumber, setInsApprovalNumber] = useState("");
+  /**
+   * فاتورة أعمال (B2B) — عمود `is_b2b` موجود في `sales_invoices` ولم يكن
+   * يُكتب من أي مكان، فبقي `false` دائمًا. وZATCA تفرّق بين الفاتورة
+   * الضريبية (B2B: تتطلب اسم المشتري ورقمه الضريبي) والفاتورة الضريبية
+   * المبسّطة (B2C) — والخلط بينهما سبب رفض شائع.
+   */
+  const [isB2b, setIsB2b] = useState(false);
+
+  const doctors = useBillingDoctors(organizationId);
+  const clinics = useBillingClinics(organizationId);
+  const warehouses = useBillingWarehouses(organizationId);
+  const quickGroups = useQuickGroups(organizationId);
+  const agreementItems = useAgreementItemsForBilling(patient?.id, organizationId);
+  const insuranceSettings = useInsuranceSettings(organizationId);
+
+  /**
+   * إضافة بند اتفاقية كسطر فاتورة **حاملًا `agreement_item_id`**.
+   *
+   * لا يمرّ عبر `addLine`: سعر بند الاتفاقية وخصمه متفق عليهما مع المريض
+   * ومكتوبان في الاتفاقية، فاحتساب خصم تلقائي جديد له عبر `app_resolve_discount`
+   * كان سيغيّر المبلغ عمّا وُقّع عليه.
+   */
+  const addAgreementLine = (option: AgreementItemOption) => {
+    const remainingQty = Math.max(option.qty - option.invoicedQty, 0);
+    if (remainingQty <= 0) return;
+    // منع تكرار نفس بند الاتفاقية في الفاتورة الواحدة
+    if (lines.some((line) => line.agreement_item_id === option.agreementItemId)) return;
     setLines((prev) => [
       ...prev,
       {
-        key: `${item.id}-${Date.now()}`,
+        key: `agr-${option.agreementItemId}-${Date.now()}`,
+        item_id: option.itemId,
+        description: option.description,
+        price: option.unitPrice,
+        qty: remainingQty,
+        discount_percent: option.discountPercent,
+        auto_discount_percent: option.discountPercent,
+        is_vat_exempt: false,
+        agreement_item_id: option.agreementItemId,
+        agreement_label: `اتفاقية #${option.agreementNumber}`,
+      },
+    ]);
+  };
+
+  const addLine = async (item: { id: string; name_ar: string; price: number; is_vat_exempt: boolean }) => {
+    // منطق أولوية الخصومات (خصم المريض ← الخصم العام ← العروض ← خصم الصنف)
+    // مبنيّ في قاعدة البيانات منذ 0004 لكنه لم يكن يُستدعى من أي مكان، فبقيت
+    // كل الخصومات يدوية. هنا نستدعيه ليقترح النسبة، ويبقى للمستخدم تعديلها.
+    let autoDiscount = 0;
+    try {
+      const { data, error } = await supabase.rpc("app_resolve_discount", {
+        p_organization_id: organizationId,
+        p_patient_id: patient?.id ?? null,
+        p_item_id: item.id,
+      });
+      if (!error && data != null) autoDiscount = Number(data) || 0;
+    } catch {
+      // فشل احتساب الخصم التلقائي لا يمنع إضافة البند — يُضاف بخصم صفر
+      // ويستطيع المستخدم إدخاله يدويًا.
+      autoDiscount = 0;
+    }
+
+    // المفتاح يُولَّد قبل الإضافة ويُعاد للمستدعي، حتى يستطيع تعديل هذا
+    // السطر بعينه بلا افتراض أنه الأخير.
+    const key = `${item.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    setLines((prev) => [
+      ...prev,
+      {
+        key,
         item_id: item.id,
         description: item.name_ar,
         price: Number(item.price),
         qty: 1,
-        discount_percent: 0,
+        discount_percent: autoDiscount,
+        auto_discount_percent: autoDiscount,
         is_vat_exempt: item.is_vat_exempt,
+        agreement_item_id: null,
+        agreement_label: null,
       },
     ]);
+    return key;
+  };
+
+  /**
+   * إضافة مجموعة تمرّ ببنودها عبر `addLine` نفسه لا بإدراج مباشر، حتى يُحتسب
+   * الخصم التلقائي لكل صنف كما لو أُضيف يدويًا — الإدراج المباشر كان سيتخطّى
+   * `app_resolve_discount` فتخرج فاتورة المجموعة بأسعار مختلفة عن نفس
+   * الأصناف مضافةً واحدًا واحدًا.
+   */
+  const addGroup = async (group: QuickGroupRow) => {
+    for (const line of group.quick_invoice_group_items ?? []) {
+      const item = Array.isArray(line.item) ? line.item[0] : line.item;
+      if (!item) continue;
+      // `addLine` يُعيد مفتاح السطر الذي أنشأه، والكمية تُطبَّق على **هذا
+      // المفتاح** لا على "آخر سطر": ضغط مجموعتين بينما استدعاء الخصم لأولاهما
+      // ما زال جاريًا كان يكتب كمية المجموعة الأولى على سطر المجموعة الثانية.
+      const key = await addLine(item);
+      const qty = Number(line.qty) || 1;
+      if (qty !== 1) {
+        setLines((prev) => prev.map((draft) => (draft.key === key ? { ...draft, qty } : draft)));
+      }
+    }
   };
 
   const updateLine = (key: string, patch: Partial<DraftLine>) =>
@@ -300,6 +1172,8 @@ function NewInvoiceDialog({
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
       if (!patient && !externalName.trim()) throw new Error("اختر مريضًا أو أدخل اسم عميل خارجي");
       if (lines.length === 0) throw new Error("أضف بندًا واحدًا على الأقل");
+      // حظر الفوترة في ملف المريض كان معروضًا بلا فرض — يُفرض هنا قبل إنشاء الرأس
+      await assertPatientNotBlocked(patient?.id, "invoices");
 
       const { data: invoice, error: invoiceError } = await supabase
         .from("sales_invoices")
@@ -312,6 +1186,21 @@ function NewInvoiceDialog({
           vat_amount: totals.vat,
           net_amount: totals.net,
           is_temporary: Boolean(isQuote),
+          doctor_id: doctorId === NONE ? null : doctorId,
+          clinic_id: clinicId === NONE ? null : clinicId,
+          warehouse_id: warehouseId === NONE ? null : warehouseId,
+          id_number: idNumber.trim() || null,
+          note: note.trim() || null,
+          created_by: session?.user.id ?? null,
+          is_b2b: isB2b,
+          is_insurance_invoice: isInsurance,
+          insurance_company_name: isInsurance ? insCompany.trim() || null : null,
+          insurance_policy_number: isInsurance ? insPolicy.trim() || null : null,
+          insurance_class_number: isInsurance ? insClass.trim() || null : null,
+          insurance_membership_number: isInsurance ? insMembership.trim() || null : null,
+          insurance_copay_percent: isInsurance && insCopayPercent ? Number(insCopayPercent) : null,
+          insurance_max_amount: isInsurance && insMaxAmount ? Number(insMaxAmount) : null,
+          insurance_approval_number: isInsurance ? insApprovalNumber.trim() || null : null,
         })
         .select("id")
         .single();
@@ -328,6 +1217,7 @@ function NewInvoiceDialog({
         vat_rate: line.is_vat_exempt ? 0 : vatRate,
         vat_amount: line.lineVat,
         net_amount: line.net,
+        agreement_item_id: line.agreement_item_id,
       }));
       const { error: linesError } = await supabase.from("sales_invoice_items").insert(itemsPayload);
       if (linesError) throw linesError;
@@ -335,10 +1225,27 @@ function NewInvoiceDialog({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+      // المفوتَر من الاتفاقية تغيّر بفعل المُحفِّز — بلا هذا التبطيل يبقى
+      // البند معروضًا "غير مفوتر" فيُفوتر مرة ثانية.
+      queryClient.invalidateQueries({ queryKey: ["billing-agreement-items"] });
       toast({ title: isQuote ? "تم إنشاء عرض السعر" : "تم إنشاء الفاتورة" });
       setPatient(null);
       setExternalName("");
       setLines([]);
+      setDoctorId(NONE);
+      setClinicId(NONE);
+      setWarehouseId(NONE);
+      setIdNumber("");
+      setNote("");
+      setIsInsurance(false);
+      setIsB2b(false);
+      setInsCompany("");
+      setInsPolicy("");
+      setInsClass("");
+      setInsMembership("");
+      setInsCopayPercent("");
+      setInsMaxAmount("");
+      setInsApprovalNumber("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -374,9 +1281,209 @@ function NewInvoiceDialog({
             </div>
           )}
 
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label>الطبيب المعالج</Label>
+              <Select value={doctorId} onValueChange={setDoctorId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="بدون" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>بدون</SelectItem>
+                  {(doctors.data ?? []).map((doctor) => (
+                    <SelectItem key={doctor.id} value={doctor.id}>
+                      {doctor.name_ar}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>العيادة</Label>
+              <Select value={clinicId} onValueChange={setClinicId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="بدون" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>بدون</SelectItem>
+                  {(clinics.data ?? []).map((clinic) => (
+                    <SelectItem key={clinic.id} value={clinic.id}>
+                      {clinic.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>المستودع</Label>
+              <Select value={warehouseId} onValueChange={setWarehouseId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="بدون" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>بدون</SelectItem>
+                  {(warehouses.data ?? []).map((warehouse) => (
+                    <SelectItem key={warehouse.id} value={warehouse.id}>
+                      {warehouse.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>رقم الهوية</Label>
+              <Input value={idNumber} onChange={(e) => setIdNumber(e.target.value)} />
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-2 rounded-lg border p-3">
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={isInsurance}
+                onChange={(e) => setIsInsurance(e.target.checked)}
+                className="h-4 w-4"
+              />
+              فاتورة تأمين
+            </label>
+            {isInsurance && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <Label>شركة التأمين</Label>
+                  <Input value={insCompany} onChange={(e) => setInsCompany(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>رقم البوليصة</Label>
+                  <Input value={insPolicy} onChange={(e) => setInsPolicy(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>رقم الفئة</Label>
+                  <Input value={insClass} onChange={(e) => setInsClass(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>رقم العضوية</Label>
+                  <Input value={insMembership} onChange={(e) => setInsMembership(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>نسبة التحمل %</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={insCopayPercent}
+                    onChange={(e) => setInsCopayPercent(e.target.value)}
+                  />
+                </div>
+                {/* `disable_patient_max_copay_field` كان يُحفَظ ولا يُنفَّذ */}
+                {!insuranceSettings.data?.disable_patient_max_copay_field && (
+                  <div className="flex flex-col gap-1.5">
+                    <Label>أعلى مبلغ مغطّى</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      value={insMaxAmount}
+                      onChange={(e) => setInsMaxAmount(e.target.value)}
+                    />
+                  </div>
+                )}
+                <div className="flex flex-col gap-1.5 sm:col-span-2">
+                  <Label>رقم الموافقة</Label>
+                  <Input
+                    value={insApprovalNumber}
+                    onChange={(e) => setInsApprovalNumber(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {(quickGroups.data ?? []).length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <Label>مجموعات سريعة</Label>
+              <div className="flex flex-wrap gap-2">
+                {(quickGroups.data ?? []).map((group) => (
+                  <Button
+                    key={group.id}
+                    size="sm"
+                    variant="outline"
+                    onClick={() => addGroup(group)}
+                    style={group.color ? { borderColor: group.color, color: group.color } : undefined}
+                  >
+                    {group.name_ar}
+                    <span className="text-[10px] text-muted-foreground">
+                      ({(group.quick_invoice_group_items ?? []).length})
+                    </span>
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <label className="flex cursor-pointer items-start gap-2 rounded-md border p-3 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4"
+              checked={isB2b}
+              onChange={(e) => setIsB2b(e.target.checked)}
+            />
+            <span className="flex flex-col gap-0.5">
+              <span>فاتورة أعمال (B2B)</span>
+              <span className="text-xs text-muted-foreground">
+                فاتورة ضريبية لمنشأة لا لمستهلك — تتطلب الرقم الضريبي للمشتري. اتركها فارغة
+                للفاتورة الضريبية المبسّطة (B2C).
+              </span>
+              {isB2b && !idNumber.trim() && (
+                <span className="text-xs text-amber-600">
+                  أدخل الرقم الضريبي/الهوية للمشتري في خانة «رقم الهوية» — بدونه تُرفض الفاتورة
+                </span>
+              )}
+            </span>
+          </label>
+
+          {patient && (agreementItems.data ?? []).length > 0 && (
+            <div className="flex flex-col gap-1.5 rounded-lg border border-primary/30 bg-primary/5 p-3">
+              <Label>بنود الاتفاقيات العلاجية لهذا المريض</Label>
+              <p className="text-xs text-muted-foreground">
+                إضافة البند من هنا تربطه بالاتفاقية، فيُحدَّث "المفوتَر" و"المتبقّي" فيها تلقائيًا.
+                إضافته من "إضافة بند" العادية لا تربطه بشيء.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {(agreementItems.data ?? []).map((option) => {
+                  const remainingQty = Math.max(option.qty - option.invoicedQty, 0);
+                  const alreadyAdded = lines.some(
+                    (line) => line.agreement_item_id === option.agreementItemId,
+                  );
+                  return (
+                    <Button
+                      key={option.agreementItemId}
+                      size="sm"
+                      variant="outline"
+                      disabled={remainingQty <= 0 || alreadyAdded}
+                      onClick={() => addAgreementLine(option)}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span className="truncate">{option.description}</span>
+                      <Badge variant={remainingQty <= 0 ? "secondary" : "default"}>
+                        {remainingQty <= 0
+                          ? "مفوتَر بالكامل"
+                          : `متبقٍ ${remainingQty} من ${option.qty}`}
+                      </Badge>
+                      <span className="text-[10px] text-muted-foreground">
+                        اتفاقية #{option.agreementNumber}
+                      </span>
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <div className="flex flex-col gap-1.5">
             <Label>إضافة بند</Label>
             <ItemPicker onSelect={addLine} />
+            <p className="text-xs text-muted-foreground">
+              يُقترح الخصم تلقائيًا حسب أولوية النظام (خصم المريض ← الخصم العام ← العروض ← خصم الصنف) ويمكن تعديله يدويًا.
+            </p>
           </div>
 
           <div className="flex flex-col gap-2 rounded-lg border p-2">
@@ -385,7 +1492,14 @@ function NewInvoiceDialog({
             )}
             {totals.computed.map((line) => (
               <div key={line.key} className="grid grid-cols-12 items-center gap-2 text-sm">
-                <span className="col-span-4 truncate">{line.description}</span>
+                <span className="col-span-4 flex min-w-0 items-center gap-1.5">
+                  <span className="truncate">{line.description}</span>
+                  {line.agreement_label && (
+                    <Badge variant="secondary" className="shrink-0 text-[10px]">
+                      {line.agreement_label}
+                    </Badge>
+                  )}
+                </span>
                 <Input
                   className="col-span-2 h-8"
                   type="number"
@@ -406,7 +1520,11 @@ function NewInvoiceDialog({
                   max={100}
                   value={line.discount_percent}
                   onChange={(e) => updateLine(line.key, { discount_percent: Number(e.target.value) })}
-                  title="نسبة الخصم %"
+                  title={
+                    line.auto_discount_percent > 0
+                      ? `نسبة الخصم % — اقترح النظام ${line.auto_discount_percent}%`
+                      : "نسبة الخصم %"
+                  }
                 />
                 <span className="col-span-1 text-left text-xs font-semibold">{line.net.toFixed(2)}</span>
                 <Button variant="ghost" size="sm" className="col-span-1" onClick={() => removeLine(line.key)}>
@@ -414,6 +1532,11 @@ function NewInvoiceDialog({
                 </Button>
               </div>
             ))}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>ملاحظات الفاتورة</Label>
+            <Input value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
 
           <div className="flex flex-col items-end gap-1 text-sm">
@@ -509,5 +1632,111 @@ function RecordPaymentDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// مؤشرات الخصم والتحصيل (لقطة 47) — نسبة الخصم الفعلية ونسبة التحصيل
+// ---------------------------------------------------------------------------
+
+/**
+ * الدالة `app_invoice_kpis` موجودة في قاعدة البيانات منذ 0010 وتحسب النسبتين
+ * بدقة، لكن لم تكن تُستدعى من أي مكان — كانت الشاشة تعرض الإجمالي والمتبقي
+ * الخام فقط. الحساب يبقى في قاعدة البيانات لأنه يشمل كل فواتير المدة لا
+ * الخمسين المعروضة في الجدول.
+ */
+type InvoiceKpis = {
+  gross_amount: number;
+  discount_amount: number;
+  discount_rate_percent: number;
+  net_amount: number;
+  paid_amount: number;
+  collection_rate_percent: number;
+};
+
+const KPI_RANGES = [
+  { value: "30", label: "آخر 30 يومًا" },
+  { value: "90", label: "آخر 90 يومًا" },
+  { value: "365", label: "آخر سنة" },
+];
+
+function InvoiceKpiBar({ organizationId }: { organizationId: string | undefined }) {
+  const [range, setRange] = useState("30");
+
+  const kpis = useQuery({
+    queryKey: ["invoice-kpis", organizationId, range],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const to = new Date();
+      const from = new Date();
+      from.setDate(from.getDate() - Number(range));
+      const { data, error } = await supabase.rpc("app_invoice_kpis", {
+        p_organization_id: organizationId,
+        p_date_from: from.toISOString().slice(0, 10),
+        p_date_to: to.toISOString().slice(0, 10),
+      });
+      if (error) throw error;
+      // الدالة تُرجع صفًا واحدًا
+      const row = Array.isArray(data) ? data[0] : data;
+      return (row ?? null) as InvoiceKpis | null;
+    },
+  });
+
+  const data = kpis.data;
+
+  return (
+    <Card>
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 space-y-0 pb-3">
+        <CardTitle className="text-base">مؤشرات الأداء</CardTitle>
+        <Select value={range} onValueChange={setRange}>
+          <SelectTrigger className="w-36">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {KPI_RANGES.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                {option.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </CardHeader>
+      <CardContent>
+        {kpis.isLoading && <Skeleton className="h-16 w-full" />}
+        {!kpis.isLoading && data && (
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg border p-3">
+              <p className="text-xs text-muted-foreground">إجمالي قبل الخصم</p>
+              <p className="text-lg font-bold tabular-nums">{Number(data.gross_amount).toFixed(2)}</p>
+            </div>
+            <div className="rounded-lg border p-3">
+              <p className="text-xs text-muted-foreground">الخصومات</p>
+              <p className="text-lg font-bold tabular-nums">{Number(data.discount_amount).toFixed(2)}</p>
+            </div>
+            <div className="rounded-lg border p-3">
+              <p className="text-xs text-muted-foreground">نسبة الخصم</p>
+              <p className="text-lg font-bold tabular-nums text-amber-600">
+                {Number(data.discount_rate_percent).toFixed(2)}%
+              </p>
+            </div>
+            <div className="rounded-lg border p-3">
+              <p className="text-xs text-muted-foreground">نسبة التحصيل</p>
+              <p
+                className={
+                  Number(data.collection_rate_percent) >= 80
+                    ? "text-lg font-bold tabular-nums text-emerald-700"
+                    : "text-lg font-bold tabular-nums text-destructive"
+                }
+              >
+                {Number(data.collection_rate_percent).toFixed(2)}%
+              </p>
+            </div>
+          </div>
+        )}
+        {!kpis.isLoading && !data && (
+          <p className="py-4 text-center text-sm text-muted-foreground">لا توجد فواتير في هذه المدة.</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }

@@ -220,8 +220,13 @@ function EnrollmentsTab({ organizationId }: { organizationId: string | undefined
 
   const markCompleted = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("training_enrollments").update({ status: "completed" }).eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("training_enrollments").update({ status: "completed" }).eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       invalidate();

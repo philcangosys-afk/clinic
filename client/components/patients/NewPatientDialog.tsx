@@ -1,6 +1,7 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
+import { TriangleAlert } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import {
@@ -84,13 +85,71 @@ export default function NewPatientDialog({
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [form, setForm] = useState(emptyForm);
+  /** تحذير الجهة المحجوبة المعروض قبل الحفظ (null = لا تطابق). */
+  const [blockWarning, setBlockWarning] = useState<string | null>(null);
+  const [warningAcknowledged, setWarningAcknowledged] = useState(false);
 
   const set = <K extends keyof typeof emptyForm>(key: K, value: typeof emptyForm[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
+  /**
+   * فحص قائمة الجهات المحجوبة (لقطة 42، المستوى الأول) بمطابقة الجوال أو
+   * الهوية. التحقق يتم عند الحفظ لا أثناء الكتابة، لتفادي استعلام مع كل حرف.
+   *
+   * التنبيه لا يمنع الإنشاء: القرار للموظف حسب سياسة المنشأة، لكن يجب أن
+   * يراه قبل أن يفتح الملف لا بعده.
+   */
+  const checkBlockedContact = async () => {
+    if (!organization?.id) return null;
+    const mobile = form.mobile_number.trim();
+    const idNumber = form.id_number.trim();
+    const name = form.name_ar.trim();
+    if (!mobile && !idNumber && !name) return null;
+
+    const conditions: string[] = [];
+    if (mobile) conditions.push(`mobile_number.eq.${mobile}`);
+    if (idNumber) conditions.push(`id_number.eq.${idNumber}`);
+    /**
+     * المطابقة بالاسم كانت غائبة رغم أن شاشة الحجب تسمح بسجل بالاسم وحده
+     * وتَعِد بالتنبيه عليه — فكان سجل الاسم-فقط ميتًا لا يُطابق شيئًا أبدًا.
+     *
+     * تُستعمل `ilike` لا `eq`: الأسماء العربية تُكتب بفروق طفيفة (مسافة
+     * زائدة، "عبدالله" مقابل "عبد الله")، والمطابقة الحرفية كانت ستفوّت
+     * معظم الحالات. الفواصل والفواصل المنقوطة تُزال لأنها تكسر صياغة `.or`.
+     */
+    const safeName = name.replace(/[,()]/g, " ").trim();
+    if (safeName) conditions.push(`full_name.ilike.%${safeName}%`);
+
+    const { data, error } = await supabase
+      .from("blocked_external_contacts")
+      .select("full_name, reason")
+      .eq("organization_id", organization.id)
+      .or(conditions.join(","))
+      .limit(1);
+    // فشل الفحص لا يعطّل تسجيل المريض — الاستقبال لا يتوقف بسبب استعلام تحذيري
+    if (error) return null;
+    const match = data?.[0];
+    if (!match) return null;
+    return match.reason?.trim()
+      ? `${match.full_name ?? "هذه الجهة"} محجوبة: ${match.reason}`
+      : `${match.full_name ?? "هذه الجهة"} مدرجة ضمن الجهات المحجوبة`;
+  };
+
   const createPatient = useMutation({
     mutationFn: async () => {
       if (!organization?.id) throw new Error("لا توجد منشأة نشطة");
+
+      // أول محاولة حفظ لمطابقة محجوبة تُظهر التحذير وتتوقف؛ الضغط ثانيةً
+      // يُكمل الحفظ بعد أن يكون الموظف قد رأى السبب.
+      if (!warningAcknowledged) {
+        const warning = await checkBlockedContact();
+        if (warning) {
+          setBlockWarning(warning);
+          setWarningAcknowledged(true);
+          throw new Error(warning);
+        }
+      }
+
       const { data, error } = await supabase
         .from("patients")
         .insert({
@@ -133,6 +192,8 @@ export default function NewPatientDialog({
       queryClient.invalidateQueries({ queryKey: ["patients-list"] });
       toast({ title: "تم فتح ملف المريض" });
       setForm(emptyForm);
+      setBlockWarning(null);
+      setWarningAcknowledged(false);
       onOpenChange(false);
       navigate(`/patients/${id}`);
     },
@@ -323,6 +384,18 @@ export default function NewPatientDialog({
             <Textarea value={form.general_note} onChange={(e) => set("general_note", e.target.value)} />
           </Field>
         </div>
+        {blockWarning && (
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+            <span>
+              <strong>تنبيه حجب:</strong> {blockWarning}
+              <span className="block text-xs text-muted-foreground">
+                اضغط "حفظ وفتح الملف" مرة أخرى للمتابعة رغم التحذير.
+              </span>
+            </span>
+          </div>
+        )}
+
 
         <DialogFooter>
           <Button disabled={!form.name_ar.trim() || createPatient.isPending} onClick={() => createPatient.mutate()}>

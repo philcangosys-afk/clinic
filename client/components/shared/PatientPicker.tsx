@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Search, UserRound } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import type { PatientRow } from "@/lib/database.types";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -23,17 +24,26 @@ export default function PatientPicker({
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
 
+  const { organization } = useOrganizationAccess();
+
   useEffect(() => {
-    if (term.trim().length < 2) {
+    if (term.trim().length < 2 || !organization?.id) {
       setResults([]);
       return;
     }
     const handle = setTimeout(async () => {
       setLoading(true);
       const isNumeric = /^\d+$/.test(term.trim());
+      /**
+       * التقييد بالمؤسسة النشطة إلزامي: سياسة RLS تسمح بكل مؤسسة **ينتمي
+       * إليها** المستخدم لا بالنشطة وحدها. بدونه كان طبيب عضو في عيادتين
+       * يستطيع اختيار مريض العيادة B وهو يعمل في A، فيُكتب صف يربط مؤسسةً
+       * بمريض ليس لها — ولا قيد في القاعدة يمنع ذلك.
+       */
       const query = supabase
         .from("patients")
         .select("id, name_ar, name_en, mobile_number, file_number")
+        .eq("organization_id", organization?.id)
         .limit(8);
       const { data } = isNumeric
         ? await query.or(`mobile_number.ilike.%${term.trim()}%,file_number.eq.${term.trim()}`)
@@ -42,7 +52,7 @@ export default function PatientPicker({
       setLoading(false);
     }, 300);
     return () => clearTimeout(handle);
-  }, [term]);
+  }, [term, organization?.id]);
 
   return (
     <div className="relative">

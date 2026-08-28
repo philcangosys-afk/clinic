@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, Settings2 } from "lucide-react";
+import { Plus, Trash2, Settings2, Info } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import {
@@ -51,6 +51,8 @@ import {
   type PrintSettingsRow,
   type SmsCreditBalanceRow,
 } from "@/lib/database.types";
+import LookupSelect, { useLookupValues } from "@/components/shared/LookupSelect";
+import ItemPicker from "@/components/shared/ItemPicker";
 
 const ROLE_LABELS_AR: Record<string, string> = {
   owner: "المالك",
@@ -146,6 +148,7 @@ export default function OperationsSettings() {
           <TabsTrigger value="insurance">التأمين</TabsTrigger>
           <TabsTrigger value="messaging">المراسلة الداخلية</TabsTrigger>
           <TabsTrigger value="sms">رصيد SMS</TabsTrigger>
+          <TabsTrigger value="quick-groups">مجموعات الفوترة السريعة</TabsTrigger>
           <TabsTrigger value="lookups">القوائم المرجعية</TabsTrigger>
         </TabsList>
 
@@ -170,11 +173,262 @@ export default function OperationsSettings() {
         <TabsContent value="sms">
           <SmsSettingsTab organizationId={organization?.id} readOnly={!isAdmin} />
         </TabsContent>
+        <TabsContent value="quick-groups">
+          <QuickInvoiceGroupsTab organizationId={organization?.id} readOnly={!isAdmin} />
+        </TabsContent>
         <TabsContent value="lookups">
           <LookupsTab organizationId={organization?.id} readOnly={!isAdmin} />
         </TabsContent>
       </Tabs>
     </div>
+  );
+}
+
+
+// ---------------------------------------------------------------------------
+// مجموعات الفوترة السريعة (لقطة 22) — جداولها في 0042
+// ---------------------------------------------------------------------------
+function QuickInvoiceGroupsTab({
+  organizationId,
+  readOnly,
+}: {
+  organizationId: string | undefined;
+  readOnly: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState("#2563eb");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  const groups = useQuery({
+    queryKey: ["quick-invoice-groups-admin", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("quick_invoice_groups")
+        .select(
+          "id, name_ar, color, sort_order, is_disabled, quick_invoice_group_items(id, qty, item_id, item:items(name_ar, price))",
+        )
+        .eq("organization_id", organizationId)
+        .order("sort_order");
+      if (error) throw error;
+      return (data ?? []) as unknown as {
+        id: string;
+        name_ar: string;
+        color: string | null;
+        sort_order: number;
+        is_disabled: boolean;
+        quick_invoice_group_items: {
+          id: string;
+          qty: number;
+          item_id: string;
+          item: { name_ar: string; price: number } | null;
+        }[];
+      }[];
+    },
+  });
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["quick-invoice-groups-admin", organizationId] });
+
+  const addGroup = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      if (!newName.trim()) throw new Error("اكتب اسم المجموعة");
+      const { error } = await supabase.from("quick_invoice_groups").insert({
+        organization_id: organizationId,
+        name_ar: newName.trim(),
+        color: newColor,
+        sort_order: (groups.data?.length ?? 0) * 10 + 10,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      setNewName("");
+      toast({ title: "تمت إضافة المجموعة" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const removeGroup = useMutation({
+    mutationFn: async (id: string) => {
+      const { data: affectedRows, error } = await supabase.from("quick_invoice_groups").delete().eq("id", id)
+        .select("id");
+      if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "تم حذف المجموعة" });
+    },
+  });
+
+  const addItem = useMutation({
+    mutationFn: async ({ groupId, itemId }: { groupId: string; itemId: string }) => {
+      const { error } = await supabase
+        .from("quick_invoice_group_items")
+        .insert({ group_id: groupId, item_id: itemId, qty: 1 });
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+    onError: () =>
+      toast({
+        variant: "destructive",
+        title: "تعذر إضافة الصنف",
+        description: "قد يكون الصنف مضافًا للمجموعة بالفعل",
+      }),
+  });
+
+  const removeItem = useMutation({
+    mutationFn: async (id: string) => {
+      const { data: affectedRows, error } = await supabase.from("quick_invoice_group_items").delete().eq("id", id)
+        .select("id");
+      if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: invalidate,
+  });
+
+  const setItemQty = useMutation({
+    mutationFn: async ({ id, qty }: { id: string; qty: number }) => {
+      if (!Number.isFinite(qty) || qty <= 0) throw new Error("الكمية يجب أن تكون أكبر من صفر");
+      const { data: affectedRows, error } = await supabase.from("quick_invoice_group_items").update({ qty }).eq("id", id)
+        .select("id");
+      if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: invalidate,
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التحديث",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>مجموعات الفوترة السريعة</CardTitle>
+        <CardDescription>
+          أزرار جاهزة في نافذة الفاتورة تضيف عدة أصناف دفعةً واحدة. ليست عرضًا سعريًا — لا تغيّر
+          الأسعار ولا الخصومات، والخصم يُحتسب لكل صنف كما لو أُضيف يدويًا.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {!readOnly && (
+          <div className="flex flex-wrap items-end gap-3 rounded-md border p-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>اسم المجموعة</Label>
+              <Input className="w-56" value={newName} onChange={(e) => setNewName(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>اللون</Label>
+              <Input
+                type="color"
+                className="h-10 w-16 p-1"
+                value={newColor}
+                onChange={(e) => setNewColor(e.target.value)}
+              />
+            </div>
+            <Button disabled={addGroup.isPending || !newName.trim()} onClick={() => addGroup.mutate()}>
+              <Plus className="h-4 w-4" />
+              إضافة مجموعة
+            </Button>
+          </div>
+        )}
+
+        {groups.isLoading && <Skeleton className="h-24 w-full" />}
+        {!groups.isLoading &&
+          (groups.data ?? []).map((group) => (
+            <div key={group.id} className="rounded-md border p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-2 font-medium">
+                  <span
+                    className="inline-block h-3 w-3 rounded-full"
+                    style={{ backgroundColor: group.color ?? "#94a3b8" }}
+                  />
+                  {group.name_ar}
+                  <span className="text-xs text-muted-foreground">
+                    ({(group.quick_invoice_group_items ?? []).length} صنف)
+                  </span>
+                </span>
+                <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setExpandedId(expandedId === group.id ? null : group.id)}
+                  >
+                    {expandedId === group.id ? "إخفاء الأصناف" : "الأصناف"}
+                  </Button>
+                  {!readOnly && (
+                    <Button size="sm" variant="ghost" onClick={() => removeGroup.mutate(group.id)}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {expandedId === group.id && (
+                <div className="mt-3 flex flex-col gap-2">
+                  {(group.quick_invoice_group_items ?? []).map((line) => {
+                    const item = Array.isArray(line.item) ? line.item[0] : line.item;
+                    return (
+                      <div key={line.id} className="flex items-center gap-2 text-sm">
+                        <span className="flex-1">{item?.name_ar ?? "—"}</span>
+                        <span className="tabular-nums text-xs text-muted-foreground">
+                          {Number(item?.price ?? 0).toFixed(2)}
+                        </span>
+                        <Input
+                          type="number"
+                          min={1}
+                          className="w-20"
+                          disabled={readOnly}
+                          defaultValue={String(line.qty)}
+                          onBlur={(e) => {
+                            const qty = Number(e.target.value);
+                            if (qty !== Number(line.qty)) setItemQty.mutate({ id: line.id, qty });
+                          }}
+                        />
+                        {!readOnly && (
+                          <Button size="sm" variant="ghost" onClick={() => removeItem.mutate(line.id)}>
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {(group.quick_invoice_group_items ?? []).length === 0 && (
+                    <p className="text-sm text-muted-foreground">لا توجد أصناف في هذه المجموعة بعد.</p>
+                  )}
+                  {!readOnly && (
+                    <ItemPicker onSelect={(item) => addItem.mutate({ groupId: group.id, itemId: item.id })} />
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        {!groups.isLoading && (groups.data ?? []).length === 0 && (
+          <p className="py-6 text-center text-sm text-muted-foreground">لا توجد مجموعات بعد.</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -352,6 +606,14 @@ function VatSettingsTab({ organizationId, readOnly }: { organizationId: string |
         {toggle("block_invoice_without_nationality_or_id", "منع إصدار الفاتورة بلا جنسية/هوية للمريض")}
         {toggle("vat_exemption_disabled_for_customer_types", "تعطيل إعفاء الضريبة حسب نوع العميل")}
         {toggle("vat_exemption_disabled_for_items", "تعطيل إعفاء الضريبة حسب الصنف")}
+        <Separator />
+        <ExemptNationalitiesPicker
+          selected={value.vat_exempt_nationality_value_ids ?? []}
+          readOnly={readOnly}
+          onChange={(ids) => setForm((f) => ({ ...f, vat_exempt_nationality_value_ids: ids }))}
+        />
+        <Separator />
+        <CategoryVatRates organizationId={organizationId} readOnly={readOnly} />
         {!readOnly && (
           <Button className="self-start" disabled={save.isPending} onClick={() => save.mutate(form)}>
             {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
@@ -375,8 +637,219 @@ const defaultVatSettings: OrganizationVatSettingsRow = {
   block_invoice_without_nationality_or_id: false,
   vat_exemption_disabled_for_customer_types: false,
   vat_exemption_disabled_for_items: false,
+  vat_exempt_nationality_value_ids: [],
   updated_at: "",
 };
+
+/**
+ * جنسيات معفاة من الضريبة — `vat_exempt_nationality_value_ids uuid[]` موجود في
+ * `organization_vat_settings` منذ 0003 وتقرؤه `app_resolve_vat_rate` فعليًا،
+ * لكن لم يكن هناك أي طريقة لتعبئته من الواجهة فبقي فارغًا دائمًا.
+ */
+function ExemptNationalitiesPicker({
+  selected,
+  readOnly,
+  onChange,
+}: {
+  selected: string[];
+  readOnly: boolean;
+  onChange: (ids: string[]) => void;
+}) {
+  // نفس الخطّاف الذي تستعمله كل القوائم المنسدلة — يجمع الجنسيات العامة
+  // وما أضافته المؤسسة، فلا تختفي جنسية أضافها المستخدم من قائمة الإعفاء.
+  const nationalities = useLookupValues("nationalities");
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <Label>الجنسيات المعفاة من الضريبة</Label>
+        <span className="text-xs text-muted-foreground">
+          {selected.length === 0 ? "لا يوجد إعفاء" : `${selected.length} جنسية معفاة`}
+        </span>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        يُطبَّق الإعفاء تلقائيًا على فواتير المرضى بهذه الجنسيات ما لم يكن &quot;تعطيل إعفاء الضريبة حسب نوع العميل&quot; مفعّلًا.
+      </p>
+      {nationalities.isLoading && <Skeleton className="h-16 w-full" />}
+      <div className="flex max-h-48 flex-wrap gap-3 overflow-y-auto rounded-md border p-3">
+        {(nationalities.data ?? []).map((row) => (
+          <label key={row.id} className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              disabled={readOnly}
+              checked={selected.includes(row.id)}
+              onChange={(e) =>
+                onChange(e.target.checked ? [...selected, row.id] : selected.filter((id) => id !== row.id))
+              }
+            />
+            {row.name_ar}
+          </label>
+        ))}
+        {!nationalities.isLoading && (nationalities.data ?? []).length === 0 && (
+          <span className="text-sm text-muted-foreground">لا توجد جنسيات معرّفة في القوائم المرجعية.</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * نِسَب الضريبة لكل فئة أصناف — تُخزَّن في `lookup_values.extra.default_vat_rate`
+ * (نمط بذرة 0003: "VAT 0%" / "VAT 15%") وتقرؤها `app_resolve_vat_rate` كمستوى
+ * وسيط بين نسبة الصنف ونسبة المؤسسة. لم يكن لها إدخال، فكانت النِسَب المزروعة
+ * هي الوحيدة الممكنة.
+ */
+function CategoryVatRates({
+  organizationId,
+  readOnly,
+}: {
+  organizationId: string | undefined;
+  readOnly: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+
+  /**
+   * فئات الأصناف المزروعة عامة (`organization_id is null`)، وسياسة
+   * `lookup_values_manage_admins` في 0001 تمنع أي منشأة من الكتابة فيها —
+   * والكتابة كانت تطابق صفرًا من الصفوف بلا خطأ فتظهر رسالة نجاح كاذبة.
+   *
+   * لذلك: النِسَب تُعرَض لكل الفئات، وتُحرَّر فقط في الفئات الخاصة بالمنشأة.
+   * الفئة العامة تُعرض نسبتها المزروعة للقراءة، ويُوجَّه المستخدم لإنشاء فئة
+   * خاصة إن أراد نسبة مختلفة — لأن تغيير نسبة فئة عامة يغيّرها لكل المنشآت.
+   */
+  const categories = useQuery({
+    queryKey: ["lookup-values", "item_categories", "vat", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data: cats, error: catError } = await supabase
+        .from("lookup_categories")
+        .select("id, organization_id")
+        .eq("key", "item_categories")
+        .or(`organization_id.is.null,organization_id.eq.${organizationId}`);
+      if (catError) throw catError;
+      const ids = (cats ?? []).map((row: { id: string }) => row.id);
+      const ownedIds = new Set(
+        (cats ?? [])
+          .filter((row: { organization_id: string | null }) => row.organization_id !== null)
+          .map((row: { id: string }) => row.id),
+      );
+      if (ids.length === 0) return [];
+      const { data, error } = await supabase
+        .from("lookup_values")
+        .select("id, name_ar, extra, category_id")
+        .in("category_id", ids)
+        .eq("is_disabled", false)
+        .order("sort_order");
+      if (error) throw error;
+      return ((data ?? []) as {
+        id: string;
+        name_ar: string;
+        extra: Record<string, unknown> | null;
+        category_id: string;
+      }[]).map((row) => ({ ...row, editable: ownedIds.has(row.category_id) }));
+    },
+  });
+
+  const saveRate = useMutation({
+    mutationFn: async ({
+      row,
+      rate,
+    }: {
+      row: { id: string; extra: Record<string, unknown> | null; editable: boolean };
+      rate: string;
+    }) => {
+      if (!row.editable)
+        throw new Error(
+          "هذه فئة عامة مشتركة بين كل المنشآت — أنشئ فئة خاصة بمنشأتك من القوائم المرجعية لتخصيص نسبتها",
+        );
+      const trimmed = rate.trim();
+      const parsed = trimmed === "" ? null : Number(trimmed);
+      if (parsed !== null && (!Number.isFinite(parsed) || parsed < 0 || parsed > 100))
+        throw new Error("النسبة يجب أن تكون بين 0 و100");
+      // الدمج مع extra الحالية لا استبدالها: الحقل نفسه يحمل بيانات أخرى
+      // لفئات أخرى، والاستبدال كان سيمسحها.
+      const { data, error } = await supabase
+        .from("lookup_values")
+        .update({ extra: { ...(row.extra ?? {}), default_vat_rate: parsed } })
+        .eq("id", row.id)
+        .select("id");
+      if (error) throw error;
+      // تحديث بلا صفوف ليس خطأً في PostgREST — بدون هذا الفحص تظهر رسالة
+      // "تم الحفظ" ولا يُحفظ شيء.
+      if (!data || data.length === 0) throw new Error("لم تُحفَظ النسبة — صلاحيتك لا تسمح بتعديل هذه الفئة");
+    },
+    onSuccess: (_result, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["lookup-values", "item_categories", "vat"] });
+      // مسح المسودة بعد الحفظ: بقاؤها كان يُظهر القيمة المكتوبة حتى لو لم تُحفظ
+      setDrafts((prev) => {
+        const next = { ...prev };
+        delete next[variables.row.id];
+        return next;
+      });
+      toast({ title: "تم حفظ نسبة الفئة" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label>نسبة الضريبة لكل فئة أصناف</Label>
+      <p className="text-xs text-muted-foreground">
+        تُستخدَم عندما لا يكون للصنف نسبة خاصة. اتركها فارغة لتُطبَّق نسبة المؤسسة الافتراضية.
+      </p>
+      {categories.isLoading && <Skeleton className="h-24 w-full" />}
+      {!categories.isLoading && (
+        <div className="flex flex-col gap-2 rounded-md border p-3">
+          {(categories.data ?? []).map((row) => {
+            const current = (row.extra ?? {}) as Record<string, unknown>;
+            const stored = current.default_vat_rate;
+            const shown = drafts[row.id] ?? (stored === null || stored === undefined ? "" : String(stored));
+            return (
+              <div key={row.id} className="flex items-center gap-2">
+                <span className="flex-1 text-sm">{row.name_ar}</span>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  className="w-24"
+                  disabled={readOnly || !row.editable}
+                  value={shown}
+                  placeholder="افتراضي"
+                  onChange={(e) => setDrafts((prev) => ({ ...prev, [row.id]: e.target.value }))}
+                />
+                <span className="text-xs text-muted-foreground">%</span>
+                {!readOnly &&
+                  (row.editable ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={saveRate.isPending || drafts[row.id] === undefined}
+                      onClick={() => saveRate.mutate({ row, rate: drafts[row.id] ?? "" })}
+                    >
+                      حفظ
+                    </Button>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">عامة</span>
+                  ))}
+              </div>
+            );
+          })}
+          {(categories.data ?? []).length === 0 && (
+            <span className="text-sm text-muted-foreground">لا توجد فئات أصناف معرّفة.</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // الخصومات — إعدادات عامة + قائمة حدود الخصم (متعددة الصفوف)
@@ -453,13 +926,33 @@ function DiscountLimitsList({ organizationId, readOnly }: { organizationId: stri
   const [role, setRole] = useState<string>("receptionist");
   const [minPercent, setMinPercent] = useState("0");
   const [maxPercent, setMaxPercent] = useState("10");
+  // الجدول يدعم حدًّا لمستخدم بعينه (applies_to_user_id) منذ 0001، لكن الواجهة
+  // كانت تدعم الصفة فقط لعدم وجود شاشة مستخدمين تُشتقّ منها القائمة.
+  const [scope, setScope] = useState<"role" | "user">("role");
+  const [userId, setUserId] = useState("");
+  const members = useQuery({
+    queryKey: ["discount-limit-members", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_organization_members_directory")
+        .select("user_id, display_name")
+        .eq("organization_id", organizationId);
+      if (error) throw error;
+      return (data ?? []) as { user_id: string; display_name: string }[];
+    },
+  });
+  const memberName = (id: string | null) =>
+    id ? ((members.data ?? []).find((m) => m.user_id === id)?.display_name ?? "مستخدم") : null;
 
   const addLimit = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      if (scope === "user" && !userId) throw new Error("اختر المستخدم أولًا");
       const { error } = await supabase.from("discount_limits").insert({
         organization_id: organizationId,
-        applies_to_role: role,
+        applies_to_role: scope === "role" ? role : null,
+        applies_to_user_id: scope === "user" ? userId : null,
         min_percent: Number(minPercent) || 0,
         max_percent: Number(maxPercent) || 0,
       });
@@ -479,8 +972,13 @@ function DiscountLimitsList({ organizationId, readOnly }: { organizationId: stri
 
   const removeLimit = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("discount_limits").delete().eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("discount_limits").delete().eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["discount_limits", organizationId] }),
   });
@@ -495,20 +993,50 @@ function DiscountLimitsList({ organizationId, readOnly }: { organizationId: stri
         {!readOnly && (
           <div className="flex flex-wrap items-end gap-3 rounded-md border p-3">
             <div className="flex flex-col gap-1.5">
-              <Label>الصفة الوظيفية</Label>
-              <Select value={role} onValueChange={setRole}>
-                <SelectTrigger className="w-48">
+              <Label>يُطبَّق على</Label>
+              <Select value={scope} onValueChange={(value) => setScope(value as "role" | "user")}>
+                <SelectTrigger className="w-36">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {ORG_ROLE_KEYS.map((key) => (
-                    <SelectItem key={key} value={key}>
-                      {ROLE_LABELS_AR[key] ?? key}
-                    </SelectItem>
-                  ))}
+                  <SelectItem value="role">صفة وظيفية</SelectItem>
+                  <SelectItem value="user">مستخدم محدد</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+            {scope === "role" ? (
+              <div className="flex flex-col gap-1.5">
+                <Label>الصفة الوظيفية</Label>
+                <Select value={role} onValueChange={setRole}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {ORG_ROLE_KEYS.map((key) => (
+                      <SelectItem key={key} value={key}>
+                        {ROLE_LABELS_AR[key] ?? key}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <Label>المستخدم</Label>
+                <Select value={userId} onValueChange={setUserId}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue placeholder="اختر مستخدمًا" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(members.data ?? []).map((member) => (
+                      <SelectItem key={member.user_id} value={member.user_id}>
+                        {member.display_name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="flex flex-col gap-1.5">
               <Label>الحد الأدنى %</Label>
               <Input type="number" className="w-28" value={minPercent} onChange={(e) => setMinPercent(e.target.value)} />
@@ -529,7 +1057,7 @@ function DiscountLimitsList({ organizationId, readOnly }: { organizationId: stri
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>الصفة</TableHead>
+                <TableHead>يُطبَّق على</TableHead>
                 <TableHead>الحد الأدنى %</TableHead>
                 <TableHead>الحد الأقصى %</TableHead>
                 {!readOnly && <TableHead />}
@@ -538,7 +1066,11 @@ function DiscountLimitsList({ organizationId, readOnly }: { organizationId: stri
             <TableBody>
               {(limits.data ?? []).map((limit) => (
                 <TableRow key={limit.id}>
-                  <TableCell>{ROLE_LABELS_AR[limit.applies_to_role ?? ""] ?? limit.applies_to_role ?? "—"}</TableCell>
+                  <TableCell>
+                    {limit.applies_to_user_id
+                      ? `مستخدم: ${memberName(limit.applies_to_user_id)}`
+                      : (ROLE_LABELS_AR[limit.applies_to_role ?? ""] ?? limit.applies_to_role ?? "—")}
+                  </TableCell>
                   <TableCell>{limit.min_percent}%</TableCell>
                   <TableCell>{limit.max_percent}%</TableCell>
                   {!readOnly && (
@@ -579,24 +1111,326 @@ function ConsultationSettingsTab({ organizationId, readOnly }: { organizationId:
   if (query.isLoading) return <SettingsSkeleton />;
 
   return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>إعدادات الكشفية</CardTitle>
+          <CardDescription>
+            تنبيه "حان وقت تجديد الكشفية" يُحسَب تلقائيًا من تاريخ آخر فاتورة كشفية فعلية لكل مريض
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-4">
+          <ToggleRow label="تفعيل تنبيه تجديد الكشفية" checked={enabled} disabled={readOnly} onChange={setEnabled} />
+          {!readOnly && (
+            <Button
+              className="self-start"
+              disabled={save.isPending}
+              onClick={() => save.mutate({ renewal_alert_enabled: enabled })}
+            >
+              {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      <ConsultationRulesList organizationId={organizationId} readOnly={readOnly} />
+    </div>
+  );
+}
+
+/**
+ * قواعد الكشفية لكل تخصص (لقطة 9).
+ *
+ * جدول `consultation_fee_rules` موجود منذ 0004 بكل حقوله (التخصص، كود
+ * الكشفية، كود المراجعة، أيام التجديد، عدد المراجعات المجانية، تخصيص
+ * لأطباء معينين، وضع خاص لمرضى التأمين) لكنه لم يُستخدم في أي شاشة.
+ *
+ * كان وصف تبويب الإعدادات يقول إن هذه القواعد "تُدار من شاشة الأطباء" —
+ * وهذا غير صحيح، فلا وجود لتلك الواجهة في أي مكان. صُحِّح الوصف وبُنيت
+ * الواجهة الفعلية هنا.
+ */
+function ConsultationRulesList({
+  organizationId,
+  readOnly,
+}: {
+  organizationId: string | undefined;
+  readOnly: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [specialtyValueId, setSpecialtyValueId] = useState("");
+  const [consultationItem, setConsultationItem] = useState<{ id: string; name_ar: string } | null>(null);
+  const [followUpItem, setFollowUpItem] = useState<{ id: string; name_ar: string } | null>(null);
+  const [renewalDays, setRenewalDays] = useState("30");
+  const [freeReviews, setFreeReviews] = useState("0");
+  const [insuranceSpecific, setInsuranceSpecific] = useState(false);
+  const [insuranceCompany, setInsuranceCompany] = useState("");
+  /**
+   * تخصيص القاعدة لأطباء بعينهم: `doctor_ids uuid[]` موجود في
+   * `consultation_fee_rules` منذ 0004 (فارغ = كل الأطباء) ولم يكن له أي إدخال،
+   * فكانت كل قاعدة تُطبَّق على الجميع رغم أن المواصفة تسمح بقصرها على أطباء.
+   */
+  const [doctorIds, setDoctorIds] = useState<string[]>([]);
+
+  const doctors = useQuery({
+    queryKey: ["consultation-rule-doctors", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        // عمود التفعيل في `doctors` اسمه `is_enabled` لا `is_disabled` (0002).
+        // الاستعلام القديم كان يفشل كليًا فتبقى قائمة الأطباء فارغة دائمًا.
+        .eq("is_enabled", true)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
+
+  const doctorNameById = new Map((doctors.data ?? []).map((d) => [d.id, d.name_ar]));
+
+  const rules = useQuery({
+    queryKey: ["consultation-fee-rules", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("consultation_fee_rules")
+        .select(
+          "*, specialty:lookup_values!consultation_fee_rules_specialty_value_id_fkey(name_ar), consultation_item:items!consultation_fee_rules_consultation_item_id_fkey(name_ar), follow_up_item:items!consultation_fee_rules_follow_up_item_id_fkey(name_ar)",
+        )
+        .eq("organization_id", organizationId)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const addRule = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      if (!consultationItem) throw new Error("اختر خدمة الكشفية");
+      const days = Number(renewalDays);
+      if (!Number.isFinite(days) || days <= 0) throw new Error("أيام التجديد يجب أن تكون رقمًا أكبر من صفر");
+      const { error } = await supabase.from("consultation_fee_rules").insert({
+        organization_id: organizationId,
+        // تخصص فارغ = قاعدة عامة تنطبق على كل التخصصات
+        specialty_value_id: specialtyValueId || null,
+        consultation_item_id: consultationItem.id,
+        follow_up_item_id: followUpItem?.id ?? null,
+        renewal_days: days,
+        free_reviews_count: Number(freeReviews) || 0,
+        is_insurance_specific: insuranceSpecific,
+        // اسم شركة التأمين لا معنى له إلا مع قاعدة تأمينية — تركه محفوظًا مع
+        // قاعدة عامة يجعل القاعدة تبدو مقيّدة بشركة وهي ليست كذلك.
+        insurance_company_name: insuranceSpecific ? insuranceCompany.trim() || null : null,
+        doctor_ids: doctorIds,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["consultation-fee-rules"] });
+      toast({ title: "تمت إضافة القاعدة" });
+      setConsultationItem(null);
+      setFollowUpItem(null);
+      setInsuranceCompany("");
+      setDoctorIds([]);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الإضافة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const removeRule = useMutation({
+    mutationFn: async (id: string) => {
+      const { data: affectedRows, error } = await supabase.from("consultation_fee_rules").delete().eq("id", id)
+        .select("id");
+      if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["consultation-fee-rules"] }),
+  });
+
+  return (
     <Card>
       <CardHeader>
-        <CardTitle>إعدادات الكشفية</CardTitle>
+        <CardTitle>قواعد الكشفية حسب التخصص</CardTitle>
         <CardDescription>
-          تنبيه "حان وقت تجديد الكشفية" يُحسَب تلقائيًا من تاريخ آخر فاتورة كشفية فعلية لكل مريض — قواعد التخصص والمدة والمراجعات
-          المجانية تُدار من شاشة "الأطباء" لكل تخصص
+          تحدد خدمة الكشفية وخدمة المراجعة لكل تخصص، ومدة صلاحية الكشفية بالأيام، وعدد المراجعات المجانية خلالها
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <ToggleRow label="تفعيل تنبيه تجديد الكشفية" checked={enabled} disabled={readOnly} onChange={setEnabled} />
         {!readOnly && (
-          <Button
-            className="self-start"
-            disabled={save.isPending}
-            onClick={() => save.mutate({ renewal_alert_enabled: enabled })}
-          >
-            {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
-          </Button>
+          <div className="flex flex-col gap-3 rounded-md border p-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <Label>التخصص</Label>
+                <LookupSelect
+                  categoryKey="medical_specialties"
+                  value={specialtyValueId}
+                  onChange={setSpecialtyValueId}
+                  placeholder="كل التخصصات"
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>أيام التجديد</Label>
+                <Input type="number" min={1} value={renewalDays} onChange={(e) => setRenewalDays(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>خدمة الكشفية *</Label>
+                {consultationItem ? (
+                  <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-1.5">
+                    <span className="text-sm">{consultationItem.name_ar}</span>
+                    <Button size="sm" variant="ghost" onClick={() => setConsultationItem(null)}>
+                      تغيير
+                    </Button>
+                  </div>
+                ) : (
+                  <ItemPicker onSelect={(item) => setConsultationItem({ id: item.id, name_ar: item.name_ar })} />
+                )}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>خدمة المراجعة</Label>
+                {followUpItem ? (
+                  <div className="flex items-center justify-between rounded-md border bg-muted/40 px-3 py-1.5">
+                    <span className="text-sm">{followUpItem.name_ar}</span>
+                    <Button size="sm" variant="ghost" onClick={() => setFollowUpItem(null)}>
+                      تغيير
+                    </Button>
+                  </div>
+                ) : (
+                  <ItemPicker onSelect={(item) => setFollowUpItem({ id: item.id, name_ar: item.name_ar })} />
+                )}
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>المراجعات المجانية</Label>
+                <Input type="number" min={0} value={freeReviews} onChange={(e) => setFreeReviews(e.target.value)} />
+              </div>
+              <div className="flex items-end">
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={insuranceSpecific}
+                    onChange={(e) => setInsuranceSpecific(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  قاعدة خاصة بمرضى التأمين
+                </label>
+              </div>
+              {insuranceSpecific && (
+                <div className="flex flex-col gap-1.5">
+                  <Label>شركة التأمين (اختياري)</Label>
+                  <Input
+                    value={insuranceCompany}
+                    onChange={(e) => setInsuranceCompany(e.target.value)}
+                    placeholder="اتركه فارغًا لتنطبق على كل شركات التأمين"
+                  />
+                </div>
+              )}
+            </div>
+
+            <div className="flex flex-col gap-2 rounded-md border p-3">
+              <div className="flex items-center justify-between">
+                <Label>الأطباء المشمولون</Label>
+                <span className="text-xs text-muted-foreground">
+                  {doctorIds.length === 0 ? "كل الأطباء" : `${doctorIds.length} طبيب محدَّد`}
+                </span>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                لا تحدد أحدًا لتنطبق القاعدة على كل الأطباء.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {(doctors.data ?? []).map((doctor) => (
+                  <label key={doctor.id} className="flex cursor-pointer items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={doctorIds.includes(doctor.id)}
+                      onChange={(e) =>
+                        setDoctorIds((prev) =>
+                          e.target.checked ? [...prev, doctor.id] : prev.filter((id) => id !== doctor.id),
+                        )
+                      }
+                    />
+                    {doctor.name_ar}
+                  </label>
+                ))}
+                {(doctors.data ?? []).length === 0 && (
+                  <span className="text-sm text-muted-foreground">لا يوجد أطباء مفعّلون.</span>
+                )}
+              </div>
+            </div>
+
+            <Button className="self-start" disabled={addRule.isPending} onClick={() => addRule.mutate()}>
+              <Plus className="h-4 w-4" />
+              إضافة قاعدة
+            </Button>
+          </div>
+        )}
+
+        {rules.isLoading && <Skeleton className="h-24 w-full" />}
+        {!rules.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>التخصص</TableHead>
+                <TableHead>خدمة الكشفية</TableHead>
+                <TableHead>خدمة المراجعة</TableHead>
+                <TableHead>أيام التجديد</TableHead>
+                <TableHead>مراجعات مجانية</TableHead>
+                <TableHead>الأطباء</TableHead>
+                <TableHead>النوع</TableHead>
+                {!readOnly && <TableHead />}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(rules.data ?? []).map((rule) => (
+                <TableRow key={rule.id}>
+                  <TableCell>{rule.specialty?.name_ar ?? "كل التخصصات"}</TableCell>
+                  <TableCell className="font-medium">{rule.consultation_item?.name_ar ?? "—"}</TableCell>
+                  <TableCell>{rule.follow_up_item?.name_ar ?? "—"}</TableCell>
+                  <TableCell className="tabular-nums">{rule.renewal_days}</TableCell>
+                  <TableCell className="tabular-nums">{rule.free_reviews_count}</TableCell>
+                  <TableCell className="max-w-[14rem] text-xs text-muted-foreground">
+                    {(rule.doctor_ids ?? []).length === 0
+                      ? "كل الأطباء"
+                      : (rule.doctor_ids as string[])
+                          .map((id) => doctorNameById.get(id) ?? "—")
+                          .join("، ")}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={rule.is_insurance_specific ? "warning" : "secondary"}>
+                      {rule.is_insurance_specific ? "تأمين" : "عام"}
+                      {rule.is_insurance_specific && rule.insurance_company_name
+                        ? ` · ${rule.insurance_company_name}`
+                        : ""}
+                    </Badge>
+                  </TableCell>
+                  {!readOnly && (
+                    <TableCell>
+                      <Button size="sm" variant="ghost" onClick={() => removeRule.mutate(rule.id)}>
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </TableCell>
+                  )}
+                </TableRow>
+              ))}
+              {(rules.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={readOnly ? 7 : 8} className="py-8 text-center text-sm text-muted-foreground">
+                    لا توجد قواعد كشفية — أضف قاعدة لتفعيل احتساب الكشفية والمراجعات تلقائيًا.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
         )}
       </CardContent>
     </Card>
@@ -606,7 +1440,15 @@ function ConsultationSettingsTab({ organizationId, readOnly }: { organizationId:
 // ---------------------------------------------------------------------------
 // التأمين
 // ---------------------------------------------------------------------------
-function InsuranceSettingsTab({ organizationId, readOnly }: { organizationId: string | undefined; readOnly: boolean }) {
+/**
+ * تبويب إعدادات التأمين — **المصدر الوحيد**.
+ *
+ * كان لهذه الإعدادات محرِّران: هذا، ونسخة ثانية داخل `Insurance.tsx` بقيم
+ * افتراضية معرَّفة مرتين. كلاهما `upsert` على نفس الصف، فتعديل في إحداهما
+ * يُظهِر قيمة قديمة في الأخرى حتى التحديث، وأول حفظ من شاشة قد يدهس ما ضُبط
+ * في الأخرى. شاشة التأمين تستورد هذا المكوّن الآن بدل نسختها.
+ */
+export function InsuranceSettingsTab({ organizationId, readOnly }: { organizationId: string | undefined; readOnly: boolean }) {
   const { query, save } = useOrgSettingsRow<InsuranceSettingsRow>("insurance_settings", organizationId);
   const [form, setForm] = useState<Partial<InsuranceSettingsRow>>({});
 
@@ -990,31 +1832,125 @@ function LookupsTab({ organizationId, readOnly }: { organizationId: string | und
         </CardContent>
       </Card>
 
-      {selectedCategory && <LookupValuesEditor category={selectedCategory} readOnly={readOnly} />}
+      {selectedCategory && (
+        <LookupValuesEditor
+          category={selectedCategory}
+          organizationId={organizationId}
+          readOnly={readOnly}
+        />
+      )}
     </div>
   );
 }
 
-function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRow; readOnly: boolean }) {
+/**
+ * **خلل حقيقي كان قائمًا**: كل الفئات المرجعية الـ19 المزروعة عامة
+ * (`organization_id is null`)، وسياسة `lookup_values_manage_admins` في 0001
+ * تشترط `app_is_org_admin(c.organization_id)` — و`app_is_org_admin(null)`
+ * تُعيد `false` دائمًا. أي أن **كل** إضافة أو تعطيل أو حذف لقيمة في أي فئة
+ * مزروعة كانت تطابق صفرًا من الصفوف، ولا تُعيد خطأً (تحديث بلا صفوف ليس
+ * خطأً في PostgREST) — فتظهر رسالة "تمت الإضافة" ولا يُحفظ شيء.
+ *
+ * الإصلاح يتبع التصميم المذكور في 0003 نفسه: «المؤسسة تُخصّص بإضافة قيمها
+ * الخاصة عبر لائحة جديدة بنفس المفتاح ومعرّف مؤسستها». فعند أول تعديل على
+ * فئة عامة تُنشأ نسخة الفئة الخاصة بالمؤسسة تلقائيًا وتُكتَب القيمة فيها.
+ *
+ * القيم العامة نفسها تبقى **غير قابلة للتعديل أو الحذف** — وهي مشتركة بين كل
+ * المنشآت، فتعديلها يعني تعديل بيانات منشآت أخرى. الأزرار معطّلة عليها
+ * بتفسير ظاهر بدل زر يبدو عاملًا ولا يفعل شيئًا.
+ */
+function LookupValuesEditor({
+  category,
+  organizationId,
+  readOnly,
+}: {
+  category: LookupCategoryRow;
+  organizationId: string | undefined;
+  readOnly: boolean;
+}) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const isPaymentMethods = category.key === "payment_methods";
+  const isGlobalCategory = category.organization_id === null;
 
+  /**
+   * تُعيد معرّف فئة المؤسسة المقابلة لهذه الفئة (تُنشئها عند أول حاجة).
+   * الفئة الخاصة تحمل نفس `key` — وهو ما تعتمد عليه القوائم المنسدلة في
+   * تفضيل قيم المؤسسة على العامة.
+   */
+  const ensureOrgCategoryId = async (): Promise<string> => {
+    if (!isGlobalCategory) return category.id;
+    if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+    const { data: existing, error: findError } = await supabase
+      .from("lookup_categories")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("key", category.key)
+      .maybeSingle();
+    if (findError) throw findError;
+    if (existing) return existing.id;
+    const { data: created, error: createError } = await supabase
+      .from("lookup_categories")
+      .insert({
+        organization_id: organizationId,
+        key: category.key,
+        name_ar: category.name_ar,
+        name_en: category.name_en,
+      })
+      .select("id")
+      .single();
+    if (createError) throw createError;
+    return created.id;
+  };
+  const isPaymentMethods = category.key === "payment_methods";
+  /**
+   * فئات الأصناف والمصاريف شجرة (لقطة 10 / لقطة 44): `parent_value_id` موجود في
+   * `lookup_values` منذ 0001 وبذرة 0003 تُنشئ "خدمات الأسنان" كأب فعليًا، لكن
+   * الواجهة لم تكن تعرض الأب ولا تسمح باختياره — فكان كل ما يُضاف يصبح جذرًا.
+   */
+  const isHierarchical = category.key === "item_categories" || category.key === "expense_categories";
+
+  /**
+   * تُعرَض قيم الفئة العامة **وقيم فئة المؤسسة بنفس المفتاح** معًا، لأن
+   * الشاشات تقرؤهما معًا بالمفتاح. عرض العامة وحدها كان سيُخفي ما أضافته
+   * المؤسسة، وعرض الخاصة وحدها كان سيُخفي القيم المزروعة.
+   */
   const values = useQuery({
-    queryKey: ["lookup_values", category.id],
+    queryKey: ["lookup_values", category.key, organizationId],
+    enabled: Boolean(organizationId),
     queryFn: async () => {
+      const { data: cats, error: catError } = await supabase
+        .from("lookup_categories")
+        .select("id, organization_id")
+        .eq("key", category.key)
+        .or(`organization_id.is.null,organization_id.eq.${organizationId}`);
+      if (catError) throw catError;
+      const ids = (cats ?? []).map((row: { id: string }) => row.id);
+      const ownedIds = new Set(
+        (cats ?? [])
+          .filter((row: { organization_id: string | null }) => row.organization_id !== null)
+          .map((row: { id: string }) => row.id),
+      );
+      if (ids.length === 0) return [] as (LookupValueRow & { editable: boolean })[];
       const { data, error } = await supabase
         .from("lookup_values")
         .select("*")
-        .eq("category_id", category.id)
+        .in("category_id", ids)
         .order("sort_order");
       if (error) throw error;
-      return (data ?? []) as LookupValueRow[];
+      return ((data ?? []) as LookupValueRow[]).map((row) => ({
+        ...row,
+        // قيمة في فئة عامة لا يمكن للمنشأة تعديلها — مشتركة بين كل المنشآت
+        editable: ownedIds.has(row.category_id),
+      })) as (LookupValueRow & { editable: boolean })[];
     },
   });
 
   const [nameAr, setNameAr] = useState("");
   const [nameEn, setNameEn] = useState("");
+  const [code, setCode] = useState("");
+  const [parentId, setParentId] = useState("none");
+  const [bankName, setBankName] = useState("");
+  const [accountNumber, setAccountNumber] = useState("");
   const [iban, setIban] = useState("");
   const [commission, setCommission] = useState("0");
   const [maxAmount, setMaxAmount] = useState("");
@@ -1023,13 +1959,21 @@ function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRo
   const resetForm = () => {
     setNameAr("");
     setNameEn("");
+    setCode("");
+    setParentId("none");
+    setBankName("");
+    setAccountNumber("");
     setIban("");
     setCommission("0");
     setMaxAmount("");
     setIsAtm(false);
   };
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["lookup_values", category.id] });
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["lookup_values"] });
+    queryClient.invalidateQueries({ queryKey: ["lookup-values"] });
+    queryClient.invalidateQueries({ queryKey: ["lookup_categories", organizationId] });
+  };
 
   const addValue = useMutation({
     mutationFn: async () => {
@@ -1037,15 +1981,22 @@ function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRo
       if (!trimmed) throw new Error("اكتب اسم القيمة");
       const extra: Record<string, unknown> = {};
       if (isPaymentMethods) {
+        extra.bank_name = bankName.trim() || null;
+        extra.account_number = accountNumber.trim() || null;
         extra.iban = iban || null;
         extra.commission_percent = Number(commission) || 0;
         extra.max_amount = maxAmount ? Number(maxAmount) : null;
         extra.is_atm = isAtm;
       }
+      const targetCategoryId = await ensureOrgCategoryId();
       const { error } = await supabase.from("lookup_values").insert({
-        category_id: category.id,
+        category_id: targetCategoryId,
         name_ar: trimmed,
         name_en: nameEn.trim() || null,
+        // `code` عمود حقيقي في lookup_values منذ 0001 — يُستخدَم في التقارير
+        // والترحيل المحاسبي، وكان يُترك فارغًا دائمًا لعدم وجود حقل له.
+        code: code.trim() || null,
+        parent_value_id: isHierarchical && parentId !== "none" ? parentId : null,
         extra,
         sort_order: (values.data?.length ?? 0) * 10 + 10,
       });
@@ -1065,29 +2016,68 @@ function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRo
   });
 
   const toggleDisabled = useMutation({
-    mutationFn: async (row: LookupValueRow) => {
-      const { error } = await supabase
+    mutationFn: async (row: LookupValueRow & { editable: boolean }) => {
+      if (!row.editable) throw new Error("هذه قيمة عامة مشتركة — لا يمكن تعديلها من منشأة واحدة");
+      const { data, error } = await supabase
         .from("lookup_values")
         .update({ is_disabled: !row.is_disabled })
-        .eq("id", row.id);
+        .eq("id", row.id)
+        .select("id");
       if (error) throw error;
+      // تحديث لا يطابق صفًا ليس خطأً في PostgREST — الفحص هنا يمنع رسالة
+      // نجاح كاذبة إن منعت سياسة RLS الكتابة لسبب لم نتوقّعه.
+      if (!data || data.length === 0) throw new Error("لم يُحفَظ التغيير — صلاحيتك لا تسمح بتعديل هذه القيمة");
     },
     onSuccess: invalidate,
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التحديث",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   const removeValue = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from("lookup_values").delete().eq("id", id);
+    mutationFn: async (row: LookupValueRow & { editable: boolean }) => {
+      if (!row.editable) throw new Error("هذه قيمة عامة مشتركة — لا يمكن حذفها من منشأة واحدة");
+      const { data, error } = await supabase
+        .from("lookup_values")
+        .delete()
+        .eq("id", row.id)
+        .select("id");
       if (error) throw error;
+      if (!data || data.length === 0)
+        throw new Error("لم يُحذَف شيء — قد تكون القيمة مستخدَمة في سجلات موجودة أو خارج صلاحيتك");
     },
     onSuccess: invalidate,
-    onError: () =>
+    onError: (error: unknown) =>
       toast({
         variant: "destructive",
         title: "تعذر الحذف",
-        description: "قد تكون هذه القيمة مستخدَمة في سجلات موجودة — جرّب تعطيلها بدلًا من حذفها",
+        description:
+          error instanceof Error
+            ? error.message
+            : "قد تكون هذه القيمة مستخدَمة في سجلات موجودة — جرّب تعطيلها بدلًا من حذفها",
       }),
   });
+
+  /**
+   * ترتيب شجري: كل أب يتبعه أبناؤه مباشرة. الترتيب المسطّح حسب sort_order كان
+   * يفرّق الابن عن أبيه فيبدو التسلسل عشوائيًا في الفئات الهرمية.
+   */
+  const orderedValues = (() => {
+    const rows = (values.data ?? []) as (LookupValueRow & { editable: boolean })[];
+    if (!isHierarchical) return rows;
+    const roots = rows.filter((row) => !row.parent_value_id);
+    const out: (LookupValueRow & { editable: boolean })[] = [];
+    roots.forEach((root) => {
+      out.push(root);
+      rows.filter((row) => row.parent_value_id === root.id).forEach((child) => out.push(child));
+    });
+    // أبناء بلا أب مرئي (أبٌ معطّل أو محذوف) لا يجوز أن يختفوا من القائمة
+    rows.filter((row) => !out.includes(row)).forEach((row) => out.push(row));
+    return out;
+  })();
 
   return (
     <Card>
@@ -1095,9 +2085,19 @@ function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRo
         <CardTitle>قيم قائمة: {category.name_ar}</CardTitle>
         <CardDescription>
           {isPaymentMethods
-            ? "لكل طريقة دفع: نسبة العمولة، الحد الأقصى للمبلغ، رقم الآيبان، وهل هي جهاز نقطة بيع (ATM/POS)"
+            ? "لكل طريقة دفع: اسم البنك ورقم الحساب والآيبان ونسبة العمولة والحد الأقصى، وهل هي جهاز نقطة بيع"
             : "ترتيب الظهور في كل القوائم المنسدلة المرتبطة بهذه الفئة في النظام يتبع ترتيب الإضافة"}
         </CardDescription>
+        {isGlobalCategory && (
+          <div className="mt-2 flex items-start gap-2 rounded-md border bg-muted/40 px-3 py-2 text-xs">
+            <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <span>
+              الصفوف المعلَّمة «عامة» مشتركة بين كل المنشآت فلا تُعدَّل ولا تُحذف من هنا. ما تضيفه
+              أنت يُحفَظ كقيمة خاصة بمنشأتك ويظهر في القوائم المنسدلة إلى جانب العامة، ويبقى
+              قابلًا للتعديل والحذف.
+            </span>
+          </div>
+        )}
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {!readOnly && (
@@ -1110,8 +2110,40 @@ function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRo
               <Label>الاسم بالإنجليزي (اختياري)</Label>
               <Input className="w-48" value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
             </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>الكود (اختياري)</Label>
+              <Input className="w-28" value={code} onChange={(e) => setCode(e.target.value)} dir="ltr" />
+            </div>
+            {isHierarchical && (
+              <div className="flex flex-col gap-1.5">
+                <Label>الفئة الأب</Label>
+                <Select value={parentId} onValueChange={setParentId}>
+                  <SelectTrigger className="w-48">
+                    <SelectValue placeholder="بلا أب (فئة رئيسية)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">بلا أب (فئة رئيسية)</SelectItem>
+                    {(values.data ?? [])
+                      .filter((row) => !row.parent_value_id)
+                      .map((row) => (
+                        <SelectItem key={row.id} value={row.id}>
+                          {row.name_ar}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             {isPaymentMethods && (
               <>
+                <div className="flex flex-col gap-1.5">
+                  <Label>اسم البنك</Label>
+                  <Input className="w-40" value={bankName} onChange={(e) => setBankName(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>رقم الحساب</Label>
+                  <Input className="w-40" value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} dir="ltr" />
+                </div>
                 <div className="flex flex-col gap-1.5">
                   <Label>رقم الآيبان</Label>
                   <Input className="w-48" value={iban} onChange={(e) => setIban(e.target.value)} />
@@ -1140,20 +2172,26 @@ function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRo
             <TableHeader>
               <TableRow>
                 <TableHead>الاسم</TableHead>
+                <TableHead>الكود</TableHead>
                 <TableHead>الحالة</TableHead>
                 {isPaymentMethods && <TableHead>تفاصيل</TableHead>}
                 {!readOnly && <TableHead />}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(values.data ?? []).map((row) => {
+              {orderedValues.map((row) => {
                 const extra = (row.extra ?? {}) as Record<string, unknown>;
                 return (
                   <TableRow key={row.id}>
                     <TableCell>
-                      {row.name_ar}
+                      {/* الإزاحة منطقية (ps) لا يسارية، حتى تنعكس صحيحًا في RTL */}
+                      <span className={isHierarchical && row.parent_value_id ? "ps-6 text-muted-foreground" : ""}>
+                        {isHierarchical && row.parent_value_id ? "↳ " : ""}
+                        {row.name_ar}
+                      </span>
                       {row.name_en && <span className="text-muted-foreground"> · {row.name_en}</span>}
                     </TableCell>
+                    <TableCell className="font-mono text-xs">{row.code ?? "—"}</TableCell>
                     <TableCell>
                       <Badge variant={row.is_disabled ? "secondary" : "success"}>
                         {row.is_disabled ? "معطّلة" : "مفعّلة"}
@@ -1161,7 +2199,9 @@ function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRo
                     </TableCell>
                     {isPaymentMethods && (
                       <TableCell className="text-xs text-muted-foreground">
-                        {extra.iban ? `آيبان: ${String(extra.iban)}` : ""}
+                        {extra.bank_name ? `${String(extra.bank_name)}` : ""}
+                        {extra.account_number ? ` · حساب: ${String(extra.account_number)}` : ""}
+                        {extra.iban ? ` · آيبان: ${String(extra.iban)}` : ""}
                         {typeof extra.commission_percent === "number" && extra.commission_percent > 0
                           ? ` · عمولة ${extra.commission_percent}%`
                           : ""}
@@ -1170,14 +2210,18 @@ function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRo
                     )}
                     {!readOnly && (
                       <TableCell>
-                        <div className="flex gap-1">
-                          <Button size="sm" variant="outline" onClick={() => toggleDisabled.mutate(row)}>
-                            {row.is_disabled ? "تفعيل" : "تعطيل"}
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => removeValue.mutate(row.id)}>
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </div>
+                        {row.editable ? (
+                          <div className="flex gap-1">
+                            <Button size="sm" variant="outline" onClick={() => toggleDisabled.mutate(row)}>
+                              {row.is_disabled ? "تفعيل" : "تعطيل"}
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => removeValue.mutate(row)}>
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">عامة</span>
+                        )}
                       </TableCell>
                     )}
                   </TableRow>
@@ -1185,7 +2229,7 @@ function LookupValuesEditor({ category, readOnly }: { category: LookupCategoryRo
               })}
               {(values.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={isPaymentMethods ? 4 : 3} className="py-6 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={isPaymentMethods ? 5 : 4} className="py-6 text-center text-sm text-muted-foreground">
                     لا توجد قيم في هذه القائمة بعد.
                   </TableCell>
                 </TableRow>

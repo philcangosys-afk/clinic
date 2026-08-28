@@ -6,6 +6,7 @@ import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type { DocumentTemplateRow, OccupationalExamPurpose, OccupationalExamReportView, OccupationalFitnessStatus } from "@/lib/database.types";
 import { buildMergeContext, mergeTemplate, printHtml } from "@/lib/document-merge";
+import { localDayRange } from "@/lib/date-range";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 
@@ -35,8 +37,18 @@ const FITNESS_STATUS_BADGE: Record<OccupationalFitnessStatus, "success" | "defau
   pending: "secondary",
 };
 
+/**
+ * التاريخ **بتوقيت المتصفح** لا بـ UTC.
+ *
+ * `toISOString().slice(0,10)` يعطي تاريخ UTC: في الرياض (UTC+3) الساعة 1:30
+ * فجرًا من 28 أغسطس يُعيد "2026-08-27" — فتفتح التقارير على نطاق ينتهي أمس
+ * وتُسقِط فواتير اليوم كله بلا أي إشارة للمستخدم.
+ */
 function toDateInputValue(date: Date) {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 function defaultFrom() {
   const date = new Date();
@@ -78,6 +90,8 @@ export default function Reports() {
           <TabsTrigger value="sales">المبيعات والعروض</TabsTrigger>
           <TabsTrigger value="profitability">الربحية</TabsTrigger>
           <TabsTrigger value="vat">الضرائب والمرتجعات</TabsTrigger>
+          <TabsTrigger value="sources">المصادر والاتفاقيات</TabsTrigger>
+          <TabsTrigger value="patients">إحصائيات المرضى</TabsTrigger>
           <TabsTrigger value="occupational">الفحوصات المهنية</TabsTrigger>
         </TabsList>
         <TabsContent value="revenue">
@@ -91,6 +105,12 @@ export default function Reports() {
         </TabsContent>
         <TabsContent value="vat">
           <VatReturnsTab organizationId={organization?.id} from={from} to={to} />
+        </TabsContent>
+        <TabsContent value="sources">
+          <SourcesAgreementsTab organizationId={organization?.id} from={from} to={to} />
+        </TabsContent>
+        <TabsContent value="patients">
+          <PatientFinancialsTab organizationId={organization?.id} />
         </TabsContent>
         <TabsContent value="occupational">
           <OccupationalExamsTab organizationId={organization?.id} from={from} to={to} />
@@ -431,8 +451,9 @@ function ProfitabilityTab({ organizationId, from, to }: { organizationId: string
         .from("v_invoice_profitability")
         .select("*")
         .eq("organization_id", organizationId)
-        .gte("created_at", `${from}T00:00:00`)
-        .lte("created_at", `${to}T23:59:59`)
+        // حدود بتوقيت المتصفح لا بتوقيت الخادم — انظر date-range.ts
+        .gte("created_at", localDayRange(from, to).from ?? `${from}T00:00:00`)
+        .lte("created_at", localDayRange(from, to).to ?? `${to}T23:59:59`)
         .order("created_at", { ascending: false })
         .limit(100);
       if (error) throw error;
@@ -803,5 +824,409 @@ function FitnessCertificateButton({ row, organizationId }: { row: OccupationalEx
       <FileCheck2 className="h-3.5 w-3.5" />
       {generate.isPending ? "جارٍ الإصدار..." : "طباعة شهادة"}
     </Button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// إحصائيات المرضى المالية (لقطة 30) — إجمالي الأعمال والمدفوعات والمتبقي
+// ---------------------------------------------------------------------------
+
+type PatientFinancialRow = {
+  patient_id: string;
+  file_number: number | null;
+  patient_name: string;
+  mobile_number: string | null;
+  insurance_company_name: string | null;
+  invoice_count: number;
+  total_work: number;
+  total_paid: number;
+  total_remaining: number;
+  last_invoice_at: string;
+};
+
+const FINANCIAL_SORTS = [
+  { value: "total_remaining", label: "الأعلى مديونية" },
+  { value: "total_work", label: "الأعلى أعمالًا" },
+  { value: "total_paid", label: "الأعلى سدادًا" },
+  { value: "last_invoice_at", label: "الأحدث تعاملًا" },
+];
+
+function usePatientFinancials(
+  organizationId: string | undefined,
+  sortBy: string,
+  debtorsOnly: boolean,
+  search: string,
+  doctorId: string,
+) {
+  return useQuery({
+    queryKey: ["patient-financials", organizationId, sortBy, debtorsOnly, search, doctorId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      // عند اختيار طبيب نقرأ من العرض المقسَّم حسب الطبيب (0041)؛ وبدونه من
+      // العرض المجمَّع على المريض حتى لا يتكرر المريض الذي عالجه أكثر من طبيب.
+      let query = supabase
+        .from(doctorId ? "v_patient_financials_by_doctor" : "v_patient_financials")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order(sortBy, { ascending: false })
+        .limit(200);
+      if (doctorId) query = query.eq("doctor_id", doctorId);
+      if (debtorsOnly) query = query.gt("total_remaining", 0);
+      if (search.trim()) query = query.ilike("patient_name", `%${search.trim()}%`);
+      const { data, error } = await query;
+      if (error) throw error;
+      return (data ?? []) as PatientFinancialRow[];
+    },
+  });
+}
+
+function PatientFinancialsTab({ organizationId }: { organizationId: string | undefined }) {
+  const [sortBy, setSortBy] = useState("total_remaining");
+  const [debtorsOnly, setDebtorsOnly] = useState(false);
+  const [search, setSearch] = useState("");
+  const [doctorId, setDoctorId] = useState("");
+  const rows = usePatientFinancials(organizationId, sortBy, debtorsOnly, search, doctorId);
+
+  const financialDoctors = useQuery({
+    queryKey: ["doctors-for-financials", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
+
+  const list = rows.data ?? [];
+  // إجماليات الصفوف المعروضة — تُحسب هنا لا في العرض لأنها تتبع الفلترة الحالية
+  const totals = list.reduce(
+    (acc, row) => ({
+      work: acc.work + Number(row.total_work ?? 0),
+      paid: acc.paid + Number(row.total_paid ?? 0),
+      remaining: acc.remaining + Number(row.total_remaining ?? 0),
+    }),
+    { work: 0, paid: 0, remaining: 0 },
+  );
+
+  return (
+    <Card className="mt-4">
+      <CardHeader>
+        <CardTitle>إحصائيات المرضى المالية</CardTitle>
+        <CardDescription>
+          إجمالي الأعمال والمدفوعات والمتبقي لكل مريض — المرتجعات مخصومة والفواتير الملغاة مستبعدة
+        </CardDescription>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="بحث باسم المريض..."
+            className="max-w-xs"
+          />
+          <Select value={sortBy} onValueChange={setSortBy}>
+            <SelectTrigger className="w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {FINANCIAL_SORTS.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={doctorId || "__all__"}
+            onValueChange={(value) => setDoctorId(value === "__all__" ? "" : value)}
+          >
+            <SelectTrigger className="w-44">
+              <SelectValue placeholder="كل الأطباء" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__all__">كل الأطباء</SelectItem>
+              {(financialDoctors.data ?? []).map((doctor) => (
+                <SelectItem key={doctor.id} value={doctor.id}>
+                  {doctor.name_ar}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={debtorsOnly}
+              onChange={(e) => setDebtorsOnly(e.target.checked)}
+              className="h-4 w-4"
+            />
+            المدينون فقط
+          </label>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {rows.isLoading && <Skeleton className="h-40 w-full" />}
+        {!rows.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>#الملف</TableHead>
+                <TableHead>المريض</TableHead>
+                <TableHead>الجوال</TableHead>
+                <TableHead>التأمين</TableHead>
+                <TableHead>الفواتير</TableHead>
+                <TableHead>إجمالي الأعمال</TableHead>
+                <TableHead>المدفوع</TableHead>
+                <TableHead>المتبقي</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {list.map((row) => (
+                <TableRow key={row.patient_id}>
+                  <TableCell className="font-mono text-xs">#{row.file_number ?? "—"}</TableCell>
+                  <TableCell className="font-medium">{row.patient_name}</TableCell>
+                  <TableCell className="font-mono text-xs">{row.mobile_number ?? "—"}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {row.insurance_company_name ?? "نقدي"}
+                  </TableCell>
+                  <TableCell className="tabular-nums">{row.invoice_count}</TableCell>
+                  <TableCell className="tabular-nums">{Number(row.total_work).toFixed(2)}</TableCell>
+                  <TableCell className="tabular-nums text-emerald-700">
+                    {Number(row.total_paid).toFixed(2)}
+                  </TableCell>
+                  <TableCell
+                    className={
+                      Number(row.total_remaining) > 0
+                        ? "font-semibold tabular-nums text-destructive"
+                        : "tabular-nums"
+                    }
+                  >
+                    {Number(row.total_remaining).toFixed(2)}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {list.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                    لا توجد بيانات مالية للمرضى.
+                  </TableCell>
+                </TableRow>
+              )}
+              {list.length > 0 && (
+                <TableRow className="border-t-2 bg-muted/40 font-semibold">
+                  <TableCell colSpan={5}>الإجمالي ({list.length} مريض)</TableCell>
+                  <TableCell className="tabular-nums">{totals.work.toFixed(2)}</TableCell>
+                  <TableCell className="tabular-nums text-emerald-700">{totals.paid.toFixed(2)}</TableCell>
+                  <TableCell className="tabular-nums text-destructive">
+                    {totals.remaining.toFixed(2)}
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// المصادر والاتفاقيات (لقطة 44) — تقارير كانت عروضها جاهزة في قاعدة البيانات
+// منذ 0010 لكن لم تُعرَض في أي شاشة
+// ---------------------------------------------------------------------------
+
+function SourcesAgreementsTab({
+  organizationId,
+  from,
+  to,
+}: {
+  organizationId: string | undefined;
+  from: string;
+  to: string;
+}) {
+  const bySource = useQuery({
+    queryKey: ["v-revenue-by-source", organizationId, from, to],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_daily_revenue_by_source")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .gte("revenue_date", from)
+        .lte("revenue_date", to);
+      if (error) throw error;
+      return (data ?? []) as {
+        source_value_id: string | null;
+        source_name_ar: string | null;
+        net_amount: number;
+        invoice_count: number;
+      }[];
+    },
+  });
+
+  const agreements = useQuery({
+    queryKey: ["v-agreements-stats", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_agreements_stats")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      if (error) throw error;
+      return data as {
+        agreement_count: number;
+        total_amount: number;
+        total_invoiced: number;
+        total_remaining: number;
+      } | null;
+    },
+  });
+
+  const tempInvoices = useQuery({
+    queryKey: ["v-temp-invoices-stats", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_temporary_invoices_stats")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      if (error) throw error;
+      return data as { temp_invoice_count: number; total_amount: number } | null;
+    },
+  });
+
+  /**
+   * العرض يُرجع صفًا لكل (تاريخ × مصدر)، فنجمّع هنا على مستوى المصدر ليكون
+   * التقرير قابلًا للقراءة. التجميع في الواجهة مقبول لأن المدى محدود بالفترة
+   * المختارة أعلى الشاشة.
+   */
+  const sourceTotals = (() => {
+    const map = new Map<string, { name: string; net: number; count: number }>();
+    (bySource.data ?? []).forEach((row) => {
+      const key = row.source_value_id ?? "__none__";
+      const current = map.get(key) ?? { name: row.source_name_ar ?? "بلا مصدر محدد", net: 0, count: 0 };
+      current.net += Number(row.net_amount ?? 0);
+      current.count += Number(row.invoice_count ?? 0);
+      map.set(key, current);
+    });
+    return [...map.values()].sort((a, b) => b.net - a.net);
+  })();
+
+  const grandTotal = sourceTotals.reduce((sum, row) => sum + row.net, 0);
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>الإيراد حسب مصدر المريض</CardTitle>
+          <CardDescription>يوضّح أي قنوات جلب المرضى تحقّق أعلى إيراد خلال الفترة المختارة</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {bySource.isLoading && <Skeleton className="h-32 w-full" />}
+          {!bySource.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>المصدر</TableHead>
+                  <TableHead>عدد الفواتير</TableHead>
+                  <TableHead>الإيراد</TableHead>
+                  <TableHead>النسبة</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sourceTotals.map((row) => (
+                  <TableRow key={row.name}>
+                    <TableCell className="font-medium">{row.name}</TableCell>
+                    <TableCell className="tabular-nums">{row.count}</TableCell>
+                    <TableCell className="tabular-nums">{row.net.toFixed(2)}</TableCell>
+                    <TableCell className="tabular-nums text-muted-foreground">
+                      {grandTotal > 0 ? `${((row.net / grandTotal) * 100).toFixed(1)}%` : "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {sourceTotals.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
+                      لا توجد فواتير في هذه الفترة.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle>الاتفاقيات</CardTitle>
+            <CardDescription>إجمالي اتفاقيات العلاج النشطة وما فُوتر منها</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {agreements.isLoading && <Skeleton className="h-24 w-full" />}
+            {!agreements.isLoading && agreements.data && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">عدد الاتفاقيات</p>
+                  <p className="text-xl font-bold tabular-nums">{agreements.data.agreement_count}</p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">القيمة الإجمالية</p>
+                  <p className="text-xl font-bold tabular-nums">
+                    {Number(agreements.data.total_amount).toFixed(2)}
+                  </p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">المفوتر</p>
+                  <p className="text-xl font-bold tabular-nums text-emerald-700">
+                    {Number(agreements.data.total_invoiced).toFixed(2)}
+                  </p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">المتبقي</p>
+                  <p className="text-xl font-bold tabular-nums text-destructive">
+                    {Number(agreements.data.total_remaining).toFixed(2)}
+                  </p>
+                </div>
+              </div>
+            )}
+            {!agreements.isLoading && !agreements.data && (
+              <p className="py-6 text-center text-sm text-muted-foreground">لا توجد اتفاقيات نشطة.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>عروض الأسعار المعلّقة</CardTitle>
+            <CardDescription>فواتير مؤقتة لم تُحوَّل بعد إلى فواتير فعلية</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {tempInvoices.isLoading && <Skeleton className="h-24 w-full" />}
+            {!tempInvoices.isLoading && tempInvoices.data && (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">العدد</p>
+                  <p className="text-xl font-bold tabular-nums">{tempInvoices.data.temp_invoice_count}</p>
+                </div>
+                <div className="rounded-lg border p-3">
+                  <p className="text-xs text-muted-foreground">القيمة</p>
+                  <p className="text-xl font-bold tabular-nums">
+                    {Number(tempInvoices.data.total_amount).toFixed(2)}
+                  </p>
+                </div>
+              </div>
+            )}
+            {!tempInvoices.isLoading && !tempInvoices.data && (
+              <p className="py-6 text-center text-sm text-muted-foreground">لا توجد عروض أسعار معلّقة.</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+    </div>
   );
 }

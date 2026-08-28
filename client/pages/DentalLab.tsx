@@ -1,12 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Smile, Wallet } from "lucide-react";
+import { Plus, Smile, Wallet, Trash2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type {
   DentalLabBalanceRow,
   DentalLabItemRow,
-  DentalLabOrderRow,
   DentalLabOrderStatus,
   DistributorRow,
   ToothShadeGuideRow,
@@ -146,8 +145,13 @@ function OrdersTab({
     mutationFn: async ({ id, status }: { id: string; status: DentalLabOrderStatus }) => {
       const patch: Record<string, unknown> = { status };
       if (status === "delivered") patch.received_date = new Date().toISOString().slice(0, 10);
-      const { error } = await supabase.from("dental_lab_orders").update(patch).eq("id", id);
+      const { data, error } = await supabase
+        .from("dental_lab_orders")
+        .update(patch)
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      if (!data || data.length === 0) throw new Error("لم يُحفظ التغيير — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dental-lab-orders", organizationId] }),
     onError: (error: unknown) =>
@@ -280,12 +284,30 @@ function NewDentalLabOrderDialog({
   const [toothNumbers, setToothNumbers] = useState("");
   const [price, setPrice] = useState("0");
   const [qty, setQty] = useState("1");
+  /**
+   * بنود الطلبية.
+   *
+   * كانت الطلبية محصورة ببند واحد: `insert` مفرد داخل `if (itemDescription)`
+   * بلا مصفوفة. فطلبية بثلاث تركيبات لأسنان مختلفة كانت تحتاج ثلاث طلبيات
+   * منفصلة إلى نفس المعمل في نفس اليوم — فينكسر إجمالي الطلبية، ويستقبل
+   * المعمل ثلاثة أوامر لحالة واحدة، ويتعذّر تتبّع التسليم كوحدة.
+   *
+   * `dental_lab_order_items` صُمِّم للتعدد منذ البداية (مفتاح `order_id`)،
+   * فالنقص كان في الواجهة وحدها.
+   */
+  const [lines, setLines] = useState<
+    { key: string; description: string; teeth: string; price: number; qty: number }[]
+  >([]);
 
   const doctors = useQuery({
     queryKey: ["doctors-select", organizationId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("doctors").select("id, name_ar").order("name_ar");
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .order("name_ar");
       if (error) throw error;
       return (data ?? []) as { id: string; name_ar: string }[];
     },
@@ -295,7 +317,13 @@ function NewDentalLabOrderDialog({
     queryKey: ["tooth-shade-guides", organizationId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase.from("tooth_shade_guides").select("id, name").order("name");
+      // بلا هذا المرشّح يرى المستخدم العضو في أكثر من منشأة أدلّة ألوان
+      // المنشآت الأخرى مختلطة بأدلّته — سياسة app_is_member تسمح بكلها.
+      const { data, error } = await supabase
+        .from("tooth_shade_guides")
+        .select("id, name")
+        .eq("organization_id", organizationId)
+        .order("name");
       if (error) throw error;
       return (data ?? []) as Pick<ToothShadeGuideRow, "id" | "name">[];
     },
@@ -328,13 +356,62 @@ function NewDentalLabOrderDialog({
     setToothNumbers("");
     setPrice("0");
     setQty("1");
+    setLines([]);
   };
+
+  const addLine = () => {
+    const description = itemDescription.trim();
+    if (!description) return;
+    setLines((prev) => [
+      ...prev,
+      {
+        key: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        description,
+        teeth: toothNumbers.trim(),
+        price: Number(price) || 0,
+        qty: Number(qty) || 1,
+      },
+    ]);
+    setItemDescription("");
+    setToothNumbers("");
+    setPrice("0");
+    setQty("1");
+  };
+
+  const removeLine = (key: string) => setLines((prev) => prev.filter((line) => line.key !== key));
+
+  const parseTeeth = (raw: string) =>
+    raw
+      .split(/[,\s]+/)
+      .map((tooth) => tooth.trim())
+      .filter(Boolean);
+
+  /**
+   * البند المكتوب في الحقول ولم يُضَف بعد يُحتسب ضمن الطلبية.
+   *
+   * بدون هذا، الموظف الذي يكتب تركيبة واحدة ويضغط "حفظ الطلبية" مباشرةً
+   * (وهو المسار الأكثر شيوعًا) كان سيحفظ طلبية بلا بنود إطلاقًا.
+   */
+  const pendingLine = itemDescription.trim()
+    ? [
+        {
+          key: "pending",
+          description: itemDescription.trim(),
+          teeth: toothNumbers.trim(),
+          price: Number(price) || 0,
+          qty: Number(qty) || 1,
+        },
+      ]
+    : [];
+  const allLines = [...lines, ...pendingLine];
+  const orderTotal = allLines.reduce((sum, line) => sum + line.price * line.qty, 0);
 
   const createOrder = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
       if (!distributorId) throw new Error("اختر المعمل");
-      const net = (Number(price) || 0) * (Number(qty) || 1);
+      if (allLines.length === 0) throw new Error("أضف تركيبة واحدة على الأقل");
+      const net = orderTotal;
       const { data: order, error } = await supabase
         .from("dental_lab_orders")
         .insert({
@@ -353,22 +430,20 @@ function NewDentalLabOrderDialog({
         .single();
       if (error) throw error;
 
-      if (itemDescription.trim()) {
-        const teeth = toothNumbers
-          .split(/[,\s]+/)
-          .map((t) => t.trim())
-          .filter(Boolean);
-        const { error: itemError } = await supabase.from("dental_lab_order_items").insert({
+      const { error: itemError } = await supabase.from("dental_lab_order_items").insert(
+        allLines.map((line) => ({
           order_id: order.id,
-          description: itemDescription.trim(),
-          tooth_numbers: teeth,
+          description: line.description,
+          tooth_numbers: parseTeeth(line.teeth),
           shade_id: shadeId || null,
-          price: Number(price) || 0,
-          qty: Number(qty) || 1,
-          net_amount: net,
-        });
-        if (itemError) throw itemError;
-      }
+          price: line.price,
+          qty: line.qty,
+          // صافي البند لا صافي الطلبية: كان يُكتب الإجمالي في كل بند، فبند
+          // واحد كان يبدو بقيمة الطلبية كاملة لو أُضيف أكثر من بند.
+          net_amount: line.price * line.qty,
+        })),
+      );
+      if (itemError) throw itemError;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["dental-lab-orders", organizationId] });
@@ -480,13 +555,57 @@ function NewDentalLabOrderDialog({
               <Input type="number" min={1} value={qty} onChange={(e) => setQty(e.target.value)} />
             </div>
           </div>
+          <div className="flex items-end sm:col-span-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!itemDescription.trim()}
+              onClick={addLine}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              إضافة تركيبة أخرى للطلبية نفسها
+            </Button>
+          </div>
+          {lines.length > 0 && (
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <Label>تركيبات الطلبية</Label>
+              <div className="flex flex-col gap-1 rounded-md border p-2">
+                {lines.map((line) => (
+                  <div key={line.key} className="flex items-center gap-2 text-sm">
+                    <span className="min-w-0 flex-1 truncate">{line.description}</span>
+                    {line.teeth && (
+                      <span className="font-mono text-[10px] text-muted-foreground">{line.teeth}</span>
+                    )}
+                    <span className="tabular-nums text-xs text-muted-foreground">
+                      {line.price} × {line.qty}
+                    </span>
+                    <Button size="sm" variant="ghost" onClick={() => removeLine(line.key)}>
+                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {allLines.length > 0 && (
+            <div className="text-sm font-medium tabular-nums sm:col-span-2">
+              إجمالي الطلبية: {orderTotal.toLocaleString("ar-SA")}
+              <span className="mr-2 text-xs font-normal text-muted-foreground">
+                ({allLines.length} تركيبة)
+              </span>
+            </div>
+          )}
           <div className="flex flex-col gap-1.5 sm:col-span-2">
             <Label>ملاحظة</Label>
             <Input value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </div>
         <DialogFooter>
-          <Button disabled={!distributorId || createOrder.isPending} onClick={() => createOrder.mutate()}>
+          <Button
+            disabled={!distributorId || allLines.length === 0 || createOrder.isPending}
+            onClick={() => createOrder.mutate()}
+          >
             {createOrder.isPending ? "جارٍ الحفظ..." : "حفظ الطلبية"}
           </Button>
         </DialogFooter>
@@ -609,13 +728,22 @@ function ItemsTab({
 
   const toggleDisabled = useMutation({
     mutationFn: async (item: DentalLabItemRow) => {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from("dental_lab_items")
         .update({ is_disabled: !item.is_disabled })
-        .eq("id", item.id);
+        .eq("id", item.id)
+        .select("id");
       if (error) throw error;
+      if (!data || data.length === 0) throw new Error("لم يُحفظ التغيير — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dental-lab-items", selectedLab] }),
+    // كانت بلا onError إطلاقًا: رفض RLS أو قيد في القاعدة كان يمرّ صامتًا تمامًا
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التحديث",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   return (

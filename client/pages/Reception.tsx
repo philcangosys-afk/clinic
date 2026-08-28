@@ -4,13 +4,13 @@ import {
   CalendarClock,
   CheckCircle2,
   LogIn,
-  LogOut,
   Megaphone,
   Plus,
   UserX,
 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import type { AppointmentStatus, AppointmentWithRelations } from "@/lib/database.types";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -69,8 +69,11 @@ function useTodayQueue(organizationId: string | undefined, doctorFilter: string)
       let query = supabase
         .from("appointments")
         .select(
-          "id, scheduled_start, scheduled_end, status, checked_in_1_at, called_at, entered_at, left_at, note, doctor_id, patient_id, clinic_id, patient:patients(id, name_ar, mobile_number, file_number), doctor:doctors(id, name_ar), clinic:clinics(id, name)",
+          "id, scheduled_start, scheduled_end, status, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, note, doctor_id, patient_id, clinic_id, patient:patients(id, name_ar, mobile_number, file_number), doctor:doctors(id, name_ar), clinic:clinics(id, name)",
         )
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
+        // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
+        .eq("organization_id", organizationId)
         .gte("scheduled_start", startOfTodayIso())
         .lte("scheduled_start", endOfTodayIso())
         .order("scheduled_start", { ascending: true });
@@ -90,6 +93,7 @@ function useDoctorsList(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("doctors")
         .select("id, name_ar")
+        .eq("organization_id", organizationId)
         .eq("is_enabled", true)
         .order("name_ar");
       if (error) throw error;
@@ -123,12 +127,19 @@ export default function Reception() {
     }: {
       id: string;
       status: AppointmentStatus;
-      timestampField?: "checked_in_1_at" | "called_at" | "entered_at" | "left_at";
+      timestampField?: "checked_in_1_at" | "checked_in_2_at" | "called_at" | "entered_at" | "left_at";
     }) => {
       const patch: Record<string, unknown> = { status };
       if (timestampField) patch[timestampField] = new Date().toISOString();
-      const { error } = await supabase.from("appointments").update(patch).eq("id", id);
+      const { data, error } = await supabase
+        .from("appointments")
+        .update(patch)
+        .eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث لا يطابق صفًا ليس خطأً في PostgREST — بلا هذا الفحص يتحرك الصف
+      // في الطابور بصريًا ثم يعود لحالته عند أول تحديث للقائمة.
+      if (!data || data.length === 0) throw new Error("لم يُحفظ التغيير — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["reception-queue"] }),
     onError: (error: unknown) =>
@@ -220,13 +231,65 @@ export default function Reception() {
   );
 }
 
+/**
+ * أزمنة الطابور الخمسة — تُكتب ولا تُعرض.
+ *
+ * التدقيق أثبت أن `checked_in_1_at` و`checked_in_2_at` و`called_at` و
+ * `entered_at` و`left_at` تُكتب كلها بأزرار هذا الصف وتُجلب في الاستعلام،
+ * **ولا تُعرض أي قيمة منها**. فلا أحد يعرف كم انتظر المريض بين وصوله ودخوله،
+ * ولا كم استغرقت الجلسة — وهي أهم رقمين تشغيليين في شاشة الاستقبال، ومطلوبان
+ * في مؤشرات CBAHI لزمن الانتظار.
+ */
+function QueueTimeline({ appointment }: { appointment: AppointmentWithRelations }) {
+  const fmt = (value: string | null | undefined) =>
+    value
+      ? new Date(value).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })
+      : null;
+
+  const stamps = [
+    { label: "وصل", value: fmt(appointment.checked_in_1_at) },
+    { label: "استقبال 2", value: fmt(appointment.checked_in_2_at) },
+    { label: "نودي", value: fmt(appointment.called_at) },
+    { label: "دخل", value: fmt(appointment.entered_at) },
+    { label: "خرج", value: fmt(appointment.left_at) },
+  ].filter((stamp) => stamp.value);
+
+  // الفروق تُحتسب من الطوابع نفسها لا من حقول محفوظة: حقل محسوب مسبقًا يصبح
+  // خاطئًا لحظة تصحيح أي طابع.
+  const minutesBetween = (from: string | null | undefined, to: string | null | undefined) => {
+    if (!from || !to) return null;
+    const diff = (new Date(to).getTime() - new Date(from).getTime()) / 60000;
+    return diff >= 0 ? Math.round(diff) : null;
+  };
+  const waited = minutesBetween(appointment.checked_in_1_at, appointment.entered_at);
+  const duration = minutesBetween(appointment.entered_at, appointment.left_at);
+
+  if (stamps.length === 0) return null;
+
+  return (
+    <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+      {stamps.map((stamp) => (
+        <span key={stamp.label} className="tabular-nums">
+          {stamp.label} {stamp.value}
+        </span>
+      ))}
+      {waited !== null && (
+        <span className="font-medium text-amber-700 tabular-nums">انتظر {waited} د</span>
+      )}
+      {duration !== null && (
+        <span className="font-medium text-emerald-700 tabular-nums">الجلسة {duration} د</span>
+      )}
+    </div>
+  );
+}
+
 function QueueRow({
   appointment,
   onUpdate,
   readOnly,
 }: {
   appointment: AppointmentWithRelations;
-  onUpdate: (status: AppointmentStatus, timestampField?: "checked_in_1_at" | "called_at" | "entered_at" | "left_at") => void;
+  onUpdate: (status: AppointmentStatus, timestampField?: "checked_in_1_at" | "checked_in_2_at" | "called_at" | "entered_at" | "left_at") => void;
   readOnly?: boolean;
 }) {
   const time = new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", {
@@ -254,6 +317,17 @@ function QueueRow({
             <LogIn className="h-3.5 w-3.5" />
             حضر
           </Button>
+          {/*
+            استقبال 2 — نقطة التحقق الثانية (بعد استكمال إجراء أو دفع مثلًا).
+            العمود checked_in_2_at موجود في appointments منذ 0002 ولم يكن له
+            زر إطلاقًا. يظهر فقط بعد الاستقبال الأول لأنه لا معنى له قبله.
+          */}
+          {appointment.checked_in_1_at && !appointment.checked_in_2_at && (
+            <Button size="sm" variant="outline" onClick={() => onUpdate("arrived", "checked_in_2_at")}>
+              <LogIn className="h-3.5 w-3.5" />
+              استقبال 2
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={() => onUpdate("called", "called_at")}>
             <Megaphone className="h-3.5 w-3.5" />
             نداء
@@ -271,6 +345,7 @@ function QueueRow({
           </Button>
         </div>
       )}
+      <QueueTimeline appointment={appointment} />
     </div>
   );
 }
@@ -295,6 +370,8 @@ function AddToQueueDialog({
   const createAppointment = useMutation({
     mutationFn: async () => {
       if (!organizationId || !patient || !doctorId) throw new Error("أكمل بيانات المريض والطبيب");
+      // نفس الحظر المطبَّق في شاشة المواعيد — الطابور مسار إنشاء موعد آخر
+      await assertPatientNotBlocked(patient.id, "appointments");
       const now = new Date();
       const { error } = await supabase.from("appointments").insert({
         organization_id: organizationId,

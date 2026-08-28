@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, CheckCircle2, Plus, Sparkles, Trash2 } from "lucide-react";
+import { BookOpen, CheckCircle2, Plus, Printer, Sparkles, Trash2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type {
@@ -8,7 +8,6 @@ import type {
   AccountType,
   CashRegisterRow,
   ChartOfAccountRow,
-  FinancialVoucherRow,
   JournalEntryRow,
   TreatmentAgreementWithRelations,
   TrialBalanceView,
@@ -204,6 +203,9 @@ function VouchersTab() {
   );
 }
 
+/** قيمة "بدون" في قوائم Select (لا تقبل قيمة فارغة). */
+const NO_COST_CENTER = "__none__";
+
 function NewVoucherDialog({
   open,
   onOpenChange,
@@ -215,7 +217,11 @@ function NewVoucherDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { organization } = useOrganizationAccess();
+  // نسبة الضريبة من إعداد المنشأة — نفس ما تقرؤه شاشة الفوترة
+  const orgVatRate = Number(organization?.default_vat_rate ?? 15);
   const [voucherType, setVoucherType] = useState<VoucherType>("receipt");
+  const [employeeRefId, setEmployeeRefId] = useState("");
   const [amount, setAmount] = useState("");
   const [voucherDate, setVoucherDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [cashRegisterId, setCashRegisterId] = useState("");
@@ -225,7 +231,16 @@ function NewVoucherDialog({
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [bankTransferRef, setBankTransferRef] = useState("");
   const [transferToAccountId, setTransferToAccountId] = useState("");
+  // حقول سند الصرف التي كانت في الجدول منذ 0003 بلا إدخال في الواجهة
+  const [expenseSourceDocument, setExpenseSourceDocument] = useState("");
+  const [expenseSourceNumber, setExpenseSourceNumber] = useState("");
+  const [requiresVat, setRequiresVat] = useState(false);
+  const [supplierTaxNumber, setSupplierTaxNumber] = useState("");
+  const [costClinicId, setCostClinicId] = useState("");
 
+  // مطابق تمامًا لشرط ظهور حقول المصروف في النموذج أدناه — سند الراتب لا
+  // يحمل مصدر مصروف ولا ضريبة مورد.
+  const isExpense = voucherType === "expense";
   const isBankVoucher = voucherType === "bank_deposit" || voucherType === "bank_withdrawal" || voucherType === "bank_transfer";
 
   const registers = useQuery({
@@ -235,6 +250,9 @@ function NewVoucherDialog({
       const { data, error } = await supabase
         .from("cash_registers")
         .select("id, name")
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
+        // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
+        .eq("organization_id", organizationId)
         .eq("is_disabled", false)
         .order("name");
       if (error) throw error;
@@ -244,6 +262,7 @@ function NewVoucherDialog({
 
   const resetForm = () => {
     setVoucherType("receipt");
+    setEmployeeRefId("");
     setAmount("");
     setVoucherDate(new Date().toISOString().slice(0, 10));
     setCashRegisterId("");
@@ -253,14 +272,56 @@ function NewVoucherDialog({
     setPatient(null);
     setBankTransferRef("");
     setTransferToAccountId("");
+    setExpenseSourceDocument("");
+    setExpenseSourceNumber("");
+    setRequiresVat(false);
+    setSupplierTaxNumber("");
+    setCostClinicId("");
   };
+
+  const clinicsList = useQuery({
+    queryKey: ["clinics-cost-center", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("clinics")
+        .select("id, name")
+        .eq("organization_id", organizationId)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
+
+  /**
+   * الموظف إلزامي لسند الراتب: القاعدة تفرض
+   * `chk_salary_requires_employee (voucher_type <> 'salary' or employee_ref_id is not null)`
+   * — وبلا هذا الحقل كان اختيار "صرف راتب" يفشل دائمًا برسالة قيد خام،
+   * أي أن نوع السند كله غير قابل للاستعمال من هذه الشاشة.
+   */
+  const employees = useQuery({
+    queryKey: ["voucher-employees", organizationId],
+    enabled: Boolean(organizationId) && voucherType === "salary",
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("employees")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
 
   const createVoucher = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      if (voucherType === "salary" && !employeeRefId)
+        throw new Error("اختر الموظف — سند الراتب لا يُحفظ بدونه");
       const { error } = await supabase.from("financial_vouchers").insert({
         organization_id: organizationId,
         voucher_type: voucherType,
+        employee_ref_id: voucherType === "salary" ? employeeRefId : null,
         voucher_date: voucherDate,
         amount: Number(amount) || 0,
         cash_register_id: cashRegisterId || null,
@@ -270,6 +331,18 @@ function NewVoucherDialog({
         patient_id: voucherType === "receipt" ? patient?.id || null : null,
         bank_transfer_ref: isBankVoucher ? bankTransferRef.trim() || null : null,
         transfer_to_account_value_id: isBankVoucher ? transferToAccountId || null : null,
+        expense_source_document: isExpense ? expenseSourceDocument.trim() || null : null,
+        expense_source_number: isExpense ? expenseSourceNumber.trim() || null : null,
+        clinic_id: isExpense ? costClinicId || null : null,
+        requires_vat: isExpense ? requiresVat : false,
+        // النسبة من إعداد المنشأة لا ثابتة 15: منشأة معفاة تضع 0، ولو تغيّرت
+        // النسبة نظاميًا لبقيت المصاريف تُحتسب بالقديمة بينما المبيعات
+        // تُحتسب بالجديدة (شاشة الفوترة تقرأ الإعداد فعلًا).
+        vat_rate: isExpense && requiresVat ? orgVatRate : null,
+        vat_amount: isExpense && requiresVat
+          ? Math.round((Number(amount) || 0) * (orgVatRate / 100) * 100) / 100
+          : null,
+        supplier_tax_number: isExpense && requiresVat ? supplierTaxNumber.trim() || null : null,
       });
       if (error) throw error;
     },
@@ -333,6 +406,27 @@ function NewVoucherDialog({
               </SelectContent>
             </Select>
           </div>
+          {voucherType === "salary" && (
+            <div className="flex flex-col gap-1.5">
+              <Label>الموظف *</Label>
+              <Select value={employeeRefId} onValueChange={setEmployeeRefId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="اختر الموظف" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(employees.data ?? []).map((employee) => (
+                    <SelectItem key={employee.id} value={employee.id}>
+                      {employee.name_ar}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                إلزامي — القاعدة ترفض سند راتب بلا موظف.
+              </p>
+            </div>
+          )}
+
           {voucherType === "expense" && (
             <>
               <div className="flex flex-col gap-1.5">
@@ -342,6 +436,59 @@ function NewVoucherDialog({
               <div className="flex flex-col gap-1.5">
                 <Label>فئة المصروف</Label>
                 <LookupSelect categoryKey="expense_categories" value={expenseCategoryId} onChange={setExpenseCategoryId} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>مصدر المصروف</Label>
+                <Input
+                  value={expenseSourceDocument}
+                  onChange={(e) => setExpenseSourceDocument(e.target.value)}
+                  placeholder="فاتورة مورد، عقد، إيصال..."
+                />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>رقم المصدر</Label>
+                <Input value={expenseSourceNumber} onChange={(e) => setExpenseSourceNumber(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>مركز التكلفة (العيادة)</Label>
+                <Select value={costClinicId || NO_COST_CENTER} onValueChange={(v) => setCostClinicId(v === NO_COST_CENTER ? "" : v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="بدون" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_COST_CENTER}>بدون</SelectItem>
+                    {(clinicsList.data ?? []).map((clinic) => (
+                      <SelectItem key={clinic.id} value={clinic.id}>
+                        {clinic.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2 sm:col-span-2">
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={requiresVat}
+                    onChange={(e) => setRequiresVat(e.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  مصروف خاضع لضريبة القيمة المضافة (15%)
+                </label>
+                {requiresVat && (
+                  <div className="flex flex-col gap-1.5">
+                    <Label>الرقم الضريبي للمورد</Label>
+                    <Input
+                      value={supplierTaxNumber}
+                      onChange={(e) => setSupplierTaxNumber(e.target.value)}
+                      dir="ltr"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      الضريبة المحتسبة: {(((Number(amount) || 0) * 0.15) || 0).toFixed(2)} — الرقم الضريبي شرط
+                      لخصم ضريبة المدخلات في الإقرار.
+                    </p>
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -403,6 +550,8 @@ function CashRegistersDialog({
       const { data, error } = await supabase
         .from("cash_registers")
         .select("*, doctor:doctors(name_ar)")
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organizationId)
         .order("name");
       if (error) throw error;
       return data ?? [];
@@ -413,7 +562,11 @@ function CashRegistersDialog({
     queryKey: ["doctors-select-registers", organizationId],
     enabled: Boolean(organizationId) && open && isDoctorCustody,
     queryFn: async () => {
-      const { data, error } = await supabase.from("doctors").select("id, name_ar").order("name_ar");
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .order("name_ar");
       if (error) throw error;
       return (data ?? []) as { id: string; name_ar: string }[];
     },
@@ -442,11 +595,16 @@ function CashRegistersDialog({
 
   const toggleDisabled = useMutation({
     mutationFn: async (register: CashRegisterRow) => {
-      const { error } = await supabase
+      const { data: affectedRows, error } = await supabase
         .from("cash_registers")
         .update({ is_disabled: !register.is_disabled })
-        .eq("id", register.id);
+        .eq("id", register.id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["cash-registers", organizationId] });
@@ -539,8 +697,10 @@ function useAgreements(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("treatment_agreements")
         .select(
-          "id, agreement_number, agreement_date, total_amount, invoiced_amount, remaining_amount, is_disabled, note, patient:patients(id, name_ar, file_number), doctor:doctors(id, name_ar), clinic:clinics(id, name)",
+          "id, agreement_number, agreement_date, created_at, vat_amount, total_amount, invoiced_amount, remaining_amount, is_disabled, note, patient:patients(id, name_ar, file_number), doctor:doctors(id, name_ar), clinic:clinics(id, name)",
         )
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organizationId)
         .order("created_at", { ascending: false })
         .limit(50);
       if (error) throw error;
@@ -551,8 +711,77 @@ function useAgreements(organizationId: string | undefined) {
 
 function AgreementsTab() {
   const { organization } = useOrganizationAccess();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [createOpen, setCreateOpen] = useState(false);
   const agreements = useAgreements(organization?.id);
+
+  const toggleAgreement = useMutation({
+    mutationFn: async (row: TreatmentAgreementWithRelations) => {
+      const { data: affectedRows, error } = await supabase
+        .from("treatment_agreements")
+        .update({ is_disabled: !row.is_disabled })
+        .eq("id", row.id)
+        .select("id");
+      if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["treatment-agreements"] });
+      toast({ title: "تم تحديث حالة الاتفاقية" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التحديث",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  /** طباعة الاتفاقية — نافذة مستقلة بتنسيق RTL جاهز للطباعة. */
+  const printAgreement = (row: TreatmentAgreementWithRelations) => {
+    const win = window.open("", "_blank", "width=800,height=900");
+    if (!win) {
+      toast({
+        variant: "destructive",
+        title: "تعذر فتح نافذة الطباعة",
+        description: "قد يكون المتصفح يمنع النوافذ المنبثقة لهذا الموقع",
+      });
+      return;
+    }
+    const money = (value: unknown) => Number(value ?? 0).toLocaleString("ar-SA");
+    win.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8">
+      <title>اتفاقية علاج #${row.agreement_number}</title>
+      <style>
+        body{font-family:"IBM Plex Sans Arabic",Tahoma,sans-serif;padding:32px;color:#152f33}
+        h1{font-size:20px;margin:0 0 4px}
+        .muted{color:#5a6b70;font-size:13px}
+        table{width:100%;border-collapse:collapse;margin-top:20px}
+        th,td{border:1px solid #d8e3e1;padding:8px;text-align:right;font-size:14px}
+        th{background:#f0f6f5}
+        .total{font-weight:700}
+      </style></head><body>
+      <h1>اتفاقية علاج رقم ${row.agreement_number}</h1>
+      <p class="muted">${new Date(row.agreement_date).toLocaleDateString("ar-SA")}</p>
+      <table>
+        <tr><th>المريض</th><td>${row.patient?.name_ar ?? "—"}</td></tr>
+        <tr><th>رقم الملف</th><td>${row.patient?.file_number ?? "—"}</td></tr>
+        <tr><th>الطبيب</th><td>${row.doctor?.name_ar ?? "—"}</td></tr>
+        <tr><th>العيادة</th><td>${row.clinic?.name ?? "—"}</td></tr>
+        <tr><th>الضريبة</th><td>${money(row.vat_amount)}</td></tr>
+        <tr><th>الإجمالي</th><td class="total">${money(row.total_amount)}</td></tr>
+        <tr><th>المفوتر</th><td>${money(row.invoiced_amount)}</td></tr>
+        <tr><th>المتبقي</th><td class="total">${money(row.remaining_amount)}</td></tr>
+        <tr><th>ملاحظة</th><td>${row.note ?? "—"}</td></tr>
+      </table>
+      <p class="muted" style="margin-top:40px">توقيع المريض: ..................................</p>
+      </body></html>`);
+    win.document.close();
+    win.print();
+  };
 
   return (
     <div className="flex flex-col gap-4">
@@ -573,12 +802,17 @@ function AgreementsTab() {
                 <TableRow>
                   <TableHead>#الاتفاقية</TableHead>
                   <TableHead>المريض</TableHead>
+                  <TableHead>#الملف</TableHead>
                   <TableHead>الطبيب</TableHead>
+                  <TableHead>العيادة</TableHead>
                   <TableHead>التاريخ</TableHead>
+                  <TableHead>الضريبة</TableHead>
                   <TableHead>الإجمالي</TableHead>
                   <TableHead>المفوتر</TableHead>
                   <TableHead>المتبقي</TableHead>
+                  <TableHead>ملاحظة</TableHead>
                   <TableHead>الحالة</TableHead>
+                  <TableHead className="w-24">إجراءات</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -586,23 +820,46 @@ function AgreementsTab() {
                   <TableRow key={a.id}>
                     <TableCell className="font-mono text-xs">#{a.agreement_number}</TableCell>
                     <TableCell>{a.patient?.name_ar ?? "—"}</TableCell>
+                    <TableCell className="font-mono text-xs">{a.patient?.file_number ?? "—"}</TableCell>
                     <TableCell>{a.doctor?.name_ar ?? "—"}</TableCell>
+                    <TableCell className="text-sm text-muted-foreground">{a.clinic?.name ?? "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {new Date(a.agreement_date).toLocaleDateString("ar-SA")}
                     </TableCell>
-                    <TableCell>{Number(a.total_amount).toLocaleString("ar-SA")}</TableCell>
+                    <TableCell className="tabular-nums">
+                      {Number(a.vat_amount ?? 0).toLocaleString("ar-SA")}
+                    </TableCell>
+                    <TableCell className="tabular-nums">{Number(a.total_amount).toLocaleString("ar-SA")}</TableCell>
                     <TableCell>{Number(a.invoiced_amount).toLocaleString("ar-SA")}</TableCell>
                     <TableCell className={Number(a.remaining_amount) > 0 ? "text-rose-600" : ""}>
                       {Number(a.remaining_amount).toLocaleString("ar-SA")}
                     </TableCell>
+                    <TableCell className="max-w-[10rem] truncate text-sm text-muted-foreground">
+                      {a.note ?? "—"}
+                    </TableCell>
                     <TableCell>
                       <Badge variant={a.is_disabled ? "secondary" : "success"}>{a.is_disabled ? "معطّلة" : "نشطة"}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        <Button size="sm" variant="ghost" title="طباعة" onClick={() => printAgreement(a)}>
+                          <Printer className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title={a.is_disabled ? "تفعيل" : "تعطيل"}
+                          onClick={() => toggleAgreement.mutate(a)}
+                        >
+                          {a.is_disabled ? "تفعيل" : "تعطيل"}
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
                 {(agreements.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={13} className="py-8 text-center text-sm text-muted-foreground">
                       لا توجد اتفاقيات علاج بعد.
                     </TableCell>
                   </TableRow>
@@ -625,6 +882,8 @@ type AgreementLine = {
   unit_price: number;
   qty: number;
   discount_percent: number;
+  /** يُنسَخ من الصنف عند إضافته — الإعفاء خاصية صنف لا خاصية اتفاقية. */
+  is_vat_exempt: boolean;
 };
 
 function NewAgreementDialog({
@@ -638,25 +897,95 @@ function NewAgreementDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { session, organization } = useOrganizationAccess();
+  // نسبة المنشأة لا 15 ثابتة — نفس ما تقرؤه شاشة الفوترة
+  const orgVatRate = Number(organization?.default_vat_rate ?? 15);
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [note, setNote] = useState("");
   const [lines, setLines] = useState<AgreementLine[]>([]);
+  // الطبيب والعيادة والضريبة تُعرض في قائمة الاتفاقيات وفي نموذج الطباعة،
+  // فيجب إدخالها هنا وإلا ظهرت كل اتفاقية جديدة بـ"—" وضريبة صفر.
+  const [doctorId, setDoctorId] = useState(NO_COST_CENTER);
+  const [clinicId, setClinicId] = useState(NO_COST_CENTER);
+  /**
+   * الافتراضي **مفعَّل**: شاشة الفوترة تحتسب الضريبة على كل بند غير معفى
+   * دائمًا وبلا خانة اختيار. تركُه معطَّلًا افتراضيًا كان يجعل كل اتفاقية
+   * جديدة تُنشأ بإجمالي بلا ضريبة ثم تُفوتَر بضريبة، فيتجاوز `invoiced_amount`
+   * الإجمالي ويصير المتبقي سالبًا.
+   */
+  const [applyVat, setApplyVat] = useState(true);
 
-  const addLine = (item: { id: string; name_ar: string; price: number }) => {
+  const agreementDoctors = useQuery({
+    queryKey: ["doctors-for-agreement", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .eq("is_enabled", true)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
+
+  const agreementClinics = useQuery({
+    queryKey: ["clinics-for-agreement", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("clinics")
+        .select("id, name")
+        .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
+
+  const addLine = (item: { id: string; name_ar: string; price: number; is_vat_exempt: boolean }) => {
     setLines((prev) => [
       ...prev,
-      { key: `${item.id}-${Date.now()}`, item_id: item.id, description: item.name_ar, unit_price: Number(item.price), qty: 1, discount_percent: 0 },
+      {
+        key: `${item.id}-${Date.now()}`,
+        item_id: item.id,
+        description: item.name_ar,
+        unit_price: Number(item.price),
+        qty: 1,
+        discount_percent: 0,
+        is_vat_exempt: Boolean(item.is_vat_exempt),
+      },
     ]);
   };
   const updateLine = (key: string, patch: Partial<AgreementLine>) =>
     setLines((prev) => prev.map((l) => (l.key === key ? { ...l, ...patch } : l)));
   const removeLine = (key: string) => setLines((prev) => prev.filter((l) => l.key !== key));
 
+  /**
+   * **إصلاح خلل مالي حقيقي**: الضريبة كانت تُحتسب نسبةً واحدة على رأس
+   * الاتفاقية (`subtotal * 0.15`) بينما `treatment_agreement_items.net_amount`
+   * يُخزَّن **بلا ضريبة**. ومُحفِّز `app_recalc_agreement_invoiced` (0003)
+   * يجمع في `invoiced_amount` نِسَب **فواتير المبيعات** وهي **شاملة الضريبة**.
+   *
+   * النتيجة على المسار الافتراضي (خانة الضريبة غير مفعّلة): اتفاقية بـ1000
+   * تُفوتَر بالكامل فيصير `invoiced_amount = 1150` و`total_amount = 1000`،
+   * و`remaining_amount` (عمود محسوب) = **‎-150‎** — يظهر في قائمة الاتفاقيات
+   * وفي نموذج الطباعة وفي إجمالي التقارير.
+   *
+   * الإصلاح: الضريبة تُحتسب **لكل بند** مع احترام إعفاء الصنف، وبنسبة
+   * المنشأة لا 15 ثابتة، ويُخزَّن صافي البند **شاملًا الضريبة** ليكون على
+   * نفس أساس نِسَب الفواتير التي يجمعها المُحفِّز.
+   */
   const computed = lines.map((l) => {
     const subtotal = l.unit_price * l.qty;
-    const net = subtotal - (subtotal * l.discount_percent) / 100;
-    return { ...l, net };
+    const taxable = subtotal - (subtotal * l.discount_percent) / 100;
+    const vat = applyVat && !l.is_vat_exempt ? Math.round(taxable * (orgVatRate / 100) * 100) / 100 : 0;
+    return { ...l, taxable, vat, net: taxable + vat };
   });
+  const subtotalAmount = computed.reduce((sum, l) => sum + l.taxable, 0);
+  const vatAmount = computed.reduce((sum, l) => sum + l.vat, 0);
   const total = computed.reduce((sum, l) => sum + l.net, 0);
 
   const createAgreement = useMutation({
@@ -667,7 +996,16 @@ function NewAgreementDialog({
 
       const { data: agreement, error: agreementError } = await supabase
         .from("treatment_agreements")
-        .insert({ organization_id: organizationId, patient_id: patient.id, total_amount: total, note: note.trim() || null })
+        .insert({
+          organization_id: organizationId,
+          patient_id: patient.id,
+          doctor_id: doctorId === NO_COST_CENTER ? null : doctorId,
+          clinic_id: clinicId === NO_COST_CENTER ? null : clinicId,
+          total_amount: total,
+          vat_amount: vatAmount,
+          note: note.trim() || null,
+          created_by: session?.user.id ?? null,
+        })
         .select("id")
         .single();
       if (agreementError) throw agreementError;
@@ -760,7 +1098,62 @@ function NewAgreementDialog({
             <Input value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
 
-          <div className="text-end text-base font-bold">الإجمالي: {total.toFixed(2)} ر.س</div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label>الطبيب</Label>
+              <Select value={doctorId} onValueChange={setDoctorId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="بدون" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_COST_CENTER}>بدون</SelectItem>
+                  {(agreementDoctors.data ?? []).map((doctor) => (
+                    <SelectItem key={doctor.id} value={doctor.id}>
+                      {doctor.name_ar}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>العيادة</Label>
+              <Select value={clinicId} onValueChange={setClinicId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="بدون" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_COST_CENTER}>بدون</SelectItem>
+                  {(agreementClinics.data ?? []).map((clinic) => (
+                    <SelectItem key={clinic.id} value={clinic.id}>
+                      {clinic.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={applyVat}
+              onChange={(e) => setApplyVat(e.target.checked)}
+              className="h-4 w-4"
+            />
+            احتساب ضريبة القيمة المضافة ({orgVatRate}%)
+          </label>
+          {!applyVat && (
+            <p className="text-xs text-amber-700">
+              الفواتير تُحتسب عليها الضريبة دائمًا — اتفاقية بلا ضريبة سيتجاوز المُفوتَر منها
+              إجماليَّها ويظهر المتبقي سالبًا. لا تُعطّلها إلا لمنشأة غير خاضعة للضريبة.
+            </p>
+          )}
+
+          <div className="flex flex-col items-end gap-1 text-sm">
+            <span>الإجمالي الفرعي: {subtotalAmount.toFixed(2)}</span>
+            {applyVat && <span>الضريبة: {vatAmount.toFixed(2)}</span>}
+            <span className="text-base font-bold">الإجمالي: {total.toFixed(2)} ر.س</span>
+          </div>
         </div>
 
         <DialogFooter>
@@ -994,8 +1387,13 @@ function JournalEntriesTab() {
 
   const postEntry = useMutation({
     mutationFn: async (entryId: string) => {
-      const { error } = await supabase.from("journal_entries").update({ status: "posted" }).eq("id", entryId);
+      const { data: affectedRows, error } = await supabase.from("journal_entries").update({ status: "posted" }).eq("id", entryId)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["journal-entries", organization?.id] });

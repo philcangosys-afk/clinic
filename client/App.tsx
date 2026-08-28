@@ -47,6 +47,20 @@ import HrReports from "./pages/HrReports";
 import DocumentTemplates from "./pages/DocumentTemplates";
 import ExternalClients from "./pages/ExternalClients";
 import CustomReports from "./pages/CustomReports";
+import Warehouses from "./pages/Warehouses";
+import Licenses from "./pages/Licenses";
+import Waitlist from "./pages/Waitlist";
+import Users from "./pages/Users";
+import ExamTemplates from "./pages/ExamTemplates";
+import Offers from "./pages/Offers";
+import SystemControl from "./pages/SystemControl";
+import Alerts from "./pages/Alerts";
+import BlockedContacts from "./pages/BlockedContacts";
+import PatientVisits from "./pages/PatientVisits";
+import DeviceSettings from "./pages/DeviceSettings";
+import OrganizationSettings from "./pages/OrganizationSettings";
+import Settings from "./pages/Settings";
+import ReferenceData from "./pages/ReferenceData";
 import { OrganizationAccessProvider } from "./contexts/OrganizationAccessContext";
 import AppShell from "./components/layout/AppShell";
 import RouteGuard from "./components/layout/RouteGuard";
@@ -99,6 +113,20 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   "document-templates": DocumentTemplates,
   "external-clients": ExternalClients,
   "custom-reports": CustomReports,
+  warehouses: Warehouses,
+  licenses: Licenses,
+  waitlist: Waitlist,
+  users: Users,
+  "exam-templates": ExamTemplates,
+  offers: Offers,
+  "system-control": SystemControl,
+  alerts: Alerts,
+  "blocked-contacts": BlockedContacts,
+  "reference-data": ReferenceData,
+  "patient-visits": PatientVisits,
+  "device-settings": DeviceSettings,
+  "organization-settings": OrganizationSettings,
+  settings: Settings,
 };
 const routedModules = [...moduleRegistry.filter((item) => item.id !== "dashboard"), settingsModule];
 

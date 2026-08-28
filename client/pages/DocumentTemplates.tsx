@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FileStack, FilePlus2, Plus, Printer, Trash2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
-import type { DocumentTemplateAppliesTo, DocumentTemplateRow, GeneratedDocumentRow } from "@/lib/database.types";
+import type { DocumentTemplateAppliesTo, DocumentTemplateRow } from "@/lib/database.types";
 import { buildMergeContext, extractCustomTokens, mergeTemplate, printHtml } from "@/lib/document-merge";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -139,8 +139,13 @@ function TemplateFormDialog({
         note: note.trim() || null,
       };
       if (initial) {
-        const { error } = await supabase.from("document_templates").update(payload).eq("id", initial.id);
+        const { data: affectedRows, error } = await supabase.from("document_templates").update(payload).eq("id", initial.id)
+          .select("id");
         if (error) throw error;
+        // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+        // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+        if (!affectedRows || affectedRows.length === 0)
+          throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
       } else {
         const { error } = await supabase.from("document_templates").insert(payload);
         if (error) throw error;
@@ -245,12 +250,17 @@ function useOrganizationMergeFields(organizationId: string | undefined) {
 }
 
 function useEmployeesList() {
+  const { organization } = useOrganizationAccess();
+  const organizationId = organization?.id;
   return useQuery({
-    queryKey: ["employees-for-document-generation"],
+    queryKey: ["employees-for-document-generation", organizationId],
+    enabled: Boolean(organizationId),
     queryFn: async () => {
       const { data, error } = await supabase
         .from("employees")
         .select("id, name_ar, national_id, mobile_1, file_number, hire_date")
+        // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organizationId)
         .eq("status", "active")
         .order("name_ar");
       if (error) throw error;
@@ -413,8 +423,13 @@ function TemplatesTab({ organizationId, currentUserId }: { organizationId: strin
 
   const toggleDisabled = useMutation({
     mutationFn: async (tpl: DocumentTemplateRow) => {
-      const { error } = await supabase.from("document_templates").update({ is_disabled: !tpl.is_disabled }).eq("id", tpl.id);
+      const { data: affectedRows, error } = await supabase.from("document_templates").update({ is_disabled: !tpl.is_disabled }).eq("id", tpl.id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["document-templates", organizationId] });
@@ -426,8 +441,13 @@ function TemplatesTab({ organizationId, currentUserId }: { organizationId: strin
 
   const deleteTemplate = useMutation({
     mutationFn: async (id: string) => {
-      const { error } = await supabase.from("document_templates").delete().eq("id", id);
+      const { data: affectedRows, error } = await supabase.from("document_templates").delete().eq("id", id)
+        .select("id");
       if (error) throw error;
+      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
+      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["document-templates", organizationId] });

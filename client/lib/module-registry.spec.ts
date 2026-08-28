@@ -41,6 +41,7 @@ const databaseFeatureKeys: FeatureKey[] = [
   "settings",
   "nursing",
   "emergency",
+  "dental_lab",
   "inpatient",
   "procedures",
   "referrals",
@@ -64,7 +65,7 @@ describe("organization module access", () => {
       expect(databaseFeatureKeys).toContain(module.featureKey);
       expect(module.requiredPermission).toBe(`${module.featureKey}.view`);
     });
-    expect(new Set(databaseFeatureKeys).size).toBe(33);
+    expect(new Set(databaseFeatureKeys).size).toBe(34);
   });
 
   it("allows a doctor only the configured clinical modules", () => {
