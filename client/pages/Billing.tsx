@@ -55,7 +55,7 @@ function useInvoices(organizationId: string | undefined, status: string, quotesO
       let query = supabase
         .from("sales_invoices")
         .select(
-          "id, invoice_number, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, external_customer_name, zatca_invoice_number, is_insurance_invoice, created_by, nationality_value_id, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar)",
+          "id, invoice_number, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, external_customer_name, zatca_invoice_number, is_insurance_invoice, created_by, nationality_value_id, patient:patients!sales_invoices_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!sales_invoices_doctor_tenant_fk(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar)",
         )
         // التصفية بالمؤسسة إلزامية: سياسة RLS تسمح بكل مؤسسة **ينتمي إليها**
         // المستخدم، لا بالمؤسسة النشطة وحدها — فبدونها كانت قائمة عضو في
@@ -209,7 +209,7 @@ export default function Billing() {
     enabled: Boolean(organization?.id && appointmentId),
     queryFn: async () => {
       const { data, error } = await supabase.from("appointments")
-        .select("id, patient_id, doctor_id, clinic_id, patient:patients(id, name_ar, insurance_company_name, insurance_policy_number, insurance_policy_category, insurance_membership_number)")
+        .select("id, patient_id, doctor_id, clinic_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, insurance_company_name, insurance_policy_number, insurance_policy_category, insurance_membership_number)")
         .eq("id", appointmentId).eq("organization_id", organization?.id).maybeSingle();
       if (error) throw error;
       return data as BillingAppointmentContext | null;

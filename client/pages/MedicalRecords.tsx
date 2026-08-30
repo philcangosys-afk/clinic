@@ -57,7 +57,7 @@ function useRecentVisits(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("patient_visits")
         .select(
-          "id, visit_date, main_complaint, patient:patients(id, name_ar, file_number), doctor:doctors(id, name_ar)",
+          "id, visit_date, main_complaint, patient:patients!patient_visits_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!patient_visits_doctor_tenant_fk(id, name_ar)",
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
         .eq("organization_id", organizationId)
@@ -80,7 +80,7 @@ export default function MedicalRecords() {
     enabled: Boolean(organization?.id && appointmentId),
     queryFn: async () => {
       const { data, error } = await supabase.from("appointments")
-        .select("id, patient_id, doctor_id, clinic_id, patient:patients(id, name_ar)")
+        .select("id, patient_id, doctor_id, clinic_id, patient:patients!appointments_patient_tenant_fk(id, name_ar)")
         .eq("id", appointmentId).eq("organization_id", organization?.id).maybeSingle();
       if (error) throw error;
       return data as AppointmentVisitContext | null;

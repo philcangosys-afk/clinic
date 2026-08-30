@@ -50,7 +50,7 @@ function useDashboardStats(organizationId: string | undefined) {
           .eq("is_enabled", true),
         supabase
           .from("appointments")
-          .select("id, scheduled_start, status, patient:patients(name_ar, file_number), doctor:doctors(name_ar)")
+          .select("id, scheduled_start, status, patient:patients!appointments_patient_tenant_fk(name_ar, file_number), doctor:doctors!appointments_doctor_tenant_fk(name_ar)")
           .eq("organization_id", organizationId)
           .gte("scheduled_start", startOfTodayIso())
           .lte("scheduled_start", endOfTodayIso())

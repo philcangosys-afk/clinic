@@ -60,7 +60,7 @@ function useWaitlist(organizationId: string | undefined, status: string) {
       let query = supabase
         .from("appointment_waitlist")
         .select(
-          "*, patient:patients(id, name_ar, file_number, mobile_number), doctor:doctors(id, name_ar)",
+          "*, patient:patients!waitlist_patient_tenant_fk(id, name_ar, file_number, mobile_number), doctor:doctors!waitlist_doctor_tenant_fk(id, name_ar)",
         )
         .eq("organization_id", organizationId)
         .order("created_at", { ascending: true });

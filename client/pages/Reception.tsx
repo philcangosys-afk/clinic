@@ -103,7 +103,7 @@ function useTodayQueue(organizationId: string | undefined, doctorFilter: string)
       let query = supabase
         .from("appointments")
         .select(
-          "id, organization_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, clinic_id, patient:patients(id, name_ar, mobile_number, file_number, insurance_company_name, insurance_policy_number), doctor:doctors(id, name_ar), clinic:clinics(id, name), invoices:sales_invoices(id, status, remaining_amount, is_temporary)",
+          "id, organization_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, clinic_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, insurance_company_name, insurance_policy_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name), invoices:sales_invoices!sales_invoices_appointment_tenant_fk(id, status, remaining_amount, is_temporary)",
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
         // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
