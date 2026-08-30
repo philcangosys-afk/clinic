@@ -11,18 +11,41 @@ export const RUN_ID = process.env.E2E_RUN_ID ?? `E2E${Date.now().toString(36).to
 
 type Role = "receptionist" | "doctor" | "accountant" | "manager";
 
-const CREDENTIALS: Record<Role, { email: string | undefined; password: string | undefined }> = {
-  receptionist: { email: process.env.E2E_RECEPTION_EMAIL, password: process.env.E2E_RECEPTION_PASSWORD },
-  doctor:       { email: process.env.E2E_DOCTOR_EMAIL,    password: process.env.E2E_DOCTOR_PASSWORD },
-  accountant:   { email: process.env.E2E_ACCOUNTANT_EMAIL, password: process.env.E2E_ACCOUNTANT_PASSWORD },
-  manager:      { email: process.env.E2E_MANAGER_EMAIL,   password: process.env.E2E_MANAGER_PASSWORD },
+const CREDENTIALS: Record<
+  Role,
+  { email: string | undefined; password: string | undefined; envPrefix: string }
+> = {
+  receptionist: {
+    email: process.env.E2E_RECEPTION_EMAIL,
+    password: process.env.E2E_RECEPTION_PASSWORD,
+    envPrefix: "E2E_RECEPTION",
+  },
+  doctor: {
+    email: process.env.E2E_DOCTOR_EMAIL,
+    password: process.env.E2E_DOCTOR_PASSWORD,
+    envPrefix: "E2E_DOCTOR",
+  },
+  accountant: {
+    email: process.env.E2E_ACCOUNTANT_EMAIL,
+    password: process.env.E2E_ACCOUNTANT_PASSWORD,
+    envPrefix: "E2E_ACCOUNTANT",
+  },
+  manager: {
+    email: process.env.E2E_MANAGER_EMAIL,
+    password: process.env.E2E_MANAGER_PASSWORD,
+    envPrefix: "E2E_MANAGER",
+  },
 };
 
 export async function signIn(page: Page, role: Role) {
+  if (process.env.E2E_ALLOW_WRITES !== "true") {
+    throw new Error("تشغيل اختبارات الرحلة يتطلب E2E_ALLOW_WRITES=true وبيئة اختبار مخصصة");
+  }
+
   const creds = CREDENTIALS[role];
   if (!creds.email || !creds.password) {
     throw new Error(
-      `بيانات الدخول للدور «${role}» غير مضبوطة. اضبط E2E_${role.toUpperCase()}_EMAIL و_PASSWORD في ملف .env`,
+      `بيانات الدخول للدور «${role}» غير مضبوطة. اضبط ${creds.envPrefix}_EMAIL و${creds.envPrefix}_PASSWORD`,
     );
   }
   await page.goto("/");

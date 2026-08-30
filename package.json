@@ -9,6 +9,8 @@
     "build:server": "vite build --config vite.config.server.ts",
     "start": "node dist/server/node-build.mjs",
     "test": "vitest --run --exclude 'e2e/**'",
+    "test:e2e": "npm --prefix e2e test",
+    "test:e2e:list": "npm --prefix e2e test -- --list",
     "format.fix": "prettier --write .",
     "typecheck": "tsc"
   },
