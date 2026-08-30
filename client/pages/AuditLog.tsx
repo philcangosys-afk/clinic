@@ -61,7 +61,7 @@ function useAuditLog(
       let query = supabase
         .from("v_audit_log_detail")
         .select(
-          "id, occurred_at, user_id, user_email, device_name, action_type, module, entity_title, details, reason",
+          "id, occurred_at, user_id, user_name, device_name, action_type, module, entity_title, details, reason",
         )
         .eq("organization_id", organizationId)
         .order("occurred_at", { ascending: false })
@@ -73,7 +73,7 @@ function useAuditLog(
       const bounds = localDayRange(dateFrom, dateTo);
       if (bounds.from) query = query.gte("occurred_at", bounds.from);
       if (bounds.to) query = query.lte("occurred_at", bounds.to);
-      if (userFilter !== "all") query = query.eq("user_email", userFilter);
+      if (userFilter !== "all") query = query.eq("user_name", userFilter);
       if (deviceFilter !== "all") query = query.eq("device_name", deviceFilter);
       const { data, error } = await query;
       if (error) throw error;
@@ -142,7 +142,7 @@ function exportCsv(rows: AuditLogDetailView[]) {
     ...rows.map((row) =>
       [
         new Date(row.occurred_at).toLocaleString("ar-SA"),
-        row.user_email,
+        row.user_name,
         row.device_name,
         ACTION_LABELS[row.action_type as AuditActionType] ?? row.action_type,
         row.module,
@@ -196,14 +196,14 @@ export default function AuditLog() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_audit_log_detail")
-        .select("user_email, device_name")
+        .select("user_name, device_name")
         .eq("organization_id", organization?.id)
         .limit(1000);
       if (error) throw error;
       const users = new Set<string>();
       const devices = new Set<string>();
-      (data ?? []).forEach((row: { user_email: string | null; device_name: string | null }) => {
-        if (row.user_email) users.add(row.user_email);
+      (data ?? []).forEach((row: { user_name: string | null; device_name: string | null }) => {
+        if (row.user_name) users.add(row.user_name);
         if (row.device_name) devices.add(row.device_name);
       });
       return { users: [...users].sort(), devices: [...devices].sort() };
@@ -319,7 +319,7 @@ export default function AuditLog() {
                 {(log.data ?? []).map((entry) => (
                   <TableRow key={entry.id}>
                     <TableCell className="text-xs text-muted-foreground">{new Date(entry.occurred_at).toLocaleString("ar-SA")}</TableCell>
-                    <TableCell className="text-sm">{entry.user_email ?? "—"}</TableCell>
+                    <TableCell className="text-sm">{entry.user_name ?? "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{entry.device_name ?? "—"}</TableCell>
                     <TableCell>
                       <span className="flex items-center gap-1.5">

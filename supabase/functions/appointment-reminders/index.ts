@@ -80,11 +80,26 @@ async function sendSms(
 }
 
 Deno.serve(async (request) => {
-  // الترويسة السرية قبل أي عمل — لا قاعدة بيانات ولا مزوّد لطلب غير موثّق
-  if (CRON_SECRET && request.headers.get("x-cron-secret") !== CRON_SECRET) {
+  const headers = { "Content-Type": "application/json" };
+
+  if (request.method !== "POST") {
+    return new Response(JSON.stringify({ error: "method_not_allowed" }), {
+      status: 405,
+      headers: { ...headers, Allow: "POST" },
+    });
+  }
+
+  if (!CRON_SECRET) {
+    return new Response(JSON.stringify({ error: "cron_secret_not_configured" }), {
+      status: 503,
+      headers,
+    });
+  }
+
+  if (request.headers.get("x-cron-secret") !== CRON_SECRET) {
     return new Response(JSON.stringify({ error: "unauthorized" }), {
       status: 401,
-      headers: { "Content-Type": "application/json" },
+      headers,
     });
   }
 
@@ -100,7 +115,7 @@ Deno.serve(async (request) => {
   if (processError) {
     return new Response(JSON.stringify({ step: "process", error: processError.message }), {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers,
     });
   }
 
@@ -112,7 +127,7 @@ Deno.serve(async (request) => {
   if (claimError) {
     return new Response(JSON.stringify({ step: "claim", error: claimError.message }), {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers,
     });
   }
 
@@ -151,6 +166,6 @@ Deno.serve(async (request) => {
 
   return new Response(
     JSON.stringify({ queued: queued ?? 0, claimed: messages.length, sent, failed }),
-    { headers: { "Content-Type": "application/json" } },
+    { headers },
   );
 });

@@ -1,67 +1,67 @@
 import "./global.css";
 
-import type { ComponentType } from "react";
+import { lazy, Suspense, type ComponentType } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { createRoot } from "react-dom/client";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Index from "./pages/Index";
-import Onboarding from "./pages/Onboarding";
-import ComingSoon from "./pages/ComingSoon";
-import NotFound from "./pages/NotFound";
-import Reception from "./pages/Reception";
-import Patients from "./pages/Patients";
-import PatientProfile from "./pages/PatientProfile";
-import Appointments from "./pages/Appointments";
-import Billing from "./pages/Billing";
-import Doctors from "./pages/Doctors";
-import Departments from "./pages/Departments";
-import Services from "./pages/Services";
-import MedicalRecords from "./pages/MedicalRecords";
-import Insurance from "./pages/Insurance";
-import Employees from "./pages/Employees";
-import Payroll from "./pages/Payroll";
-import Reports from "./pages/Reports";
-import OperationsSettings from "./pages/OperationsSettings";
-import Laboratory from "./pages/Laboratory";
-import Radiology from "./pages/Radiology";
-import Pharmacy from "./pages/Pharmacy";
-import Packages from "./pages/Packages";
-import Accounting from "./pages/Accounting";
-import Procurement from "./pages/Procurement";
-import Inventory from "./pages/Inventory";
-import DentalLab from "./pages/DentalLab";
-import Messaging from "./pages/Messaging";
-import AuditLog from "./pages/AuditLog";
-import PatientJourney from "./pages/PatientJourney";
-import Shifts from "./pages/Shifts";
-import Attendance from "./pages/Attendance";
-import Leave from "./pages/Leave";
-import Contracts from "./pages/Contracts";
-import Recruitment from "./pages/Recruitment";
-import Performance from "./pages/Performance";
-import Training from "./pages/Training";
-import HrReports from "./pages/HrReports";
-import DocumentTemplates from "./pages/DocumentTemplates";
-import ExternalClients from "./pages/ExternalClients";
-import CustomReports from "./pages/CustomReports";
-import Warehouses from "./pages/Warehouses";
-import Licenses from "./pages/Licenses";
-import Waitlist from "./pages/Waitlist";
-import Users from "./pages/Users";
-import ExamTemplates from "./pages/ExamTemplates";
-import Offers from "./pages/Offers";
-import SystemControl from "./pages/SystemControl";
-import Alerts from "./pages/Alerts";
-import BlockedContacts from "./pages/BlockedContacts";
-import PatientVisits from "./pages/PatientVisits";
-import DeviceSettings from "./pages/DeviceSettings";
-import OrganizationSettings from "./pages/OrganizationSettings";
-import Content from "./pages/Content";
-import Settings from "./pages/Settings";
-import ReferenceData from "./pages/ReferenceData";
+const Index = lazy(() => import("./pages/Index"));
+const Onboarding = lazy(() => import("./pages/Onboarding"));
+const ComingSoon = lazy(() => import("./pages/ComingSoon"));
+const NotFound = lazy(() => import("./pages/NotFound"));
+const Reception = lazy(() => import("./pages/Reception"));
+const Patients = lazy(() => import("./pages/Patients"));
+const PatientProfile = lazy(() => import("./pages/PatientProfile"));
+const Appointments = lazy(() => import("./pages/Appointments"));
+const Billing = lazy(() => import("./pages/Billing"));
+const Doctors = lazy(() => import("./pages/Doctors"));
+const Departments = lazy(() => import("./pages/Departments"));
+const Services = lazy(() => import("./pages/Services"));
+const MedicalRecords = lazy(() => import("./pages/MedicalRecords"));
+const Insurance = lazy(() => import("./pages/Insurance"));
+const Employees = lazy(() => import("./pages/Employees"));
+const Payroll = lazy(() => import("./pages/Payroll"));
+const Reports = lazy(() => import("./pages/Reports"));
+const OperationsSettings = lazy(() => import("./pages/OperationsSettings"));
+const Laboratory = lazy(() => import("./pages/Laboratory"));
+const Radiology = lazy(() => import("./pages/Radiology"));
+const Pharmacy = lazy(() => import("./pages/Pharmacy"));
+const Packages = lazy(() => import("./pages/Packages"));
+const Accounting = lazy(() => import("./pages/Accounting"));
+const Procurement = lazy(() => import("./pages/Procurement"));
+const Inventory = lazy(() => import("./pages/Inventory"));
+const DentalLab = lazy(() => import("./pages/DentalLab"));
+const Messaging = lazy(() => import("./pages/Messaging"));
+const AuditLog = lazy(() => import("./pages/AuditLog"));
+const PatientJourney = lazy(() => import("./pages/PatientJourney"));
+const Shifts = lazy(() => import("./pages/Shifts"));
+const Attendance = lazy(() => import("./pages/Attendance"));
+const Leave = lazy(() => import("./pages/Leave"));
+const Contracts = lazy(() => import("./pages/Contracts"));
+const Recruitment = lazy(() => import("./pages/Recruitment"));
+const Performance = lazy(() => import("./pages/Performance"));
+const Training = lazy(() => import("./pages/Training"));
+const HrReports = lazy(() => import("./pages/HrReports"));
+const DocumentTemplates = lazy(() => import("./pages/DocumentTemplates"));
+const ExternalClients = lazy(() => import("./pages/ExternalClients"));
+const CustomReports = lazy(() => import("./pages/CustomReports"));
+const Warehouses = lazy(() => import("./pages/Warehouses"));
+const Licenses = lazy(() => import("./pages/Licenses"));
+const Waitlist = lazy(() => import("./pages/Waitlist"));
+const Users = lazy(() => import("./pages/Users"));
+const ExamTemplates = lazy(() => import("./pages/ExamTemplates"));
+const Offers = lazy(() => import("./pages/Offers"));
+const SystemControl = lazy(() => import("./pages/SystemControl"));
+const Alerts = lazy(() => import("./pages/Alerts"));
+const BlockedContacts = lazy(() => import("./pages/BlockedContacts"));
+const PatientVisits = lazy(() => import("./pages/PatientVisits"));
+const DeviceSettings = lazy(() => import("./pages/DeviceSettings"));
+const OrganizationSettings = lazy(() => import("./pages/OrganizationSettings"));
+const Content = lazy(() => import("./pages/Content"));
+const Settings = lazy(() => import("./pages/Settings"));
+const ReferenceData = lazy(() => import("./pages/ReferenceData"));
 import { OrganizationAccessProvider } from "./contexts/OrganizationAccessContext";
 import AppShell from "./components/layout/AppShell";
 import RouteGuard from "./components/layout/RouteGuard";
@@ -145,6 +145,13 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <OrganizationAccessProvider>
+          <Suspense
+            fallback={
+              <main dir="rtl" className="grid min-h-screen place-items-center bg-background text-foreground">
+                جارٍ تحميل الشاشة...
+              </main>
+            }
+          >
           <Routes>
             <Route path="/onboarding" element={<Onboarding />} />
             <Route
@@ -170,6 +177,7 @@ const App = () => (
             {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
             <Route path="*" element={<NotFound />} />
           </Routes>
+          </Suspense>
         </OrganizationAccessProvider>
       </BrowserRouter>
     </TooltipProvider>

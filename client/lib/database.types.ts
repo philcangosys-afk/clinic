@@ -1998,7 +1998,7 @@ export interface AppointmentWaitlistRow {
   created_at: string;
 }
 
-/** سجل التدقيق مع بريد المستخدم — العرض v_audit_log_detail (0037). */
+/** سجل التدقيق مع اسم المستخدم — العرض v_audit_log_detail. */
 export interface AuditLogDetailView extends AuditLogRow {
-  user_email: string | null;
+  user_name: string | null;
 }
