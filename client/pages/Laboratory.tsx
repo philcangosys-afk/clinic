@@ -33,6 +33,8 @@ import ExamCategoryManager, { ExamCategorySelect } from "@/components/shared/Exa
 import ResultAttachments from "@/components/shared/ResultAttachments";
 import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
+import ItemPicker from "@/components/shared/ItemPicker";
+import BillingItemLink from "@/components/shared/BillingItemLink";
 
 const STATUS_LABELS: Record<LabOrderStatus, string> = {
   ordered: "مطلوب",
@@ -67,7 +69,7 @@ function useLabTests(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("lab_tests")
-        .select("id, code, name_ar, unit, specimen_type, normal_range_text, normal_range_min, normal_range_max, turnaround_hours, is_active, category_id, category:lab_test_categories(name_ar)")
+        .select("id, code, name_ar, unit, specimen_type, normal_range_text, normal_range_min, normal_range_max, turnaround_hours, is_active, category_id, category:lab_test_categories(name_ar), billing_item_id, billing_item:items(id, name_ar, price)")
         .eq("organization_id", organizationId)
         .order("name_ar");
       if (error) throw error;
@@ -240,6 +242,7 @@ function LabTestsCatalog({ organizationId }: { organizationId: string | undefine
                 <TableHead>نوع العيّنة</TableHead>
                 <TableHead>الوحدة</TableHead>
                 <TableHead>المدى الطبيعي</TableHead>
+                <TableHead>صنف الفوترة</TableHead>
                 <TableHead>الحالة</TableHead>
               </TableRow>
             </TableHeader>
@@ -261,13 +264,25 @@ function LabTestsCatalog({ organizationId }: { organizationId: string | undefine
                       : test.normal_range_text ?? "—"}
                   </TableCell>
                   <TableCell>
+                    <BillingItemLink
+                      table="lab_tests"
+                      rowId={test.id}
+                      value={
+                        (Array.isArray((test as any).billing_item)
+                          ? (test as any).billing_item[0]
+                          : (test as any).billing_item) ?? null
+                      }
+                      invalidateKey={["lab-tests", organizationId]}
+                    />
+                  </TableCell>
+                  <TableCell>
                     <Badge variant={test.is_active ? "success" : "secondary"}>{test.is_active ? "نشط" : "معطّل"}</Badge>
                   </TableCell>
                 </TableRow>
               ))}
               {(tests.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
                     لا توجد فحوصات مُعرَّفة بعد. أضف أول فحص.
                   </TableCell>
                 </TableRow>
@@ -299,6 +314,8 @@ function NewLabTestDialog({
   const [rangeText, setRangeText] = useState("");
   // التصنيف: عمود `category_id` موجود منذ 0013 ولم يكن له أي حقل إدخال
   const [categoryId, setCategoryId] = useState("");
+  // صنف الفوترة: عمود `billing_item_id` موجود منذ 0013 ولم يكن يُقرأ ولا يُكتب
+  const [billingItem, setBillingItem] = useState<{ id: string; name_ar: string } | null>(null);
 
   const createTest = useMutation({
     mutationFn: async () => {
@@ -311,6 +328,7 @@ function NewLabTestDialog({
         normal_range_min: rangeMin ? Number(rangeMin) : null,
         normal_range_max: rangeMax ? Number(rangeMax) : null,
         normal_range_text: rangeText.trim() || null,
+        billing_item_id: billingItem?.id ?? null,
       });
       if (error) throw error;
     },
@@ -323,6 +341,7 @@ function NewLabTestDialog({
       setRangeMax("");
       setRangeText("");
       setCategoryId("");
+      setBillingItem(null);
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -366,6 +385,23 @@ function NewLabTestDialog({
           <div className="flex flex-col gap-1.5">
             <Label>أو مدى وصفي (إن لم يكن عدديًا)</Label>
             <Input value={rangeText} onChange={(e) => setRangeText(e.target.value)} placeholder="مثال: سلبي" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>صنف الفوترة</Label>
+            <p className="text-xs text-muted-foreground">
+              بلا صنف مربوط لا يمكن فوترة هذا الفحص تلقائيًا من الزيارة — الصنف يحمل السعر
+              والمعاملة الضريبية.
+            </p>
+            {billingItem ? (
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary">{billingItem.name_ar}</Badge>
+                <Button size="sm" variant="ghost" onClick={() => setBillingItem(null)}>
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <ItemPicker onSelect={(item) => setBillingItem({ id: item.id, name_ar: item.name_ar })} />
+            )}
           </div>
         </div>
         <DialogFooter>

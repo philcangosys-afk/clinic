@@ -34,6 +34,8 @@ import ExamCategoryManager, { ExamCategorySelect } from "@/components/shared/Exa
 import ResultAttachments from "@/components/shared/ResultAttachments";
 import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
+import ItemPicker from "@/components/shared/ItemPicker";
+import BillingItemLink from "@/components/shared/BillingItemLink";
 
 const STATUS_LABELS: Record<RadiologyOrderStatus, string> = {
   ordered: "مطلوب",
@@ -77,7 +79,7 @@ function useRadiologyExams(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("radiology_exams")
-        .select("id, code, name_ar, modality, body_part, requires_contrast, preparation_instructions, is_active, category_id, category:radiology_exam_categories(name_ar)")
+        .select("id, code, name_ar, modality, body_part, requires_contrast, preparation_instructions, is_active, category_id, category:radiology_exam_categories(name_ar), billing_item_id, billing_item:items(id, name_ar, price)")
         .eq("organization_id", organizationId)
         .order("name_ar");
       if (error) throw error;
@@ -250,6 +252,7 @@ function RadiologyExamsCatalog({ organizationId }: { organizationId: string | un
                 <TableHead>نوع الجهاز</TableHead>
                 <TableHead>العضو/المنطقة</TableHead>
                 <TableHead>يحتاج صبغة تباين</TableHead>
+                <TableHead>صنف الفوترة</TableHead>
                 <TableHead>الحالة</TableHead>
               </TableRow>
             </TableHeader>
@@ -267,13 +270,25 @@ function RadiologyExamsCatalog({ organizationId }: { organizationId: string | un
                   <TableCell>{exam.body_part ?? "—"}</TableCell>
                   <TableCell>{exam.requires_contrast ? "نعم" : "لا"}</TableCell>
                   <TableCell>
+                    <BillingItemLink
+                      table="radiology_exams"
+                      rowId={exam.id}
+                      value={
+                        (Array.isArray((exam as any).billing_item)
+                          ? (exam as any).billing_item[0]
+                          : (exam as any).billing_item) ?? null
+                      }
+                      invalidateKey={["radiology-exams", organizationId]}
+                    />
+                  </TableCell>
+                  <TableCell>
                     <Badge variant={exam.is_active ? "success" : "secondary"}>{exam.is_active ? "نشط" : "معطّل"}</Badge>
                   </TableCell>
                 </TableRow>
               ))}
               {(exams.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
                     لا توجد فحوصات مُعرَّفة بعد. أضف أول فحص.
                   </TableCell>
                 </TableRow>
@@ -305,6 +320,8 @@ function NewRadiologyExamDialog({
   const [prep, setPrep] = useState("");
   // التصنيف: عمود `category_id` موجود منذ 0014 ولم يكن له أي حقل إدخال
   const [categoryId, setCategoryId] = useState("");
+  // صنف الفوترة: عمود `billing_item_id` موجود منذ 0014 ولم يكن يُقرأ ولا يُكتب
+  const [billingItem, setBillingItem] = useState<{ id: string; name_ar: string } | null>(null);
 
   const createExam = useMutation({
     mutationFn: async () => {
@@ -317,6 +334,7 @@ function NewRadiologyExamDialog({
         body_part: bodyPart.trim() || null,
         requires_contrast: requiresContrast,
         preparation_instructions: prep.trim() || null,
+        billing_item_id: billingItem?.id ?? null,
       });
       if (error) throw error;
     },
@@ -329,6 +347,7 @@ function NewRadiologyExamDialog({
       setRequiresContrast(false);
       setPrep("");
       setCategoryId("");
+      setBillingItem(null);
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -380,6 +399,23 @@ function NewRadiologyExamDialog({
           <div className="flex flex-col gap-1.5">
             <Label>تعليمات التحضير (اختياري)</Label>
             <Textarea value={prep} onChange={(e) => setPrep(e.target.value)} rows={2} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>صنف الفوترة</Label>
+            <p className="text-xs text-muted-foreground">
+              بلا صنف مربوط لا يمكن فوترة هذا الفحص تلقائيًا من الزيارة — الصنف يحمل السعر
+              والمعاملة الضريبية.
+            </p>
+            {billingItem ? (
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary">{billingItem.name_ar}</Badge>
+                <Button size="sm" variant="ghost" onClick={() => setBillingItem(null)}>
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <ItemPicker onSelect={(item) => setBillingItem({ id: item.id, name_ar: item.name_ar })} />
+            )}
           </div>
         </div>
         <DialogFooter>
