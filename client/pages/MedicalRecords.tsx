@@ -266,7 +266,6 @@ function NewVisitDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { session } = useOrganizationAccess();
   const doctors = useDoctorsList(organizationId);
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [doctorId, setDoctorId] = useState("");
@@ -353,406 +352,105 @@ function NewVisitDialog({
     [template.data],
   );
 
+  /**
+   * حفظ الزيارة — نداء واحد لدالة `app_save_visit` (0061).
+   *
+   * كان هذا الحفظ **خمسة عشر طلبًا منفصلًا**: الزيارة، ثم الخدمات،
+   * التشخيصات، لوحة الأسنان، المؤشرات، مخطط الجسم، الفحص المهني، ثم طلبات
+   * المختبر والأشعة والوصفة. كلٌّ منها معاملة قائمة بذاتها.
+   *
+   * فإن نجح حفظ الزيارة وفشل ما بعده — انقطاع شبكة، إغلاق الحاسوب، سياسة
+   * مانعة — بقيت زيارة محفوظة نصفها. والأسوأ أن الطبيب يرى رسالة فشل فيُعيد
+   * الحفظ، فتُستبدل الخدمات مرة أخرى بينما التشخيص الذي فشل أولًا ما زال
+   * ناقصًا.
+   *
+   * ولا يُصلح ذلك بترتيب الطلبات ولا بحذف تعويضي: الشبكة قد تنقطع بين أي
+   * طلبين، وقد يفشل الحذف التعويضي هو الآخر. الذرّية لا تُبنى في العميل.
+   *
+   * فحص حظر المريض يبقى هنا عمدًا: الحظر قرار تشغيلي قابل للتجاوز بقرار
+   * إداري لا قيد سلامة بيانات، وفرضه في القاعدة كان يمنع حتى الحالات
+   * المشروعة (طوارئ، تسوية) بلا مخرج.
+   */
   const createVisit = useMutation({
     mutationFn: async () => {
       if (!organizationId || !patient || !doctorId) throw new Error("أكمل بيانات المريض والطبيب");
-      // حظر الملف يمنع فتح زيارة جديدة عليه — كان معروضًا في الملف بلا فرض
       await assertPatientNotBlocked(patient.id, "file");
-      const visitPayload = {
-        organization_id: organizationId,
-        patient_id: patient.id,
-        doctor_id: doctorId,
-        clinic_id: appointment?.clinic_id ?? null,
-        appointment_id: appointment?.id ?? null,
-        template_id: template.data?.id ?? null,
-        canvas_type: template.data?.canvas_type ?? "none",
-        main_complaint: mainComplaint.trim() || null,
-        exam_data: fieldValues,
-        notes: notes.trim() || null,
-        next_visit_plan: nextVisitPlan.trim() || null,
-        next_visit_date: nextVisitDate || null,
-        created_by: session?.user.id ?? null,
-      };
-      const existingVisit = appointment?.id
-        ? await supabase.from("patient_visits").select("id").eq("appointment_id", appointment.id).maybeSingle()
-        : { data: null, error: null };
-      if (existingVisit.error) throw existingVisit.error;
-      const visitResult = existingVisit.data
-        ? await supabase.from("patient_visits").update(visitPayload).eq("id", existingVisit.data.id).eq("organization_id", organizationId).select("id").single()
-        : await supabase.from("patient_visits").insert(visitPayload).select("id").single();
-      if (visitResult.error) throw visitResult.error;
-      const visit = visitResult.data;
 
-      /**
-       * الخدمات تُستبدل لا تُضاف: تعديل زيارة قائمة يعيد كتابة قائمتها كاملةً.
-       * الإضافة وحدها كانت ستضاعف الخدمات في كل حفظ لنفس الزيارة.
-       *
-       * والحذف مقيَّد بغير المفوتر: خدمة صدرت بها فاتورة لا تُحذف بتعديل
-       * الزيارة — وإلا اختفى سند البند من الفاتورة. القيد الأجنبي على
-       * `sales_invoice_items.visit_service_id` يمنع ذلك أصلًا، والتصفية هنا
-       * تتجنّب الاصطدام به برسالة خام.
-       */
-      /**
-       * الاستعلام عن البنود المفوترة مقيَّد بخدمات **هذه الزيارة** وحدها.
-       *
-       * النسخة الأولى كانت تجلب كل `sales_invoice_items` في المنشأة بلا شرط.
-       * وPostgREST يسقّف الرد بألف صف افتراضيًا، فمنشأة تجاوزت ذلك كانت تُعيد
-       * قائمة مبتورة: خدمة مفوترة خارج الألف تغيب عن `billedIds` فتدخل في
-       * `removable`، فيصطدم الحذف بالقيد الأجنبي برسالة خام — أو أسوأ، لو
-       * أُسقط القيد يومًا، لاختفى سند البند من فاتورة صادرة.
-       */
-      const { data: currentServices } = await supabase
-        .from("patient_visit_services")
-        .select("id")
-        .eq("visit_id", visit.id);
-      const currentServiceIds = (currentServices ?? []).map((row) => (row as { id: string }).id);
-      const billedIds = new Set<string>();
-      if (currentServiceIds.length > 0) {
-        const { data: billedServices, error: billedError } = await supabase
-          .from("sales_invoice_items")
-          .select("visit_service_id")
-          .in("visit_service_id", currentServiceIds);
-        if (billedError) throw billedError;
-        for (const row of billedServices ?? []) {
-          const id = (row as { visit_service_id: string | null }).visit_service_id;
-          if (id) billedIds.add(id);
-        }
-      }
-      const removable = currentServiceIds.filter((id) => !billedIds.has(id));
-      if (removable.length > 0) {
-        const { data: deletedServices, error: delError } = await supabase
-          .from("patient_visit_services")
-          .delete()
-          .in("id", removable)
-          .select("id");
-        if (delError) throw delError;
-        // الحذف يستهدف معرّفات قرأناها للتوّ، فعدم مطابقة شيء ليس حالة طبيعية
-        // بل سياسة مانعة. الصمت عنه كان يُبقي الخدمة القديمة ثم يُدرج الجديدة
-        // فوقها — فتُفوتَر الخدمة مرتين.
-        if ((deletedServices ?? []).length !== removable.length) {
-          throw new Error("تعذر تحديث خدمات الزيارة — صلاحيتك لا تسمح بحذف خدمة سابقة");
-        }
-      }
-      if (services.length > 0) {
-        const { error: servicesError } = await supabase.from("patient_visit_services").insert(
-          services.map((service) => ({
-            organization_id: organizationId,
-            visit_id: visit.id,
-            item_id: service.itemId,
-            qty: service.qty,
-            unit_price: service.price,
-            note: service.note.trim() || null,
-            performed_by: doctorId,
-            created_by: session?.user.id ?? null,
-          })),
-        );
-        if (servicesError) throw servicesError;
-      }
+      const { data, error } = await supabase.rpc("app_save_visit", {
+        p_organization_id: organizationId,
+        p_patient_id: patient.id,
+        p_doctor_id: doctorId,
+        p_clinic_id: appointment?.clinic_id ?? null,
+        p_appointment_id: appointment?.id ?? null,
+        p_template_id: template.data?.id ?? null,
+        p_canvas_type: template.data?.canvas_type ?? "none",
+        p_main_complaint: mainComplaint.trim() || null,
+        p_exam_data: fieldValues,
+        p_notes: notes.trim() || null,
+        p_next_visit_plan: nextVisitPlan.trim() || null,
+        p_next_visit_date: nextVisitDate || null,
+        p_services: services.map((service) => ({
+          item_id: service.itemId,
+          qty: service.qty,
+          unit_price: service.price,
+          note: service.note.trim() || null,
+        })),
+        p_diagnoses: diagnoses.length > 0 ? diagnoses.map((code) => code.id) : null,
+        // المؤشرات صارت جزءًا من المعاملة لا كتابةً جانبية: قيمة مرفوضة
+        // تُبطل الحفظ كله بدل أن تُبتلع بتحذير في الطرفية ويظن الطبيب أنها
+        // حُفظت. `extractVitals` يُسقط غير الرقمي أصلًا قبل الوصول إلى هنا.
+        p_vitals: extractVitals(fieldValues),
+        p_dental:
+          isDental && selectedTeeth.length > 0
+            ? {
+                tooth_numbers: selectedTeeth,
+                tooth_type: toothType,
+                procedure_done: dentalProcedure.trim() || null,
+                diagnosis_icd10_id: diagnoses[0]?.id ?? null,
+                complications: dentalComplications.trim() || null,
+                anesthesia: dentalAnesthesia.trim() || null,
+                prophylactic_antibiotics: dentalAntibiotics.trim() || null,
+                patient_family_education: dentalEducation.trim() || null,
+                is_xray: isXray,
+                ortho_upper: orthoUpper,
+                ortho_lower: orthoLower,
+                full_arch: fullArch,
+              }
+            : null,
+        p_body_diagram: isBodyDiagram
+          ? { view: bodyDiagram.view, strokes: bodyDiagram.strokes }
+          : null,
+        p_occupational: isOccupational
+          ? {
+              exam_purpose: examPurpose,
+              fitness_status: fitnessStatus,
+              employer_value_id: employerValueId || null,
+              restrictions_note: restrictionsNote.trim() || null,
+              certificate_number: certificateNumber.trim() || null,
+              next_exam_due_date: nextExamDueDate || null,
+            }
+          : null,
+        p_lab_test_ids: orders.labTestIds.length > 0 ? orders.labTestIds : null,
+        p_radiology_exam_ids:
+          orders.radiologyExamIds.length > 0 ? orders.radiologyExamIds : null,
+        p_prescription_items: orders.prescriptionItems.map((entry) => ({
+          drug_item_id: entry.drugItemId,
+          dosage: entry.dosage.trim() || null,
+          frequency: entry.frequency.trim() || null,
+          duration_days: entry.durationDays ? Number(entry.durationDays) : null,
+          quantity: entry.quantity,
+          substitutable: entry.substitutable,
+        })),
+        p_order_priority: orders.priority,
+        p_lab_notes: orders.labNotes.trim() || null,
+        p_clinical_indication: orders.clinicalIndication.trim() || null,
+        p_prescription_notes: orders.prescriptionNotes.trim() || null,
+      });
+      if (error) throw error;
 
-      /**
-       * التشخيصات تُستبدل لا تُضاف — تمامًا كالخدمات.
-       *
-       * مفتاح `patient_visit_diagnoses` الأساسي هو (visit_id, icd10_code_id).
-       * فإعادة حفظ زيارة قائمة بنفس التشخيص كانت ترفع
-       * `duplicate key value violates unique constraint` خامًا بالإنجليزية،
-       * **بعد** أن تكون الزيارة والخدمات قد حُفظت فعلًا: يرى الطبيب رسالة فشل
-       * بينما نصف الحفظ تمّ. الحذف قبل الإدراج يجعل الحفظ المتكرر عملية واحدة
-       * قابلة للإعادة.
-       */
-      const { error: clearDiagnosesError } = await supabase
-        .from("patient_visit_diagnoses")
-        .delete()
-        .eq("visit_id", visit.id);
-      if (clearDiagnosesError) throw clearDiagnosesError;
-      if (diagnoses.length > 0) {
-        const { error: diagnosesError } = await supabase.from("patient_visit_diagnoses").insert(
-          diagnoses.map((code) => ({ visit_id: visit.id, icd10_code_id: code.id })),
-        );
-        if (diagnosesError) throw diagnosesError;
-      }
-
-      // لوحة الأسنان — تُحفظ فقط إذا اختار الطبيب سنًّا واحدًا على الأقل، حتى
-      // لا يُنشأ سجل فارغ لكل زيارة أسنان لم تُستخدم فيها اللوحة.
-      // سجل لوحة الأسنان واحد لكل زيارة (فهرس uq_dental_chart_entries_visit في
-      // 0056): يُحذف السابق ثم يُكتب الحالي، فلا تتراكم نسخة لكل ضغطة حفظ.
-      if (isDental) {
-        const { error: clearDentalError } = await supabase
-          .from("dental_chart_entries")
-          .delete()
-          .eq("visit_id", visit.id);
-        if (clearDentalError) throw clearDentalError;
-      }
-      if (isDental && selectedTeeth.length > 0) {
-        const { error: dentalError } = await supabase.from("dental_chart_entries").insert({
-          visit_id: visit.id,
-          tooth_numbers: selectedTeeth,
-          tooth_type: toothType,
-          main_complaint: mainComplaint.trim() || null,
-          procedure_done: dentalProcedure.trim() || null,
-          diagnosis_icd10_id: diagnoses[0]?.id ?? null,
-          complications: dentalComplications.trim() || null,
-          anesthesia: dentalAnesthesia.trim() || null,
-          prophylactic_antibiotics: dentalAntibiotics.trim() || null,
-          patient_family_education: dentalEducation.trim() || null,
-          is_xray: isXray,
-          ortho_upper: orthoUpper,
-          ortho_lower: orthoLower,
-          full_arch: fullArch,
-          next_visit_plan: nextVisitPlan.trim() || null,
-          created_by: session?.user.id ?? null,
-        });
-        if (dentalError) throw dentalError;
-      }
-
-      /**
-       * المؤشرات الحيوية تُكتب **أيضًا** في `patient_vital_signs` المهيكل.
-       *
-       * القالب يخزّنها في `exam_data` كنص حر داخل jsonb — وهو كافٍ لعرض
-       * الزيارة نفسها، لكنه لا يصلح للتتبّع الزمني: لا يمكن رسم منحنى ضغط
-       * المريض عبر السنة من حقل نصّي داخل jsonb، ولا يُحسب مؤشر كتلة الجسم.
-       * الجدول المهيكل موجود منذ 0006 (وفيه `bmi` عمود محسوب) ولم يكن يُكتب
-       * فيه شيء إطلاقًا.
-       *
-       * القيم غير الرقمية تُترك فارغة لا صفرًا: طبيب كتب "طبيعي" في خانة
-       * النبض لا يعني أن نبض المريض صفر.
-       */
-      const vitals = extractVitals(fieldValues);
-      // صف مؤشرات واحد لكل زيارة (uq_patient_vital_signs_visit في 0056): بلا
-      // هذا الحذف كان منحنى ضغط المريض يُظهر ثلاث قراءات متطابقة لزيارة واحدة
-      // لمجرد أن الطبيب ضغط «حفظ» ثلاث مرات.
-      const { error: clearVitalsError } = await supabase
-        .from("patient_vital_signs")
-        .delete()
-        .eq("visit_id", visit.id);
-      if (clearVitalsError) throw clearVitalsError;
-      if (vitals) {
-        const { error: vitalsError } = await supabase.from("patient_vital_signs").insert({
-          organization_id: organizationId,
-          patient_id: patient.id,
-          visit_id: visit.id,
-          ...vitals,
-          created_by: session?.user.id ?? null,
-        });
-        // فشل حفظ المؤشرات لا يُبطل الزيارة نفسها — الزيارة محفوظة بالفعل
-        // وبياناتها في exam_data، والمؤشرات نسخة مهيكلة إضافية.
-        if (vitalsError) console.warn("تعذر حفظ المؤشرات الحيوية المهيكلة", vitalsError);
-      }
-
-      // مخطط الجسم — يُحفظ فقط إذا رُسم عليه شيء فعلًا.
-      if (isBodyDiagram) {
-        // رسم واحد لكل (زيارة، منظور) — uq_body_diagram_visit_view في 0056.
-        const { error: clearDiagramError } = await supabase
-          .from("body_diagram_annotations")
-          .delete()
-          .eq("visit_id", visit.id)
-          .eq("diagram_view", bodyDiagram.view);
-        if (clearDiagramError) throw clearDiagramError;
-      }
-      if (isBodyDiagram && bodyDiagram.strokes.length > 0) {
-        const { error: diagramError } = await supabase.from("body_diagram_annotations").insert({
-          visit_id: visit.id,
-          diagram_view: bodyDiagram.view,
-          annotation_data: { strokes: bodyDiagram.strokes },
-          created_by: session?.user.id ?? null,
-        });
-        if (diagramError) throw diagramError;
-      }
-
-      if (isOccupational) {
-        // `occupational_exam_results.visit_id` عليه `unique` منذ 0033، فالإدراج
-        // المتكرر كان يرفع خطأ مفتاح مكرَّر خامًا عند إعادة حفظ الزيارة.
-        const { error: clearOccError } = await supabase
-          .from("occupational_exam_results")
-          .delete()
-          .eq("visit_id", visit.id);
-        if (clearOccError) throw clearOccError;
-        const { error: occError } = await supabase.from("occupational_exam_results").insert({
-          organization_id: organizationId,
-          patient_id: patient.id,
-          visit_id: visit.id,
-          exam_purpose: examPurpose,
-          fitness_status: fitnessStatus,
-          employer_value_id: employerValueId || null,
-          restrictions_note: restrictionsNote.trim() || null,
-          certificate_number: certificateNumber.trim() || null,
-          next_exam_due_date: nextExamDueDate || null,
-          created_by: session?.user.id ?? null,
-        });
-        if (occError) throw occError;
-      }
-
-      /**
-       * طلبات المختبر والأشعة والوصفة — مربوطة بالزيارة (`visit_id`).
-       *
-       * الأعمدة موجودة منذ 0013/0014/0015 ولم تكن الواجهة تكتبها إطلاقًا، فكل
-       * طلب كان يُنشأ من شاشته منفصلًا عن الزيارة التي وُلد منها.
-       *
-       * الاستبدال مشروط: طلبٌ **بدأ تنفيذه** (تجاوز حالته الأولى) أو **فُوتِر**
-       * لا يُمَس. إعادة حفظ الزيارة إجراء توثيقي، ولا يجوز أن يمحو عيّنة سُحبت
-       * أو صورة أُخذت أو دواءً صُرف. في هذه الحالة يُترك الطلب كما هو ويُنبَّه
-       * الطبيب صراحةً بدل أن يظن أن تعديله سرى.
-       */
-      const orderWarnings: string[] = [];
-      const visitClinicId = appointment?.clinic_id ?? null;
-
-      // ── المختبر
-      const { data: existingLab, error: existingLabError } = await supabase
-        .from("lab_orders")
-        .select("id, status, sales_invoice_id")
-        .eq("visit_id", visit.id);
-      if (existingLabError) throw existingLabError;
-      const lockedLab = (existingLab ?? []).filter(
-        (row: any) => row.status !== "ordered" || row.sales_invoice_id,
-      );
-      const replaceableLab = (existingLab ?? []).filter(
-        (row: any) => row.status === "ordered" && !row.sales_invoice_id,
-      );
-      if (lockedLab.length > 0) {
-        orderWarnings.push("طلب المختبر السابق بدأ تنفيذه أو فُوتِر — تُرك كما هو");
-      } else {
-        if (replaceableLab.length > 0) {
-          const { data: deleted, error } = await supabase
-            .from("lab_orders")
-            .delete()
-            .in("id", replaceableLab.map((row: any) => row.id))
-            .select("id");
-          if (error) throw error;
-          if ((deleted ?? []).length !== replaceableLab.length) {
-            throw new Error("تعذر استبدال طلب المختبر السابق — صلاحيتك لا تسمح بحذفه");
-          }
-        }
-        if (orders.labTestIds.length > 0) {
-          const { data: labOrder, error: labOrderError } = await supabase
-            .from("lab_orders")
-            .insert({
-              organization_id: organizationId,
-              patient_id: patient.id,
-              ordering_doctor_id: doctorId,
-              visit_id: visit.id,
-              clinic_id: visitClinicId,
-              priority: orders.priority,
-              notes: orders.labNotes.trim() || null,
-            })
-            .select("id")
-            .single();
-          if (labOrderError) throw labOrderError;
-          const { error: labItemsError } = await supabase
-            .from("lab_order_items")
-            .insert(orders.labTestIds.map((testId) => ({ lab_order_id: labOrder.id, lab_test_id: testId })));
-          if (labItemsError) throw labItemsError;
-        }
-      }
-
-      // ── الأشعة
-      const { data: existingRad, error: existingRadError } = await supabase
-        .from("radiology_orders")
-        .select("id, status, sales_invoice_id")
-        .eq("visit_id", visit.id);
-      if (existingRadError) throw existingRadError;
-      const lockedRad = (existingRad ?? []).filter(
-        (row: any) => row.status !== "ordered" || row.sales_invoice_id,
-      );
-      const replaceableRad = (existingRad ?? []).filter(
-        (row: any) => row.status === "ordered" && !row.sales_invoice_id,
-      );
-      if (lockedRad.length > 0) {
-        orderWarnings.push("طلب الأشعة السابق بدأ تنفيذه أو فُوتِر — تُرك كما هو");
-      } else {
-        if (replaceableRad.length > 0) {
-          const { data: deleted, error } = await supabase
-            .from("radiology_orders")
-            .delete()
-            .in("id", replaceableRad.map((row: any) => row.id))
-            .select("id");
-          if (error) throw error;
-          if ((deleted ?? []).length !== replaceableRad.length) {
-            throw new Error("تعذر استبدال طلب الأشعة السابق — صلاحيتك لا تسمح بحذفه");
-          }
-        }
-        if (orders.radiologyExamIds.length > 0) {
-          const { data: radOrder, error: radOrderError } = await supabase
-            .from("radiology_orders")
-            .insert({
-              organization_id: organizationId,
-              patient_id: patient.id,
-              ordering_doctor_id: doctorId,
-              visit_id: visit.id,
-              clinic_id: visitClinicId,
-              priority: orders.priority,
-              clinical_indication: orders.clinicalIndication.trim() || null,
-            })
-            .select("id")
-            .single();
-          if (radOrderError) throw radOrderError;
-          const { error: radItemsError } = await supabase
-            .from("radiology_order_items")
-            .insert(
-              orders.radiologyExamIds.map((examId) => ({
-                radiology_order_id: radOrder.id,
-                radiology_exam_id: examId,
-              })),
-            );
-          if (radItemsError) throw radItemsError;
-        }
-      }
-
-      // ── الوصفة: الصرف الجزئي يقفلها أيضًا، لا الحالة وحدها
-      const { data: existingRx, error: existingRxError } = await supabase
-        .from("prescriptions")
-        .select("id, status, is_billed, prescription_items(dispensed_quantity)")
-        .eq("visit_id", visit.id);
-      if (existingRxError) throw existingRxError;
-      const isRxLocked = (row: any) =>
-        !["draft", "issued"].includes(row.status) ||
-        row.is_billed ||
-        (row.prescription_items ?? []).some((item: any) => Number(item.dispensed_quantity) > 0);
-      const lockedRx = (existingRx ?? []).filter(isRxLocked);
-      const replaceableRx = (existingRx ?? []).filter((row: any) => !isRxLocked(row));
-      if (lockedRx.length > 0) {
-        orderWarnings.push("الوصفة السابقة صُرفت أو فُوترت — تُركت كما هي");
-      } else {
-        if (replaceableRx.length > 0) {
-          const { data: deleted, error } = await supabase
-            .from("prescriptions")
-            .delete()
-            .in("id", replaceableRx.map((row: any) => row.id))
-            .select("id");
-          if (error) throw error;
-          if ((deleted ?? []).length !== replaceableRx.length) {
-            throw new Error("تعذر استبدال الوصفة السابقة — صلاحيتك لا تسمح بحذفها");
-          }
-        }
-        if (orders.prescriptionItems.length > 0) {
-          const { data: prescription, error: rxError } = await supabase
-            .from("prescriptions")
-            .insert({
-              organization_id: organizationId,
-              patient_id: patient.id,
-              doctor_id: doctorId,
-              visit_id: visit.id,
-              clinic_id: visitClinicId,
-              status: "issued",
-              notes: orders.prescriptionNotes.trim() || null,
-            })
-            .select("id")
-            .single();
-          if (rxError) throw rxError;
-          const { error: rxItemsError } = await supabase.from("prescription_items").insert(
-            orders.prescriptionItems.map((entry) => ({
-              prescription_id: prescription.id,
-              drug_item_id: entry.drugItemId,
-              dosage_instructions: entry.dosage.trim() || null,
-              frequency: entry.frequency.trim() || null,
-              duration_days: entry.durationDays ? Number(entry.durationDays) : null,
-              quantity_prescribed: entry.quantity,
-              is_substitutable: entry.substitutable,
-            })),
-          );
-          if (rxItemsError) throw rxItemsError;
-        }
-      }
-
-      return { orderWarnings };
+      const saved = data as { visit_id: string; warnings: string[] } | null;
+      if (!saved?.visit_id) throw new Error("لم تُحفظ الزيارة — أعد المحاولة");
+      return { orderWarnings: saved.warnings ?? [] };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["medical-visits"] });
