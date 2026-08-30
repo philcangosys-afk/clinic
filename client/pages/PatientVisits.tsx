@@ -50,7 +50,7 @@ function useVisits(
       let query = supabase
         .from("patient_visits")
         .select(
-          "id, visit_date, main_complaint, notes, next_visit_plan, canvas_type, created_by, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), clinic:clinics(name), patient_visit_diagnoses(icd10_code_id)",
+          "id, visit_date, main_complaint, notes, next_visit_plan, canvas_type, created_by, patient:patients!patient_visits_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!patient_visits_doctor_tenant_fk(name_ar), clinic:clinics!patient_visits_clinic_tenant_fk(name), patient_visit_diagnoses(icd10_code_id)",
         )
         .eq("organization_id", organizationId)
         .order("visit_date", { ascending: false })

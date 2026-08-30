@@ -54,7 +54,7 @@ export function PatientVisitsTab({ patientId }: { patientId: string }) {
       const { data, error } = await supabase
         .from("patient_visits")
         .select(
-          "id, visit_date, main_complaint, next_visit_plan, doctor:doctors(name_ar), patient_visit_diagnoses(icd10_code_id)",
+          "id, visit_date, main_complaint, next_visit_plan, doctor:doctors!patient_visits_doctor_tenant_fk(name_ar), patient_visit_diagnoses(icd10_code_id)",
         )
         // المريض ينتمي لمنشأة واحدة، فالتقييد به يكفي لعزل المؤسسات
         .eq("patient_id", patientId)

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Newspaper, Monitor, Plus, Trash2, Pencil, GripVertical, CalendarClock } from "lucide-react";
+import { Newspaper, Monitor, Plus, Trash2, Pencil, GripVertical, CalendarClock, AlertTriangle } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -50,6 +50,36 @@ type ScreenRow = {
 };
 
 const todayIso = () => new Date().toISOString().slice(0, 10);
+
+/**
+ * لافتة خطأ صريحة بدل قائمة فارغة كاذبة.
+ *
+ * بلا هذه اللافتة، فشل الاستعلام يترك `data` غير معرَّفة فتُعرض رسالة "لا توجد
+ * رسائل" — أي أن الشاشة تقول "لا يوجد محتوى" بينما الحقيقة "تعذّر الوصول
+ * للمحتوى". وأكثر سبب متوقَّع هنا محدَّد ومعروف: **هجرة 0049 لم تُشغَّل بعد**،
+ * فالجدولان غير موجودين في القاعدة. ذكر السبب صراحةً يوفّر ساعة بحث.
+ */
+function QueryError({ error }: { error: unknown }) {
+  const message = error instanceof Error ? error.message : "خطأ غير متوقع";
+  const missingTable = /does not exist|schema cache|PGRST205/i.test(message);
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <div className="flex flex-col gap-1">
+        <span className="font-medium">تعذّر تحميل البيانات — هذه ليست قائمة فارغة</span>
+        {missingTable ? (
+          <span>
+            الجدول غير موجود في قاعدة البيانات. شغّل الهجرة{" "}
+            <code className="font-mono">0049_waiting_room_content.sql</code> في Supabase ثم أعد
+            تحميل الصفحة.
+          </span>
+        ) : (
+          <span className="font-mono text-xs">{message}</span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // الشريط الأخباري
@@ -268,7 +298,8 @@ function TickersTab({ organizationId }: { organizationId: string | undefined }) 
       </CardHeader>
       <CardContent>
         {tickers.isLoading && <Skeleton className="h-32 w-full" />}
-        {!tickers.isLoading && (
+        {tickers.isError && <QueryError error={tickers.error} />}
+        {!tickers.isLoading && !tickers.isError && (
           <Table>
             <TableHeader>
               <TableRow>
@@ -536,7 +567,8 @@ function ScreensTab({ organizationId }: { organizationId: string | undefined }) 
         </CardHeader>
         <CardContent>
           {screens.isLoading && <Skeleton className="h-32 w-full" />}
-          {!screens.isLoading && (
+          {screens.isError && <QueryError error={screens.error} />}
+          {!screens.isLoading && !screens.isError && (
             <Table>
               <TableHeader>
                 <TableRow>

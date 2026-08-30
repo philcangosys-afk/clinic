@@ -1438,7 +1438,7 @@ function BatchItemsDialog({
      */
     const { data } = await supabase
       .from("sales_invoices")
-      .select("id, invoice_number, net_amount, is_insurance_invoice, patient:patients(name_ar)")
+      .select("id, invoice_number, net_amount, is_insurance_invoice, patient:patients!sales_invoices_patient_tenant_fk(name_ar)")
       .eq("organization_id", organization?.id)
       .eq("invoice_number", Number(invoiceSearch) || 0)
       .limit(5);

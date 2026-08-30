@@ -826,6 +826,13 @@ type DraftLine = {
   agreement_item_id: string | null;
   /** رقم الاتفاقية — للعرض بجانب السطر فقط، لا يُكتب في القاعدة. */
   agreement_label: string | null;
+  /**
+   * الخدمة المنفَّذة في الزيارة التي وُلِّد منها هذا السطر (0053).
+   *
+   * وجوده يجعل الفهرس الفريد في القاعدة يرفض فوترة الخدمة مرتين — فالمنع
+   * ليس في هذه الشاشة بل تحتها.
+   */
+  visit_service_id: string | null;
 };
 
 /** قيمة "بدون اختيار" في قوائم Select (لا تقبل قيمة فارغة). */
@@ -1087,6 +1094,96 @@ function NewInvoiceDialog({
   const agreementItems = useAgreementItemsForBilling(patient?.id, organizationId);
   const insuranceSettings = useInsuranceSettings(organizationId);
 
+  /**
+   * الزيارة المرتبطة بالموعد — لتخزينها في `sales_invoices.visit_id` (0052).
+   *
+   * بلا هذا الربط تبقى الفاتورة معلَّقة بالموعد وحده، فيتعذّر الرجوع من
+   * الفاتورة إلى الزيارة التي وُلِّدت منها — وهو ما يقطع التسلسل المطلوب:
+   * خدمة منفَّذة في زيارة ← بند فاتورة ← دفعة ← إغلاق مالي.
+   *
+   * فهرس فريد على `patient_visits(appointment_id)` يضمن زيارة واحدة لكل موعد،
+   * فـ`maybeSingle` آمن هنا ولا يخفي تعدّدًا.
+   */
+  const appointmentVisit = useQuery({
+    queryKey: ["billing-appointment-visit", organizationId, appointment?.id],
+    enabled: Boolean(organizationId && appointment?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patient_visits")
+        .select("id")
+        .eq("organization_id", organizationId)
+        .eq("appointment_id", appointment!.id)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as { id: string } | null)?.id ?? null;
+    },
+  });
+  const appointmentVisitId = appointmentVisit.data ?? null;
+
+  /**
+   * خدمات الزيارة التي لم تُفوتَر بعد — تُقرأ من منظور `v_visit_services_unbilled`
+   * (0053) لا من الجدول: المنظور يستثني المفوتَر أصلًا، فلا يحتاج العميل أن
+   * يعرف أي خدمة صدرت بها فاتورة.
+   */
+  const visitServices = useQuery({
+    queryKey: ["billing-visit-services", organizationId, appointmentVisitId],
+    enabled: Boolean(organizationId && appointmentVisitId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_visit_services_unbilled")
+        .select("visit_service_id, item_id, item_name, qty, unit_price, is_vat_exempt")
+        .eq("organization_id", organizationId)
+        .eq("visit_id", appointmentVisitId)
+        .order("created_at");
+      if (error) throw error;
+      return (data ?? []) as {
+        visit_service_id: string;
+        item_id: string;
+        item_name: string;
+        qty: number;
+        unit_price: number;
+        is_vat_exempt: boolean;
+      }[];
+    },
+  });
+
+  /**
+   * إضافة خدمة زيارة كسطر فاتورة.
+   *
+   * لا تمرّ بـ`addLine`: سعر الخدمة هو **سعر يوم التنفيذ** المخزَّن في
+   * `patient_visit_services.unit_price`، وتمريره على `app_resolve_discount`
+   * كان سيعيد تسعيره بسعر اليوم وخصومات اليوم — فيختلف ما يُحاسَب عليه
+   * المريض عمّا نُفِّذ له.
+   */
+  const addVisitServiceLine = (service: {
+    visit_service_id: string;
+    item_id: string;
+    item_name: string;
+    qty: number;
+    unit_price: number;
+    is_vat_exempt: boolean;
+  }) => {
+    if (lines.some((line) => line.visit_service_id === service.visit_service_id)) return;
+    setLines((prev) => [
+      ...prev,
+      {
+        key: `vs-${service.visit_service_id}`,
+        item_id: service.item_id,
+        description: service.item_name,
+        price: Number(service.unit_price) || 0,
+        qty: Number(service.qty) || 1,
+        discount_percent: 0,
+        auto_discount_percent: 0,
+        is_vat_exempt: Boolean(service.is_vat_exempt),
+        agreement_item_id: null,
+        agreement_label: null,
+        visit_service_id: service.visit_service_id,
+      },
+    ]);
+  };
+
+  const addAllVisitServices = () => (visitServices.data ?? []).forEach(addVisitServiceLine);
+
   useEffect(() => {
     if (!open || !appointment) return;
     const appointmentPatient = Array.isArray(appointment.patient) ? appointment.patient[0] : appointment.patient;
@@ -1127,6 +1224,7 @@ function NewInvoiceDialog({
         is_vat_exempt: false,
         agreement_item_id: option.agreementItemId,
         agreement_label: `اتفاقية #${option.agreementNumber}`,
+        visit_service_id: null,
       },
     ]);
   };
@@ -1165,6 +1263,7 @@ function NewInvoiceDialog({
         is_vat_exempt: item.is_vat_exempt,
         agreement_item_id: null,
         agreement_label: null,
+        visit_service_id: null,
       },
     ]);
     return key;
@@ -1220,63 +1319,70 @@ function NewInvoiceDialog({
       // حظر الفوترة في ملف المريض كان معروضًا بلا فرض — يُفرض هنا قبل إنشاء الرأس
       await assertPatientNotBlocked(patient?.id, "invoices");
 
-      const { data: invoice, error: invoiceError } = await supabase
-        .from("sales_invoices")
-        .insert({
-          organization_id: organizationId,
-          patient_id: patient?.id ?? null,
-          appointment_id: appointment?.id ?? null,
-          external_customer_name: patient ? null : externalName.trim(),
-          subtotal_amount: totals.subtotal,
-          discount_amount: totals.discount,
-          vat_amount: totals.vat,
-          net_amount: totals.net,
-          is_temporary: Boolean(isQuote),
-          doctor_id: doctorId === NONE ? null : doctorId,
-          clinic_id: clinicId === NONE ? null : clinicId,
-          warehouse_id: warehouseId === NONE ? null : warehouseId,
-          id_number: idNumber.trim() || null,
-          note: note.trim() || null,
-          created_by: session?.user.id ?? null,
-          is_b2b: isB2b,
-          is_insurance_invoice: isInsurance,
-          insurance_company_name: isInsurance ? insCompany.trim() || null : null,
-          insurance_policy_number: isInsurance ? insPolicy.trim() || null : null,
-          insurance_class_number: isInsurance ? insClass.trim() || null : null,
-          insurance_membership_number: isInsurance ? insMembership.trim() || null : null,
-          insurance_copay_percent: isInsurance && insCopayPercent ? Number(insCopayPercent) : null,
-          insurance_max_amount: isInsurance && insMaxAmount ? Number(insMaxAmount) : null,
-          insurance_approval_number: isInsurance ? insApprovalNumber.trim() || null : null,
-        })
-        .select("id")
-        .single();
-      if (invoiceError) throw invoiceError;
-
-      const itemsPayload = totals.computed.map((line) => ({
-        invoice_id: invoice.id,
-        item_id: line.item_id,
-        description: line.description,
-        price: line.price,
-        qty: line.qty,
-        discount_percent: line.discount_percent,
-        discount_amount: line.lineDiscount,
-        vat_rate: line.is_vat_exempt ? 0 : vatRate,
-        vat_amount: line.lineVat,
-        net_amount: line.net,
-        agreement_item_id: line.agreement_item_id,
-      }));
-      const { error: linesError } = await supabase.from("sales_invoice_items").insert(itemsPayload);
-      if (linesError) {
-        await supabase.from("sales_invoices").delete().eq("id", invoice.id).eq("organization_id", organizationId);
-        throw linesError;
-      }
-      return invoice.id as string;
+      /**
+       * الإنشاء عبر RPC واحد لا إدراجين.
+       *
+       * كان المسار: أدرج الرأس، ثم أدرج البنود، وإن فشلت البنود احذف الرأس.
+       * هذا **ليس ذرّيًا**: انقطاع الشبكة بين النداءين يترك رأس فاتورة بلا
+       * بنود — برقم مستهلَك من التسلسل ويظهر بصفر في كشف المبيعات — وقد يفشل
+       * الحذف التعويضي هو الآخر فلا يبقى ما يصحّح الحالة.
+       *
+       * والأهم أن كل الحسابات كانت تجري هنا في المتصفح ثم تُرسَل جاهزة، فيكفي
+       * تعديل الطلب قبل إرساله ليقبل النظام أي إجمالي. الدالة (0052) تُعيد
+       * حساب السعر والخصم والضريبة وحصتي التأمين **في القاعدة** من أسعار
+       * الأصناف ونسبة الضريبة المخزَّنة، وتتجاهل ما يرسله العميل من إجماليات.
+       *
+       * `totals` يبقى مستعملًا لعرض الإجمالي على الشاشة قبل الحفظ فقط.
+       */
+      const { data: newInvoiceId, error: rpcError } = await supabase.rpc("app_create_sales_invoice", {
+        p_organization_id: organizationId,
+        p_items: totals.computed.map((line) => ({
+          item_id: line.item_id,
+          description: line.description,
+          qty: line.qty,
+          price: line.price,
+          discount_percent: line.discount_percent,
+          is_vat_exempt: line.is_vat_exempt,
+          agreement_item_id: line.agreement_item_id,
+          visit_service_id: line.visit_service_id,
+        })),
+        p_patient_id: patient?.id ?? null,
+        p_external_customer_name: patient ? null : externalName.trim(),
+        p_appointment_id: appointment?.id ?? null,
+        p_visit_id: appointmentVisitId ?? null,
+        p_doctor_id: doctorId === NONE ? null : doctorId,
+        p_clinic_id: clinicId === NONE ? null : clinicId,
+        p_warehouse_id: warehouseId === NONE ? null : warehouseId,
+        p_invoice_type: "sale",
+        p_is_insurance: isInsurance,
+        p_insurance: isInsurance
+          ? {
+              company_name: insCompany.trim() || null,
+              policy_number: insPolicy.trim() || null,
+              class_number: insClass.trim() || null,
+              membership_number: insMembership.trim() || null,
+              copay_percent: insCopayPercent || null,
+              max_amount: insMaxAmount || null,
+              approval_number: insApprovalNumber.trim() || null,
+            }
+          : {},
+        p_is_temporary: Boolean(isQuote),
+        p_is_b2b: isB2b,
+        p_id_number: idNumber.trim() || null,
+        p_note: note.trim() || null,
+      });
+      if (rpcError) throw rpcError;
+      if (!newInvoiceId) throw new Error("لم تُنشأ الفاتورة — أعد المحاولة");
+      return newInvoiceId as string;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
       // المفوتَر من الاتفاقية تغيّر بفعل المُحفِّز — بلا هذا التبطيل يبقى
       // البند معروضًا "غير مفوتر" فيُفوتر مرة ثانية.
       queryClient.invalidateQueries({ queryKey: ["billing-agreement-items"] });
+      // الخدمات التي فُوترت للتوّ لم تعد ضمن غير المفوتر — بلا هذا التبطيل
+      // تبقى معروضة كأنها متاحة، فيحاول المستخدم فوترتها ثانيةً وترفضه القاعدة.
+      queryClient.invalidateQueries({ queryKey: ["billing-visit-services"] });
       toast({ title: isQuote ? "تم إنشاء عرض السعر" : "تم إنشاء الفاتورة" });
       setPatient(null);
       setExternalName("");
@@ -1489,6 +1595,41 @@ function NewInvoiceDialog({
             </span>
           </label>
 
+          {(visitServices.data ?? []).length > 0 && (
+            <div className="flex flex-col gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50/60 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <Label>الخدمات المنفَّذة في الزيارة</Label>
+                <Button size="sm" variant="outline" onClick={addAllVisitServices}>
+                  <Plus className="h-3.5 w-3.5" />
+                  إضافة الكل
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                ما سجّله الطبيب في هذه الزيارة ولم يُفوتَر بعد. السعر هو سعر يوم التنفيذ.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {(visitServices.data ?? []).map((service) => {
+                  const added = lines.some((l) => l.visit_service_id === service.visit_service_id);
+                  return (
+                    <Button
+                      key={service.visit_service_id}
+                      size="sm"
+                      variant="outline"
+                      disabled={added}
+                      onClick={() => addVisitServiceLine(service)}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span className="truncate">{service.item_name}</span>
+                      <Badge variant="secondary">
+                        {service.qty} × {Number(service.unit_price).toLocaleString("ar-SA")}
+                      </Badge>
+                    </Button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {patient && (agreementItems.data ?? []).length > 0 && (
             <div className="flex flex-col gap-1.5 rounded-lg border border-primary/30 bg-primary/5 p-3">
               <Label>بنود الاتفاقيات العلاجية لهذا المريض</Label>
@@ -1546,6 +1687,11 @@ function NewInvoiceDialog({
                   {line.agreement_label && (
                     <Badge variant="secondary" className="shrink-0 text-[10px]">
                       {line.agreement_label}
+                    </Badge>
+                  )}
+                  {line.visit_service_id && (
+                    <Badge className="shrink-0 bg-emerald-100 text-[10px] text-emerald-800">
+                      من الزيارة
                     </Badge>
                   )}
                 </span>

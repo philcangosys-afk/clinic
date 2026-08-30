@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ClipboardList, Plus, Save } from "lucide-react";
+import { ClipboardList, Plus, Save, Trash2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import PatientPicker from "@/components/shared/PatientPicker";
 import IcdPicker from "@/components/shared/IcdPicker";
+import ItemPicker from "@/components/shared/ItemPicker";
 import LookupSelect from "@/components/shared/LookupSelect";
 import type { OccupationalExamPurpose, OccupationalFitnessStatus } from "@/lib/database.types";
 import { useToast } from "@/hooks/use-toast";
@@ -269,6 +270,19 @@ function NewVisitDialog({
   const [nextVisitPlan, setNextVisitPlan] = useState("");
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [diagnoses, setDiagnoses] = useState<{ id: string; code: string; name_ar: string | null; name_en: string }[]>([]);
+  /**
+   * الخدمات المنفَّذة في هذه الزيارة (0053).
+   *
+   * كان النظام يسجّل التشخيص والفحص ولا يسجّل **ما نُفِّذ**، فيفتح المحاسب
+   * الفاتورة ويعيد اختيار الخدمات بالذاكرة أو بسؤال الطبيب — وكل خدمة تُنسى
+   * لا تُفوتَر. هذا هو مصدر بنود الفاتورة المقترحة لاحقًا.
+   *
+   * `unit_price` يُلتقط من الكتالوج لحظة الإضافة ويُخزَّن: سعر الكتالوج قد
+   * يتغيّر قبل الفوترة، والمريض يُحاسَب على سعر يوم التنفيذ.
+   */
+  const [services, setServices] = useState<
+    { key: string; itemId: string; name: string; qty: number; price: number; note: string }[]
+  >([]);
   const [examPurpose, setExamPurpose] = useState<OccupationalExamPurpose>("periodic");
   const [fitnessStatus, setFitnessStatus] = useState<OccupationalFitnessStatus>("pending");
   const [employerValueId, setEmployerValueId] = useState("");
@@ -354,6 +368,52 @@ function NewVisitDialog({
         : await supabase.from("patient_visits").insert(visitPayload).select("id").single();
       if (visitResult.error) throw visitResult.error;
       const visit = visitResult.data;
+
+      /**
+       * الخدمات تُستبدل لا تُضاف: تعديل زيارة قائمة يعيد كتابة قائمتها كاملةً.
+       * الإضافة وحدها كانت ستضاعف الخدمات في كل حفظ لنفس الزيارة.
+       *
+       * والحذف مقيَّد بغير المفوتر: خدمة صدرت بها فاتورة لا تُحذف بتعديل
+       * الزيارة — وإلا اختفى سند البند من الفاتورة. القيد الأجنبي على
+       * `sales_invoice_items.visit_service_id` يمنع ذلك أصلًا، والتصفية هنا
+       * تتجنّب الاصطدام به برسالة خام.
+       */
+      const { data: billedServices } = await supabase
+        .from("sales_invoice_items")
+        .select("visit_service_id")
+        .not("visit_service_id", "is", null);
+      const billedIds = new Set(
+        (billedServices ?? []).map((row) => (row as { visit_service_id: string }).visit_service_id),
+      );
+      const { data: currentServices } = await supabase
+        .from("patient_visit_services")
+        .select("id")
+        .eq("visit_id", visit.id);
+      const removable = (currentServices ?? [])
+        .map((row) => (row as { id: string }).id)
+        .filter((id) => !billedIds.has(id));
+      if (removable.length > 0) {
+        const { error: delError } = await supabase
+          .from("patient_visit_services")
+          .delete()
+          .in("id", removable);
+        if (delError) throw delError;
+      }
+      if (services.length > 0) {
+        const { error: servicesError } = await supabase.from("patient_visit_services").insert(
+          services.map((service) => ({
+            organization_id: organizationId,
+            visit_id: visit.id,
+            item_id: service.itemId,
+            qty: service.qty,
+            unit_price: service.price,
+            note: service.note.trim() || null,
+            performed_by: doctorId,
+            created_by: session?.user.id ?? null,
+          })),
+        );
+        if (servicesError) throw servicesError;
+      }
 
       if (diagnoses.length > 0) {
         const { error: diagnosesError } = await supabase.from("patient_visit_diagnoses").insert(
@@ -670,6 +730,89 @@ function NewVisitDialog({
           <div className="flex flex-col gap-1.5">
             <Label>التشخيص (ICD10)</Label>
             <IcdPicker selected={diagnoses} onChange={setDiagnoses} />
+          </div>
+
+          <div className="flex flex-col gap-2 rounded-lg border border-primary/30 bg-primary/5 p-3">
+            <Label>الخدمات المنفَّذة في هذه الزيارة</Label>
+            <p className="text-xs text-muted-foreground">
+              ما تسجّله هنا يُقترح تلقائيًا كبنود فاتورة في شاشة الفوترة — ولا يُفوتَر مرتين.
+            </p>
+            <ItemPicker
+              onSelect={(item) =>
+                setServices((prev) =>
+                  // نفس الخدمة مرتين في زيارة واحدة تعني زيادة الكمية لا سطرًا
+                  // ثانيًا — والسطر الثاني كان سيُفوتَر منفصلًا ويشوّش الفاتورة.
+                  prev.some((s) => s.itemId === item.id)
+                    ? prev.map((s) => (s.itemId === item.id ? { ...s, qty: s.qty + 1 } : s))
+                    : [
+                        ...prev,
+                        {
+                          key: `${item.id}-${Date.now()}`,
+                          itemId: item.id,
+                          name: item.name_ar,
+                          qty: 1,
+                          price: Number(item.price) || 0,
+                          note: "",
+                        },
+                      ],
+                )
+              }
+            />
+            {services.length > 0 && (
+              <div className="flex flex-col gap-1 rounded-md border bg-background p-2">
+                {services.map((service) => (
+                  <div key={service.key} className="flex items-center gap-2 text-sm">
+                    <span className="min-w-0 flex-1 truncate">{service.name}</span>
+                    <Input
+                      className="h-8 w-20"
+                      type="number"
+                      min={1}
+                      value={service.qty}
+                      onChange={(e) =>
+                        setServices((prev) =>
+                          prev.map((s) =>
+                            s.key === service.key
+                              ? { ...s, qty: Math.max(Number(e.target.value) || 1, 1) }
+                              : s,
+                          ),
+                        )
+                      }
+                    />
+                    <Input
+                      className="h-8 w-24"
+                      type="number"
+                      min={0}
+                      value={service.price}
+                      onChange={(e) =>
+                        setServices((prev) =>
+                          prev.map((s) =>
+                            s.key === service.key
+                              ? { ...s, price: Math.max(Number(e.target.value) || 0, 0) }
+                              : s,
+                          ),
+                        )
+                      }
+                    />
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() =>
+                        setServices((prev) => prev.filter((s) => s.key !== service.key))
+                      }
+                    >
+                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                    </Button>
+                  </div>
+                ))}
+                <span className="pt-1 text-xs text-muted-foreground">
+                  الإجمالي التقديري:{" "}
+                  {services
+                    .reduce((sum, s) => sum + s.qty * s.price, 0)
+                    .toLocaleString("ar-SA")}{" "}
+                  (قبل الضريبة والخصم — تُحسب في الفاتورة)
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">

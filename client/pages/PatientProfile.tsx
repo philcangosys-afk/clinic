@@ -1012,7 +1012,7 @@ function AppointmentsTab({ patientId }: { patientId: string }) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("appointments")
-        .select("id, scheduled_start, status, doctor:doctors(name_ar)")
+        .select("id, scheduled_start, status, doctor:doctors!appointments_doctor_tenant_fk(name_ar)")
         .eq("patient_id", patientId)
         .order("scheduled_start", { ascending: false })
         .limit(30);
