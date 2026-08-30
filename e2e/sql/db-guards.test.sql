@@ -28,6 +28,10 @@ begin
     returning id into v_user;
   insert into organizations (name, organization_type, created_by)
     values ('منشأة اختبار E2E', 'clinic', v_user) returning id into v_org;
+
+  -- الدوال تفحص العضوية (`app_is_member`) منذ 0082، فبدون هوية يعمل الملف
+  -- بحساب مجهول فترفضه كل دالة. `true` يجعل الضبط محليًا للمعاملة.
+  perform set_config('request.jwt.claim.sub', v_user::text, true);
   insert into patients (organization_id, name_ar, mobile_number)
     values (v_org, 'مريض اختبار', '0509999999') returning id into v_pat;
   insert into doctors (organization_id, name_ar)

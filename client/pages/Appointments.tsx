@@ -499,6 +499,14 @@ function CreateAppointmentDialog({
    * ويشتقّ العيادة، والقاعدة تفحص ملاءمتها للمريض قبل الحفظ.
    */
   const [service, setService] = useState<{ id: string; name: string } | null>(null);
+  /**
+   * سلسلة الحجز: فرع ← عيادة ← طبيب ← خدمة (0081).
+   *
+   * كل خطوة تسأل القاعدة عمّا هو متاح في التي تليها، فلا تعرض الشاشة طبيبًا
+   * لا يعمل في العيادة ولا خدمةً لا يقدّمها — والقاعدة ترفضهما على كل حال.
+   */
+  const [branchId, setBranchId] = useState("");
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   /**
    * العيادة ونوع الزيارة والملاحظة أعمدة في `appointments` منذ 0002 لم تكن
@@ -546,6 +554,77 @@ function CreateAppointmentDialog({
     },
   });
 
+  const branches = useQuery({
+    queryKey: ["appt-branches", organizationId],
+    enabled: open && Boolean(organizationId),
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("branches")
+        .select("id, name")
+        .eq("organization_id", organizationId)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
+
+  const clinicOptions = useQuery({
+    queryKey: ["appt-clinics-chain", organizationId, branchId],
+    enabled: open && Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_clinics_for_branch", {
+        p_organization_id: organizationId,
+        p_branch_id: branchId || null,
+      });
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const doctorOptions = useQuery({
+    queryKey: ["appt-doctors-chain", organizationId, clinicId],
+    enabled: open && Boolean(organizationId) && clinicId !== NONE_VALUE && Boolean(clinicId),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_doctors_for_clinic", {
+        p_organization_id: organizationId,
+        p_clinic_id: clinicId,
+      });
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const serviceOptions = useQuery({
+    queryKey: ["appt-services-chain", organizationId, doctorId, clinicId, branchId],
+    enabled: open && Boolean(organizationId) && Boolean(doctorId),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_services_for_doctor", {
+        p_organization_id: organizationId,
+        p_doctor_id: doctorId,
+        p_clinic_id: clinicId === NONE_VALUE ? null : clinicId || null,
+        p_branch_id: branchId || null,
+      });
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const slots = useQuery({
+    queryKey: ["appt-slots", doctorId, date, clinicId, duration],
+    enabled: open && Boolean(doctorId) && Boolean(date),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_doctor_available_slots", {
+        p_doctor_id: doctorId,
+        p_date: date,
+        p_clinic_id: clinicId === NONE_VALUE ? null : clinicId || null,
+        p_duration: Number(duration) || null,
+      });
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
   const createAppointment = useMutation({
     mutationFn: async () => {
       if (!organizationId || !patient || !doctorId) throw new Error("أكمل بيانات المريض والطبيب والوقت");
@@ -569,6 +648,7 @@ function CreateAppointmentDialog({
         scheduled_start: start.toISOString(),
         scheduled_end: end.toISOString(),
         status: "scheduled",
+        branch_id: branchId || null,
         clinic_id: clinicId === NONE_VALUE ? null : clinicId,
         item_id: service?.id ?? null,
         visit_type_value_id: visitTypeValueId || null,
@@ -621,44 +701,132 @@ function CreateAppointmentDialog({
                 مريض جديد بلا ملف؟ فتح ملف سريع
               </button>
             </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5">
+                <Label>الفرع</Label>
+                <Select
+                  value={branchId || NONE_VALUE}
+                  onValueChange={(value) => {
+                    setBranchId(value === NONE_VALUE ? "" : value);
+                    // تغيير الفرع يُبطل ما بعده في السلسلة: عيادةٌ من فرع
+                    // آخر تبقى محدَّدة تُنتج موعدًا ترفضه القاعدة.
+                    setClinicId(NONE_VALUE);
+                    setDoctorId("");
+                    setService(null);
+                    setWarnings([]);
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="كل الفروع" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_VALUE}>كل الفروع</SelectItem>
+                    {(branches.data ?? []).map((branch) => (
+                      <SelectItem key={branch.id} value={branch.id}>
+                        {branch.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>العيادة</Label>
+                <Select
+                  value={clinicId}
+                  onValueChange={(value) => {
+                    setClinicId(value);
+                    setDoctorId("");
+                    setService(null);
+                    setWarnings([]);
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="اختر العيادة" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_VALUE}>بدون عيادة</SelectItem>
+                    {(clinicOptions.data ?? []).map((clinic: any) => (
+                      <SelectItem key={clinic.id} value={clinic.id}>
+                        {clinic.name}
+                        {clinic.department_name ? ` — ${clinic.department_name}` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
             <div className="flex flex-col gap-1.5">
               <Label>الطبيب</Label>
-              <Select value={doctorId} onValueChange={setDoctorId}>
+              <Select
+                value={doctorId}
+                onValueChange={async (value) => {
+                  setDoctorId(value);
+                  setService(null);
+                  const { data } = await supabase.rpc("app_doctor_booking_warnings", {
+                    p_doctor_id: value,
+                  });
+                  setWarnings((data as string[]) ?? []);
+                  const picked = (doctorOptions.data ?? []).find((d: any) => d.id === value);
+                  if (picked?.default_duration) setDuration(String(picked.default_duration));
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="اختر الطبيب" />
                 </SelectTrigger>
                 <SelectContent>
-                  {doctors.map((doctor) => (
+                  {(doctorOptions.data ?? []).map((doctor: any) => (
                     <SelectItem key={doctor.id} value={doctor.id}>
                       د. {doctor.name_ar}
+                      {doctor.specialty ? ` — ${doctor.specialty}` : ""}
                     </SelectItem>
                   ))}
+                  {/* العيادة غير محدَّدة: تُعرض قائمة المنشأة كاملة كي لا
+                      يتعطّل الحجز السريع، والقاعدة تفحص الارتباط عند الحفظ. */}
+                  {(clinicId === NONE_VALUE || !clinicId) &&
+                    doctors.map((doctor) => (
+                      <SelectItem key={doctor.id} value={doctor.id}>
+                        د. {doctor.name_ar}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
+              {warnings.length > 0 && (
+                <p className="text-xs text-amber-700">{warnings.join(" — ")}</p>
+              )}
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>الخدمة المطلوبة (اختياري)</Label>
-              {service ? (
-                <div className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
-                  {service.name}
-                  <Button size="sm" variant="ghost" className="ms-auto" onClick={() => setService(null)}>
-                    تغيير
-                  </Button>
-                </div>
-              ) : (
-                <ItemPicker
-                  onSelect={async (item: any) => {
-                    setService({ id: item.id, name: item.name_ar });
-                    const { data } = await supabase
-                      .from("items")
-                      .select("duration_minutes, default_clinic_id, requires_appointment")
-                      .eq("id", item.id)
-                      .maybeSingle();
-                    if (data?.duration_minutes) setDuration(String(data.duration_minutes));
-                    if (data?.default_clinic_id && clinicId === NONE_VALUE)
-                      setClinicId(data.default_clinic_id);
+              {doctorId ? (
+                <Select
+                  value={service?.id ?? NONE_VALUE}
+                  onValueChange={(value) => {
+                    if (value === NONE_VALUE) {
+                      setService(null);
+                      return;
+                    }
+                    const picked = (serviceOptions.data ?? []).find((x: any) => x.id === value);
+                    setService({ id: value, name: picked?.name_ar ?? "" });
+                    if (picked?.duration_minutes) setDuration(String(picked.duration_minutes));
                   }}
-                />
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="اختر الخدمة" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE_VALUE}>بدون خدمة محدَّدة</SelectItem>
+                    {(serviceOptions.data ?? []).map((item: any) => (
+                      <SelectItem key={item.id} value={item.id}>
+                        {item.name_ar}
+                        {item.duration_minutes ? ` — ${item.duration_minutes} د` : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                  اختر الطبيب أولًا لتظهر خدماته.
+                </p>
               )}
               <p className="text-xs text-muted-foreground">
                 تحديد الخدمة يضبط المدة والعيادة، ويمنع حجزًا لا يصلح للمريض.
@@ -678,23 +846,47 @@ function CreateAppointmentDialog({
                 <Input type="number" min={5} step={5} value={duration} onChange={(e) => setDuration(e.target.value)} />
               </div>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2">
+
+            {/* الأوقات المتاحة تُحسب في القاعدة من جدول الطبيب ومواعيده
+                واستثناءاته — لا في المتصفّح، حيث قد تكون البيانات تغيّرت
+                بين التحميل والضغط. */}
+            {doctorId && (slots.data ?? []).length > 0 && (
               <div className="flex flex-col gap-1.5">
-                <Label>العيادة</Label>
-                <Select value={clinicId} onValueChange={setClinicId}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="بدون" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NONE_VALUE}>بدون</SelectItem>
-                    {(clinics.data ?? []).map((clinic) => (
-                      <SelectItem key={clinic.id} value={clinic.id}>
-                        {clinic.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <Label>الأوقات المتاحة</Label>
+                <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto rounded-md border p-2">
+                  {(slots.data ?? []).map((slot: any) => {
+                    const label = new Date(slot.slot_start).toLocaleTimeString("ar-SA", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    });
+                    return (
+                      <Button
+                        key={slot.slot_start}
+                        size="sm"
+                        type="button"
+                        variant={
+                          time === new Date(slot.slot_start).toTimeString().slice(0, 5)
+                            ? "default"
+                            : "outline"
+                        }
+                        disabled={!slot.is_free}
+                        title={slot.block_reason ?? (slot.is_free ? "" : "محجوز")}
+                        className="h-7 px-2 text-xs"
+                        onClick={() => setTime(new Date(slot.slot_start).toTimeString().slice(0, 5))}
+                      >
+                        {label}
+                      </Button>
+                    );
+                  })}
+                </div>
               </div>
+            )}
+            {doctorId && slots.isSuccess && (slots.data ?? []).length === 0 && (
+              <p className="text-xs text-muted-foreground">
+                لا جدول دوام مسجَّل لهذا الطبيب في هذا اليوم — الوقت يُدخَل يدويًا.
+              </p>
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label>نوع الزيارة</Label>
                 <LookupSelect

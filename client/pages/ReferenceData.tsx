@@ -22,6 +22,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import DictionariesTab from "@/components/reference/DictionariesTab";
 
 /**
  * البيانات المرجعية الطبية (لقطتا 16 و17).
@@ -428,27 +429,116 @@ function Icd10Tab() {
   );
 }
 
+/**
+ * أكواد الإجراءات — مرجع عالمي بلا `organization_id`، مثل ICD-10.
+ *
+ * يُقرأ ولا يُكتب من التطبيق: كتابةٌ من منشأةٍ على مرجعٍ عالمي تراه كل
+ * المنشآت. التوسعة بالاستيراد من محرّر SQL.
+ */
+function ProcedureCodesTab() {
+  const [search, setSearch] = useState("");
+
+  const rows = useQuery({
+    queryKey: ["procedure-codes", search],
+    queryFn: async () => {
+      let query = supabase
+        .from("procedure_codes")
+        .select("id, code_system, code, name_ar, name_en, category")
+        .eq("is_disabled", false)
+        .order("code")
+        .limit(200);
+      const term = search.trim();
+      if (term) query = query.or(`code.ilike.%${term}%,name_ar.ilike.%${term}%,name_en.ilike.%${term}%`);
+      const { data, error } = await query;
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="بحث بالكود أو الاسم..."
+          className="max-w-sm"
+        />
+        <CardDescription>
+          مرجع عالمي مشترك — يُقرأ ولا يُعدَّل من التطبيق. الربط بالخدمة يتم من محرّر الخدمة
+          (تبويب «أكواد المطالبات»).
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {rows.isLoading && <Skeleton className="h-32 w-full" />}
+        {!rows.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>النظام</TableHead>
+                <TableHead>الكود</TableHead>
+                <TableHead>الاسم</TableHead>
+                <TableHead>التصنيف</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(rows.data ?? []).map((row) => (
+                <TableRow key={row.id}>
+                  <TableCell>
+                    <Badge variant="outline">{String(row.code_system).toUpperCase()}</Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{row.code}</TableCell>
+                  <TableCell>{row.name_ar ?? row.name_en}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{row.category ?? "—"}</TableCell>
+                </TableRow>
+              ))}
+              {(rows.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
+                    لا أكواد إجراءات محمَّلة بعد — تُستورَد إلى جدول `procedure_codes`.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function ReferenceData() {
   const { membership } = useOrganizationAccess();
   const isAdmin = isOrganizationAdmin(membership?.role_key as OrganizationRole | undefined);
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
       <div>
         <h1 className="text-2xl font-bold">البيانات المرجعية الطبية</h1>
-        <p className="text-sm text-muted-foreground">قوائم الأمراض وأكواد التشخيص المستخدمة في النظام</p>
+        <p className="text-sm text-muted-foreground">
+          القواميس الطبية وأكواد التشخيص والإجراءات. القواميس النظامية مشتركة بين كل المنشآت
+          وتُقرأ ولا تُعدَّل.
+        </p>
       </div>
 
-      <Tabs defaultValue="conditions" className="flex flex-col gap-4">
+      <Tabs defaultValue="dictionaries" className="flex flex-col gap-4">
         <TabsList>
+          <TabsTrigger value="dictionaries">القواميس</TabsTrigger>
           <TabsTrigger value="conditions">الأمراض والحالات</TabsTrigger>
           <TabsTrigger value="icd10">أكواد ICD-10</TabsTrigger>
+          <TabsTrigger value="procedures">أكواد الإجراءات</TabsTrigger>
         </TabsList>
+        <TabsContent value="dictionaries">
+          <DictionariesTab readOnly={!isAdmin} />
+        </TabsContent>
         <TabsContent value="conditions">
           <HealthConditionsTab readOnly={!isAdmin} />
         </TabsContent>
         <TabsContent value="icd10">
           <Icd10Tab />
+        </TabsContent>
+        <TabsContent value="procedures">
+          <ProcedureCodesTab />
         </TabsContent>
       </Tabs>
     </div>

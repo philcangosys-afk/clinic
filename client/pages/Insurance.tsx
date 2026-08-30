@@ -1,6 +1,6 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, Check, Plus, Printer, ShieldCheck, X } from "lucide-react";
+import { Building2, Check, FileSignature, Plus, Printer, RefreshCcw, ShieldCheck, X } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type {
@@ -28,8 +28,12 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { usePermissions } from "@/lib/permissions";
 import PatientPicker from "@/components/shared/PatientPicker";
 import NewClaimFormDialog from "@/components/insurance/NewClaimFormDialog";
 import { useInsuranceSettings } from "@/lib/insurance-settings";
@@ -37,17 +41,32 @@ import { InsuranceSettingsTab } from "@/pages/OperationsSettings";
 import FormRequirementsTab from "@/components/insurance/FormRequirementsTab";
 import { useToast } from "@/hooks/use-toast";
 
-const CLAIM_STATUS_LABELS: Record<InsuranceClaimStatus, string> = {
+/**
+ * حالات المطالبة بعد 0089.
+ *
+ * كانت أربعًا، وكان `rejected` منها **طريقًا مسدودًا**: لا سبب رفض، ولا
+ * رابط لإعادة تقديم. الأربع الجديدة تفتح الطريق: اعتماد جزئي، وإعادة تقديم،
+ * ودفع، وإلغاء.
+ */
+const CLAIM_STATUS_LABELS: Record<string, string> = {
   draft: "مسودة",
   submitted: "مُرسلة",
   approved: "موافق عليها",
+  partially_approved: "معتمَدة جزئيًا",
   rejected: "مرفوضة",
+  resubmitted: "أُعيد تقديمها",
+  paid: "مدفوعة",
+  cancelled: "ملغاة",
 };
-const CLAIM_STATUS_BADGE: Record<InsuranceClaimStatus, string> = {
+const CLAIM_STATUS_BADGE: Record<string, string> = {
   draft: "bg-slate-100 text-slate-700",
   submitted: "bg-sky-100 text-sky-700",
   approved: "bg-emerald-100 text-emerald-700",
+  partially_approved: "bg-amber-100 text-amber-800",
   rejected: "bg-rose-100 text-rose-700",
+  resubmitted: "bg-violet-100 text-violet-700",
+  paid: "bg-emerald-200 text-emerald-900",
+  cancelled: "bg-slate-200 text-slate-600",
 };
 const FORM_TYPE_LABELS: Record<InsuranceClaimFormType, string> = { ucaf: "UCAF", dcaf: "DCAF", ocaf: "OCAF" };
 const PREAUTH_STATUS_LABELS: Record<PreauthorizationStatus, string> = {
@@ -73,6 +92,7 @@ export default function Insurance() {
       <Tabs defaultValue="companies">
         <TabsList>
           <TabsTrigger value="companies">شركات التأمين والبوليصات</TabsTrigger>
+          <TabsTrigger value="contracts">العقود والتغطية</TabsTrigger>
           <TabsTrigger value="claims">المطالبات</TabsTrigger>
           <TabsTrigger value="batches">دفعات المطالبات</TabsTrigger>
           <TabsTrigger value="preauth">الموافقات المسبقة</TabsTrigger>
@@ -81,6 +101,10 @@ export default function Insurance() {
         </TabsList>
         <TabsContent value="companies">
           <CompaniesTab />
+        </TabsContent>
+        <TabsContent value="contracts" className="mt-4 flex flex-col gap-4">
+          <CoverageCheckCard />
+          <ContractsTab />
         </TabsContent>
         <TabsContent value="claims">
           <ClaimsTab />
@@ -712,7 +736,7 @@ function useClaimForms(organizationId: string | undefined, status: string) {
       let query = supabase
         .from("insurance_claim_forms")
         .select(
-          "id, form_type, status, auto_created, created_at, form_data, patient:patients(name_ar, file_number, id_number, birth_date, insurance_company_name, insurance_policy_number, insurance_membership_number), doctor:doctors(name_ar)",
+          "id, form_type, status, auto_created, created_at, form_data, claimed_amount, approved_amount, rejected_amount, rejection_reason, rejection_code, resubmission_count, resubmission_of_id, submitted_at, responded_at, patient:patients(name_ar, file_number, id_number, birth_date, insurance_company_name, insurance_policy_number, insurance_membership_number), doctor:doctors(name_ar)",
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
         .eq("organization_id", organizationId)
@@ -802,21 +826,87 @@ function ClaimsTab() {
   const [createOpen, setCreateOpen] = useState(false);
   const claims = useClaimForms(organization?.id, statusFilter);
 
+  const [rejectTarget, setRejectTarget] = useState<any | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectCode, setRejectCode] = useState("");
+  const [rejectAmount, setRejectAmount] = useState("");
+  const [rejectPartial, setRejectPartial] = useState(false);
+
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["insurance-claim-forms"] });
+
+  const fail = (title: string) => (error: unknown) =>
+    toast({
+      variant: "destructive",
+      title,
+      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+    });
+
+  /**
+   * كل تغيير حالة يمرّ بـ`app_set_claim_form_status` (0089) لا بتحديث مباشر.
+   *
+   * التحديث المباشر كان يقبل أيّ قفزة — من مسوّدة إلى «موافق عليها» دون
+   * إرسال — ولا يسجّل وقت التقديم ولا وقت الردّ ولا سببًا في التدقيق.
+   */
   const updateStatus = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: InsuranceClaimStatus }) => {
-      const { data, error } = await supabase
-        .from("insurance_claim_forms")
-        .update({ status })
-        .eq("id", id)
-        .select("id");
+    mutationFn: async ({ id, status }: { id: string; status: string }) => {
+      const { error } = await supabase.rpc("app_set_claim_form_status", {
+        p_form_id: id,
+        p_status: status,
+        p_reason: null,
+        p_amount: null,
+        p_code: null,
+      });
       if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة ويعود الصف لحالته عند أول تحديث للقائمة.
-      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insurance-claim-forms"] }),
-    onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر التحديث", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+    onSuccess: invalidate,
+    onError: fail("تعذر التحديث"),
+  });
+
+  const rejectClaim = useMutation({
+    mutationFn: async () => {
+      if (!rejectTarget) throw new Error("لا مطالبة محدَّدة");
+      if (!rejectReason.trim()) throw new Error("اكتب سبب الرفض");
+      if (rejectPartial && !rejectAmount) throw new Error("اكتب المبلغ المعتمَد");
+      const { error } = await supabase.rpc("app_set_claim_form_status", {
+        p_form_id: rejectTarget.id,
+        p_status: rejectPartial ? "partially_approved" : "rejected",
+        p_reason: rejectReason.trim(),
+        p_amount: rejectPartial ? Number(rejectAmount) : null,
+        p_code: rejectCode.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: rejectPartial ? "سُجّل الاعتماد الجزئي" : "سُجّل الرفض بسببه" });
+      setRejectTarget(null);
+      setRejectReason("");
+      setRejectCode("");
+      setRejectAmount("");
+      setRejectPartial(false);
+    },
+    onError: fail("تعذر التسجيل"),
+  });
+
+  /**
+   * إعادة التقديم تُنشئ **نسخة جديدة** وتترك الأصل مرفوضًا شاهدًا عليه.
+   * تاريخُ ما قُدِّم ومتى ورُدَّ بأيّ سبب هو نصف الملفّ في أيّ نزاع مع شركة
+   * تأمين، فلا يُعدَّل الأصل في مكانه.
+   */
+  const resubmit = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.rpc("app_resubmit_claim_form", {
+        p_form_id: id,
+        p_note: null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "أُنشئت مطالبة جديدة بسطور الأصل — راجعها ثم أرسلها" });
+    },
+    onError: fail("تعذرت إعادة التقديم"),
   });
 
   return (
@@ -841,6 +931,8 @@ function ClaimsTab() {
         </Button>
       </div>
 
+      <ClaimRegisterCard />
+
       <Card>
         <CardHeader>
           <CardTitle>نماذج المطالبات</CardTitle>
@@ -861,7 +953,15 @@ function ClaimsTab() {
                 <p className="text-xs text-muted-foreground">
                   د. {form.doctor?.name_ar ?? "—"} · {new Date(form.created_at).toLocaleDateString("ar-SA")}
                   {form.auto_created && " · أُنشئ تلقائيًا"}
+                  {form.resubmission_count > 0 && ` · المحاولة ${form.resubmission_count + 1}`}
                 </p>
+                {form.rejection_reason && (
+                  <p className="text-xs text-rose-700">
+                    سبب الردّ: {form.rejection_reason}
+                    {form.rejection_code ? ` (${form.rejection_code})` : ""}
+                    {form.approved_amount != null && ` · المعتمَد ${Number(form.approved_amount).toLocaleString("ar-SA")} ر.س`}
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <Badge className={CLAIM_STATUS_BADGE[form.status as InsuranceClaimStatus]}>
@@ -885,18 +985,74 @@ function ClaimsTab() {
                       size="sm"
                       variant="ghost"
                       className="text-destructive"
-                      onClick={() => updateStatus.mutate({ id: form.id, status: "rejected" })}
+                      onClick={() => setRejectTarget(form)}
                     >
                       <X className="h-3.5 w-3.5" />
-                      رفض
+                      ردّ الشركة
                     </Button>
                   </>
+                )}
+                {form.status === "approved" && (
+                  <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: form.id, status: "paid" })}>
+                    تسجيل السداد
+                  </Button>
+                )}
+                {["rejected", "partially_approved"].includes(form.status) && (
+                  <Button size="sm" variant="outline" onClick={() => resubmit.mutate(form.id)}>
+                    <RefreshCcw className="h-3.5 w-3.5" />
+                    إعادة تقديم
+                  </Button>
                 )}
               </div>
             </div>
           ))}
         </CardContent>
       </Card>
+
+      <Dialog open={Boolean(rejectTarget)} onOpenChange={(next) => !next && setRejectTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>ردّ شركة التأمين</DialogTitle>
+            <DialogDescription>
+              الرفض بلا سبب مكتوب لا يُبنى عليه اعتراض ولا إعادة تقديم — يبقى الأثر «مرفوضة» ولا
+              أحد يعرف لماذا.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={rejectPartial}
+                onChange={(e) => setRejectPartial(e.target.checked)}
+              />
+              اعتماد جزئي (اعتُمد بعض المبلغ)
+            </label>
+            {rejectPartial && (
+              <div className="flex flex-col gap-1.5">
+                <Label>المبلغ المعتمَد *</Label>
+                <Input type="number" min={0} value={rejectAmount} onChange={(e) => setRejectAmount(e.target.value)} />
+              </div>
+            )}
+            <div className="flex flex-col gap-1.5">
+              <Label>سبب الردّ *</Label>
+              <Textarea rows={3} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>كود الرفض لدى الشركة</Label>
+              <Input value={rejectCode} onChange={(e) => setRejectCode(e.target.value)} dir="ltr" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              disabled={!rejectReason.trim() || rejectClaim.isPending}
+              onClick={() => rejectClaim.mutate()}
+            >
+              {rejectClaim.isPending ? "جارٍ التسجيل..." : "تسجيل الردّ"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <NewClaimFormDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
     </div>
@@ -911,7 +1067,7 @@ function usePreauths(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("insurance_preauthorizations")
         .select(
-          "id, service_description, requested_amount, status, requested_at, approval_number, note, patient:patients(name_ar), doctor:doctors(name_ar), clinic:clinics(name)",
+          "id, service_description, requested_amount, approved_amount, status, requested_at, responded_at, approval_number, rejection_reason, valid_from, valid_to, consumed_at, note, item_id, item:items(id, name_ar), patient:patients(name_ar), doctor:doctors(name_ar), clinic:clinics(name)",
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
         .eq("organization_id", organizationId)
@@ -931,23 +1087,41 @@ function PreauthTab() {
   const [approvalNumbers, setApprovalNumbers] = useState<Record<string, string>>({});
   const preauths = usePreauths(organization?.id);
 
+  const [validTo, setValidTo] = useState<Record<string, string>>({});
+  const [rejectId, setRejectId] = useState<string | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+
+  /**
+   * الاعتماد والرفض يمرّان بـ`app_set_preauth_status` (0089).
+   *
+   * التحديث المباشر كان يقبل اعتمادًا بلا رقم موافقة من الشركة، ورفضًا بلا
+   * سبب، ويسمح بتغيير القرار بعد الردّ. والأهمّ: الموافقة كانت بلا نافذة
+   * سريان، فتبقى مفتوحة تسعين يومًا لأيّ خدمة.
+   */
   const updateStatus = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: PreauthorizationStatus }) => {
-      const { data, error } = await supabase
-        .from("insurance_preauthorizations")
-        .update({
-          status,
-          responded_at: new Date().toISOString(),
-          approval_number: status === "approved" ? approvalNumbers[id]?.trim() || null : null,
-        })
-        .eq("id", id)
-        .select("id");
+    mutationFn: async ({ id, status, reason }: { id: string; status: string; reason?: string }) => {
+      const { error } = await supabase.rpc("app_set_preauth_status", {
+        p_preauth_id: id,
+        p_status: status,
+        p_reason: reason ?? null,
+        p_amount: null,
+        p_approval_number: status === "approved" ? approvalNumbers[id]?.trim() || null : null,
+        p_valid_to: status === "approved" ? validTo[id] || null : null,
+      });
       if (error) throw error;
-      // تحديث لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر رسالة
-      // نجاح كاذبة ويعود الصف لحالته عند أول تحديث للقائمة.
-      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insurance-preauth"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["insurance-preauth"] });
+      toast({ title: "سُجّل ردّ شركة التأمين" });
+      setRejectId(null);
+      setRejectReason("");
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التسجيل",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
   });
 
   return (
@@ -974,11 +1148,26 @@ function PreauthTab() {
               <div>
                 <p className="text-sm font-semibold">{item.patient?.name_ar ?? "—"}</p>
                 <p className="text-xs text-muted-foreground">
-                  {item.service_description ?? "—"} · {Number(item.requested_amount ?? 0).toLocaleString("ar-SA")} ر.س
+                  {item.item?.name_ar ?? item.service_description ?? "—"} ·{" "}
+                  {Number(item.requested_amount ?? 0).toLocaleString("ar-SA")} ر.س
                   {item.doctor?.name_ar && ` · د. ${item.doctor.name_ar}`}
                   {item.clinic?.name && ` · ${item.clinic.name}`}
                   {item.approval_number && ` · رقم الموافقة: ${item.approval_number}`}
                 </p>
+                {!item.item_id && item.status === "pending" && (
+                  <p className="text-xs text-amber-700">
+                    بلا خدمة محدَّدة — الموافقة لن تفتح أيّ خدمة، حدّد الخدمة قبل الاعتماد.
+                  </p>
+                )}
+                {item.status === "approved" && (
+                  <p className="text-xs text-emerald-700">
+                    سارية {item.valid_from ?? "—"} ← {item.valid_to ?? "—"}
+                    {item.consumed_at && " · استُهلكت"}
+                  </p>
+                )}
+                {item.rejection_reason && (
+                  <p className="text-xs text-rose-700">سبب الرفض: {item.rejection_reason}</p>
+                )}
                 {item.note && <p className="text-xs text-muted-foreground">ملاحظة: {item.note}</p>}
               </div>
               <div className="flex items-center gap-2">
@@ -995,10 +1184,22 @@ function PreauthTab() {
                       value={approvalNumbers[item.id] ?? ""}
                       onChange={(e) => setApprovalNumbers((prev) => ({ ...prev, [item.id]: e.target.value }))}
                     />
-                    <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: item.id, status: "approved" })}>
+                    <Input
+                      className="h-8 w-36"
+                      type="date"
+                      title="سريان الموافقة حتى (الافتراضي ٩٠ يومًا)"
+                      value={validTo[item.id] ?? ""}
+                      onChange={(e) => setValidTo((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      title="اعتماد"
+                      onClick={() => updateStatus.mutate({ id: item.id, status: "approved" })}
+                    >
                       <Check className="h-3.5 w-3.5" />
                     </Button>
-                    <Button size="sm" variant="ghost" className="text-destructive" onClick={() => updateStatus.mutate({ id: item.id, status: "rejected" })}>
+                    <Button size="sm" variant="ghost" className="text-destructive" title="رفض" onClick={() => setRejectId(item.id)}>
                       <X className="h-3.5 w-3.5" />
                     </Button>
                   </>
@@ -1008,6 +1209,30 @@ function PreauthTab() {
           ))}
         </CardContent>
       </Card>
+
+      <Dialog open={Boolean(rejectId)} onOpenChange={(next) => !next && setRejectId(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>رفض الموافقة المسبقة</DialogTitle>
+            <DialogDescription>السبب يُحفظ ويظهر للطبيب وللمريض عند الاستفسار.</DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label>سبب الرفض *</Label>
+            <Textarea rows={3} value={rejectReason} onChange={(e) => setRejectReason(e.target.value)} />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              disabled={!rejectReason.trim() || updateStatus.isPending}
+              onClick={() =>
+                rejectId && updateStatus.mutate({ id: rejectId, status: "rejected", reason: rejectReason.trim() })
+              }
+            >
+              تسجيل الرفض
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <NewPreauthDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
     </div>
@@ -1031,6 +1256,47 @@ function NewPreauthDialog({
   const [doctorId, setDoctorId] = useState("");
   const [clinicId, setClinicId] = useState("");
   const [note, setNote] = useState("");
+  const [item, setItem] = useState<{ id: string; name_ar: string; price: number } | null>(null);
+  const [membershipId, setMembershipId] = useState("");
+
+  // خدمات تشترط موافقة مسبقة أوّلًا — وهي سبب وجود هذه الشاشة أصلًا.
+  const services = useQuery({
+    queryKey: ["preauth-services", organizationId],
+    enabled: open && Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("items")
+        .select("id, name_ar, price, requires_preauthorization")
+        .eq("organization_id", organizationId)
+        .eq("item_type", "service")
+        .eq("is_archived", false)
+        .eq("is_disabled", false)
+        .order("requires_preauthorization", { ascending: false })
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string; price: number; requires_preauthorization: boolean }[];
+    },
+  });
+
+  const memberships = useQuery({
+    queryKey: ["preauth-memberships", patient?.id],
+    enabled: open && Boolean(patient?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_patient_insurance_status")
+        .select("membership_id, company_name, policy_name, membership_number, remaining_amount, issue")
+        .eq("patient_id", patient?.id);
+      if (error) throw error;
+      return (data ?? []) as {
+        membership_id: string;
+        company_name: string;
+        policy_name: string;
+        membership_number: string | null;
+        remaining_amount: number | null;
+        issue: string | null;
+      }[];
+    },
+  });
 
   const doctors = useQuery({
     queryKey: ["doctors-select-preauth", organizationId],
@@ -1061,15 +1327,25 @@ function NewPreauthDialog({
     },
   });
 
+  /**
+   * الخدمة **إلزامية** الآن.
+   *
+   * قبل 0089 كان الطلب يحمل «وصف خدمة» نصًّا حرًّا ولا يحمل معرّف الخدمة،
+   * فكانت الموافقة عليه تفتح كلّ خدمة تشترط موافقة. الحقل النصّي بقي
+   * للتفاصيل، والربط صار بالمعرّف.
+   */
   const createPreauth = useMutation({
     mutationFn: async () => {
       if (!organizationId || !patient) throw new Error("اختر مريضًا أولًا");
+      if (!item) throw new Error("اختر الخدمة المطلوب الموافقة عليها");
       const { error } = await supabase.from("insurance_preauthorizations").insert({
         organization_id: organizationId,
         patient_id: patient.id,
+        membership_id: membershipId || null,
+        item_id: item.id,
         doctor_id: doctorId || null,
         clinic_id: clinicId || null,
-        service_description: description.trim() || null,
+        service_description: description.trim() || item.name_ar,
         requested_amount: amount ? Number(amount) : null,
         note: note.trim() || null,
       });
@@ -1084,6 +1360,8 @@ function NewPreauthDialog({
       setDoctorId("");
       setClinicId("");
       setNote("");
+      setItem(null);
+      setMembershipId("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -1102,8 +1380,59 @@ function NewPreauthDialog({
             <PatientPicker onSelect={(found) => setPatient({ id: found.id, name_ar: found.name_ar })} />
             {patient && <p className="text-xs text-emerald-700">المحدد: {patient.name_ar}</p>}
           </div>
+          {patient && (memberships.data ?? []).length > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <Label>العضوية التأمينية</Label>
+              <Select value={membershipId} onValueChange={setMembershipId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="اختر العضوية" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(memberships.data ?? []).map((m) => (
+                    <SelectItem key={m.membership_id} value={m.membership_id}>
+                      {m.company_name} — {m.policy_name}
+                      {m.membership_number ? ` (${m.membership_number})` : ""}
+                      {m.issue ? ` — ${m.issue}` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {membershipId &&
+                (memberships.data ?? []).find((m) => m.membership_id === membershipId)?.issue && (
+                  <p className="text-xs text-amber-700">
+                    {(memberships.data ?? []).find((m) => m.membership_id === membershipId)?.issue}
+                  </p>
+                )}
+            </div>
+          )}
           <div className="flex flex-col gap-1.5">
-            <Label>وصف الخدمة المطلوبة</Label>
+            <Label>الخدمة المطلوبة *</Label>
+            <Select
+              value={item?.id ?? ""}
+              onValueChange={(v) => {
+                const found = (services.data ?? []).find((s) => s.id === v);
+                setItem(found ? { id: found.id, name_ar: found.name_ar, price: found.price } : null);
+                if (found && !amount) setAmount(String(found.price ?? ""));
+              }}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="اختر الخدمة" />
+              </SelectTrigger>
+              <SelectContent>
+                {(services.data ?? []).map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name_ar}
+                    {s.requires_preauthorization ? " ⚠︎" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              الموافقة تخصّ هذه الخدمة وحدها ولا تفتح غيرها.
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>تفاصيل إضافية</Label>
             <Input value={description} onChange={(e) => setDescription(e.target.value)} />
           </div>
           <div className="grid grid-cols-2 gap-2">
@@ -1148,7 +1477,7 @@ function NewPreauthDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button disabled={!patient || createPreauth.isPending} onClick={() => createPreauth.mutate()}>
+          <Button disabled={!patient || !item || createPreauth.isPending} onClick={() => createPreauth.mutate()}>
             {createPreauth.isPending ? "جارٍ الحفظ..." : "إرسال الطلب"}
           </Button>
         </DialogFooter>
@@ -1424,18 +1753,7 @@ function BatchItemsDialog({
     if (!batch) return;
     const { data } = await supabase.from("insurance_claim_batch_items").select("amount").eq("batch_id", batch.id);
     const total = (data ?? []).reduce((sum, row: any) => sum + Number(row.amount), 0);
-    // كان هذا السطر بلا فحص خطأ إطلاقًا: فشل التحديث يترك **إجمالي دفعة
-    // مطالبات** خاطئًا في الشاشة وفي المطالبة المُرسَلة لشركة التأمين، بلا
-    // أي إشارة. الرقم مالي، فلا يجوز أن يفشل بصمت.
-    const { data: updatedBatch, error: totalError } = await supabase
-      .from("insurance_claim_batches")
-      .update({ total_amount: total })
-      .eq("id", batch.id)
-      .select("id");
-    if (totalError) throw totalError;
-    if (!updatedBatch || updatedBatch.length === 0) {
-      throw new Error("تعذر تحديث إجمالي الدفعة — راجع صلاحيتك ثم أعد الحساب");
-    }
+    await supabase.from("insurance_claim_batches").update({ total_amount: total }).eq("id", batch.id);
   };
 
   const searchInvoices = async () => {
@@ -1581,3 +1899,1195 @@ function BatchItemsDialog({
 // حفظ من إحداهما قد يدهس ما ضُبط في الأخرى. المكوّن الآن مستورد لا مكرَّر،
 // فيبقى مدخلا الوصول قائمَين ومصدر الحقيقة واحدًا.
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// العقود والتغطية — 0089
+//
+// قبل هذه المرحلة لم يكن في النظام شيء يربط شركة تأمين بقائمة أسعار متفق
+// عليها ولا بمدّة سريان: التسعير يقفز إلى «قائمة التأمين» بلا عقدٍ يحكمها،
+// ولا شيء يقول إن خدمةً مستثناة أو أن نسبة تحمّلها تختلف.
+// ---------------------------------------------------------------------------
+type ContractRow = {
+  id: string;
+  organization_id: string;
+  company_id: string;
+  company_name: string;
+  network_id: string | null;
+  network_name: string | null;
+  contract_number: string | null;
+  name_ar: string;
+  price_list_id: string | null;
+  price_list_name: string | null;
+  discount_percent: number;
+  default_copay_percent: number | null;
+  payment_terms_days: number | null;
+  claim_submission_days: number | null;
+  effective_from: string;
+  effective_to: string | null;
+  status: string;
+  is_in_effect: boolean;
+  days_to_expiry: number | null;
+  coverage_rules_count: number;
+  notes: string | null;
+};
+
+const CONTRACT_STATUS_LABELS: Record<string, string> = {
+  draft: "مسودة",
+  active: "ساري",
+  suspended: "موقوف",
+  expired: "منتهٍ",
+  terminated: "مفسوخ",
+};
+
+const COVERAGE_LABELS: Record<string, string> = {
+  covered: "مغطّى",
+  excluded: "مستثنى",
+  requires_preauth: "يشترط موافقة مسبقة",
+};
+
+const SCOPE_LABELS: Record<string, string> = {
+  item: "خدمة بعينها",
+  category: "فئة",
+  service_type: "نوع خدمة",
+  all: "كل الخدمات",
+};
+
+function useContracts(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["insurance-contracts", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_insurance_contracts")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("effective_from", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as ContractRow[];
+    },
+  });
+}
+
+function ContractsTab() {
+  const { organization } = useOrganizationAccess();
+  const { can } = usePermissions();
+  const contracts = useContracts(organization?.id);
+  const [editing, setEditing] = useState<ContractRow | null>(null);
+  const [createOpen, setCreateOpen] = useState(false);
+  const [coverageFor, setCoverageFor] = useState<ContractRow | null>(null);
+
+  const canManage = can("insurance.contracts");
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-muted-foreground">
+          العقد يحكم التسعير والتغطية ونسبة التحمّل — ولا يُقبل عقدان ساريان للشركة نفسها في
+          المدّة نفسها.
+        </p>
+        {canManage && (
+          <Button onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            عقد جديد
+          </Button>
+        )}
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>عقود شركات التأمين</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {contracts.isLoading && <Skeleton className="h-40 w-full" />}
+          {!contracts.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>الشركة</TableHead>
+                  <TableHead>العقد</TableHead>
+                  <TableHead>قائمة الأسعار</TableHead>
+                  <TableHead>التحمّل</TableHead>
+                  <TableHead>السريان</TableHead>
+                  <TableHead>التغطية</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(contracts.data ?? []).map((c) => (
+                  <TableRow key={c.id}>
+                    <TableCell className="font-medium">
+                      {c.company_name}
+                      {c.network_name && (
+                        <span className="block text-xs text-muted-foreground">{c.network_name}</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {c.name_ar}
+                      {c.contract_number && (
+                        <span className="block text-xs text-muted-foreground">{c.contract_number}</span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {c.price_list_name ?? (
+                        <span className="text-xs text-amber-700">بلا قائمة — يُستعمل خصم العقد فقط</span>
+                      )}
+                      {Number(c.discount_percent) > 0 && (
+                        <span className="block text-xs text-muted-foreground">
+                          خصم {c.discount_percent}٪
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      {c.default_copay_percent != null ? `${c.default_copay_percent}٪` : "—"}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col gap-1">
+                        <Badge variant={c.is_in_effect ? "success" : "secondary"}>
+                          {CONTRACT_STATUS_LABELS[c.status] ?? c.status}
+                        </Badge>
+                        <span className="text-xs text-muted-foreground">
+                          {c.effective_from} ← {c.effective_to ?? "مفتوح"}
+                        </span>
+                        {c.days_to_expiry != null && c.days_to_expiry >= 0 && c.days_to_expiry <= 60 && (
+                          <span className="text-xs text-amber-700">ينتهي خلال {c.days_to_expiry} يومًا</span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <Button size="sm" variant="ghost" onClick={() => setCoverageFor(c)}>
+                        {c.coverage_rules_count} قاعدة
+                      </Button>
+                    </TableCell>
+                    <TableCell>
+                      {canManage && (
+                        <Button size="sm" variant="ghost" onClick={() => setEditing(c)}>
+                          تعديل
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(contracts.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
+                      لا توجد عقود بعد. بلا عقدٍ ساري يرجع التسعير إلى قائمة التأمين أو الأساس.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <ContractDialog
+        open={createOpen || Boolean(editing)}
+        contract={editing}
+        organizationId={organization?.id}
+        onOpenChange={(next) => {
+          if (!next) {
+            setCreateOpen(false);
+            setEditing(null);
+          }
+        }}
+      />
+      <CoverageRulesDialog contract={coverageFor} onClose={() => setCoverageFor(null)} />
+    </div>
+  );
+}
+
+function ContractDialog({
+  open,
+  contract,
+  organizationId,
+  onOpenChange,
+}: {
+  open: boolean;
+  contract: ContractRow | null;
+  organizationId: string | undefined;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [form, setForm] = useState<Record<string, string>>({});
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
+
+  const key = contract?.id ?? "new";
+  if (open && loadedFor !== key) {
+    setLoadedFor(key);
+    setForm({
+      company_id: contract?.company_id ?? "",
+      network_id: contract?.network_id ?? "",
+      name_ar: contract?.name_ar ?? "",
+      contract_number: contract?.contract_number ?? "",
+      price_list_id: contract?.price_list_id ?? "",
+      discount_percent: String(contract?.discount_percent ?? 0),
+      default_copay_percent:
+        contract?.default_copay_percent != null ? String(contract.default_copay_percent) : "",
+      payment_terms_days: contract?.payment_terms_days != null ? String(contract.payment_terms_days) : "",
+      claim_submission_days:
+        contract?.claim_submission_days != null ? String(contract.claim_submission_days) : "",
+      effective_from: contract?.effective_from ?? new Date().toISOString().slice(0, 10),
+      effective_to: contract?.effective_to ?? "",
+      status: contract?.status ?? "active",
+      termination_reason: "",
+      notes: contract?.notes ?? "",
+    });
+  }
+  if (!open && loadedFor !== null) setLoadedFor(null);
+
+  const set = (k: string, v: string) => setForm((prev) => ({ ...prev, [k]: v }));
+
+  const companies = useQuery({
+    queryKey: ["contract-companies", organizationId],
+    enabled: open && Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("insurance_companies")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
+
+  const networks = useQuery({
+    queryKey: ["contract-networks", form.company_id],
+    enabled: open && Boolean(form.company_id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("insurance_networks")
+        .select("id, name_ar")
+        .eq("company_id", form.company_id)
+        .eq("is_active", true)
+        .order("sort_order");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
+
+  const priceLists = useQuery({
+    queryKey: ["contract-price-lists", organizationId, form.company_id],
+    enabled: open && Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("price_lists")
+        .select("id, name, list_kind, insurance_company_id")
+        .eq("organization_id", organizationId)
+        .eq("is_active", true)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as {
+        id: string;
+        name: string;
+        list_kind: string;
+        insurance_company_id: string | null;
+      }[];
+    },
+  });
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد منشأة نشطة");
+      if (!form.company_id) throw new Error("اختر شركة التأمين");
+      if (!form.name_ar?.trim()) throw new Error("اسم العقد مطلوب");
+
+      const payload = {
+        organization_id: organizationId,
+        company_id: form.company_id,
+        network_id: form.network_id || null,
+        name_ar: form.name_ar.trim(),
+        contract_number: form.contract_number?.trim() || null,
+        price_list_id: form.price_list_id || null,
+        discount_percent: Number(form.discount_percent) || 0,
+        default_copay_percent: form.default_copay_percent ? Number(form.default_copay_percent) : null,
+        payment_terms_days: form.payment_terms_days ? Number(form.payment_terms_days) : null,
+        claim_submission_days: form.claim_submission_days ? Number(form.claim_submission_days) : null,
+        effective_from: form.effective_from,
+        effective_to: form.effective_to || null,
+        status: form.status,
+        termination_reason: form.termination_reason?.trim() || null,
+        notes: form.notes?.trim() || null,
+      };
+
+      if (contract) {
+        const { data, error } = await supabase
+          .from("insurance_contracts")
+          .update(payload)
+          .eq("id", contract.id)
+          .select("id");
+        if (error) throw error;
+        if (!data || data.length === 0) throw new Error("لم يُحفظ التعديل — راجع صلاحيتك");
+      } else {
+        const { error } = await supabase.from("insurance_contracts").insert(payload);
+        if (error) throw error;
+      }
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["insurance-contracts", organizationId] });
+      toast({ title: contract ? "حُدِّث العقد" : "حُفظ العقد" });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{contract ? `تعديل: ${contract.name_ar}` : "عقد تأمين جديد"}</DialogTitle>
+          <DialogDescription>
+            سعر العقد يسبق قائمة التأمين وقائمة الفرع وقائمة الأساس. عقدان ساريان للشركة نفسها
+            مرفوضان في القاعدة.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>شركة التأمين *</Label>
+            <Select value={form.company_id ?? ""} onValueChange={(v) => set("company_id", v)}>
+              <SelectTrigger>
+                <SelectValue placeholder="اختر الشركة" />
+              </SelectTrigger>
+              <SelectContent>
+                {(companies.data ?? []).map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name_ar}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الشبكة</Label>
+            <Select
+              value={form.network_id || "none"}
+              onValueChange={(v) => set("network_id", v === "none" ? "" : v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="كل الشبكات" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">كل الشبكات</SelectItem>
+                {(networks.data ?? []).map((n) => (
+                  <SelectItem key={n.id} value={n.id}>
+                    {n.name_ar}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>اسم العقد *</Label>
+            <Input value={form.name_ar ?? ""} onChange={(e) => set("name_ar", e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>رقم العقد</Label>
+            <Input
+              value={form.contract_number ?? ""}
+              onChange={(e) => set("contract_number", e.target.value)}
+              dir="ltr"
+            />
+          </div>
+          <div className="col-span-2 flex flex-col gap-1.5">
+            <Label>قائمة الأسعار المتفق عليها</Label>
+            <Select
+              value={form.price_list_id || "none"}
+              onValueChange={(v) => set("price_list_id", v === "none" ? "" : v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="بلا قائمة خاصة" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">بلا قائمة خاصة — يُطبَّق خصم العقد فقط</SelectItem>
+                {(priceLists.data ?? []).map((pl) => (
+                  <SelectItem key={pl.id} value={pl.id}>
+                    {pl.name}
+                    {pl.list_kind === "insurance" ? " (تأمين)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>خصم العقد ٪</Label>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={form.discount_percent ?? "0"}
+              onChange={(e) => set("discount_percent", e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>نسبة تحمّل المريض ٪</Label>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={form.default_copay_percent ?? ""}
+              onChange={(e) => set("default_copay_percent", e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>مهلة السداد (أيام)</Label>
+            <Input
+              type="number"
+              min={0}
+              value={form.payment_terms_days ?? ""}
+              onChange={(e) => set("payment_terms_days", e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>مهلة تقديم المطالبة (أيام)</Label>
+            <Input
+              type="number"
+              min={0}
+              value={form.claim_submission_days ?? ""}
+              onChange={(e) => set("claim_submission_days", e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>يسري من *</Label>
+            <Input
+              type="date"
+              value={form.effective_from ?? ""}
+              onChange={(e) => set("effective_from", e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>حتى</Label>
+            <Input
+              type="date"
+              value={form.effective_to ?? ""}
+              onChange={(e) => set("effective_to", e.target.value)}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الحالة</Label>
+            <Select value={form.status ?? "active"} onValueChange={(v) => set("status", v)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(CONTRACT_STATUS_LABELS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {["terminated", "suspended"].includes(form.status ?? "") &&
+            contract?.status !== form.status && (
+              <div className="col-span-2 flex flex-col gap-1.5">
+                <Label>سبب الفسخ أو الإيقاف *</Label>
+                <Textarea
+                  rows={2}
+                  value={form.termination_reason ?? ""}
+                  onChange={(e) => set("termination_reason", e.target.value)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  عقدٌ ميت بلا سبب مكتوب أوّل ما يُسأل عنه حين تعود الشركة للتفاوض.
+                </p>
+              </div>
+            )}
+          <div className="col-span-2 flex flex-col gap-1.5">
+            <Label>ملاحظات</Label>
+            <Textarea rows={2} value={form.notes ?? ""} onChange={(e) => set("notes", e.target.value)} />
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button
+            disabled={!form.company_id || !form.name_ar?.trim() || save.isPending}
+            onClick={() => save.mutate()}
+          >
+            {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CoverageRulesDialog({
+  contract,
+  onClose,
+}: {
+  contract: ContractRow | null;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { can } = usePermissions();
+  const [scope, setScope] = useState("item");
+  const [itemId, setItemId] = useState("");
+  const [serviceType, setServiceType] = useState("");
+  const [coverage, setCoverage] = useState("covered");
+  const [copay, setCopay] = useState("");
+  const [maxAmount, setMaxAmount] = useState("");
+  const [maxCount, setMaxCount] = useState("");
+  const [waitingDays, setWaitingDays] = useState("");
+  const [note, setNote] = useState("");
+
+  const canManage = can("insurance.contracts");
+
+  const rules = useQuery({
+    queryKey: ["coverage-rules", contract?.id],
+    enabled: Boolean(contract?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("insurance_coverage_rules")
+        .select(
+          "id, scope, coverage, copay_percent, max_amount_per_service, max_count_per_year, waiting_period_days, medical_service_type, note_ar, is_active, item:items(name_ar)",
+        )
+        .eq("contract_id", contract?.id)
+        .eq("is_active", true)
+        .order("scope");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const services = useQuery({
+    queryKey: ["coverage-services", contract?.organization_id],
+    enabled: Boolean(contract?.organization_id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("items")
+        .select("id, name_ar")
+        .eq("organization_id", contract?.organization_id)
+        .eq("item_type", "service")
+        .eq("is_archived", false)
+        .order("name_ar")
+        .limit(500);
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
+
+  const addRule = useMutation({
+    mutationFn: async () => {
+      if (!contract) throw new Error("لا عقد محدَّد");
+      if (scope === "item" && !itemId) throw new Error("اختر الخدمة");
+      if (scope === "service_type" && !serviceType) throw new Error("اختر نوع الخدمة");
+      const { error } = await supabase.from("insurance_coverage_rules").insert({
+        organization_id: contract.organization_id,
+        contract_id: contract.id,
+        scope,
+        item_id: scope === "item" ? itemId : null,
+        medical_service_type: scope === "service_type" ? serviceType : null,
+        coverage,
+        copay_percent: copay ? Number(copay) : null,
+        max_amount_per_service: maxAmount ? Number(maxAmount) : null,
+        max_count_per_year: maxCount ? Number(maxCount) : null,
+        waiting_period_days: waitingDays ? Number(waitingDays) : null,
+        note_ar: note.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["coverage-rules", contract?.id] });
+      queryClient.invalidateQueries({ queryKey: ["insurance-contracts"] });
+      toast({ title: "أُضيفت قاعدة التغطية" });
+      setItemId("");
+      setServiceType("");
+      setCopay("");
+      setMaxAmount("");
+      setMaxCount("");
+      setWaitingDays("");
+      setNote("");
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذرت الإضافة",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  const disableRule = useMutation({
+    mutationFn: async (id: string) => {
+      const { data, error } = await supabase
+        .from("insurance_coverage_rules")
+        .update({ is_active: false })
+        .eq("id", id)
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["coverage-rules", contract?.id] });
+      queryClient.invalidateQueries({ queryKey: ["insurance-contracts"] });
+    },
+  });
+
+  return (
+    <Dialog open={Boolean(contract)} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>تغطية العقد: {contract?.name_ar}</DialogTitle>
+          <DialogDescription>
+            الأخصّ يغلب: قاعدة الخدمة تسبق قاعدة الفئة، والفئة تسبق نوع الخدمة، ونوع الخدمة يسبق
+            «كل الخدمات».
+          </DialogDescription>
+        </DialogHeader>
+
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>النطاق</TableHead>
+              <TableHead>التغطية</TableHead>
+              <TableHead>التحمّل</TableHead>
+              <TableHead>السقف</TableHead>
+              <TableHead>العدد سنويًا</TableHead>
+              {canManage && <TableHead />}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(rules.data ?? []).map((r) => (
+              <TableRow key={r.id}>
+                <TableCell>
+                  {SCOPE_LABELS[r.scope] ?? r.scope}
+                  <span className="block text-xs text-muted-foreground">
+                    {r.item?.name_ar ?? r.medical_service_type ?? "—"}
+                  </span>
+                </TableCell>
+                <TableCell>
+                  <Badge variant={r.coverage === "excluded" ? "destructive" : "secondary"}>
+                    {COVERAGE_LABELS[r.coverage] ?? r.coverage}
+                  </Badge>
+                  {r.note_ar && <span className="block text-xs text-muted-foreground">{r.note_ar}</span>}
+                </TableCell>
+                <TableCell>{r.copay_percent != null ? `${r.copay_percent}٪` : "—"}</TableCell>
+                <TableCell>{r.max_amount_per_service ?? "—"}</TableCell>
+                <TableCell>
+                  {r.max_count_per_year ?? "—"}
+                  {r.waiting_period_days ? (
+                    <span className="block text-xs text-muted-foreground">
+                      انتظار {r.waiting_period_days} يومًا
+                    </span>
+                  ) : null}
+                </TableCell>
+                {canManage && (
+                  <TableCell>
+                    <Button size="sm" variant="ghost" onClick={() => disableRule.mutate(r.id)}>
+                      تعطيل
+                    </Button>
+                  </TableCell>
+                )}
+              </TableRow>
+            ))}
+            {(rules.data ?? []).length === 0 && (
+              <TableRow>
+                <TableCell colSpan={canManage ? 6 : 5} className="py-6 text-center text-sm text-muted-foreground">
+                  لا قواعد بعد — كل الخدمات مغطّاة بنسبة تحمّل العقد.
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+
+        {canManage && (
+          <div className="flex flex-col gap-3 rounded-md border p-3">
+            <h4 className="text-sm font-medium">قاعدة جديدة</h4>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label>النطاق</Label>
+                <Select value={scope} onValueChange={setScope}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(SCOPE_LABELS)
+                      .filter(([v]) => v !== "category")
+                      .map(([value, label]) => (
+                        <SelectItem key={value} value={value}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>التغطية</Label>
+                <Select value={coverage} onValueChange={setCoverage}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(COVERAGE_LABELS).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {scope === "item" && (
+                <div className="col-span-2 flex flex-col gap-1.5">
+                  <Label>الخدمة *</Label>
+                  <Select value={itemId} onValueChange={setItemId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="اختر الخدمة" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(services.data ?? []).map((s) => (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.name_ar}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              {scope === "service_type" && (
+                <div className="col-span-2 flex flex-col gap-1.5">
+                  <Label>نوع الخدمة *</Label>
+                  <Select value={serviceType} onValueChange={setServiceType}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="اختر النوع" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {[
+                        ["consultation", "كشف"],
+                        ["follow_up", "مراجعة"],
+                        ["procedure", "إجراء"],
+                        ["surgery", "جراحة"],
+                        ["laboratory", "مختبر"],
+                        ["radiology", "أشعة"],
+                        ["dental", "أسنان"],
+                        ["physiotherapy", "علاج طبيعي"],
+                        ["vaccination", "تطعيم"],
+                        ["nursing", "تمريض"],
+                        ["dressing", "تضميد"],
+                        ["injection", "حقن"],
+                        ["screening", "فحص"],
+                        ["home_visit", "زيارة منزلية"],
+                        ["other", "أخرى"],
+                      ].map(([value, label]) => (
+                        <SelectItem key={value} value={value}>
+                          {label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+              <div className="flex flex-col gap-1.5">
+                <Label>نسبة التحمّل ٪</Label>
+                <Input type="number" min={0} max={100} value={copay} onChange={(e) => setCopay(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>سقف الخدمة</Label>
+                <Input type="number" min={0} value={maxAmount} onChange={(e) => setMaxAmount(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>العدد المسموح سنويًا</Label>
+                <Input type="number" min={0} value={maxCount} onChange={(e) => setMaxCount(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>فترة انتظار (أيام)</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={waitingDays}
+                  onChange={(e) => setWaitingDays(e.target.value)}
+                  title="العضوية الحديثة لا تُغطّى قبل مرور هذه المدّة"
+                />
+              </div>
+              <div className="col-span-2 flex flex-col gap-1.5">
+                <Label>ملاحظة تظهر للمستخدم</Label>
+                <Input value={note} onChange={(e) => setNote(e.target.value)} />
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button size="sm" disabled={addRule.isPending} onClick={() => addRule.mutate()}>
+                <Plus className="h-4 w-4" />
+                إضافة القاعدة
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// التحقّق من التغطية قبل الحجز
+//
+// الخطوة التي كانت مفقودة تمامًا: قبل 0089 لم يكن في النظام شيء يجيب سؤال
+// موظف الاستقبال البديهيّ — «هل هذه الخدمة مغطّاة لهذا المريض، وكم يدفع؟».
+// كانت الإجابة تُكتشف عند الفوترة، بعد تنفيذ الخدمة.
+// ---------------------------------------------------------------------------
+function CoverageCheckCard() {
+  const { organization } = useOrganizationAccess();
+  const organizationId = organization?.id;
+  const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
+  const [membershipId, setMembershipId] = useState("");
+  const [itemId, setItemId] = useState("");
+
+  const memberships = useQuery({
+    queryKey: ["coverage-check-memberships", patient?.id],
+    enabled: Boolean(patient?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_patient_insurance_status")
+        .select(
+          "membership_id, company_id, company_name, policy_name, network_name, class_name, membership_number, annual_limit, used_amount, remaining_amount, copay_percent, contract_name, has_active_contract, expiry_date, issue",
+        )
+        .eq("patient_id", patient?.id);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const services = useQuery({
+    queryKey: ["coverage-check-services", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("items")
+        .select("id, name_ar")
+        .eq("organization_id", organizationId)
+        .eq("item_type", "service")
+        .eq("is_archived", false)
+        .eq("is_disabled", false)
+        .order("name_ar")
+        .limit(500);
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
+
+  const membership = (memberships.data ?? []).find((m) => m.membership_id === membershipId);
+
+  // السعر المُطبَّق فعلًا بترتيب: عقد الشركة ← قائمة التأمين ← الفرع ← الأساس
+  const price = useQuery({
+    queryKey: ["coverage-check-price", organizationId, itemId, membership?.company_id],
+    enabled: Boolean(organizationId && itemId),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_resolve_item_price_v2", {
+        p_organization_id: organizationId,
+        p_item_id: itemId,
+        p_branch_id: null,
+        p_insurance_company_id: membership?.company_id ?? null,
+        p_external_client_id: null,
+      });
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+      return row as {
+        price: number;
+        discount_percent: number;
+        source_kind: string;
+        source_list_name: string | null;
+      } | null;
+    },
+  });
+
+  const coverage = useQuery({
+    queryKey: ["coverage-check", membershipId, itemId, price.data?.price],
+    enabled: Boolean(membershipId && itemId),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_insurance_coverage", {
+        p_membership_id: membershipId,
+        p_item_id: itemId,
+        p_amount: price.data?.price ?? null,
+      });
+      if (error) throw error;
+      return data as {
+        ok: boolean;
+        covered: boolean;
+        amount: number;
+        copay_percent: number;
+        patient_share: number;
+        insurer_share: number;
+        requires_preauth: boolean;
+        has_preauth: boolean;
+        approval_number: string | null;
+        contract_name: string | null;
+        annual_remaining: number | null;
+        blocks: string[];
+        warnings: string[];
+      };
+    },
+  });
+
+  const PRICE_SOURCE_LABELS: Record<string, string> = {
+    contract: "قائمة العقد",
+    insurance: "قائمة التأمين",
+    corporate: "قائمة جهة",
+    branch: "قائمة الفرع",
+    base: "قائمة الأساس",
+    item: "سعر الصنف",
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>التحقّق من التغطية</CardTitle>
+        <CardDescription>
+          قبل الحجز لا بعد التنفيذ: هل الخدمة مغطّاة لهذا المريض، وكم يدفع، وهل تحتاج موافقة مسبقة
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>المريض</Label>
+            <PatientPicker
+              onSelect={(found) => {
+                setPatient({ id: found.id, name_ar: found.name_ar });
+                setMembershipId("");
+              }}
+            />
+            {patient && <p className="text-xs text-emerald-700">{patient.name_ar}</p>}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>العضوية التأمينية</Label>
+            <Select value={membershipId} onValueChange={setMembershipId} disabled={!patient}>
+              <SelectTrigger>
+                <SelectValue placeholder={patient ? "اختر العضوية" : "اختر مريضًا أولًا"} />
+              </SelectTrigger>
+              <SelectContent>
+                {(memberships.data ?? []).map((m) => (
+                  <SelectItem key={m.membership_id} value={m.membership_id}>
+                    {m.company_name} — {m.policy_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {patient && (memberships.data ?? []).length === 0 && !memberships.isLoading && (
+              <p className="text-xs text-amber-700">لا عضوية تأمينية لهذا المريض — الحالة نقدية.</p>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الخدمة</Label>
+            <Select value={itemId} onValueChange={setItemId}>
+              <SelectTrigger>
+                <SelectValue placeholder="اختر الخدمة" />
+              </SelectTrigger>
+              <SelectContent>
+                {(services.data ?? []).map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {s.name_ar}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {membership && (
+          <div className="rounded-md border p-3 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <Badge variant={membership.has_active_contract ? "success" : "warning"}>
+                {membership.has_active_contract ? `عقد: ${membership.contract_name}` : "لا عقد ساري"}
+              </Badge>
+              {membership.network_name && <Badge variant="secondary">{membership.network_name}</Badge>}
+              {membership.class_name && <Badge variant="secondary">{membership.class_name}</Badge>}
+              {membership.issue && <Badge variant="destructive">{membership.issue}</Badge>}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              العضوية {membership.membership_number ?? "—"} · تنتهي {membership.expiry_date ?? "—"} · نسبة
+              التحمّل {membership.copay_percent}٪
+            </p>
+            {membership.annual_limit != null && (
+              <p className="text-xs text-muted-foreground">
+                السقف السنوي {Number(membership.annual_limit).toLocaleString("ar-SA")} · المستهلك{" "}
+                {Number(membership.used_amount ?? 0).toLocaleString("ar-SA")} · المتبقّي{" "}
+                {Number(membership.remaining_amount ?? 0).toLocaleString("ar-SA")} ر.س
+              </p>
+            )}
+          </div>
+        )}
+
+        {itemId && price.data && (
+          <p className="text-xs text-muted-foreground">
+            السعر المُطبَّق {Number(price.data.price).toLocaleString("ar-SA")} ر.س من{" "}
+            {PRICE_SOURCE_LABELS[price.data.source_kind] ?? price.data.source_kind}
+            {price.data.source_list_name ? ` — ${price.data.source_list_name}` : ""}
+          </p>
+        )}
+
+        {coverage.isLoading && <Skeleton className="h-24 w-full" />}
+        {coverage.data && (
+          <div
+            className={`rounded-md border p-3 ${
+              coverage.data.covered ? "border-emerald-300 bg-emerald-50" : "border-rose-300 bg-rose-50"
+            }`}
+          >
+            <p className="text-sm font-semibold">
+              {coverage.data.covered ? "مغطّاة" : "غير مغطّاة"}
+              {coverage.data.requires_preauth &&
+                (coverage.data.has_preauth
+                  ? ` · موافقة سارية ${coverage.data.approval_number ?? ""}`
+                  : " · تحتاج موافقة مسبقة")}
+            </p>
+            <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
+              <div>
+                <span className="block text-xs text-muted-foreground">المبلغ</span>
+                {Number(coverage.data.amount).toLocaleString("ar-SA")} ر.س
+              </div>
+              <div>
+                <span className="block text-xs text-muted-foreground">
+                  على المريض ({coverage.data.copay_percent}٪)
+                </span>
+                <span className="font-semibold">
+                  {Number(coverage.data.patient_share).toLocaleString("ar-SA")} ر.س
+                </span>
+              </div>
+              <div>
+                <span className="block text-xs text-muted-foreground">على الشركة</span>
+                {Number(coverage.data.insurer_share).toLocaleString("ar-SA")} ر.س
+              </div>
+            </div>
+            {(coverage.data.blocks ?? []).length > 0 && (
+              <ul className="mt-2 list-inside list-disc text-xs text-rose-800">
+                {coverage.data.blocks.map((b, i) => (
+                  <li key={i}>{b}</li>
+                ))}
+              </ul>
+            )}
+            {(coverage.data.warnings ?? []).length > 0 && (
+              <ul className="mt-2 list-inside list-disc text-xs text-amber-800">
+                {coverage.data.warnings.map((w, i) => (
+                  <li key={i}>{w}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// سجل المطالبات — ما رُدَّ، وما يحتاج إعادة تقديم، وما ركد
+// ---------------------------------------------------------------------------
+function ClaimRegisterCard() {
+  const { organization } = useOrganizationAccess();
+  const [filter, setFilter] = useState("attention");
+
+  const register = useQuery({
+    queryKey: ["claim-register", organization?.id],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_claim_register")
+        .select("*")
+        .eq("organization_id", organization?.id)
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const rows = (register.data ?? []).filter((r) => {
+    if (filter === "attention") return r.needs_resubmission || r.is_stale;
+    if (filter === "rejected") return ["rejected", "partially_approved"].includes(r.status);
+    return true;
+  });
+
+  const totals = (register.data ?? []).reduce(
+    (acc, r) => {
+      acc.claimed += Number(r.claimed_amount ?? 0);
+      acc.approved += Number(r.approved_amount ?? 0);
+      acc.rejected += Number(r.rejected_amount ?? 0);
+      return acc;
+    },
+    { claimed: 0, approved: 0, rejected: 0 },
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>سجل المطالبات</CardTitle>
+        <CardDescription>
+          المطالَب {totals.claimed.toLocaleString("ar-SA")} · المعتمَد{" "}
+          {totals.approved.toLocaleString("ar-SA")} · المرفوض {totals.rejected.toLocaleString("ar-SA")} ر.س
+        </CardDescription>
+        <div className="mt-2">
+          <Select value={filter} onValueChange={setFilter}>
+            <SelectTrigger className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="attention">تحتاج عملًا</SelectItem>
+              <SelectItem value="rejected">مرفوضة أو جزئية</SelectItem>
+              <SelectItem value="all">الكل</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {register.isLoading && <Skeleton className="h-32 w-full" />}
+        {!register.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>المريض</TableHead>
+                <TableHead>الشركة</TableHead>
+                <TableHead>المبلغ</TableHead>
+                <TableHead>الحالة</TableHead>
+                <TableHead>الملاحظة</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.form_id}>
+                  <TableCell className="font-medium">
+                    {r.patient_name}
+                    {r.file_number && (
+                      <span className="block text-xs text-muted-foreground">ملف {r.file_number}</span>
+                    )}
+                  </TableCell>
+                  <TableCell>{r.company_name ?? "—"}</TableCell>
+                  <TableCell>
+                    {Number(r.claimed_amount ?? 0).toLocaleString("ar-SA")}
+                    {r.approved_amount != null && (
+                      <span className="block text-xs text-emerald-700">
+                        معتمَد {Number(r.approved_amount).toLocaleString("ar-SA")}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge className={CLAIM_STATUS_BADGE[r.status] ?? ""}>
+                      {CLAIM_STATUS_LABELS[r.status] ?? r.status}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {r.needs_resubmission && (
+                      <span className="block text-rose-700">مرفوضة ولم يُعَد تقديمها</span>
+                    )}
+                    {r.is_stale && <span className="block text-amber-700">راكدة أكثر من ٣٠ يومًا</span>}
+                    {r.rejection_reason && (
+                      <span className="block text-muted-foreground">{r.rejection_reason}</span>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {rows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-6 text-center text-sm text-muted-foreground">
+                    لا مطالبات تحتاج عملًا.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

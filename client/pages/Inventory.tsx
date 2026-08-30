@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeftRight, Plus, X } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { usePermissions } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
 import {
   allocateFifo,
@@ -22,12 +23,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -91,6 +94,7 @@ export default function Inventory() {
           <TabsTrigger value="onhand">الموجودات</TabsTrigger>
           <TabsTrigger value="movements">سجل الحركات</TabsTrigger>
           <TabsTrigger value="lots">الدفعات والصلاحية</TabsTrigger>
+          <TabsTrigger value="alerts">التنبيهات</TabsTrigger>
           <TabsTrigger value="transfers">المناقلات</TabsTrigger>
         </TabsList>
         <TabsContent value="onhand" className="mt-4">
@@ -101,6 +105,9 @@ export default function Inventory() {
         </TabsContent>
         <TabsContent value="lots" className="mt-4">
           <LotsTab />
+        </TabsContent>
+        <TabsContent value="alerts" className="mt-4">
+          <StockAlertsTab />
         </TabsContent>
         <TabsContent value="transfers" className="mt-4">
           <TransfersTab />
@@ -463,7 +470,9 @@ function useInventoryLots(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("inventory_lots")
-        .select("id, lot_number, qty_remaining, expiry_date, unit_cost, item:items(name_ar), warehouse:warehouses(name)")
+        .select(
+          "id, lot_number, qty_remaining, reserved_quantity, status, expiry_date, unit_cost, selling_price, item:items(name_ar), warehouse:warehouses(name)",
+        )
         .eq("organization_id", organizationId)
         .gt("qty_remaining", 0)
         .order("expiry_date", { ascending: true, nullsFirst: false });
@@ -472,6 +481,12 @@ function useInventoryLots(organizationId: string | undefined) {
     },
   });
 }
+
+const LOT_STATUS_LABELS: Record<string, string> = {
+  quarantined: "محجورة",
+  recalled: "مسحوبة",
+  expired: "منتهية",
+};
 
 /** نطاقات تنبيه الصلاحية — كانت العتبة مثبَّتة 30 يومًا في الكود (لقطة 75). */
 const EXPIRY_WINDOWS = [
@@ -483,9 +498,12 @@ const EXPIRY_WINDOWS = [
 
 function LotsTab() {
   const { organization } = useOrganizationAccess();
+  const { can } = usePermissions();
   const lots = useInventoryLots(organization?.id);
   const [expiryWindow, setExpiryWindow] = useState("90");
   const [nearExpiryOnly, setNearExpiryOnly] = useState(false);
+  const [adjustLot, setAdjustLot] = useState<any | null>(null);
+  const canAdjust = can("inventory.adjust");
 
   const threshold = new Date();
   threshold.setDate(threshold.getDate() + Number(expiryWindow));
@@ -540,7 +558,10 @@ function LotsTab() {
                 <TableHead>المستودع</TableHead>
                 <TableHead>رقم الدفعة</TableHead>
                 <TableHead>المتبقي</TableHead>
+                <TableHead>المحجوز</TableHead>
+                <TableHead>المتاح</TableHead>
                 <TableHead>تاريخ الانتهاء</TableHead>
+                {canAdjust && <TableHead />}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -554,20 +575,273 @@ function LotsTab() {
                     <TableCell>{warehouse?.name ?? "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{lot.lot_number ?? "—"}</TableCell>
                     <TableCell>{lot.qty_remaining}</TableCell>
+                    <TableCell>{Number(lot.reserved_quantity ?? 0)}</TableCell>
+                    <TableCell className="font-medium">
+                      {Number(lot.qty_remaining) - Number(lot.reserved_quantity ?? 0)}
+                    </TableCell>
                     <TableCell>
                       {lot.expiry_date ? (
                         <Badge variant={isNearExpiry ? "warning" : "secondary"}>{lot.expiry_date}</Badge>
                       ) : (
                         "بلا تاريخ انتهاء"
                       )}
+                      {lot.status && lot.status !== "available" && (
+                        <Badge variant="destructive" className="mr-2">
+                          {LOT_STATUS_LABELS[lot.status as string] ?? lot.status}
+                        </Badge>
+                      )}
                     </TableCell>
+                    {canAdjust && (
+                      <TableCell>
+                        <Button size="sm" variant="ghost" onClick={() => setAdjustLot(lot)}>
+                          تسوية
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 );
               })}
               {visibleLots.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={canAdjust ? 8 : 7} className="py-8 text-center text-sm text-muted-foreground">
                     لا توجد دفعات مطابقة.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+      <LotAdjustDialog lot={adjustLot} onClose={() => setAdjustLot(null)} organizationId={organization?.id} />
+    </Card>
+  );
+}
+
+/**
+ * تسوية دفعة بعينها عبر `app_adjust_stock` (0088).
+ *
+ * التسوية القديمة كانت على مستوى **الصنف**: تختار الكمية والاتجاه، والعميل
+ * يوزّعها على الدفعات. ذلك يصلح للجرد العام، ولا يصلح حين تكسر عبوةٌ بعينها
+ * أو تُتلَف دفعةٌ بعينها — وهو أكثر ما يحدث في صيدلية. والأهم أن الدالّة
+ * تمنع النزول دون الكمية المحجوزة لوصفات لم تُصرَف بعد.
+ */
+function LotAdjustDialog({
+  lot,
+  onClose,
+  organizationId,
+}: {
+  lot: any | null;
+  onClose: () => void;
+  organizationId: string | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [direction, setDirection] = useState<"in" | "out">("out");
+  const [qty, setQty] = useState("1");
+  const [reason, setReason] = useState("");
+
+  const adjust = useMutation({
+    mutationFn: async () => {
+      if (!lot) throw new Error("لا دفعة محدَّدة");
+      const amount = Number(qty);
+      if (!Number.isFinite(amount) || amount <= 0) throw new Error("الكمية يجب أن تكون أكبر من صفر");
+      if (!reason.trim()) throw new Error("اكتب سبب التسوية");
+      const { error } = await supabase.rpc("app_adjust_stock", {
+        p_lot_id: lot.id,
+        p_qty: direction === "in" ? amount : -amount,
+        p_reason: reason.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["inventory-lots", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["inventory-movements", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["stock-alerts", organizationId] });
+      toast({ title: "سُجّلت التسوية" });
+      setQty("1");
+      setReason("");
+      onClose();
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذرت التسوية",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const item = lot ? (Array.isArray(lot.item) ? lot.item[0] : lot.item) : null;
+  const available = lot ? Number(lot.qty_remaining) - Number(lot.reserved_quantity ?? 0) : 0;
+
+  return (
+    <Dialog open={Boolean(lot)} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>تسوية دفعة</DialogTitle>
+          <DialogDescription>
+            {item?.name_ar ?? "صنف"} — دفعة {lot?.lot_number ?? "بلا رقم"}: المتبقّي {lot?.qty_remaining}،
+            المتاح {available}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>الاتجاه</Label>
+            <Select value={direction} onValueChange={(v) => setDirection(v as "in" | "out")}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="out">نقص (تلف، فقد، جرد)</SelectItem>
+                <SelectItem value="in">زيادة (تصحيح جرد)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الكمية *</Label>
+            <Input type="number" min={1} value={qty} onChange={(e) => setQty(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>السبب *</Label>
+            <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
+          </div>
+          <p className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
+            التسوية تُسجَّل حركةً في سجل المخزون وقيدًا في سجل التدقيق، ولا يمكن حذفها.
+            النقص لا ينزل دون الكمية المحجوزة لوصفات لم تُصرَف بعد.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button disabled={!reason.trim() || adjust.isPending} onClick={() => adjust.mutate()}>
+            {adjust.isPending ? "جارٍ الحفظ..." : "تسجيل التسوية"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// تنبيهات المخزون
+// ---------------------------------------------------------------------------
+type StockAlertRow = {
+  organization_id: string;
+  warehouse_id: string;
+  warehouse_name: string;
+  item_id: string;
+  item_name: string;
+  item_code: string | null;
+  lot_id: string;
+  lot_number: string | null;
+  qty_remaining: number;
+  expiry_date: string | null;
+  days_to_expiry: number | null;
+  reorder_level: number;
+  alert_type: "expired" | "expiring_soon" | "low_stock";
+  alert_label: string;
+};
+
+const ALERT_TONE: Record<string, "destructive" | "warning" | "secondary"> = {
+  expired: "destructive",
+  expiring_soon: "warning",
+  low_stock: "secondary",
+};
+
+function useStockAlerts(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["stock-alerts", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_stock_alerts")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("expiry_date", { ascending: true, nullsFirst: false });
+      if (error) throw error;
+      return (data ?? []) as StockAlertRow[];
+    },
+  });
+}
+
+/**
+ * التنبيهات لم تكن موجودة قبل 0088: دفعةٌ انتهت أمس وبها خمسون قرصًا لم يكن
+ * في النظام كله ما يُظهرها، ولا شاشةٌ تقول إن صنفًا نزل دون حدّ إعادة طلبه.
+ */
+function StockAlertsTab() {
+  const { organization } = useOrganizationAccess();
+  const alerts = useStockAlerts(organization?.id);
+  const [filter, setFilter] = useState("all");
+
+  const rows = (alerts.data ?? []).filter((a) => filter === "all" || a.alert_type === filter);
+  const counts = {
+    expired: (alerts.data ?? []).filter((a) => a.alert_type === "expired").length,
+    expiring_soon: (alerts.data ?? []).filter((a) => a.alert_type === "expiring_soon").length,
+    low_stock: (alerts.data ?? []).filter((a) => a.alert_type === "low_stock").length,
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>تنبيهات المخزون</CardTitle>
+        <CardDescription>
+          منتهية بها رصيد ({counts.expired}) — تنتهي خلال ٩٠ يومًا ({counts.expiring_soon}) — دون حدّ
+          إعادة الطلب ({counts.low_stock})
+        </CardDescription>
+        <div className="mt-2">
+          <Select value={filter} onValueChange={setFilter}>
+            <SelectTrigger className="w-56">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">كل التنبيهات</SelectItem>
+              <SelectItem value="expired">منتهية بها رصيد</SelectItem>
+              <SelectItem value="expiring_soon">تقارب الانتهاء</SelectItem>
+              <SelectItem value="low_stock">دون حدّ إعادة الطلب</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </CardHeader>
+      <CardContent>
+        {alerts.isLoading && <Skeleton className="h-40 w-full" />}
+        {!alerts.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>الصنف</TableHead>
+                <TableHead>المستودع</TableHead>
+                <TableHead>الدفعة</TableHead>
+                <TableHead>الرصيد</TableHead>
+                <TableHead>الانتهاء</TableHead>
+                <TableHead>التنبيه</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((a) => (
+                <TableRow key={`${a.lot_id}-${a.alert_type}`}>
+                  <TableCell className="font-medium">
+                    {a.item_name}
+                    {a.item_code && <span className="block text-xs text-muted-foreground">{a.item_code}</span>}
+                  </TableCell>
+                  <TableCell>{a.warehouse_name}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{a.lot_number ?? "—"}</TableCell>
+                  <TableCell>{Number(a.qty_remaining).toLocaleString("ar-SA")}</TableCell>
+                  <TableCell>
+                    {a.expiry_date ?? "—"}
+                    {a.days_to_expiry != null && (
+                      <span className="block text-xs text-muted-foreground">
+                        {a.days_to_expiry < 0
+                          ? `انتهت منذ ${Math.abs(a.days_to_expiry)} يومًا`
+                          : `بقي ${a.days_to_expiry} يومًا`}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={ALERT_TONE[a.alert_type]}>{a.alert_label}</Badge>
+                  </TableCell>
+                </TableRow>
+              ))}
+              {rows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                    لا تنبيهات — المخزون سليم.
                   </TableCell>
                 </TableRow>
               )}

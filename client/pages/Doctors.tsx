@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Stethoscope, Pencil, CalendarClock, Trash2 } from "lucide-react";
+import { Plus, Stethoscope, Pencil, CalendarClock, Trash2, Network } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -21,6 +21,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
+import DoctorRelationsDialog from "@/components/doctors/DoctorRelationsDialog";
 
 /** الحقول التي يقرأها/يكتبها نموذج الطبيب (إنشاء وتعديل). */
 export type DoctorFormRow = {
@@ -95,6 +96,7 @@ export default function Doctors() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<DoctorFormRow | null>(null);
   const [hoursTarget, setHoursTarget] = useState<{ id: string; name: string } | null>(null);
+  const [relationsTarget, setRelationsTarget] = useState<{ id: string; name_ar: string } | null>(null);
   const doctors = useDoctors(organization?.id);
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -202,6 +204,14 @@ export default function Doctors() {
                         </Button>
                         <Button
                           size="sm"
+                          variant="ghost"
+                          title="العيادات والخدمات وجدول العمل"
+                          onClick={() => setRelationsTarget({ id: doctor.id, name_ar: doctor.name_ar })}
+                        >
+                          <Network className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
                           variant="outline"
                           onClick={() => toggleEnabled.mutate({ id: doctor.id, is_enabled: !doctor.is_enabled })}
                         >
@@ -244,6 +254,8 @@ export default function Doctors() {
           onClose={() => setHoursTarget(null)}
         />
       )}
+
+      <DoctorRelationsDialog doctor={relationsTarget} onClose={() => setRelationsTarget(null)} />
     </div>
   );
 }

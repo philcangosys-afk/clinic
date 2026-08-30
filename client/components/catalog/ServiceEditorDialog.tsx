@@ -46,6 +46,7 @@ export const MEDICAL_SERVICE_TYPES: Record<string, string> = {
   dressing: "تضميد",
   injection: "حقن",
   screening: "فحص دوري",
+  home_visit: "زيارة منزلية",
   other: "أخرى",
 };
 
@@ -276,6 +277,14 @@ export default function ServiceEditorDialog({
   });
 
   const save = useMutation({
+    /**
+     * الحفظ عبر `app_save_service` (0077) لا بخمسة طلبات.
+     *
+     * قبله كان الحفظ: تعديل الصنف، ثم حذف فروعه، ثم إدراجها، ثم حذف موارده،
+     * ثم إدراجها. فشلُ أيّ خطوة بعد الأولى يترك الخدمة بفروع محذوفة وموارد
+     * قديمة — حالة لا يصل إليها المستخدم بأي طريق مشروع. الدالة تجعلها
+     * معاملة واحدة، وتفحص الصلاحية وانتماء الفروع والموارد للمنشأة.
+     */
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
       const name = String(draft.name_ar ?? "").trim();
@@ -287,85 +296,58 @@ export default function ServiceEditorDialog({
         throw new Error("الحدّ الأدنى للعمر أكبر من الحدّ الأقصى");
       }
 
-      const payload: Record<string, any> = {
-        organization_id: organizationId,
-        code: String(draft.code ?? "").trim() || `ITM-${Date.now().toString().slice(-6)}`,
-        barcode: String(draft.barcode ?? "").trim() || null,
-        name_ar: name,
-        name_en: String(draft.name_en ?? "").trim() || null,
-        description_ar: String(draft.description_ar ?? "").trim() || null,
-        description_en: String(draft.description_en ?? "").trim() || null,
-        item_type: draft.item_type,
-        medical_service_type: draft.item_type === "service" ? draft.medical_service_type : null,
-        category_value_id: draft.category_value_id || null,
-        default_clinic_id: draft.default_clinic_id || null,
-        duration_minutes: nullableNumber(draft.duration_minutes),
-        provider_role: draft.provider_role,
-        requires_appointment: Boolean(draft.requires_appointment),
-        price: Number(draft.price) || 0,
-        cost_price: Number(draft.cost_price) || 0,
-        default_discount_percent: Number(draft.default_discount_percent) || 0,
-        is_vat_exempt: Boolean(draft.is_vat_exempt),
-        is_disabled: Boolean(draft.is_disabled),
-        requires_fasting: Boolean(draft.requires_fasting),
-        fasting_hours: draft.requires_fasting ? nullableNumber(draft.fasting_hours) : null,
-        preparation_ar: String(draft.preparation_ar ?? "").trim() || null,
-        contraindications_ar: String(draft.contraindications_ar ?? "").trim() || null,
-        min_age_years: minAge,
-        max_age_years: maxAge,
-        gender_restriction: draft.gender_restriction || "any",
-        requires_consent: Boolean(draft.requires_consent),
-        requires_preauthorization: Boolean(draft.requires_preauthorization),
-        requires_referral: Boolean(draft.requires_referral),
-        preauthorization_note: String(draft.preauthorization_note ?? "").trim() || null,
-        preparation_en: String(draft.preparation_en ?? "").trim() || null,
-        consent_note_ar: String(draft.consent_note_ar ?? "").trim() || null,
-        revenue_account_id: draft.revenue_account_id || null,
-        cogs_account_id: draft.cogs_account_id || null,
+      // القيم تُمرَّر نصًّا والدالة تحوّلها: الفراغ يعني `null` لا صفرًا،
+      // وهو تمييز يضيع لو أرسلنا أرقامًا مباشرةً.
+      const text = (value: any) => {
+        const raw = String(value ?? "").trim();
+        return raw === "" ? null : raw;
       };
 
-      let savedId = itemId;
-      if (isNew) {
-        const { data, error } = await supabase.from("items").insert(payload).select("id").single();
-        if (error) throw error;
-        savedId = data.id;
-      } else {
-        // `.select("id")` مقصود: تحديث لا يطابق صفًا يعود بلا خطأ من
-        // PostgREST، فيظهر «تم الحفظ» ولم يُحفظ شيء.
-        const { data, error } = await supabase.from("items").update(payload).eq("id", itemId).select("id");
-        if (error) throw error;
-        if (!data || data.length === 0) throw new Error("لم يُحدَّث أي صنف — تحقّق من صلاحيتك");
-      }
+      const payload: Record<string, any> = {
+        code: text(draft.code),
+        barcode: text(draft.barcode),
+        name_ar: name,
+        name_en: text(draft.name_en),
+        description_ar: text(draft.description_ar),
+        description_en: text(draft.description_en),
+        item_type: draft.item_type,
+        medical_service_type: draft.item_type === "service" ? draft.medical_service_type : null,
+        category_value_id: text(draft.category_value_id),
+        default_clinic_id: text(draft.default_clinic_id),
+        duration_minutes: text(draft.duration_minutes),
+        provider_role: draft.provider_role || "any",
+        requires_appointment: Boolean(draft.requires_appointment),
+        price: text(draft.price) ?? "0",
+        cost_price: text(draft.cost_price) ?? "0",
+        default_discount_percent: text(draft.default_discount_percent) ?? "0",
+        is_vat_exempt: Boolean(draft.is_vat_exempt),
+        is_disabled: Boolean(draft.is_disabled),
+        revenue_account_id: text(draft.revenue_account_id),
+        cogs_account_id: text(draft.cogs_account_id),
+        requires_fasting: Boolean(draft.requires_fasting),
+        fasting_hours: draft.requires_fasting ? text(draft.fasting_hours) : null,
+        preparation_ar: text(draft.preparation_ar),
+        preparation_en: text(draft.preparation_en),
+        contraindications_ar: text(draft.contraindications_ar),
+        min_age_years: minAge === null ? null : String(minAge),
+        max_age_years: maxAge === null ? null : String(maxAge),
+        gender_restriction: draft.gender_restriction || "any",
+        requires_consent: Boolean(draft.requires_consent),
+        consent_note_ar: text(draft.consent_note_ar),
+        requires_preauthorization: Boolean(draft.requires_preauthorization),
+        requires_referral: Boolean(draft.requires_referral),
+        preauthorization_note: text(draft.preauthorization_note),
+      };
 
-      // الفروع والموارد: استبدال كامل، فالمجموعة هي المقصودة لا الإضافة إليها.
-      const delBranches = await supabase.from("item_branches").delete().eq("item_id", savedId);
-      if (delBranches.error) throw delBranches.error;
-      if (branchIds.length > 0) {
-        const { error } = await supabase.from("item_branches").insert(
-          branchIds.map((branchId) => ({
-            organization_id: organizationId,
-            item_id: savedId,
-            branch_id: branchId,
-          })),
-        );
-        if (error) throw error;
-      }
-
-      const delResources = await supabase.from("item_resources").delete().eq("item_id", savedId);
-      if (delResources.error) throw delResources.error;
-      if (resourceIds.length > 0) {
-        const { error } = await supabase.from("item_resources").insert(
-          resourceIds.map((resourceId) => ({
-            organization_id: organizationId,
-            item_id: savedId,
-            resource_id: resourceId,
-            is_required: true,
-          })),
-        );
-        if (error) throw error;
-      }
-
-      return savedId;
+      const { data, error } = await supabase.rpc("app_save_service", {
+        p_organization_id: organizationId,
+        p_item_id: itemId,
+        p_payload: payload,
+        p_branch_ids: branchIds,
+        p_resource_ids: resourceIds,
+      });
+      if (error) throw error;
+      return data as string;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["items-catalog"] });

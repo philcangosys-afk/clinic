@@ -36,21 +36,70 @@ import PatientPicker from "@/components/shared/PatientPicker";
 import ItemPicker from "@/components/shared/ItemPicker";
 import BillingItemLink from "@/components/shared/BillingItemLink";
 
-const STATUS_LABELS: Record<LabOrderStatus, string> = {
+/**
+ * دورة حياة طلب المختبر (0083) — تسع حالات وثلاث استثنائية.
+ *
+ * `completed` القديمة رُحِّلت إلى `resulted`: الاسمان لمعنى واحد، و«مكتمل»
+ * يوهم أن الطلب انتهى بينما النتيجة لم تُراجَع بعد.
+ */
+const STATUS_LABELS: Record<string, string> = {
+  draft: "مسودة",
   ordered: "مطلوب",
-  specimen_collected: "تم سحب العيّنة",
+  specimen_collected: "سُحبت العيّنة",
+  received: "استُلمت العيّنة",
   in_progress: "قيد التحليل",
-  completed: "مكتمل (بانتظار المراجعة)",
-  verified: "موثَّق",
-  cancelled: "ملغي",
+  resulted: "صدرت النتيجة",
+  verified: "مراجَعة",
+  approved: "معتمدة",
+  delivered: "مسلَّمة",
+  rejected: "مرفوضة",
+  cancelled: "ملغاة",
+  recollection_required: "تحتاج إعادة سحب",
 };
-const STATUS_BADGE: Record<LabOrderStatus, "default" | "secondary" | "success" | "warning" | "destructive"> = {
+const STATUS_BADGE: Record<string, "default" | "secondary" | "success" | "warning" | "destructive"> = {
+  draft: "secondary",
   ordered: "secondary",
   specimen_collected: "default",
+  received: "default",
   in_progress: "default",
-  completed: "warning",
-  verified: "success",
+  resulted: "warning",
+  verified: "warning",
+  approved: "success",
+  delivered: "success",
+  rejected: "destructive",
   cancelled: "destructive",
+  recollection_required: "destructive",
+};
+
+/** الانتقال التالي المتاح من كل حالة — نفس خريطة `app_lab_status_allowed`. */
+const NEXT_STATUS: Record<string, { value: string; label: string; needsReason?: boolean }[]> = {
+  draft: [{ value: "ordered", label: "إرسال الطلب" }],
+  ordered: [
+    { value: "specimen_collected", label: "سحب العيّنة" },
+    { value: "rejected", label: "رفض", needsReason: true },
+  ],
+  specimen_collected: [
+    { value: "received", label: "استلام العيّنة" },
+    { value: "recollection_required", label: "إعادة سحب", needsReason: true },
+  ],
+  received: [
+    { value: "in_progress", label: "بدء التحليل" },
+    { value: "recollection_required", label: "إعادة سحب", needsReason: true },
+  ],
+  in_progress: [
+    { value: "resulted", label: "إصدار النتيجة" },
+    { value: "recollection_required", label: "إعادة سحب", needsReason: true },
+  ],
+  resulted: [
+    { value: "verified", label: "مراجعة" },
+    { value: "in_progress", label: "إعادة إلى التحليل" },
+  ],
+  verified: [
+    { value: "approved", label: "اعتماد" },
+    { value: "resulted", label: "إرجاع للمراجعة" },
+  ],
+  approved: [{ value: "delivered", label: "تسليم" }],
+  recollection_required: [{ value: "specimen_collected", label: "سحب جديد" }],
 };
 type LabTestWithCategory = LabTestRow & {
   category: { name_ar: string } | { name_ar: string }[] | null;
@@ -626,25 +675,42 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
   const [draftValues, setDraftValues] = useState<Record<string, string>>({});
 
   const saveResult = useMutation({
-    mutationFn: async ({ itemId, value }: { itemId: string; value: string }) => {
+    /**
+     * الحفظ عبر `app_enter_lab_result` (0083) لا بتحديث مباشر.
+     *
+     * الدالة تختار المدى المرجعي المناسب **لعمر المريض وجنسه**، وتعلّم
+     * النتيجة شاذة أو حرجة، وتحفظ النسخة السابقة في سجلّ التعديلات. التحديث
+     * المباشر كان يكتب رقمًا ولا يعرف أشاذٌّ هو أم لا.
+     */
+    mutationFn: async ({
+      itemId,
+      value,
+      reason,
+    }: {
+      itemId: string;
+      value: string;
+      reason?: string;
+    }) => {
       const numeric = Number(value);
-      const { data: affectedRows, error } = await supabase
-        .from("lab_order_items")
-        .update({
-          result_value: value,
-          result_numeric: Number.isFinite(numeric) && value.trim() !== "" ? numeric : null,
-        })
-        .eq("id", itemId)
-        .select("id");
+      const { data, error } = await supabase.rpc("app_enter_lab_result", {
+        p_item_id: itemId,
+        p_value: value,
+        p_numeric: Number.isFinite(numeric) && value.trim() !== "" ? numeric : null,
+        p_reason: reason ?? null,
+      });
       if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+      return data as { is_abnormal: boolean; is_critical: boolean } | null;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["lab-order-details", orderId] });
       queryClient.invalidateQueries({ queryKey: ["lab-orders"] });
+      if (result?.is_critical) {
+        toast({
+          variant: "destructive",
+          title: "قيمة حرجة",
+          description: "النتيجة خارج الحدّ الحرج — أبلغ الطبيب المعالج.",
+        });
+      }
     },
     onError: (error: unknown) =>
       toast({
@@ -654,62 +720,34 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
       }),
   });
 
-  const verifyOrder = useMutation({
-    mutationFn: async () => {
-      if (!orderId) return;
-      const { data: affectedRows, error } = await supabase
-        .from("lab_orders")
-        // `verified_by` عمود قائم منذ 0013 ولم يُكتب قط: كانت النتيجة تُعتمَد
-        // ولا يُعرف من اعتمدها. نتيجة مخبرية بلا موثِّق ليست نتيجة معتمَدة.
-        .update({
-          status: "verified",
-          verified_at: new Date().toISOString(),
-          verified_by: session?.user.id ?? null,
-        })
-        .eq("id", orderId)
-        .select("id");
-      if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["lab-orders"] });
-      toast({ title: "تم توثيق نتائج الطلب" });
-      onOpenChange();
-    },
-  });
-
   /**
-   * تقدُّم حالة الطلب: «سحب العيّنة» ثم «بدء التنفيذ».
+   * تقدُّم الطلب في دورته.
    *
-   * الحالتان `specimen_collected` و`in_progress` معرَّفتان في القيد منذ 0013
-   * ولهما تسميتان عربيتان في هذه الشاشة، **ولم يكن في الواجهة زر واحد ينقل
-   * إليهما**. فطلب المختبر يقفز من «مطلوب» إلى «مكتمل» (بمُحفِّز إدخال
-   * النتائج) ثم «موثَّق». ونتيجة ذلك أن `specimen_collected_at` — وهو عمود
-   * قائم — لم يُملأ قط، فلا يُعرف متى سُحبت العيّنة: وهو أول ما يُسأل عنه في
-   * تحاليل لها زمن صلاحية للعيّنة، وفي شكوى مريض انتظر بلا سحب.
+   * كل انتقال يمرّ بـ`app_set_lab_order_status` (0083): الدالة ترفض القفز
+   * بين الحالات، وتفرض لكل انتقال صلاحيته (من يسحب العيّنة ليس من يعتمد
+   * النتيجة)، وتُلزم بسبب للرفض وإعادة السحب، وتمنع إصدار نتيجة وبعض
+   * الفحوص فارغة، وتسجّل من نفّذ ومتى.
+   *
+   * قبل هذا كانت الشاشة تكتب `status` مباشرةً، فأي قيمة تمرّ وأي مستخدم.
    */
+  const [transition, setTransition] = useState<{ value: string; label: string } | null>(null);
+  const [transitionReason, setTransitionReason] = useState("");
+
   const advanceStatus = useMutation({
-    mutationFn: async (next: "specimen_collected" | "in_progress") => {
+    mutationFn: async ({ next, reason }: { next: string; reason?: string }) => {
       if (!orderId) return;
-      const payload: Record<string, unknown> = { status: next };
-      if (next === "specimen_collected") {
-        payload.specimen_collected_at = new Date().toISOString();
-      }
-      const { data: affectedRows, error } = await supabase
-        .from("lab_orders")
-        .update(payload)
-        .eq("id", orderId)
-        .select("id");
+      const { error } = await supabase.rpc("app_set_lab_order_status", {
+        p_order_id: orderId,
+        p_status: next,
+        p_reason: reason ?? null,
+      });
       if (error) throw error;
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["lab-order-details", orderId] });
       queryClient.invalidateQueries({ queryKey: ["lab-orders"] });
+      setTransition(null);
+      setTransitionReason("");
       toast({ title: "تم تحديث حالة الطلب" });
     },
     onError: (error: unknown) =>
@@ -793,32 +831,65 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
         {orderId && <ResultAttachments kind="lab" parentId={orderId} />}
 
         <Separator />
-        <DialogFooter className="gap-2">
-          {(details.data?.order as LabOrderRow | undefined)?.status === "ordered" && (
+        {/* الانتقالات المتاحة تُشتقّ من الحالة الحالية بنفس خريطة القاعدة،
+            فلا يظهر زرٌّ مصيره الرفض. */}
+        <DialogFooter className="flex-wrap gap-2">
+          {(NEXT_STATUS[(details.data?.order as any)?.status ?? ""] ?? []).map((step) => (
             <Button
-              variant="outline"
+              key={step.value}
+              variant={step.needsReason ? "outline" : "default"}
               disabled={advanceStatus.isPending}
-              onClick={() => advanceStatus.mutate("specimen_collected")}
+              onClick={() => {
+                if (step.needsReason) {
+                  setTransition(step);
+                } else {
+                  advanceStatus.mutate({ next: step.value });
+                }
+              }}
             >
-              تسجيل سحب العيّنة
+              {step.label}
             </Button>
+          ))}
+          {(NEXT_STATUS[(details.data?.order as any)?.status ?? ""] ?? []).length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              لا إجراء متاح — الطلب في حالة نهائية.
+            </p>
           )}
-          {(details.data?.order as LabOrderRow | undefined)?.status === "specimen_collected" && (
-            <Button
-              variant="outline"
-              disabled={advanceStatus.isPending}
-              onClick={() => advanceStatus.mutate("in_progress")}
-            >
-              بدء التنفيذ
-            </Button>
-          )}
-          <Button
-            disabled={verifyOrder.isPending || (details.data?.order as LabOrderRow | undefined)?.status === "verified"}
-            onClick={() => verifyOrder.mutate()}
-          >
-            {verifyOrder.isPending ? "جارٍ التوثيق..." : "توثيق النتائج (Verify)"}
-          </Button>
         </DialogFooter>
+
+        <Dialog open={Boolean(transition)} onOpenChange={(open) => !open && setTransition(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{transition?.label}</DialogTitle>
+              <DialogDescription>
+                هذا الإجراء يحتاج سببًا مكتوبًا — يُحفظ في سجلّ التدقيق.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-1.5">
+              <Label>السبب *</Label>
+              <Textarea
+                rows={2}
+                value={transitionReason}
+                onChange={(e) => setTransitionReason(e.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setTransition(null)}>
+                إلغاء
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={!transitionReason.trim() || advanceStatus.isPending}
+                onClick={() =>
+                  transition &&
+                  advanceStatus.mutate({ next: transition.value, reason: transitionReason.trim() })
+                }
+              >
+                تأكيد
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
     </Dialog>
   );
