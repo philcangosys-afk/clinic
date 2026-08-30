@@ -88,6 +88,16 @@ export default function NewPatientDialog({
   /** تحذير الجهة المحجوبة المعروض قبل الحفظ (null = لا تطابق). */
   const [blockWarning, setBlockWarning] = useState<string | null>(null);
   const [warningAcknowledged, setWarningAcknowledged] = useState(false);
+  /**
+   * ملفات قد تكون لنفس الشخص (0066).
+   *
+   * تُعرَض ولا تمنع: توأمان بنفس الاسم وتاريخ الميلاد واقع، وأمٌّ تُسجّل
+   * رضيعها برقم جوالها واقع أشيع. المنع التلقائي كان سيمنع حالات صحيحة
+   * ويُعلّم الموظف تجاوز التحذير بأي حيلة.
+   */
+  const [duplicates, setDuplicates] = useState<
+    { patient_id: string; name_ar: string; file_number: string | null; mobile_number: string | null; match_reason: string; match_score: number }[]
+  >([]);
 
   const set = <K extends keyof typeof emptyForm>(key: K, value: typeof emptyForm[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -143,10 +153,25 @@ export default function NewPatientDialog({
       // يُكمل الحفظ بعد أن يكون الموظف قد رأى السبب.
       if (!warningAcknowledged) {
         const warning = await checkBlockedContact();
-        if (warning) {
-          setBlockWarning(warning);
+        // كشف التكرار يجري في نفس محاولة الحفظ الأولى، لا مع كل حرف يُكتب:
+        // استعلام لكل ضغطة مفتاح هدر، والموظف لا يقرأ تحذيرًا يومض أثناء
+        // الكتابة.
+        const { data: dupes } = await supabase.rpc("app_find_duplicate_patients", {
+          p_organization_id: organization.id,
+          p_id_number: form.id_number.trim() || null,
+          p_passport_number: null,
+          p_mobile_number: form.mobile_number.trim() || null,
+          p_name_ar: form.name_ar.trim() || null,
+          p_birth_date: form.birth_date || null,
+        });
+        const found = (dupes ?? []) as typeof duplicates;
+        setDuplicates(found);
+        if (warning || found.length > 0) {
+          if (warning) setBlockWarning(warning);
           setWarningAcknowledged(true);
-          throw new Error(warning);
+          throw new Error(
+            warning ?? "يوجد ملف قد يكون لنفس الشخص — راجع القائمة ثم اضغط الحفظ ثانيةً للمتابعة",
+          );
         }
       }
 
@@ -384,6 +409,35 @@ export default function NewPatientDialog({
             <Textarea value={form.general_note} onChange={(e) => set("general_note", e.target.value)} />
           </Field>
         </div>
+        {duplicates.length > 0 && (
+          <div className="flex flex-col gap-1.5 rounded-lg border border-amber-400 bg-amber-50/60 px-3 py-2 text-sm">
+            <div className="flex items-center gap-2 font-medium text-amber-900">
+              <TriangleAlert className="h-4 w-4" />
+              ملفات قد تكون لنفس الشخص
+            </div>
+            {duplicates.map((row) => (
+              <button
+                key={row.patient_id}
+                type="button"
+                onClick={() => {
+                  onOpenChange(false);
+                  navigate(`/patients/${row.patient_id}`);
+                }}
+                className="flex flex-wrap items-center gap-2 rounded-md border bg-background px-2 py-1 text-right text-xs hover:bg-muted"
+              >
+                <span className="font-medium">{row.name_ar}</span>
+                {row.file_number && <span className="text-muted-foreground">ملف {row.file_number}</span>}
+                {row.mobile_number && <span className="text-muted-foreground">{row.mobile_number}</span>}
+                <span className="rounded bg-amber-200 px-1.5">{row.match_reason}</span>
+                <span className="text-muted-foreground">فتح الملف ←</span>
+              </button>
+            ))}
+            <span className="text-xs text-muted-foreground">
+              إن كان شخصًا مختلفًا فعلًا، اضغط الحفظ ثانيةً للمتابعة.
+            </span>
+          </div>
+        )}
+
         {blockWarning && (
           <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
             <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />

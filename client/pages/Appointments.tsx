@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import AppointmentCalendar from "@/components/appointments/AppointmentCalendar";
+import AppointmentMessages from "@/components/appointments/AppointmentMessages";
 import { CalendarX, Check, ChevronLeft, ChevronRight, Edit3, ExternalLink, Plus, Search } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
@@ -106,7 +108,28 @@ export default function Appointments() {
   const [managedAppointment, setManagedAppointment] = useState<AppointmentWithRelations | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  /**
+   * نمط العرض. التقويم هو الافتراضي لأنه ما يُطلب في الاستقبال، والقائمة
+   * القديمة تبقى كما هي — لا تُستبدل: من اعتاد عليها لا يُجبَر على تعلّم
+   * شاشة جديدة في يوم عمل.
+   */
+  const [mode, setMode] = useState<"calendar" | "classic">("calendar");
+  const [prefill, setPrefill] = useState<{ day: string; time: string; doctorId: string | null; clinicId: string | null } | null>(null);
   const doctors = useDoctorsList(organization?.id);
+  const clinicList = useQuery({
+    queryKey: ["appointments-clinic-list", organization?.id],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("clinics")
+        .select("id, name")
+        .eq("organization_id", organization?.id)
+        .eq("is_disabled", false)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
   const appointments = useDayAppointments(organization?.id, day);
   const canSchedule = legacyMode || ["owner", "organization_admin", "branch_manager", "receptionist"].includes(membership?.role_key ?? "");
 
@@ -192,11 +215,49 @@ export default function Appointments() {
               ))}
             </SelectContent>
           </Select>
+          <div className="flex rounded-md border p-0.5">
+            <button
+              type="button"
+              onClick={() => setMode("calendar")}
+              className={`rounded px-2.5 py-1 text-xs ${mode === "calendar" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+            >
+              التقويم
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("classic")}
+              className={`rounded px-2.5 py-1 text-xs ${mode === "classic" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+            >
+              بطاقات الأطباء
+            </button>
+          </div>
           <Button variant="outline" onClick={() => navigate("/waitlist")}>قائمة الانتظار</Button>
         </CardContent>
       </Card>
 
-      {appointments.isLoading && (
+      {mode === "calendar" && (
+        <AppointmentCalendar
+          organizationId={organization?.id}
+          doctors={doctors.data ?? []}
+          clinics={clinicList.data ?? []}
+          onCreateAt={(start, doctorId, clinicId) => {
+            if (!canSchedule) return;
+            const day = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
+            const time = `${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`;
+            setPrefill({ day, time, doctorId, clinicId });
+            setCreateOpen(true);
+          }}
+          onOpenAppointment={(appointmentId) => {
+            const found = (appointments.data ?? []).find((row) => row.id === appointmentId);
+            // الموعد قد يكون خارج يوم القائمة (عرض أسبوعي أو شهري): عندها
+            // يُفتح ملف المريض بدل نافذة إدارة لا نملك بياناتها.
+            if (found) setManagedAppointment(found);
+            else navigate(`/reception?appointmentId=${appointmentId}`);
+          }}
+        />
+      )}
+
+      {mode === "classic" && appointments.isLoading && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 3 }).map((_, index) => (
             <Skeleton key={index} className="h-64 w-full" />
@@ -204,7 +265,7 @@ export default function Appointments() {
         </div>
       )}
 
-      {!appointments.isLoading && (
+      {mode === "classic" && !appointments.isLoading && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[...byDoctor.entries()].map(([doctorId, list]) => {
             const doctor = (doctors.data ?? []).find((item) => item.id === doctorId);
@@ -263,7 +324,9 @@ export default function Appointments() {
         onOpenChange={setCreateOpen}
         organizationId={organization?.id}
         doctors={doctors.data ?? []}
-        defaultDay={day}
+        defaultDay={prefill?.day ?? day}
+        prefill={prefill}
+        onConsumePrefill={() => setPrefill(null)}
       />
     </div>
   );
@@ -391,6 +454,7 @@ function ManageAppointmentDialog({
         <div><Label>ملاحظة</Label><Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} /></div>
         <label className="flex items-center gap-2 rounded-md border p-2.5 text-sm"><input type="checkbox" checked={allowOutsideHours} onChange={(event) => setAllowOutsideHours(event.target.checked)} />السماح بإعادة الجدولة خارج دوام الطبيب</label>
         <div><Label>سبب الإلغاء</Label><Textarea value={cancellationReason} onChange={(event) => setCancellationReason(event.target.value)} placeholder="مطلوب عند إلغاء الموعد" rows={2} /></div>
+        {appointment && <AppointmentMessages appointmentId={appointment.id} />}
       </div>
       <DialogFooter className="gap-2">
         <Button variant="destructive" disabled={cancel.isPending || !cancellationReason.trim()} onClick={() => cancel.mutate()}><CalendarX className="h-4 w-4" />إلغاء الموعد</Button>
@@ -406,12 +470,17 @@ function CreateAppointmentDialog({
   organizationId,
   doctors,
   defaultDay,
+  prefill,
+  onConsumePrefill,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   organizationId: string | undefined;
   doctors: { id: string; name_ar: string }[];
   defaultDay: string;
+  /** قيم من الضغط على خانة فارغة في التقويم — يوم ووقت وطبيب وعيادة. */
+  prefill?: { day: string; time: string; doctorId: string | null; clinicId: string | null } | null;
+  onConsumePrefill?: () => void;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -441,7 +510,16 @@ function CreateAppointmentDialog({
   const [allowOutsideHours, setAllowOutsideHours] = useState(false);
 
   useEffect(() => {
-    if (open) setDate(defaultDay);
+    if (!open) return;
+    setDate(defaultDay);
+    // التعبئة تُستهلك مرة واحدة عند الفتح: إبقاؤها كان يُعيد ضبط ما يكتبه
+    // المستخدم في كل إعادة رسم.
+    if (prefill) {
+      setTime(prefill.time);
+      if (prefill.doctorId) setDoctorId(prefill.doctorId);
+      if (prefill.clinicId) setClinicId(prefill.clinicId);
+      onConsumePrefill?.();
+    }
   }, [defaultDay, open]);
 
   const clinics = useQuery({

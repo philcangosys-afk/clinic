@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import ReceptionReports from "@/components/reports/ReceptionReports";
 import { useToast } from "@/hooks/use-toast";
 
 const EXAM_PURPOSE_LABELS: Record<OccupationalExamPurpose, string> = {
@@ -86,6 +87,7 @@ export default function Reports() {
 
       <Tabs defaultValue="revenue">
         <TabsList>
+          <TabsTrigger value="reception">الاستقبال والمواعيد</TabsTrigger>
           <TabsTrigger value="revenue">الإيراد</TabsTrigger>
           <TabsTrigger value="sales">المبيعات والعروض</TabsTrigger>
           <TabsTrigger value="profitability">الربحية</TabsTrigger>
@@ -94,6 +96,10 @@ export default function Reports() {
           <TabsTrigger value="patients">إحصائيات المرضى</TabsTrigger>
           <TabsTrigger value="occupational">الفحوصات المهنية</TabsTrigger>
         </TabsList>
+        <TabsContent value="reception" className="mt-4">
+          <ReceptionReports />
+        </TabsContent>
+
         <TabsContent value="revenue">
           <RevenueTab organizationId={organization?.id} from={from} to={to} />
         </TabsContent>

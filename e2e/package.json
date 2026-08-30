@@ -1,0 +1,16 @@
+{
+  "name": "clinic-e2e",
+  "private": true,
+  "version": "1.0.0",
+  "description": "اختبارات رحلة التشغيل الكاملة — مشروع منفصل عن التطبيق حتى لا يلمس pnpm-lock.yaml الجذري ولا يدخل في بناء Netlify",
+  "scripts": {
+    "install:browsers": "playwright install chromium",
+    "test": "playwright test",
+    "test:headed": "playwright test --headed",
+    "test:journey": "playwright test tests/journey.spec.ts",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}
