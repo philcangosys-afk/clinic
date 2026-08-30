@@ -707,11 +707,17 @@ function TransfersTab() {
         });
       }
 
-      const { error: statusError } = await supabase
+      const { data: completedTransfer, error: statusError } = await supabase
         .from("stock_transfers")
         .update({ status: "completed" })
-        .eq("id", transfer.id);
+        .eq("id", transfer.id)
+        .select("id");
       if (statusError) throw statusError;
+      // المخزون تحرّك قبل هذا السطر. لو لم تُختم الحالة «مكتمل» بقي التحويل
+      // معروضًا كمعلَّق، فيُنفَّذ ثانيةً وتُخصم الكمية مرتين.
+      if (!completedTransfer || completedTransfer.length === 0) {
+        throw new Error("نُقلت الكمية لكن تعذّر ختم التحويل كمكتمل — راجعه يدويًا قبل إعادة التنفيذ");
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["stock-transfers", organization?.id] });

@@ -420,11 +420,18 @@ function NewVisitDialog({
       }
       const removable = currentServiceIds.filter((id) => !billedIds.has(id));
       if (removable.length > 0) {
-        const { error: delError } = await supabase
+        const { data: deletedServices, error: delError } = await supabase
           .from("patient_visit_services")
           .delete()
-          .in("id", removable);
+          .in("id", removable)
+          .select("id");
         if (delError) throw delError;
+        // الحذف يستهدف معرّفات قرأناها للتوّ، فعدم مطابقة شيء ليس حالة طبيعية
+        // بل سياسة مانعة. الصمت عنه كان يُبقي الخدمة القديمة ثم يُدرج الجديدة
+        // فوقها — فتُفوتَر الخدمة مرتين.
+        if ((deletedServices ?? []).length !== removable.length) {
+          throw new Error("تعذر تحديث خدمات الزيارة — صلاحيتك لا تسمح بحذف خدمة سابقة");
+        }
       }
       if (services.length > 0) {
         const { error: servicesError } = await supabase.from("patient_visit_services").insert(
@@ -738,6 +745,7 @@ function NewVisitDialog({
               frequency: entry.frequency.trim() || null,
               duration_days: entry.durationDays ? Number(entry.durationDays) : null,
               quantity_prescribed: entry.quantity,
+              is_substitutable: entry.substitutable,
             })),
           );
           if (rxItemsError) throw rxItemsError;

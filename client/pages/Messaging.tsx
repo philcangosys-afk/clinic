@@ -869,7 +869,17 @@ function InternalChatTab() {
       .update({ last_read_at: new Date().toISOString() })
       .eq("conversation_id", selectedConversationId)
       .eq("user_id", currentUserId)
-      .then(() => queryClient.invalidateQueries({ queryKey: ["internal-unread", organization?.id, currentUserId] }));
+      .select("conversation_id")
+      .then(({ data, error }) => {
+        // لا نُزعج المستخدم برسالة: تعليم المحادثة مقروءة ليس إجراءً طلبه.
+        // لكن الفشل الصامت التام كان يُبقي شارة «غير مقروء» إلى الأبد بلا أي
+        // أثر يُفسّرها، فيُسجَّل في الطرفية على الأقل.
+        if (error || (data ?? []).length === 0) {
+          console.warn("تعذّر تعليم المحادثة كمقروءة", error);
+          return;
+        }
+        queryClient.invalidateQueries({ queryKey: ["internal-unread", organization?.id, currentUserId] });
+      });
   }, [selectedConversationId, currentUserId, organization?.id, queryClient]);
 
   const nameFor = (userId: string) => members.data?.find((m) => m.user_id === userId)?.display_name ?? "مستخدم";

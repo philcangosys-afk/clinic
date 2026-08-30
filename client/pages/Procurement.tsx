@@ -747,11 +747,17 @@ function NewPurchaseInvoiceDialog({
 
         // تحديث سعر بيع الصنف من شاشة الشراء عند طلب ذلك صراحةً
         if (line.updateSalePrice && salePrice != null) {
-          const { error: priceError } = await supabase
+          const { data: pricedItem, error: priceError } = await supabase
             .from("items")
             .update({ price: salePrice })
-            .eq("id", line.itemId);
+            .eq("id", line.itemId)
+            .select("id");
           if (priceError) throw priceError;
+          // المستخدم أشّر على «تحديث سعر البيع» صراحةً. فشل صامت هنا يعني أنه
+          // يظن السعر تغيَّر ويبيع بالقديم.
+          if (!pricedItem || pricedItem.length === 0) {
+            throw new Error("تعذّر تحديث سعر بيع الصنف — صلاحيتك لا تسمح بتعديل الأصناف");
+          }
         }
 
         // الكمية المجانية تدخل المخزون فعليًا لكن بتكلفة صفر، فينخفض المتوسط

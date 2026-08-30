@@ -307,6 +307,8 @@ export interface SalesInvoiceRow {
   external_customer_mobile: string | null;
   invoice_number: number;
   zatca_invoice_number: string | null;
+  /** حمولة رمز QR بترميز TLV ثم Base64 — تُولَّد في القاعدة (0058). */
+  zatca_qr: string | null;
   invoice_type: "sale" | "return";
   nationality_value_id: UUID | null;
   source_value_id: UUID | null;
@@ -314,12 +316,26 @@ export interface SalesInvoiceRow {
   is_b2b: boolean;
   status: SalesInvoiceStatus;
   is_insurance_invoice: boolean;
+  /** بيانات التأمين كما سُجِّلت وقت الإصدار — لقطة لا مرجعًا حيًّا لملف المريض. */
+  insurance_company_name: string | null;
+  insurance_policy_number: string | null;
+  insurance_class_number: string | null;
+  insurance_membership_number: string | null;
+  insurance_copay_percent: number | null;
+  insurance_max_amount: number | null;
+  insurance_approval_number: string | null;
   subtotal_amount: number;
   discount_percent: number;
   discount_amount: number;
   vat_amount: number;
   exemption_amount: number;
   net_amount: number;
+  /**
+   * حصّتا التأمين والمريض (0052). تُحسبان في القاعدة عند إصدار الفاتورة ولا
+   * تُرسلان من العميل — وكانتا غائبتين عن هذا النوع، فلا تُقرآن في أي شاشة.
+   */
+  insurance_share_amount: number;
+  patient_share_amount: number;
   paid_amount: number;
   remaining_amount: number;
   note: string | null;

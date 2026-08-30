@@ -41,6 +41,7 @@ type VisitRow = {
   visit_date: string;
   main_complaint: string | null;
   next_visit_plan: string | null;
+  next_visit_date: string | null;
   doctor: { name_ar: string } | null;
   patient_visit_diagnoses: { icd10_code_id: string }[];
 };
@@ -54,7 +55,7 @@ export function PatientVisitsTab({ patientId }: { patientId: string }) {
       const { data, error } = await supabase
         .from("patient_visits")
         .select(
-          "id, visit_date, main_complaint, next_visit_plan, doctor:doctors!patient_visits_doctor_tenant_fk(name_ar), patient_visit_diagnoses(icd10_code_id)",
+          "id, visit_date, main_complaint, next_visit_plan, next_visit_date, doctor:doctors!patient_visits_doctor_tenant_fk(name_ar), patient_visit_diagnoses(icd10_code_id)",
         )
         // المريض ينتمي لمنشأة واحدة، فالتقييد به يكفي لعزل المؤسسات
         .eq("patient_id", patientId)
@@ -115,8 +116,13 @@ export function PatientVisitsTab({ patientId }: { patientId: string }) {
                     <TableCell className="tabular-nums">
                       {(row.patient_visit_diagnoses ?? []).length}
                     </TableCell>
-                    <TableCell className="max-w-xs truncate text-xs text-muted-foreground">
-                      {row.next_visit_plan ?? "—"}
+                    <TableCell className="max-w-xs text-xs text-muted-foreground">
+                      {row.next_visit_date && (
+                        <div className="font-medium text-foreground">
+                          {new Date(row.next_visit_date).toLocaleDateString("ar-SA")}
+                        </div>
+                      )}
+                      <div className="truncate">{row.next_visit_plan ?? (row.next_visit_date ? "" : "—")}</div>
                     </TableCell>
                     <TableCell>
                       <Button

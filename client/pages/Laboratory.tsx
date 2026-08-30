@@ -622,6 +622,7 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
   const details = useLabOrderDetails(orderId);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { session } = useOrganizationAccess();
   const [draftValues, setDraftValues] = useState<Record<string, string>>({});
 
   const saveResult = useMutation({
@@ -658,7 +659,13 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
       if (!orderId) return;
       const { data: affectedRows, error } = await supabase
         .from("lab_orders")
-        .update({ status: "verified", verified_at: new Date().toISOString() })
+        // `verified_by` عمود قائم منذ 0013 ولم يُكتب قط: كانت النتيجة تُعتمَد
+        // ولا يُعرف من اعتمدها. نتيجة مخبرية بلا موثِّق ليست نتيجة معتمَدة.
+        .update({
+          status: "verified",
+          verified_at: new Date().toISOString(),
+          verified_by: session?.user.id ?? null,
+        })
         .eq("id", orderId)
         .select("id");
       if (error) throw error;
@@ -672,6 +679,45 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
       toast({ title: "تم توثيق نتائج الطلب" });
       onOpenChange();
     },
+  });
+
+  /**
+   * تقدُّم حالة الطلب: «سحب العيّنة» ثم «بدء التنفيذ».
+   *
+   * الحالتان `specimen_collected` و`in_progress` معرَّفتان في القيد منذ 0013
+   * ولهما تسميتان عربيتان في هذه الشاشة، **ولم يكن في الواجهة زر واحد ينقل
+   * إليهما**. فطلب المختبر يقفز من «مطلوب» إلى «مكتمل» (بمُحفِّز إدخال
+   * النتائج) ثم «موثَّق». ونتيجة ذلك أن `specimen_collected_at` — وهو عمود
+   * قائم — لم يُملأ قط، فلا يُعرف متى سُحبت العيّنة: وهو أول ما يُسأل عنه في
+   * تحاليل لها زمن صلاحية للعيّنة، وفي شكوى مريض انتظر بلا سحب.
+   */
+  const advanceStatus = useMutation({
+    mutationFn: async (next: "specimen_collected" | "in_progress") => {
+      if (!orderId) return;
+      const payload: Record<string, unknown> = { status: next };
+      if (next === "specimen_collected") {
+        payload.specimen_collected_at = new Date().toISOString();
+      }
+      const { data: affectedRows, error } = await supabase
+        .from("lab_orders")
+        .update(payload)
+        .eq("id", orderId)
+        .select("id");
+      if (error) throw error;
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["lab-order-details", orderId] });
+      queryClient.invalidateQueries({ queryKey: ["lab-orders"] });
+      toast({ title: "تم تحديث حالة الطلب" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر تحديث الحالة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   const toggleCritical = useMutation({
@@ -747,7 +793,25 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
         {orderId && <ResultAttachments kind="lab" parentId={orderId} />}
 
         <Separator />
-        <DialogFooter>
+        <DialogFooter className="gap-2">
+          {(details.data?.order as LabOrderRow | undefined)?.status === "ordered" && (
+            <Button
+              variant="outline"
+              disabled={advanceStatus.isPending}
+              onClick={() => advanceStatus.mutate("specimen_collected")}
+            >
+              تسجيل سحب العيّنة
+            </Button>
+          )}
+          {(details.data?.order as LabOrderRow | undefined)?.status === "specimen_collected" && (
+            <Button
+              variant="outline"
+              disabled={advanceStatus.isPending}
+              onClick={() => advanceStatus.mutate("in_progress")}
+            >
+              بدء التنفيذ
+            </Button>
+          )}
           <Button
             disabled={verifyOrder.isPending || (details.data?.order as LabOrderRow | undefined)?.status === "verified"}
             onClick={() => verifyOrder.mutate()}

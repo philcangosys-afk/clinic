@@ -1424,7 +1424,18 @@ function BatchItemsDialog({
     if (!batch) return;
     const { data } = await supabase.from("insurance_claim_batch_items").select("amount").eq("batch_id", batch.id);
     const total = (data ?? []).reduce((sum, row: any) => sum + Number(row.amount), 0);
-    await supabase.from("insurance_claim_batches").update({ total_amount: total }).eq("id", batch.id);
+    // كان هذا السطر بلا فحص خطأ إطلاقًا: فشل التحديث يترك **إجمالي دفعة
+    // مطالبات** خاطئًا في الشاشة وفي المطالبة المُرسَلة لشركة التأمين، بلا
+    // أي إشارة. الرقم مالي، فلا يجوز أن يفشل بصمت.
+    const { data: updatedBatch, error: totalError } = await supabase
+      .from("insurance_claim_batches")
+      .update({ total_amount: total })
+      .eq("id", batch.id)
+      .select("id");
+    if (totalError) throw totalError;
+    if (!updatedBatch || updatedBatch.length === 0) {
+      throw new Error("تعذر تحديث إجمالي الدفعة — راجع صلاحيتك ثم أعد الحساب");
+    }
   };
 
   const searchInvoices = async () => {

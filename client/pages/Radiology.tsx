@@ -646,6 +646,7 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
   const details = useRadiologyOrderDetails(orderId);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { session } = useOrganizationAccess();
   const [draftFindings, setDraftFindings] = useState<Record<string, { findings: string; impression: string }>>({});
 
   const markPerformed = useMutation({
@@ -707,7 +708,13 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
       if (!orderId) return;
       const { data: affectedRows, error } = await supabase
         .from("radiology_orders")
-        .update({ status: "reported", reported_at: new Date().toISOString() })
+        // `reported_by` عمود قائم منذ 0014 ولم يُكتب قط: تقرير أشعة يُوثَّق
+        // ولا يُعرف من كتبه. وهو أول ما يُسأل عنه عند مراجعة موجودة فائتة.
+        .update({
+          status: "reported",
+          reported_at: new Date().toISOString(),
+          reported_by: session?.user.id ?? null,
+        })
         .eq("id", orderId)
         .select("id");
       if (error) throw error;

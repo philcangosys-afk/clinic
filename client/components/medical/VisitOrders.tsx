@@ -40,6 +40,13 @@ export type PrescriptionDraftItem = {
   frequency: string;
   durationDays: string;
   quantity: number;
+  /**
+   * جواز استبدال الدواء بمكافئ علمي — `prescription_items.is_substitutable`،
+   * عمود قائم منذ 0015 ولم يكن له حقل إدخال ولا عرض. افتراضه `true` في
+   * القاعدة، فكل وصفة كانت تُصدر «قابلة للاستبدال» بلا أن يقرّر ذلك أحد.
+   * وهناك أدوية لا تُستبدل (هامش علاجي ضيق، حساسية لسواغ بعينه).
+   */
+  substitutable: boolean;
 };
 
 export type VisitOrdersValue = {
@@ -358,6 +365,7 @@ export default function VisitOrders({
                           frequency: "",
                           durationDays: "",
                           quantity: 1,
+                          substitutable: true,
                         },
                       ],
                     });
@@ -451,6 +459,21 @@ export default function VisitOrders({
                     }
                   />
                 </div>
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox
+                    checked={entry.substitutable}
+                    onCheckedChange={(checked) =>
+                      patch({
+                        prescriptionItems: value.prescriptionItems.map((candidate) =>
+                          candidate.key === entry.key
+                            ? { ...candidate, substitutable: checked === true }
+                            : candidate,
+                        ),
+                      })
+                    }
+                  />
+                  يجوز للصيدلي استبداله بمكافئ علمي
+                </label>
               </div>
             ))}
             <Textarea

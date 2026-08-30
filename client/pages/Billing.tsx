@@ -55,7 +55,7 @@ function useInvoices(organizationId: string | undefined, status: string, quotesO
       let query = supabase
         .from("sales_invoices")
         .select(
-          "id, invoice_number, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, external_customer_name, zatca_invoice_number, is_insurance_invoice, created_by, nationality_value_id, patient:patients!sales_invoices_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!sales_invoices_doctor_tenant_fk(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar)",
+          "id, invoice_number, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, insurance_share_amount, patient_share_amount, insurance_company_name, external_customer_name, zatca_invoice_number, zatca_qr, is_insurance_invoice, created_by, nationality_value_id, patient:patients!sales_invoices_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!sales_invoices_doctor_tenant_fk(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar)",
         )
         // التصفية بالمؤسسة إلزامية: سياسة RLS تسمح بكل مؤسسة **ينتمي إليها**
         // المستخدم، لا بالمؤسسة النشطة وحدها — فبدونها كانت قائمة عضو في
@@ -156,9 +156,39 @@ async function printInvoice(
        ${Number(invoice.exemption_amount ?? 0) > 0 ? `الإعفاء: ${money(invoice.exemption_amount)}<br />` : ""}
        الضريبة: ${money(invoice.vat_amount)}<br />
        <strong>الصافي: ${money(invoice.net_amount)}</strong><br />
+       ${
+         /**
+          * حصّتا التأمين والمريض تُحسَبان في القاعدة (0052) وتُخزَّنان في
+          * `insurance_share_amount` و`patient_share_amount` — ولم تكن تُقرآن
+          * في أي مكان. فالمريض المؤمَّن يستلم إيصالًا يقول «الصافي 500
+          * والمتبقي 500» بينما لا يخصّه منها إلا حصته. رقم يخيف المريض بلا
+          * سبب، ويجعل تحصيل الاستقبال خاطئًا.
+          */
+         invoice.is_insurance_invoice
+           ? `حصة شركة التأمين${invoice.insurance_company_name ? ` (${esc(invoice.insurance_company_name)})` : ""}: ${money(invoice.insurance_share_amount ?? 0)}<br />
+              <strong>حصة المريض: ${money(invoice.patient_share_amount ?? invoice.net_amount)}</strong><br />`
+           : ""
+       }
        المدفوع: ${money(invoice.paid_amount)}<br />
        المتبقي: ${money(invoice.remaining_amount)}
      </p>
+     ${
+       /**
+        * حمولة رمز QR لزاتكا (TLV ثم Base64) تُولَّد في القاعدة (0058) وتُخزَّن
+        * في `sales_invoices.zatca_qr` — وكان العمود فارغًا في كل فاتورة صدرت
+        * من النظام.
+        *
+        * تُطبع هنا **نصًّا** لا صورةً: توليد صورة QR يحتاج مكتبة، وإضافتها
+        * تتطلب تحديث `pnpm-lock.yaml` — وبناء Netlify يعمل بقفل مجمَّد فيفشل
+        * إن اختلّ. الحمولة نفسها هي المطلوب نظاميًا، والصورة تمثيلٌ لها؛
+        * فطباعتها نصًّا إفصاح صحيح ريثما تُضاف المكتبة، لا بديل نهائي عنها.
+        */
+       invoice.zatca_qr
+         ? `<p style="font-size:9px;word-break:break-all;direction:ltr;text-align:left">
+              <span style="direction:rtl;display:block">حمولة رمز QR (زاتكا):</span>${esc(invoice.zatca_qr)}
+            </p>`
+         : ""
+     }
      ${footerNote ? `<p>${esc(footerNote)}</p>` : ""}`,
     paper,
   );
@@ -833,6 +863,32 @@ type DraftLine = {
    * ليس في هذه الشاشة بل تحتها.
    */
   visit_service_id: string | null;
+  /**
+   * الطلب (مختبر/أشعة/وصفة) الذي وُلِّد منه هذا السطر (0057).
+   *
+   * اختياري عمدًا: مواضع إنشاء السطور الأخرى لا تعرف الطلبات، وجعله إلزاميًا
+   * كان سيفرض تعديلها كلها بلا فائدة.
+   */
+  order_source_type?: "lab" | "radiology" | "prescription" | null;
+  order_id?: string | null;
+};
+
+type VisitOrderRow = {
+  source_type: "lab" | "radiology" | "prescription";
+  source_order_id: string;
+  source_item_id: string;
+  item_id: string | null;
+  item_name: string;
+  source_name: string;
+  qty: number;
+  unit_price: number;
+  is_vat_exempt: boolean;
+};
+
+const ORDER_TYPE_LABELS: Record<VisitOrderRow["source_type"], string> = {
+  lab: "طلب مختبر",
+  radiology: "طلب أشعة",
+  prescription: "وصفة",
 };
 
 /** قيمة "بدون اختيار" في قوائم Select (لا تقبل قيمة فارغة). */
@@ -1184,6 +1240,106 @@ function NewInvoiceDialog({
 
   const addAllVisitServices = () => (visitServices.data ?? []).forEach(addVisitServiceLine);
 
+  /**
+   * طلبات الزيارة غير المفوترة (0057): مختبر وأشعة ووصفة.
+   *
+   * قبل هذا كان المحاسب لا يرى إلا خدمات الزيارة. أما التحليل الذي طلبه
+   * الطبيب والصورة التي أُخذت فلا أثر لهما في الفاتورة — فإمّا يعيد إدخالهما
+   * بالاسم والسعر تخمينًا، وإمّا يسقطان. إيراد نُفِّذ ولا يُحصَّل.
+   */
+  const visitOrders = useQuery({
+    queryKey: ["billing-visit-orders", organizationId, appointmentVisitId],
+    enabled: Boolean(organizationId && appointmentVisitId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_visit_orders_unbilled")
+        .select(
+          "source_type, source_order_id, source_item_id, item_id, item_name, source_name, qty, unit_price, is_vat_exempt",
+        )
+        .eq("organization_id", organizationId)
+        .eq("visit_id", appointmentVisitId);
+      if (error) throw error;
+      return (data ?? []) as VisitOrderRow[];
+    },
+  });
+
+  const visitOrderGroups = useMemo(() => {
+    const groups = new Map<
+      string,
+      { key: string; type: VisitOrderRow["source_type"]; orderId: string; rows: VisitOrderRow[] }
+    >();
+    for (const row of visitOrders.data ?? []) {
+      const key = `${row.source_type}:${row.source_order_id}`;
+      if (!groups.has(key)) {
+        groups.set(key, { key, type: row.source_type, orderId: row.source_order_id, rows: [] });
+      }
+      groups.get(key)!.rows.push(row);
+    }
+    return Array.from(groups.values());
+  }, [visitOrders.data]);
+
+  /**
+   * الإضافة تتم **بالطلب كاملًا** لا ببنده.
+   *
+   * لأن `lab_orders.sales_invoice_id` يُختم على مستوى الطلب لا البند: إضافة
+   * بندٍ واحد كانت ستُعلّم الطلب كله مفوترًا، فيضيع باقي بنوده بلا فاتورة.
+   * الحبيبة في الواجهة تساوي الحبيبة في القاعدة، وإلا كذبت إحداهما على
+   * الأخرى.
+   */
+  const addVisitOrderLines = (group: {
+    type: VisitOrderRow["source_type"];
+    orderId: string;
+    rows: VisitOrderRow[];
+  }) => {
+    const unlinked = group.rows.filter((row) => !row.item_id);
+    const usable = group.rows.filter((row) => row.item_id);
+    if (usable.length === 0) {
+      toast({
+        variant: "destructive",
+        title: "لا يمكن فوترة هذا الطلب",
+        description: "بنوده غير مربوطة بأصناف فوترة — اربطها من شاشة المختبر/الأشعة أولًا",
+      });
+      return;
+    }
+    setLines((prev) => [
+      ...prev,
+      ...usable
+        .filter((row) => !prev.some((line) => line.key === `ord-${row.source_item_id}`))
+        .map((row) => ({
+          key: `ord-${row.source_item_id}`,
+          item_id: row.item_id as string,
+          description: row.item_name,
+          price: Number(row.unit_price) || 0,
+          qty: Number(row.qty) || 1,
+          discount_percent: 0,
+          auto_discount_percent: 0,
+          is_vat_exempt: Boolean(row.is_vat_exempt),
+          agreement_item_id: null,
+          agreement_label: null,
+          visit_service_id: null,
+          order_source_type: group.type,
+          order_id: group.orderId,
+        })),
+    ]);
+    if (unlinked.length > 0) {
+      toast({
+        variant: "destructive",
+        title: "بنود بلا صنف فوترة سقطت من الفاتورة",
+        description: `${unlinked.map((row) => row.source_name).join("، ")} — وسيُعلَّم الطلب مفوترًا رغم ذلك. اربطها بصنف ثم أعد الإصدار إن أردت تحصيلها.`,
+      });
+    }
+  };
+
+  /** معرّفات الطلبات المرتبطة بسطور الفاتورة الحالية، بلا تكرار. */
+  const attachedOrderIds = (type: VisitOrderRow["source_type"]) =>
+    Array.from(
+      new Set(
+        lines
+          .filter((line) => line.order_source_type === type && line.order_id)
+          .map((line) => line.order_id as string),
+      ),
+    );
+
   useEffect(() => {
     if (!open || !appointment) return;
     const appointmentPatient = Array.isArray(appointment.patient) ? appointment.patient[0] : appointment.patient;
@@ -1370,6 +1526,13 @@ function NewInvoiceDialog({
         p_is_b2b: isB2b,
         p_id_number: idNumber.trim() || null,
         p_note: note.trim() || null,
+        // الختم يجري داخل نفس معاملة الفاتورة (0057): إمّا فاتورة وطلبات
+        // مختومة معًا، أو لا شيء.
+        p_lab_order_ids: attachedOrderIds("lab").length > 0 ? attachedOrderIds("lab") : null,
+        p_radiology_order_ids:
+          attachedOrderIds("radiology").length > 0 ? attachedOrderIds("radiology") : null,
+        p_prescription_ids:
+          attachedOrderIds("prescription").length > 0 ? attachedOrderIds("prescription") : null,
       });
       if (rpcError) throw rpcError;
       if (!newInvoiceId) throw new Error("لم تُنشأ الفاتورة — أعد المحاولة");
@@ -1383,6 +1546,10 @@ function NewInvoiceDialog({
       // الخدمات التي فُوترت للتوّ لم تعد ضمن غير المفوتر — بلا هذا التبطيل
       // تبقى معروضة كأنها متاحة، فيحاول المستخدم فوترتها ثانيةً وترفضه القاعدة.
       queryClient.invalidateQueries({ queryKey: ["billing-visit-services"] });
+      queryClient.invalidateQueries({ queryKey: ["billing-visit-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["lab-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["radiology-orders"] });
+      queryClient.invalidateQueries({ queryKey: ["prescriptions-list"] });
       toast({ title: isQuote ? "تم إنشاء عرض السعر" : "تم إنشاء الفاتورة" });
       setPatient(null);
       setExternalName("");
@@ -1627,6 +1794,58 @@ function NewInvoiceDialog({
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {visitOrderGroups.length > 0 && (
+            <div className="flex flex-col gap-1.5 rounded-lg border border-sky-300 bg-sky-50/60 p-3">
+              <Label>طلبات الزيارة غير المفوترة</Label>
+              <p className="text-xs text-muted-foreground">
+                ما طلبه الطبيب في هذه الزيارة: تحاليل وأشعة وأدوية. تُضاف بالطلب كاملًا،
+                ويُعلَّم الطلب مفوترًا عند الحفظ.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {visitOrderGroups.map((group) => {
+                  const addedCount = group.rows.filter((row) =>
+                    lines.some((line) => line.key === `ord-${row.source_item_id}`),
+                  ).length;
+                  const billable = group.rows.filter((row) => row.item_id).length;
+                  const total = group.rows.reduce(
+                    (sum, row) => sum + Number(row.qty) * Number(row.unit_price),
+                    0,
+                  );
+                  return (
+                    <Button
+                      key={group.key}
+                      size="sm"
+                      variant="outline"
+                      disabled={addedCount > 0 && addedCount === billable}
+                      onClick={() => addVisitOrderLines(group)}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
+                      <span className="truncate">
+                        {ORDER_TYPE_LABELS[group.type]}: {group.rows.map((row) => row.source_name).join("، ")}
+                      </span>
+                      <Badge variant="secondary">{total.toLocaleString("ar-SA")}</Badge>
+                      {billable < group.rows.length && (
+                        <Badge variant="destructive">{group.rows.length - billable} بلا صنف</Badge>
+                      )}
+                    </Button>
+                  );
+                })}
+              </div>
+              {visitOrderGroups.some((group) => {
+                const added = group.rows.filter((row) =>
+                  lines.some((line) => line.key === `ord-${row.source_item_id}`),
+                ).length;
+                const billable = group.rows.filter((row) => row.item_id).length;
+                return added > 0 && added < billable;
+              }) && (
+                <p className="text-xs text-amber-700">
+                  حذفتَ بندًا من طلب مُضاف — سيُعلَّم الطلب مفوترًا كاملًا عند الحفظ، فلن يظهر
+                  البند المحذوف في فاتورة لاحقة.
+                </p>
+              )}
             </div>
           )}
 
