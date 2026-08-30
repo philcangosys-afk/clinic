@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import ReceptionBoard from "@/components/reception/ReceptionBoard";
 import {
   CalendarClock,
   CheckCircle2,
@@ -146,6 +147,26 @@ export default function Reception() {
   const [addOpen, setAddOpen] = useState(false);
   const [noShowTarget, setNoShowTarget] = useState<ReceptionAppointment | null>(null);
   const [noShowReason, setNoShowReason] = useState("");
+  /**
+   * اللوحة هي الافتراضي: هي التي تعرض مدّة الانتظار وحالة الفاتورة والتأمين
+   * والتنبيه الطبي والترتيب المحسوم في القاعدة. والبطاقات القديمة تبقى
+   * بزرّ — لا تُستبدل شاشة يعمل عليها موظف كل يوم بلا مخرج.
+   */
+  const [mode, setMode] = useState<"board" | "cards">("board");
+  const clinicList = useQuery({
+    queryKey: ["reception-clinic-list", organization?.id],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("clinics")
+        .select("id, name")
+        .eq("organization_id", organization?.id)
+        .eq("is_disabled", false)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
 
   const canManageQueue = legacyMode || ["owner", "organization_admin", "branch_manager", "receptionist"].includes(membership?.role_key ?? "");
   const canEditClinical = legacyMode || ["owner", "organization_admin", "doctor", "nurse"].includes(membership?.role_key ?? "");
@@ -206,6 +227,22 @@ export default function Reception() {
               ))}
             </SelectContent>
           </Select>
+          <div className="flex rounded-md border p-0.5">
+            <button
+              type="button"
+              onClick={() => setMode("board")}
+              className={`rounded px-2.5 py-1 text-xs ${mode === "board" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+            >
+              اللوحة
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("cards")}
+              className={`rounded px-2.5 py-1 text-xs ${mode === "cards" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+            >
+              بطاقات
+            </button>
+          </div>
           {canManageQueue && <Button onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" />
             إضافة للطابور
@@ -213,6 +250,16 @@ export default function Reception() {
         </div>
       </div>
 
+      {mode === "board" && (
+        <ReceptionBoard
+          organizationId={organization?.id}
+          organizationName={organization?.name ?? ""}
+          doctors={doctors.data ?? []}
+          clinics={clinicList.data ?? []}
+        />
+      )}
+
+      {mode === "cards" && (
       <Card>
         <CardHeader>
           <CardTitle>قيد الانتظار الآن ({grouped.active.length})</CardTitle>
@@ -238,8 +285,9 @@ export default function Reception() {
           ))}
         </CardContent>
       </Card>
+      )}
 
-      {grouped.done.length > 0 && (
+      {mode === "cards" && grouped.done.length > 0 && (
         <Card>
           <CardHeader>
             <CardTitle>منتهية اليوم ({grouped.done.length})</CardTitle>

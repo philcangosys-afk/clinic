@@ -14,6 +14,9 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import PatientContactsTab from "@/components/patients/PatientContactsTab";
+import MergePatientsDialog from "@/components/patients/MergePatientsDialog";
+import { usePermissions } from "@/lib/permissions";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LookupSelect from "@/components/shared/LookupSelect";
 import SessionsTab from "@/components/patients/SessionsTab";
@@ -75,7 +78,15 @@ export default function PatientProfile() {
             </p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* الملف المدموج يجب أن يُعرف من أول نظرة: من يفتحه يظن أنه ينظر
+              إلى سجل كامل، وهو سجل نُقل عنه كل شيء. */}
+          {(patient.data as any).merged_into_id && (
+            <Badge variant="destructive">
+              ملف مدموج — استخدم الملف الأصلي
+            </Badge>
+          )}
+          <MergeButton patientId={patient.data.id} patientName={patient.data.name_ar} />
           {patient.data.block_file && <Badge variant="destructive">الملف محجوب بالكامل</Badge>}
           {patient.data.block_appointments && <Badge variant="destructive">محجوب عن المواعيد</Badge>}
           {patient.data.block_invoices && <Badge variant="destructive">محجوب عن الفوترة</Badge>}
@@ -105,6 +116,7 @@ export default function PatientProfile() {
               <TabsTrigger value="overview">نظرة عامة</TabsTrigger>
               <TabsTrigger value="conditions">الحالة الصحية</TabsTrigger>
               <TabsTrigger value="history">السوابق الصحية</TabsTrigger>
+              <TabsTrigger value="contacts">المرافقون</TabsTrigger>
               <TabsTrigger value="notes">الملاحظات</TabsTrigger>
               <TabsTrigger value="blocking">الحجب</TabsTrigger>
             </TabsList>
@@ -116,6 +128,9 @@ export default function PatientProfile() {
             </TabsContent>
             <TabsContent value="history" className="mt-4">
               <MedicalHistoryTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="contacts" className="mt-4">
+              <PatientContactsTab patientId={id!} />
             </TabsContent>
             <TabsContent value="notes" className="mt-4">
               <NotesTab patientId={patient.data.id} />
@@ -1086,5 +1101,28 @@ function InvoicesTab({ patientId }: { patientId: string }) {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * زر الدمج — مكوّن منفصل لأن `usePermissions` خطّاف، ولا يُستدعى داخل JSX
+ * ولا داخل شرط. وفصله يُبقي رأس الملف نظيفًا.
+ */
+function MergeButton({ patientId, patientName }: { patientId: string; patientName: string }) {
+  const { can } = usePermissions();
+  const [open, setOpen] = useState(false);
+  if (!can("patients.merge")) return null;
+  return (
+    <>
+      <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
+        دمج ملف مكرَّر
+      </Button>
+      <MergePatientsDialog
+        open={open}
+        onOpenChange={setOpen}
+        primaryPatientId={patientId}
+        primaryPatientName={patientName}
+      />
+    </>
   );
 }
