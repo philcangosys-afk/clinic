@@ -84,6 +84,20 @@ export default function ReceptionReports() {
   const set = <K extends keyof Filters>(key: K, value: Filters[K]) =>
     setFilters((prev) => ({ ...prev, [key]: value }));
 
+  const branches = useQuery({
+    queryKey: ["report-branches", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("branches")
+        .select("id, name")
+        .eq("organization_id", organizationId)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
+
   const doctors = useQuery({
     queryKey: ["report-doctors", organizationId],
     enabled: Boolean(organizationId),
@@ -104,13 +118,17 @@ export default function ReceptionReports() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("clinics")
-        .select("id, name")
+        .select("id, name, branch_id")
         .eq("organization_id", organizationId)
         .order("name");
       if (error) throw error;
-      return (data ?? []) as { id: string; name: string }[];
+      return (data ?? []) as { id: string; name: string; branch_id: string | null }[];
     },
   });
+
+  const visibleClinics = (clinics.data ?? []).filter(
+    (clinic) => filters.branchId === ALL || clinic.branch_id === filters.branchId,
+  );
 
   const args = useMemo(
     () => ({
@@ -239,6 +257,31 @@ export default function ReceptionReports() {
             />
           </div>
           <div className="flex flex-col gap-1">
+            <Label className="text-xs">الفرع</Label>
+            <Select
+              value={filters.branchId}
+              onValueChange={(value) =>
+                setFilters((previous) => ({
+                  ...previous,
+                  branchId: value,
+                  clinicId: ALL,
+                }))
+              }
+            >
+              <SelectTrigger className="h-9 w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>كل الفروع</SelectItem>
+                {(branches.data ?? []).map((branch) => (
+                  <SelectItem key={branch.id} value={branch.id}>
+                    {branch.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1">
             <Label className="text-xs">الطبيب</Label>
             <Select value={filters.doctorId} onValueChange={(value) => set("doctorId", value)}>
               <SelectTrigger className="h-9 w-44">
@@ -262,7 +305,7 @@ export default function ReceptionReports() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>كل العيادات</SelectItem>
-                {(clinics.data ?? []).map((clinic) => (
+                {visibleClinics.map((clinic) => (
                   <SelectItem key={clinic.id} value={clinic.id}>
                     {clinic.name}
                   </SelectItem>
