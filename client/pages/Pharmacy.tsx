@@ -1,14 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pill, Plus, X, Printer } from "lucide-react";
+import { AlertTriangle, Pill, Plus, Printer, RotateCcw, X } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { usePermissions } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
-import type {
-  AvailableDrugLotView,
-  DrugDosageForm,
-  PrescriptionPendingDispensingView,
-  PrescriptionRoute,
-} from "@/lib/database.types";
+import type { DrugDosageForm, PrescriptionRoute } from "@/lib/database.types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -121,41 +117,109 @@ export default function Pharmacy() {
 }
 
 // ---------------------------------------------------------------------------
-// كتالوج الأدوية — يعرض أصناف items من نوع drug + تفاصيلها من drug_details
+// كتالوج الأدوية
+//
+// يقرأ `v_drug_catalog` (0088): الصنف وتفاصيله الدوائية ورصيده في نداء واحد،
+// بدل `items` + علاقة مضمَّنة كانت تُرجع مصفوفة أو كائنًا حسب المزاج.
 // ---------------------------------------------------------------------------
-function useDrugCatalog(organizationId: string | undefined) {
+type DrugCatalogRow = {
+  item_id: string;
+  code: string | null;
+  name_ar: string;
+  name_en: string | null;
+  unit: string | null;
+  price: number | null;
+  cost_price: number | null;
+  reorder_level: number | null;
+  is_disabled: boolean;
+  is_archived: boolean;
+  generic_name: string | null;
+  brand_name: string | null;
+  dosage_form: string | null;
+  strength_text: string | null;
+  manufacturer: string | null;
+  registration_number: string | null;
+  atc_code: string | null;
+  default_route: string | null;
+  pack_size: number | null;
+  storage_conditions: string | null;
+  requires_prescription: boolean | null;
+  is_controlled_substance: boolean | null;
+  controlled_drug_class: string | null;
+  default_dosage_instructions: string | null;
+  stock_on_hand: number;
+  stock_reserved: number;
+};
+
+const CONTROLLED_CLASS_LABELS: Record<string, string> = {
+  narcotic: "مخدّر",
+  psychotropic: "مؤثّر عقلي",
+  precursor: "سليفة كيميائية",
+  controlled_other: "خاضع لرقابة أخرى",
+};
+
+function useDrugCatalog(organizationId: string | undefined, includeArchived: boolean) {
   return useQuery({
-    queryKey: ["drug-catalog", organizationId],
+    queryKey: ["drug-catalog", organizationId, includeArchived],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("items")
-        .select("id, code, name_ar, price, is_disabled, drug_details(generic_name, dosage_form, strength_text, requires_prescription, is_controlled_substance)")
+      let query = supabase
+        .from("v_drug_catalog")
+        .select("*")
         .eq("organization_id", organizationId)
-        .eq("item_type", "drug")
         .order("name_ar");
+      // كل قائمة اختيار تعرض النشط غير المؤرشف فقط — والمؤرشف يظهر هنا
+      // بطلب صريح لأن هذه شاشة إدارة لا قائمة اختيار.
+      if (!includeArchived) query = query.eq("is_archived", false);
+      const { data, error } = await query;
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []) as DrugCatalogRow[];
     },
   });
 }
 
 function DrugCatalogTab() {
   const { organization } = useOrganizationAccess();
-  const drugs = useDrugCatalog(organization?.id);
+  const { can } = usePermissions();
+  const drugs = useDrugCatalog(organization?.id, false);
+  const [editing, setEditing] = useState<DrugCatalogRow | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const rows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!needle) return drugs.data ?? [];
+    return (drugs.data ?? []).filter((d) =>
+      [d.name_ar, d.name_en, d.code, d.generic_name, d.brand_name]
+        .some((v) => (v ?? "").toLowerCase().includes(needle)),
+    );
+  }, [drugs.data, search]);
+
+  const canManage = can("pharmacy.manage_drugs");
 
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between gap-3">
         <div>
           <CardTitle>كتالوج الأدوية</CardTitle>
-          <CardDescription>كل دواء هو صنف بنوع "drug" في كتالوج الأصناف الموحّد، بتفاصيل دوائية إضافية</CardDescription>
+          <CardDescription>
+            الدواء صنف من نوع «drug» في الكتالوج الموحّد، بتفاصيل دوائية ورصيد مخزون
+          </CardDescription>
         </div>
-        <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          دواء جديد
-        </Button>
+        <div className="flex items-center gap-2">
+          <Input
+            className="w-56"
+            placeholder="بحث بالاسم أو الكود أو العلمي"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {canManage && (
+            <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-4 w-4" />
+              دواء جديد
+            </Button>
+          )}
+        </div>
       </CardHeader>
       <CardContent>
         {drugs.isLoading && <Skeleton className="h-40 w-full" />}
@@ -165,39 +229,71 @@ function DrugCatalogTab() {
               <TableRow>
                 <TableHead>الاسم</TableHead>
                 <TableHead>الاسم العلمي</TableHead>
-                <TableHead>الشكل الدوائي</TableHead>
-                <TableHead>التركيز</TableHead>
-                <TableHead>يحتاج وصفة</TableHead>
+                <TableHead>الشكل والتركيز</TableHead>
+                <TableHead>الرصيد</TableHead>
+                <TableHead>الصرف</TableHead>
                 <TableHead>السعر</TableHead>
+                {canManage && <TableHead />}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(drugs.data ?? []).map((drug) => {
-                const details = Array.isArray(drug.drug_details) ? drug.drug_details[0] : drug.drug_details;
+              {rows.map((drug) => {
+                const onHand = Number(drug.stock_on_hand ?? 0);
+                const reserved = Number(drug.stock_reserved ?? 0);
+                const reorder = Number(drug.reorder_level ?? 0);
                 return (
-                  <TableRow key={drug.id}>
-                    <TableCell className="flex items-center gap-2 font-medium">
-                      <Pill className="h-4 w-4 text-muted-foreground" />
-                      {drug.name_ar}
+                  <TableRow key={drug.item_id}>
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        <Pill className="h-4 w-4 text-muted-foreground" />
+                        <span>{drug.name_ar}</span>
+                        {drug.is_controlled_substance && (
+                          <Badge variant="destructive">
+                            {CONTROLLED_CLASS_LABELS[drug.controlled_drug_class ?? ""] ?? "خاضع للرقابة"}
+                          </Badge>
+                        )}
+                        {drug.is_disabled && <Badge variant="secondary">معطَّل</Badge>}
+                      </div>
+                      {drug.code && <span className="text-xs text-muted-foreground">{drug.code}</span>}
                     </TableCell>
-                    <TableCell>{details?.generic_name ?? "—"}</TableCell>
-                    <TableCell>{details ? DOSAGE_FORM_LABELS[details.dosage_form as DrugDosageForm] : "—"}</TableCell>
-                    <TableCell>{details?.strength_text ?? "—"}</TableCell>
+                    <TableCell>{drug.generic_name ?? "—"}</TableCell>
                     <TableCell>
-                      {details?.requires_prescription === false ? (
+                      {drug.dosage_form ? DOSAGE_FORM_LABELS[drug.dosage_form as DrugDosageForm] : "—"}
+                      {drug.strength_text ? ` — ${drug.strength_text}` : ""}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <span>{onHand.toLocaleString("ar-SA")}</span>
+                        {reserved > 0 && (
+                          <span className="text-xs text-muted-foreground">({reserved} محجوز)</span>
+                        )}
+                        {reorder > 0 && onHand <= reorder && (
+                          <Badge variant="warning">دون حدّ الطلب</Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {drug.requires_prescription === false ? (
                         <Badge variant="secondary">بلا وصفة</Badge>
                       ) : (
-                        <Badge variant="warning">يحتاج وصفة</Badge>
+                        <Badge variant="warning">بوصفة</Badge>
                       )}
                     </TableCell>
-                    <TableCell>{Number(drug.price).toLocaleString("ar-SA")} ر.س</TableCell>
+                    <TableCell>{Number(drug.price ?? 0).toLocaleString("ar-SA")} ر.س</TableCell>
+                    {canManage && (
+                      <TableCell>
+                        <Button size="sm" variant="ghost" onClick={() => setEditing(drug)}>
+                          تعديل
+                        </Button>
+                      </TableCell>
+                    )}
                   </TableRow>
                 );
               })}
-              {(drugs.data ?? []).length === 0 && (
+              {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
-                    لا توجد أدوية في الكتالوج بعد.
+                  <TableCell colSpan={canManage ? 7 : 6} className="py-8 text-center text-sm text-muted-foreground">
+                    {search ? "لا نتائج مطابقة." : "لا توجد أدوية في الكتالوج بعد."}
                   </TableCell>
                 </TableRow>
               )}
@@ -205,70 +301,114 @@ function DrugCatalogTab() {
           </Table>
         )}
       </CardContent>
-      <NewDrugDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
+      <DrugDialog
+        open={createOpen || Boolean(editing)}
+        drug={editing}
+        onOpenChange={(next) => {
+          if (!next) {
+            setCreateOpen(false);
+            setEditing(null);
+          }
+        }}
+        organizationId={organization?.id}
+      />
     </Card>
   );
 }
 
-function NewDrugDialog({
+/**
+ * محرّر الدواء.
+ *
+ * يحفظ عبر `app_save_drug` (0088) في نداء واحد ذرّي بدل إدراجين متتاليين في
+ * `items` ثم `drug_details`: فشل الثاني كان يترك صنفًا بلا تفاصيل دوائية،
+ * فيظهر في الكتالوج بلا شكل ولا تركيز ولا اشتراط وصفة.
+ *
+ * الحفظ **دمجيّ**: ما لا يُرسَل لا يُمحى، فتعديل السعر وحده لا يمسح الاسم
+ * العلمي ولا حدّ إعادة الطلب.
+ */
+function DrugDialog({
   open,
+  drug,
   onOpenChange,
   organizationId,
 }: {
   open: boolean;
+  drug: DrugCatalogRow | null;
   onOpenChange: (open: boolean) => void;
   organizationId: string | undefined;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [nameAr, setNameAr] = useState("");
-  const [genericName, setGenericName] = useState("");
-  const [dosageForm, setDosageForm] = useState<DrugDosageForm>("tablet");
-  const [strength, setStrength] = useState("");
-  const [price, setPrice] = useState("0");
+  const [form, setForm] = useState<Record<string, string>>({});
   const [requiresPrescription, setRequiresPrescription] = useState(true);
-  const [isControlled, setIsControlled] = useState(false);
-  const [defaultInstructions, setDefaultInstructions] = useState("");
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
-  const createDrug = useMutation({
+  const key = drug?.item_id ?? "new";
+  if (open && loadedFor !== key) {
+    setLoadedFor(key);
+    setForm({
+      code: drug?.code ?? `DRG-${Date.now().toString().slice(-6)}`,
+      name_ar: drug?.name_ar ?? "",
+      name_en: drug?.name_en ?? "",
+      generic_name: drug?.generic_name ?? "",
+      brand_name: drug?.brand_name ?? "",
+      dosage_form: drug?.dosage_form ?? "tablet",
+      strength_text: drug?.strength_text ?? "",
+      default_route: drug?.default_route ?? "",
+      manufacturer: drug?.manufacturer ?? "",
+      registration_number: drug?.registration_number ?? "",
+      atc_code: drug?.atc_code ?? "",
+      controlled_drug_class: drug?.controlled_drug_class ?? "",
+      pack_size: drug?.pack_size != null ? String(drug.pack_size) : "",
+      storage_conditions: drug?.storage_conditions ?? "",
+      unit: drug?.unit ?? "علبة",
+      price: drug?.price != null ? String(drug.price) : "0",
+      cost_price: drug?.cost_price != null ? String(drug.cost_price) : "",
+      reorder_level: drug?.reorder_level != null ? String(drug.reorder_level) : "0",
+      default_dosage_instructions: drug?.default_dosage_instructions ?? "",
+    });
+    setRequiresPrescription(drug?.requires_prescription !== false);
+  }
+  if (!open && loadedFor !== null) setLoadedFor(null);
+
+  const set = (k: string, v: string) => setForm((prev) => ({ ...prev, [k]: v }));
+
+  const save = useMutation({
     mutationFn: async () => {
-      if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
-      const { data: item, error: itemError } = await supabase
-        .from("items")
-        .insert({
-          organization_id: organizationId,
-          item_type: "drug",
-          code: `DRG-${Date.now().toString().slice(-6)}`,
-          name_ar: nameAr.trim(),
-          price: Number(price) || 0,
-          track_inventory: true,
-        })
-        .select("id")
-        .single();
-      if (itemError) throw itemError;
-
-      const { error: detailsError } = await supabase.from("drug_details").insert({
-        item_id: item.id,
-        generic_name: genericName.trim() || null,
-        dosage_form: dosageForm,
-        strength_text: strength.trim() || null,
+      if (!organizationId) throw new Error("لا توجد منشأة نشطة");
+      const payload: Record<string, unknown> = {
+        code: form.code?.trim(),
+        name_ar: form.name_ar?.trim(),
+        name_en: form.name_en?.trim() || null,
+        generic_name: form.generic_name?.trim() || null,
+        brand_name: form.brand_name?.trim() || null,
+        dosage_form: form.dosage_form || "tablet",
+        strength_text: form.strength_text?.trim() || null,
+        default_route: form.default_route || null,
+        manufacturer: form.manufacturer?.trim() || null,
+        registration_number: form.registration_number?.trim() || null,
+        atc_code: form.atc_code?.trim() || null,
+        controlled_drug_class: form.controlled_drug_class || null,
+        pack_size: form.pack_size ? Number(form.pack_size) : null,
+        storage_conditions: form.storage_conditions?.trim() || null,
+        unit: form.unit?.trim() || "علبة",
+        price: Number(form.price) || 0,
+        cost_price: form.cost_price ? Number(form.cost_price) : null,
+        reorder_level: Number(form.reorder_level) || 0,
         requires_prescription: requiresPrescription,
-        is_controlled_substance: isControlled,
-        default_dosage_instructions: defaultInstructions.trim() || null,
+        default_dosage_instructions: form.default_dosage_instructions?.trim() || null,
+      };
+      const { error } = await supabase.rpc("app_save_drug", {
+        p_organization_id: organizationId,
+        p_item_id: drug?.item_id ?? null,
+        p_payload: payload,
       });
-      if (detailsError) throw detailsError;
+      if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["drug-catalog", organizationId] });
-      toast({ title: "تم حفظ الدواء" });
-      setNameAr("");
-      setGenericName("");
-      setDosageForm("tablet");
-      setStrength("");
-      setPrice("0");
-      setRequiresPrescription(true);
-      setIsControlled(false);
-      setDefaultInstructions("");
+      queryClient.invalidateQueries({ queryKey: ["drugs-select-list", organizationId] });
+      toast({ title: drug ? "تم تحديث الدواء" : "تم حفظ الدواء" });
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -281,60 +421,156 @@ function NewDrugDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>دواء جديد</DialogTitle>
+          <DialogTitle>{drug ? `تعديل: ${drug.name_ar}` : "دواء جديد"}</DialogTitle>
+          <DialogDescription>
+            الدواء يُتتبَّع مخزونًا وصلاحيةً تلقائيًا — بلا ذلك لا معنى لدفعة ولا لتاريخ انتهاء
+          </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-3">
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>الكود *</Label>
+            <Input value={form.code ?? ""} onChange={(e) => set("code", e.target.value)} />
+          </div>
           <div className="flex flex-col gap-1.5">
             <Label>الاسم التجاري *</Label>
-            <Input value={nameAr} onChange={(e) => setNameAr(e.target.value)} autoFocus />
+            <Input value={form.name_ar ?? ""} onChange={(e) => set("name_ar", e.target.value)} autoFocus />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الاسم بالإنجليزية</Label>
+            <Input value={form.name_en ?? ""} onChange={(e) => set("name_en", e.target.value)} dir="ltr" />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>الاسم العلمي</Label>
-            <Input value={genericName} onChange={(e) => setGenericName(e.target.value)} />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label>الشكل الدوائي</Label>
-              <Select value={dosageForm} onValueChange={(v) => setDosageForm(v as DrugDosageForm)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {Object.entries(DOSAGE_FORM_LABELS).map(([value, label]) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>التركيز</Label>
-              <Input value={strength} onChange={(e) => setStrength(e.target.value)} placeholder="500mg" />
-            </div>
+            <Input value={form.generic_name ?? ""} onChange={(e) => set("generic_name", e.target.value)} />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label>السعر</Label>
-            <Input type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} />
+            <Label>الشكل الدوائي</Label>
+            <Select value={form.dosage_form ?? "tablet"} onValueChange={(v) => set("dosage_form", v)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {Object.entries(DOSAGE_FORM_LABELS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label>تعليمات الجرعة الافتراضية (اختياري)</Label>
-            <Textarea value={defaultInstructions} onChange={(e) => setDefaultInstructions(e.target.value)} rows={2} />
+            <Label>التركيز</Label>
+            <Input value={form.strength_text ?? ""} onChange={(e) => set("strength_text", e.target.value)} placeholder="500mg" />
           </div>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={requiresPrescription} onChange={(e) => setRequiresPrescription(e.target.checked)} />
+          <div className="flex flex-col gap-1.5">
+            <Label>طريق الإعطاء الافتراضي</Label>
+            <Select value={form.default_route || "none"} onValueChange={(v) => set("default_route", v === "none" ? "" : v)}>
+              <SelectTrigger>
+                <SelectValue placeholder="غير محدَّد" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">غير محدَّد</SelectItem>
+                {Object.entries(ROUTE_LABELS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>التصنيف الرقابي</Label>
+            <Select
+              value={form.controlled_drug_class || "none"}
+              onValueChange={(v) => set("controlled_drug_class", v === "none" ? "" : v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="غير خاضع" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">غير خاضع للرقابة</SelectItem>
+                {Object.entries(CONTROLLED_CLASS_LABELS).map(([value, label]) => (
+                  <SelectItem key={value} value={value}>
+                    {label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الشركة المصنّعة</Label>
+            <Input value={form.manufacturer ?? ""} onChange={(e) => set("manufacturer", e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>رقم التسجيل</Label>
+            <Input value={form.registration_number ?? ""} onChange={(e) => set("registration_number", e.target.value)} dir="ltr" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>رمز ATC</Label>
+            <Input value={form.atc_code ?? ""} onChange={(e) => set("atc_code", e.target.value)} dir="ltr" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>وحدة البيع</Label>
+            <Input value={form.unit ?? ""} onChange={(e) => set("unit", e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>حجم العبوة</Label>
+            <Input type="number" min={0} value={form.pack_size ?? ""} onChange={(e) => set("pack_size", e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>حدّ إعادة الطلب</Label>
+            <Input type="number" min={0} value={form.reorder_level ?? "0"} onChange={(e) => set("reorder_level", e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>سعر البيع</Label>
+            <Input type="number" min={0} value={form.price ?? "0"} onChange={(e) => set("price", e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>سعر التكلفة</Label>
+            <Input type="number" min={0} value={form.cost_price ?? ""} onChange={(e) => set("cost_price", e.target.value)} />
+          </div>
+          <div className="col-span-2 flex flex-col gap-1.5">
+            <Label>ظروف التخزين</Label>
+            <Input
+              value={form.storage_conditions ?? ""}
+              onChange={(e) => set("storage_conditions", e.target.value)}
+              placeholder="مثال: يُحفظ بين ٢ و٨ درجات"
+            />
+          </div>
+          <div className="col-span-2 flex flex-col gap-1.5">
+            <Label>تعليمات الجرعة الافتراضية</Label>
+            <Textarea
+              value={form.default_dosage_instructions ?? ""}
+              onChange={(e) => set("default_dosage_instructions", e.target.value)}
+              rows={2}
+            />
+          </div>
+          <label className="col-span-2 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={requiresPrescription}
+              onChange={(e) => setRequiresPrescription(e.target.checked)}
+            />
             يحتاج وصفة طبية للصرف
           </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={isControlled} onChange={(e) => setIsControlled(e.target.checked)} />
-            دواء مخضع للرقابة (Controlled Substance)
-          </label>
+          {form.controlled_drug_class && (
+            <p className="col-span-2 rounded-md bg-amber-50 p-2 text-xs text-amber-800">
+              التصنيف الرقابي يرفع علَم «خاضع للرقابة» تلقائيًا، ويشترط صلاحية
+              <span className="font-mono"> pharmacy.dispense_controlled </span>
+              عند كل صرف، ويُسجَّل باسم الدواء في سجل التدقيق.
+            </p>
+          )}
         </div>
+
         <DialogFooter>
-          <Button disabled={!nameAr.trim() || createDrug.isPending} onClick={() => createDrug.mutate()}>
-            {createDrug.isPending ? "جارٍ الحفظ..." : "حفظ"}
+          <Button
+            disabled={!form.name_ar?.trim() || !form.code?.trim() || save.isPending}
+            onClick={() => save.mutate()}
+          >
+            {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -345,18 +581,38 @@ function NewDrugDialog({
 // ---------------------------------------------------------------------------
 // الوصفات
 // ---------------------------------------------------------------------------
+type PharmacyQueueRow = {
+  prescription_id: string;
+  organization_id: string;
+  status: string;
+  issued_at: string;
+  sent_to_pharmacy_at: string | null;
+  warehouse_id: string | null;
+  patient_id: string;
+  patient_name: string;
+  file_number: string | null;
+  doctor_name: string | null;
+  clinic_name: string | null;
+  lines_count: number;
+  lines_done: number;
+  qty_pending: number | null;
+  has_controlled: boolean | null;
+  qty_reserved: number;
+  is_billed: boolean;
+};
+
 function usePendingPrescriptions(organizationId: string | undefined) {
   return useQuery({
-    queryKey: ["pending-prescriptions", organizationId],
+    queryKey: ["pharmacy-queue", organizationId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("v_prescriptions_pending_dispensing")
+        .from("v_pharmacy_queue")
         .select("*")
         .eq("organization_id", organizationId)
         .order("issued_at", { ascending: false });
       if (error) throw error;
-      return (data ?? []) as PrescriptionPendingDispensingView[];
+      return (data ?? []) as PharmacyQueueRow[];
     },
   });
 }
@@ -499,9 +755,46 @@ function PrescriptionsTab() {
   const { organization } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { can } = usePermissions();
   const [statusFilter, setStatusFilter] = useState("all");
   const prescriptions = usePrescriptionsList(organization?.id, statusFilter);
   const [createOpen, setCreateOpen] = useState(false);
+  const [cancelRow, setCancelRow] = useState<PrescriptionListRow | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+
+  /**
+   * إلغاء الوصفة.
+   *
+   * الحالة `cancelled` كانت معروضة في هذه الشاشة منذ 0015 — بشارة حمراء
+   * وترجمة عربية — ولا شيء في النظام كلّه يستطيع ضبطها. الزرّ هنا يصلها
+   * بـ`app_set_prescription_status` (0088)، التي تُلزم بسبب، وتفكّ الحجوزات،
+   * وترفض الإلغاء إن كان ثمّة صرف منفَّذ لم يُلغَ.
+   */
+  const cancelPrescription = useMutation({
+    mutationFn: async () => {
+      if (!cancelRow) throw new Error("لا وصفة محدَّدة");
+      if (!cancelReason.trim()) throw new Error("اكتب سبب الإلغاء");
+      const { error } = await supabase.rpc("app_set_prescription_status", {
+        p_prescription_id: cancelRow.id,
+        p_status: "cancelled",
+        p_reason: cancelReason.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["prescriptions-list"] });
+      queryClient.invalidateQueries({ queryKey: ["pharmacy-queue", organization?.id] });
+      toast({ title: "أُلغيت الوصفة وفُكّت حجوزاتها" });
+      setCancelRow(null);
+      setCancelReason("");
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الإلغاء",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
 
   const toggleBilled = useMutation({
     mutationFn: async (row: PrescriptionListRow) => {
@@ -620,9 +913,18 @@ function PrescriptionsTab() {
                       {row.insurance_policy_number ? ` · ${row.insurance_policy_number}` : ""}
                     </TableCell>
                     <TableCell>
-                      <Button size="sm" variant={row.is_billed ? "outline" : "ghost"} onClick={() => toggleBilled.mutate(row)}>
-                        {row.is_billed ? "تمت الفوترة" : "لم تُفوتَر"}
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button size="sm" variant={row.is_billed ? "outline" : "ghost"} onClick={() => toggleBilled.mutate(row)}>
+                          {row.is_billed ? "تمت الفوترة" : "لم تُفوتَر"}
+                        </Button>
+                        {can("pharmacy.prescribe") &&
+                          !["cancelled", "dispensed"].includes(row.status) && (
+                            <Button size="sm" variant="ghost" onClick={() => setCancelRow(row)}>
+                              <X className="h-4 w-4" />
+                              إلغاء
+                            </Button>
+                          )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 );
@@ -639,6 +941,31 @@ function PrescriptionsTab() {
         )}
       </CardContent>
       <NewPrescriptionDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
+
+      <Dialog open={Boolean(cancelRow)} onOpenChange={(next) => !next && setCancelRow(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>إلغاء الوصفة</DialogTitle>
+            <DialogDescription>
+              الإلغاء يفكّ ما حُجز من المخزون لهذه الوصفة، ولا يمسّ صرفًا وقع — لإبطاله يُلغى الصرف
+              نفسه فتعود الكميات بحركة مسجَّلة.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label>سبب الإلغاء *</Label>
+            <Textarea rows={3} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              disabled={!cancelReason.trim() || cancelPrescription.isPending}
+              onClick={() => cancelPrescription.mutate()}
+            >
+              {cancelPrescription.isPending ? "جارٍ الإلغاء..." : "تأكيد الإلغاء"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -874,7 +1201,26 @@ function NewPrescriptionDialog({
 
 // ---------------------------------------------------------------------------
 // الصرف
+//
+// المسار القديم كان: أدرج `dispensing_records`، ثم أدرج `dispensing_items`
+// بدفعة يختارها الصيدليّ من قائمة. ثلاث مشكلات في هذا: الطلبان غير ذرّيين،
+// والدفعة اختيار بشريّ لا FEFO، والكمية محدودة بالموصوف لا بالمتاح — فصرف
+// ١٠ من دفعة فيها ٣ كان يترك رصيدًا سالبًا في القاعدة.
+//
+// الآن نداء واحد: `app_dispense_prescription` يوزّع FEFO، ويرفض المنتهي
+// والمؤرشف والمعطَّل، ويشترط صلاحية إضافية للرقابي، ويسعّر من الدفعة.
 // ---------------------------------------------------------------------------
+type PrescriptionLine = {
+  id: string;
+  drug_item_id: string;
+  quantity_prescribed: number;
+  dispensed_quantity: number;
+  dosage_instructions: string | null;
+  frequency: string | null;
+  duration_days: number | null;
+  drug?: { id: string; name_ar: string } | null;
+};
+
 function usePrescriptionDetails(prescriptionId: string | null) {
   return useQuery({
     queryKey: ["prescription-details", prescriptionId],
@@ -882,40 +1228,98 @@ function usePrescriptionDetails(prescriptionId: string | null) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("prescription_items")
-        .select("*, drug:items(id, name_ar)")
+        .select(
+          "id, drug_item_id, quantity_prescribed, dispensed_quantity, dosage_instructions, frequency, duration_days, drug:items(id, name_ar)",
+        )
         .eq("prescription_id", prescriptionId);
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []) as unknown as PrescriptionLine[];
     },
   });
 }
 
-function useAvailableLots(itemId: string | undefined, organizationId: string | undefined) {
+/**
+ * المتاح فعلًا لكل دواء في مستودع.
+ *
+ * يقرأ `v_available_drug_lots` (0088) الذي يستبعد المنتهي وغير المتاح ويطرح
+ * المحجوز — لا `inventory_lots` الخام كما كان، فقد كان المنظور القديم يعرض
+ * دفعة انتهت أمس كأنها صالحة للصرف.
+ */
+function useAvailableStock(warehouseId: string, organizationId: string | undefined) {
   return useQuery({
-    queryKey: ["available-drug-lots", itemId, organizationId],
-    enabled: Boolean(itemId && organizationId),
+    queryKey: ["available-stock", warehouseId, organizationId],
+    enabled: Boolean(warehouseId && organizationId),
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_available_drug_lots")
-        .select("*")
-        .eq("item_id", itemId)
-        .eq("organization_id", organizationId);
+        .select("item_id, qty_available, expiry_date, days_to_expiry, selling_price, lot_number")
+        .eq("organization_id", organizationId)
+        .eq("warehouse_id", warehouseId);
       if (error) throw error;
-      return (data ?? []) as AvailableDrugLotView[];
+      const map: Record<string, { available: number; nearestExpiry: string | null; price: number | null }> = {};
+      for (const row of (data ?? []) as {
+        item_id: string;
+        qty_available: number;
+        expiry_date: string | null;
+        selling_price: number | null;
+      }[]) {
+        const cur = map[row.item_id] ?? { available: 0, nearestExpiry: null, price: null };
+        cur.available += Number(row.qty_available ?? 0);
+        if (!cur.nearestExpiry || (row.expiry_date && row.expiry_date < cur.nearestExpiry)) {
+          cur.nearestExpiry = row.expiry_date;
+        }
+        if (cur.price == null) cur.price = row.selling_price;
+        map[row.item_id] = cur;
+      }
+      return map;
+    },
+  });
+}
+
+function useDispensingHistory(prescriptionId: string | null) {
+  return useQuery({
+    queryKey: ["dispensing-history", prescriptionId],
+    enabled: Boolean(prescriptionId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("dispensing_records")
+        .select(
+          "id, status, dispensed_at, notes, dispensing_items(id, quantity_dispensed, unit_price, drug:items(name_ar))",
+        )
+        .eq("prescription_id", prescriptionId)
+        .order("dispensed_at", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as unknown as {
+        id: string;
+        status: string;
+        dispensed_at: string;
+        notes: string | null;
+        dispensing_items: {
+          id: string;
+          quantity_dispensed: number;
+          unit_price: number;
+          drug?: { name_ar: string } | null;
+        }[];
+      }[];
     },
   });
 }
 
 function DispensingTab() {
   const { organization } = useOrganizationAccess();
+  const { can } = usePermissions();
   const prescriptions = usePendingPrescriptions(organization?.id);
   const [openPrescriptionId, setOpenPrescriptionId] = useState<string | null>(null);
+
+  const canDispense = can("pharmacy.dispense");
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>طابور الصرف</CardTitle>
-        <CardDescription>اختر وصفة لصرف أدويتها — الكمية المتبقية تُحدَّث تلقائيًا من المخزون عند كل صرف</CardDescription>
+        <CardDescription>
+          الصرف يوزّع الكمية على الدفعات بترتيب الأقرب انتهاءً أوّلًا، ويتجاوز المحجوز والمنتهي
+        </CardDescription>
       </CardHeader>
       <CardContent>
         {prescriptions.isLoading && <Skeleton className="h-40 w-full" />}
@@ -925,6 +1329,8 @@ function DispensingTab() {
               <TableRow>
                 <TableHead>المريض</TableHead>
                 <TableHead>الطبيب</TableHead>
+                <TableHead>الأدوية</TableHead>
+                <TableHead>المتبقّي</TableHead>
                 <TableHead>الحالة</TableHead>
                 <TableHead />
               </TableRow>
@@ -932,15 +1338,55 @@ function DispensingTab() {
             <TableBody>
               {(prescriptions.data ?? []).map((pr) => (
                 <TableRow key={pr.prescription_id}>
-                  <TableCell className="font-medium">{pr.patient_name}</TableCell>
+                  <TableCell className="font-medium">
+                    <div className="flex items-center gap-2">
+                      <span>{pr.patient_name}</span>
+                      {pr.has_controlled && (
+                        <Badge variant="destructive" className="gap-1">
+                          <AlertTriangle className="h-3 w-3" />
+                          رقابي
+                        </Badge>
+                      )}
+                    </div>
+                    {pr.file_number && (
+                      <span className="text-xs text-muted-foreground">ملف {pr.file_number}</span>
+                    )}
+                  </TableCell>
                   <TableCell>{pr.doctor_name ?? "—"}</TableCell>
                   <TableCell>
-                    <Badge variant={pr.status === "partially_dispensed" ? "warning" : "secondary"}>
-                      {pr.status === "partially_dispensed" ? "صرف جزئي" : "لم يُصرَف"}
+                    {pr.lines_done} / {pr.lines_count}
+                  </TableCell>
+                  <TableCell>
+                    {Number(pr.qty_pending ?? 0).toLocaleString("ar-SA")}
+                    {Number(pr.qty_reserved ?? 0) > 0 && (
+                      <span className="text-xs text-muted-foreground"> ({pr.qty_reserved} محجوز)</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={
+                        pr.status === "partially_dispensed"
+                          ? "warning"
+                          : pr.status === "sent_to_pharmacy"
+                            ? "default"
+                            : "secondary"
+                      }
+                    >
+                      {pr.status === "partially_dispensed"
+                        ? "صرف جزئي"
+                        : pr.status === "sent_to_pharmacy"
+                          ? "في الصيدلية"
+                          : "لم يُصرَف"}
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    <Button size="sm" variant="outline" onClick={() => setOpenPrescriptionId(pr.prescription_id)}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!canDispense}
+                      title={canDispense ? undefined : "تحتاج صلاحية pharmacy.dispense"}
+                      onClick={() => setOpenPrescriptionId(pr.prescription_id)}
+                    >
                       صرف
                     </Button>
                   </TableCell>
@@ -948,7 +1394,7 @@ function DispensingTab() {
               ))}
               {(prescriptions.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
                     لا توجد وصفات بانتظار الصرف.
                   </TableCell>
                 </TableRow>
@@ -966,62 +1412,6 @@ function DispensingTab() {
   );
 }
 
-function DispenseLineRow({
-  item,
-  organizationId,
-  qty,
-  lotId,
-  onChangeQty,
-  onChangeLot,
-}: {
-  item: { id: string; drug_item_id: string; quantity_prescribed: number; dispensed_quantity: number; drug?: { name_ar: string } };
-  organizationId: string | undefined;
-  qty: string;
-  lotId: string;
-  onChangeQty: (value: string) => void;
-  onChangeLot: (value: string) => void;
-}) {
-  const lots = useAvailableLots(item.drug_item_id, organizationId);
-  const remaining = Number(item.quantity_prescribed) - Number(item.dispensed_quantity);
-
-  if (remaining <= 0) {
-    return (
-      <div className="flex items-center justify-between rounded-md border p-3 text-sm text-muted-foreground">
-        <span>{item.drug?.name_ar}</span>
-        <Badge variant="success">صُرف بالكامل</Badge>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex flex-col gap-2 rounded-md border p-3">
-      <div className="flex items-center justify-between">
-        <span className="font-medium">{item.drug?.name_ar}</span>
-        <span className="text-xs text-muted-foreground">المتبقي من الوصفة: {remaining}</span>
-      </div>
-      <div className="grid grid-cols-2 gap-2">
-        <Select value={lotId} onValueChange={onChangeLot}>
-          <SelectTrigger>
-            <SelectValue placeholder="اختر دفعة المخزون" />
-          </SelectTrigger>
-          <SelectContent>
-            {(lots.data ?? []).map((lot) => (
-              <SelectItem key={lot.lot_id} value={lot.lot_id}>
-                {lot.lot_number ?? "دفعة بلا رقم"} — متبقٍ {lot.qty_remaining}
-                {lot.expiry_date ? ` — ينتهي ${lot.expiry_date}` : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Input type="number" min={0} max={remaining} placeholder="الكمية المصروفة" value={qty} onChange={(e) => onChangeQty(e.target.value)} />
-      </div>
-      {(lots.data ?? []).length === 0 && (
-        <p className="text-xs text-amber-700">لا توجد دفعة مخزون متاحة لهذا الدواء — تحقّق من المشتريات/المخزون.</p>
-      )}
-    </div>
-  );
-}
-
 function DispenseDialog({
   prescriptionId,
   onOpenChange,
@@ -1032,77 +1422,136 @@ function DispenseDialog({
   organizationId: string | undefined;
 }) {
   const details = usePrescriptionDetails(prescriptionId);
+  const history = useDispensingHistory(prescriptionId);
   const warehouses = useWarehousesList(organizationId);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { can } = usePermissions();
   const [warehouseId, setWarehouseId] = useState("");
-  const [selections, setSelections] = useState<Record<string, { qty: string; lotId: string }>>({});
+  const [quantities, setQuantities] = useState<Record<string, string>>({});
+  const [cancelTarget, setCancelTarget] = useState<string | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+
+  const stock = useAvailableStock(warehouseId, organizationId);
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["pharmacy-queue", organizationId] });
+    queryClient.invalidateQueries({ queryKey: ["prescription-details", prescriptionId] });
+    queryClient.invalidateQueries({ queryKey: ["dispensing-history", prescriptionId] });
+    queryClient.invalidateQueries({ queryKey: ["available-stock", warehouseId, organizationId] });
+    queryClient.invalidateQueries({ queryKey: ["drug-catalog", organizationId] });
+    queryClient.invalidateQueries({ queryKey: ["prescriptions-list", organizationId] });
+  };
+
+  const fail = (title: string) => (error: unknown) =>
+    toast({
+      variant: "destructive",
+      title,
+      description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+    });
+
+  const reserve = useMutation({
+    mutationFn: async () => {
+      if (!prescriptionId || !warehouseId) throw new Error("اختر المستودع أوّلًا");
+      const { data, error } = await supabase.rpc("app_reserve_prescription", {
+        p_prescription_id: prescriptionId,
+        p_warehouse_id: warehouseId,
+      });
+      if (error) throw error;
+      return data as { reserved_lines: number; shortages: { drug: string; needed: number }[] };
+    },
+    onSuccess: (result) => {
+      invalidate();
+      const shortages = result?.shortages ?? [];
+      if (shortages.length > 0) {
+        toast({
+          variant: "destructive",
+          title: "حُجز المتاح، وبقي نقص",
+          description: shortages.map((s) => `${s.drug}: ينقص ${s.needed}`).join(" — "),
+        });
+      } else {
+        toast({ title: "تم حجز كامل الوصفة من المخزون" });
+      }
+    },
+    onError: fail("تعذر الحجز"),
+  });
+
+  const release = useMutation({
+    mutationFn: async () => {
+      if (!prescriptionId) throw new Error("لا توجد وصفة");
+      const { data, error } = await supabase.rpc("app_release_prescription_reservations", {
+        p_prescription_id: prescriptionId,
+        p_reason: "فكّ يدوي من شاشة الصرف",
+      });
+      if (error) throw error;
+      return data as number;
+    },
+    onSuccess: (count) => {
+      invalidate();
+      toast({ title: `فُكّ ${count ?? 0} حجزًا وعادت الكميات إلى المتاح` });
+    },
+    onError: fail("تعذر فكّ الحجز"),
+  });
 
   const dispense = useMutation({
     mutationFn: async () => {
-      if (!organizationId || !prescriptionId) throw new Error("بيانات غير مكتملة");
+      if (!prescriptionId) throw new Error("لا توجد وصفة");
       if (!warehouseId) throw new Error("اختر المستودع");
+      const lines = Object.keys(quantities)
+        .map((id) => ({ prescription_item_id: id, qty: Number(quantities[id]) }))
+        .filter((line) => line.qty > 0);
+      if (lines.length === 0) throw new Error("حدّد كمية لدواء واحد على الأقل");
 
-      const { data: prescription, error: prescriptionLoadError } = await supabase
-        .from("prescriptions")
-        .select("patient_id")
-        .eq("id", prescriptionId)
-        .single();
-      if (prescriptionLoadError) throw prescriptionLoadError;
-
-      const linesToDispense: Array<[string, { qty: string; lotId: string }]> = Object.keys(selections)
-        .map((itemId) => [itemId, selections[itemId]] as [string, { qty: string; lotId: string }])
-        .filter(([, sel]) => Number(sel.qty) > 0 && sel.lotId);
-      if (linesToDispense.length === 0) throw new Error("حدّد كمية ودفعة لدواء واحد على الأقل");
-
-      const { data: record, error: recordError } = await supabase
-        .from("dispensing_records")
-        .insert({
-          organization_id: organizationId,
-          prescription_id: prescriptionId,
-          patient_id: prescription.patient_id,
-          warehouse_id: warehouseId,
-        })
-        .select("id")
-        .single();
-      if (recordError) throw recordError;
-
-      const { error: itemsError } = await supabase.from("dispensing_items").insert(
-        linesToDispense.map(([itemId, sel]) => {
-          const item = (details.data ?? []).find((line) => line.id === itemId);
-          return {
-            dispensing_record_id: record.id,
-            prescription_item_id: itemId,
-            drug_item_id: item?.drug_item_id,
-            lot_id: sel.lotId,
-            quantity_dispensed: Number(sel.qty),
-            unit_price: 0,
-          };
-        }),
-      );
-      if (itemsError) throw itemsError;
+      const { error } = await supabase.rpc("app_dispense_prescription", {
+        p_prescription_id: prescriptionId,
+        p_warehouse_id: warehouseId,
+        p_lines: lines,
+        p_notes: null,
+      });
+      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["pending-prescriptions", organizationId] });
-      queryClient.invalidateQueries({ queryKey: ["prescription-details", prescriptionId] });
-      toast({ title: "تم صرف الأدوية المحدَّدة" });
-      setSelections({});
+      invalidate();
+      toast({ title: "تم الصرف" });
+      setQuantities({});
       onOpenChange();
     },
-    onError: (error: unknown) =>
-      toast({
-        variant: "destructive",
-        title: "تعذر الصرف",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
-      }),
+    onError: fail("تعذر الصرف"),
   });
+
+  const cancelDispensing = useMutation({
+    mutationFn: async () => {
+      if (!cancelTarget) throw new Error("لا سجل محدَّد");
+      if (!cancelReason.trim()) throw new Error("اكتب سبب الإلغاء");
+      const { error } = await supabase.rpc("app_cancel_dispensing", {
+        p_record_id: cancelTarget,
+        p_reason: cancelReason.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "أُلغي الصرف وأُعيدت الكميات إلى المخزون" });
+      setCancelTarget(null);
+      setCancelReason("");
+    },
+    onError: fail("تعذر الإلغاء"),
+  });
+
+  const canCancel = can("pharmacy.cancel_dispensing");
+  const lines = details.data ?? [];
+  const pending = lines.filter(
+    (line) => Number(line.quantity_prescribed) - Number(line.dispensed_quantity) > 0,
+  );
 
   return (
     <Dialog open={Boolean(prescriptionId)} onOpenChange={(next) => !next && onOpenChange()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>صرف الوصفة</DialogTitle>
-          <DialogDescription>كل دواء يُصرَف من دفعة مخزون محدَّدة — الكمية تُنقَص من المخزون فورًا بعد الصرف</DialogDescription>
+          <DialogDescription>
+            اختر المستودع وحدّد الكميات — القاعدة تختار الدفعات بنفسها بترتيب الأقرب انتهاءً
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-1.5">
@@ -1112,7 +1561,7 @@ function DispenseDialog({
               <SelectValue placeholder="اختر المستودع" />
             </SelectTrigger>
             <SelectContent>
-              {(warehouses.data ?? []).map((w) => (
+              {(warehouses.data ?? []).map((w: { id: string; name: string }) => (
                 <SelectItem key={w.id} value={w.id}>
                   {w.name}
                 </SelectItem>
@@ -1121,27 +1570,154 @@ function DispenseDialog({
           </Select>
         </div>
 
+        {warehouseId && (
+          <div className="flex justify-end gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={release.isPending}
+              onClick={() => release.mutate()}
+            >
+              {release.isPending ? "جارٍ الفكّ..." : "فكّ الحجز"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={reserve.isPending}
+              onClick={() => reserve.mutate()}
+            >
+              {reserve.isPending ? "جارٍ الحجز..." : "حجز الكميات من المخزون"}
+            </Button>
+          </div>
+        )}
+
         <Separator />
 
-        {details.isLoading && <Skeleton className="h-40 w-full" />}
-        {!details.isLoading && (
-          <div className="flex flex-col gap-3">
-            {(details.data ?? []).map((item) => (
-              <DispenseLineRow
-                key={item.id}
-                item={item as { id: string; drug_item_id: string; quantity_prescribed: number; dispensed_quantity: number; drug?: { name_ar: string } }}
-                organizationId={organizationId}
-                qty={selections[item.id]?.qty ?? ""}
-                lotId={selections[item.id]?.lotId ?? ""}
-                onChangeQty={(value) => setSelections((s) => ({ ...s, [item.id]: { ...s[item.id], qty: value, lotId: s[item.id]?.lotId ?? "" } }))}
-                onChangeLot={(value) => setSelections((s) => ({ ...s, [item.id]: { qty: s[item.id]?.qty ?? "", lotId: value } }))}
-              />
-            ))}
+        <div className="flex flex-col gap-2">
+          {details.isLoading && <Skeleton className="h-24 w-full" />}
+          {!details.isLoading && pending.length === 0 && (
+            <p className="py-4 text-center text-sm text-muted-foreground">صُرفت كل أدوية الوصفة.</p>
+          )}
+          {pending.map((line) => {
+            const remaining = Number(line.quantity_prescribed) - Number(line.dispensed_quantity);
+            const info = stock.data?.[line.drug_item_id];
+            const available = info?.available ?? 0;
+            const short = warehouseId && available < remaining;
+            return (
+              <div key={line.id} className="flex flex-col gap-2 rounded-md border p-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium">{line.drug?.name_ar ?? "دواء"}</span>
+                  <span className="text-xs text-muted-foreground">
+                    المتبقّي من الوصفة: {remaining}
+                    {warehouseId ? ` — المتاح في المستودع: ${available}` : ""}
+                  </span>
+                </div>
+                {line.dosage_instructions && (
+                  <p className="text-xs text-muted-foreground">{line.dosage_instructions}</p>
+                )}
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={0}
+                    max={Math.min(remaining, available || remaining)}
+                    placeholder="الكمية المصروفة"
+                    value={quantities[line.id] ?? ""}
+                    onChange={(e) => setQuantities((prev) => ({ ...prev, [line.id]: e.target.value }))}
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() =>
+                      setQuantities((prev) => ({
+                        ...prev,
+                        [line.id]: String(Math.min(remaining, available || remaining)),
+                      }))
+                    }
+                  >
+                    الأقصى
+                  </Button>
+                </div>
+                {short && (
+                  <p className="text-xs text-amber-700">
+                    المتاح أقلّ من المتبقّي — الصرف الجزئي مسموح، والباقي يبقى على الوصفة.
+                  </p>
+                )}
+                {warehouseId && available === 0 && (
+                  <p className="text-xs text-destructive">
+                    لا رصيد صالح لهذا الدواء في هذا المستودع — راجع الدفعات وتواريخ الانتهاء.
+                  </p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {(history.data ?? []).length > 0 && (
+          <>
+            <Separator />
+            <div className="flex flex-col gap-2">
+              <h4 className="text-sm font-medium">سجل الصرف</h4>
+              {(history.data ?? []).map((rec) => (
+                <div key={rec.id} className="rounded-md border p-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span>
+                      {new Date(rec.dispensed_at).toLocaleString("ar-SA")}
+                      {rec.status === "cancelled" && (
+                        <Badge variant="secondary" className="mr-2">
+                          ملغى
+                        </Badge>
+                      )}
+                    </span>
+                    {rec.status !== "cancelled" && canCancel && (
+                      <Button size="sm" variant="ghost" onClick={() => setCancelTarget(rec.id)}>
+                        <RotateCcw className="h-4 w-4" />
+                        إلغاء وإرجاع
+                      </Button>
+                    )}
+                  </div>
+                  <ul className="mt-1 text-xs text-muted-foreground">
+                    {(rec.dispensing_items ?? []).map((it) => (
+                      <li key={it.id}>
+                        {it.drug?.name_ar ?? "دواء"} — {it.quantity_dispensed} ×{" "}
+                        {Number(it.unit_price).toLocaleString("ar-SA")} ر.س
+                      </li>
+                    ))}
+                  </ul>
+                  {rec.notes && <p className="mt-1 text-xs text-muted-foreground">{rec.notes}</p>}
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {cancelTarget && (
+          <div className="flex flex-col gap-2 rounded-md border border-destructive/40 p-3">
+            <Label>سبب الإلغاء *</Label>
+            <Textarea rows={2} value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} />
+            <p className="text-xs text-muted-foreground">
+              الإلغاء يسجّل حركة إرجاع في المخزون ولا يمحو شيئًا — الكميات تعود إلى دفعاتها.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setCancelTarget(null)}>
+                تراجع
+              </Button>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={!cancelReason.trim() || cancelDispensing.isPending}
+                onClick={() => cancelDispensing.mutate()}
+              >
+                تأكيد الإلغاء
+              </Button>
+            </div>
           </div>
         )}
 
         <DialogFooter>
-          <Button disabled={!warehouseId || dispense.isPending} onClick={() => dispense.mutate()}>
+          <Button
+            disabled={!warehouseId || pending.length === 0 || dispense.isPending}
+            onClick={() => dispense.mutate()}
+          >
             {dispense.isPending ? "جارٍ الصرف..." : "تأكيد الصرف"}
           </Button>
         </DialogFooter>

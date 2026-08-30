@@ -37,21 +37,64 @@ import PatientPicker from "@/components/shared/PatientPicker";
 import ItemPicker from "@/components/shared/ItemPicker";
 import BillingItemLink from "@/components/shared/BillingItemLink";
 
-const STATUS_LABELS: Record<RadiologyOrderStatus, string> = {
+/**
+ * دورة حياة طلب الأشعة (0084) — تسع حالات واثنتان استثنائيتان.
+ *
+ * `completed` رُحِّلت إلى `images_ready` و`reported` إلى `reporting`:
+ * «مكتمل» بعد التصوير ليس اكتمالًا، والتقرير لم يُكتب بعد.
+ */
+const STATUS_LABELS: Record<string, string> = {
+  draft: "مسودة",
   ordered: "مطلوب",
   scheduled: "مُجدوَل",
+  arrived: "حضر المريض",
   in_progress: "قيد التصوير",
-  completed: "تم التصوير (بانتظار التقرير)",
-  reported: "تقرير موثَّق",
+  images_ready: "الصور جاهزة",
+  reporting: "قيد التقرير",
+  verified: "تقرير معتمد",
+  delivered: "مسلَّم",
+  rejected: "مرفوض",
   cancelled: "ملغي",
 };
-const STATUS_BADGE: Record<RadiologyOrderStatus, "default" | "secondary" | "success" | "warning" | "destructive"> = {
+const STATUS_BADGE: Record<string, "default" | "secondary" | "success" | "warning" | "destructive"> = {
+  draft: "secondary",
   ordered: "secondary",
   scheduled: "default",
+  arrived: "default",
   in_progress: "default",
-  completed: "warning",
-  reported: "success",
+  images_ready: "warning",
+  reporting: "warning",
+  verified: "success",
+  delivered: "success",
+  rejected: "destructive",
   cancelled: "destructive",
+};
+
+/** الانتقالات المتاحة — نفس خريطة `app_radiology_status_allowed`. */
+const NEXT_STATUS: Record<string, { value: string; label: string; needsReason?: boolean }[]> = {
+  draft: [{ value: "ordered", label: "إرسال الطلب" }],
+  ordered: [
+    { value: "arrived", label: "تسجيل الحضور" },
+    { value: "rejected", label: "رفض", needsReason: true },
+  ],
+  scheduled: [
+    { value: "arrived", label: "تسجيل الحضور" },
+    { value: "cancelled", label: "إلغاء", needsReason: true },
+  ],
+  arrived: [
+    { value: "in_progress", label: "بدء التصوير" },
+    { value: "cancelled", label: "إلغاء", needsReason: true },
+  ],
+  in_progress: [{ value: "images_ready", label: "الصور جاهزة" }],
+  images_ready: [
+    { value: "reporting", label: "بدء التقرير" },
+    { value: "in_progress", label: "إعادة التصوير" },
+  ],
+  reporting: [
+    { value: "verified", label: "اعتماد التقرير" },
+    { value: "images_ready", label: "إرجاع" },
+  ],
+  verified: [{ value: "delivered", label: "تسليم" }],
 };
 type RadiologyExamWithCategory = RadiologyExamRow & {
   category: { name_ar: string } | { name_ar: string }[] | null;
@@ -633,7 +676,7 @@ function useRadiologyOrderDetails(orderId: string | null) {
 
       const { data: items, error: itemsError } = await supabase
         .from("radiology_order_items")
-        .select("*, radiology_exam:radiology_exams(id, name_ar, body_part, modality)")
+        .select("*, radiology_exam:radiology_exams(id, name_ar, body_part, modality, pregnancy_check_required)")
         .eq("radiology_order_id", orderId);
       if (itemsError) throw itemsError;
 
@@ -703,31 +746,65 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["radiology-order-details", orderId] }),
   });
 
-  const markReported = useMutation({
-    mutationFn: async () => {
+  /**
+   * تقدُّم الطلب في دورته.
+   *
+   * كل انتقال يمرّ بـ`app_set_radiology_order_status` (0084): الدالة ترفض
+   * القفز، وتفرض لكل انتقال صلاحيته (الفني يصوّر ولا يكتب التقرير)، وتمنع
+   * بدء فحصٍ مشعّ لامرأة قبل تسجيل نفي الحمل، وتمنع اعتماد تقرير بلا انطباع،
+   * وتحرّر حجز الجهاز عند الإلغاء.
+   */
+  const [transition, setTransition] = useState<{ value: string; label: string } | null>(null);
+  const [transitionReason, setTransitionReason] = useState("");
+
+  const advanceStatus = useMutation({
+    mutationFn: async ({ next, reason }: { next: string; reason?: string }) => {
       if (!orderId) return;
-      const { data: affectedRows, error } = await supabase
-        .from("radiology_orders")
-        // `reported_by` عمود قائم منذ 0014 ولم يُكتب قط: تقرير أشعة يُوثَّق
-        // ولا يُعرف من كتبه. وهو أول ما يُسأل عنه عند مراجعة موجودة فائتة.
-        .update({
-          status: "reported",
-          reported_at: new Date().toISOString(),
-          reported_by: session?.user.id ?? null,
-        })
-        .eq("id", orderId)
-        .select("id");
+      const { error } = await supabase.rpc("app_set_radiology_order_status", {
+        p_order_id: orderId,
+        p_status: next,
+        p_reason: reason ?? null,
+      });
       if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["radiology-orders"] });
-      toast({ title: "تم توثيق تقرير الطلب" });
-      onOpenChange();
+      queryClient.invalidateQueries({ queryKey: ["radiology-order-details", orderId] });
+      setTransition(null);
+      setTransitionReason("");
+      toast({ title: "تم تحديث حالة الطلب" });
     },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر تحديث الحالة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  /** نفي الحمل — شرط بدء التصوير في الفحوص المشعّة. */
+  const confirmNotPregnant = useMutation({
+    mutationFn: async () => {
+      if (!orderId) return;
+      const { data, error } = await supabase
+        .from("radiology_orders")
+        .update({ pregnancy_confirmed_not: true, pregnancy_checked_by: session?.user.id ?? null })
+        .eq("id", orderId)
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["radiology-order-details", orderId] });
+      toast({ title: "سُجِّل نفي الحمل" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التسجيل",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   const orderStatus = (details.data?.order as RadiologyOrderRow | undefined)?.status;
@@ -818,14 +895,89 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
         )}
 
         <Separator />
-        <DialogFooter>
-          <Button
-            disabled={markReported.isPending || orderStatus === "reported" || !allHaveFindings}
-            onClick={() => markReported.mutate()}
-          >
-            {markReported.isPending ? "جارٍ التوثيق..." : "توثيق التقرير النهائي"}
-          </Button>
+        {/* نفي الحمل يظهر حين يشترطه أحد الفحوص ولم يُسجَّل بعد. */}
+        {(details.data?.order as any)?.pregnancy_confirmed_not !== true &&
+          (details.data?.items ?? []).some((item: any) =>
+            Array.isArray(item.radiology_exam)
+              ? item.radiology_exam[0]?.pregnancy_check_required
+              : item.radiology_exam?.pregnancy_check_required,
+          ) && (
+            <div className="flex flex-wrap items-center gap-3 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+              <span>هذا الفحص يُشعّع — سجّل نفي الحمل قبل بدء التصوير.</span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={confirmNotPregnant.isPending}
+                onClick={() => confirmNotPregnant.mutate()}
+              >
+                أُقرّ بعدم وجود حمل
+              </Button>
+            </div>
+          )}
+
+        <DialogFooter className="flex-wrap gap-2">
+          {(NEXT_STATUS[orderStatus ?? ""] ?? []).map((step) => (
+            <Button
+              key={step.value}
+              variant={step.needsReason ? "outline" : "default"}
+              disabled={
+                advanceStatus.isPending ||
+                (step.value === "verified" && !allHaveFindings)
+              }
+              title={
+                step.value === "verified" && !allHaveFindings
+                  ? "اكتب الموجودات والانطباع لكل فحص أولًا"
+                  : undefined
+              }
+              onClick={() => {
+                if (step.needsReason) {
+                  setTransition(step);
+                } else {
+                  advanceStatus.mutate({ next: step.value });
+                }
+              }}
+            >
+              {step.label}
+            </Button>
+          ))}
+          {(NEXT_STATUS[orderStatus ?? ""] ?? []).length === 0 && (
+            <p className="text-sm text-muted-foreground">لا إجراء متاح — الطلب في حالة نهائية.</p>
+          )}
         </DialogFooter>
+
+        <Dialog open={Boolean(transition)} onOpenChange={(open) => !open && setTransition(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{transition?.label}</DialogTitle>
+              <DialogDescription>
+                هذا الإجراء يحتاج سببًا مكتوبًا — يُحفظ في سجلّ التدقيق، ويحرّر حجز الجهاز.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-1.5">
+              <Label>السبب *</Label>
+              <Textarea
+                rows={2}
+                value={transitionReason}
+                onChange={(e) => setTransitionReason(e.target.value)}
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setTransition(null)}>
+                إلغاء
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={!transitionReason.trim() || advanceStatus.isPending}
+                onClick={() =>
+                  transition &&
+                  advanceStatus.mutate({ next: transition.value, reason: transitionReason.trim() })
+                }
+              >
+                تأكيد
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </DialogContent>
     </Dialog>
   );

@@ -36,7 +36,32 @@ export type PermissionKey =
   | "reports.reception"
   | "catalog.view"
   | "catalog.manage"
-  | "catalog.pricing";
+  | "catalog.pricing"
+  | "structure.view"
+  | "structure.manage"
+  | "doctors.view"
+  | "doctors.manage"
+  | "exam_templates.view"
+  | "exam_templates.manage"
+  | "visits.view"
+  | "visits.update"
+  | "visits.sign"
+  | "visits.close"
+  | "visits.reopen"
+  | "pharmacy.view"
+  | "pharmacy.prescribe"
+  | "pharmacy.dispense"
+  | "pharmacy.dispense_controlled"
+  | "pharmacy.cancel_dispensing"
+  | "pharmacy.manage_drugs"
+  | "inventory.view"
+  | "inventory.manage"
+  | "inventory.adjust"
+  | "insurance.view"
+  | "insurance.manage"
+  | "insurance.contracts"
+  | "insurance.preauth"
+  | "insurance.claims";
 
 export function usePermissions() {
   const { organization } = useOrganizationAccess();
