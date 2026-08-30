@@ -19,6 +19,8 @@ import Billing from "./pages/Billing";
 import Doctors from "./pages/Doctors";
 import Departments from "./pages/Departments";
 import Services from "./pages/Services";
+import PriceLists from "./pages/PriceLists";
+import Resources from "./pages/Resources";
 import MedicalRecords from "./pages/MedicalRecords";
 import Insurance from "./pages/Insurance";
 import Employees from "./pages/Employees";
@@ -82,6 +84,8 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   doctors: Doctors,
   departments: Departments,
   services: Services,
+  "price-lists": PriceLists,
+  resources: Resources,
   "medical-records": MedicalRecords,
   insurance: Insurance,
   employees: Employees,

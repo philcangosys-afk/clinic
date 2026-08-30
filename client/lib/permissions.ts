@@ -33,7 +33,10 @@ export type PermissionKey =
   | "patients.merge"
   | "blocked_contacts.manage"
   | "messages.resend"
-  | "reports.reception";
+  | "reports.reception"
+  | "catalog.view"
+  | "catalog.manage"
+  | "catalog.pricing";
 
 export function usePermissions() {
   const { organization } = useOrganizationAccess();

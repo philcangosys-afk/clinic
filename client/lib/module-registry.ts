@@ -66,6 +66,8 @@ export const moduleRegistry: ModuleRegistryItem[] = [
   { id: "patient-journey", label: "رحلة المريض", icon: Activity, badge: "3", featureKey: "patient_journey", requiredPermission: "patient_journey.view", category: "الاستقبال والمواعيد", order: 60 },
   { id: "services", label: "الخدمات", icon: ReceiptText, badge: "18", featureKey: "medical_services", requiredPermission: "medical_services.view", category: "الكتالوج الطبي", order: 70 },
   { id: "departments", label: "الأقسام والعيادات", icon: Building2, badge: "22", featureKey: "departments_clinics", requiredPermission: "departments_clinics.view", category: "الكتالوج الطبي", order: 80 },
+  { id: "price-lists", label: "قوائم الأسعار", icon: TicketPercent, featureKey: "medical_services", requiredPermission: "medical_services.view", category: "الكتالوج الطبي", order: 72 },
+  { id: "resources", label: "الموارد", icon: Warehouse, featureKey: "medical_services", requiredPermission: "medical_services.view", category: "الكتالوج الطبي", order: 74 },
   { id: "doctors", label: "الأطباء", icon: Stethoscope, badge: "10", featureKey: "doctors", requiredPermission: "doctors.view", category: "الكتالوج الطبي", order: 90 },
   { id: "laboratory", label: "المختبر", icon: FlaskConical, badge: "4", featureKey: "laboratory", requiredPermission: "laboratory.view", category: "الكتالوج الطبي", order: 100 },
   { id: "radiology", label: "الأشعة والتصوير الطبي", icon: Activity, badge: "6", featureKey: "radiology", requiredPermission: "radiology.view", category: "الكتالوج الطبي", order: 110 },

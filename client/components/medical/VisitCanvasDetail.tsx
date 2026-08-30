@@ -1,10 +1,46 @@
-import type { ReactNode } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { type ReactNode, useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Activity, FlaskConical, Pill, Scan, Stethoscope, Wrench } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BodyDiagramReadOnly, VIEW_LABELS, type BodyDiagramData } from "@/components/medical/BodyDiagram";
+
+/** دورة حياة الخدمة (0073) — نفس القيم المسموحة في القاعدة. */
+const SERVICE_STATUS_LABELS: Record<string, string> = {
+  draft: "مسودة",
+  ordered: "مطلوبة",
+  performed: "منفذة",
+  invoiced: "مفوترة",
+  paid: "مدفوعة",
+  claimed: "مطالب بها",
+  cancelled: "ملغاة",
+  refunded: "مستردة",
+};
+
+const SERVICE_STATUS_STYLES: Record<string, "default" | "secondary" | "outline" | "destructive"> = {
+  draft: "outline",
+  ordered: "outline",
+  performed: "secondary",
+  invoiced: "default",
+  paid: "default",
+  claimed: "default",
+  cancelled: "destructive",
+  refunded: "destructive",
+};
+
 
 /**
  * تفاصيل زيارة بعينها: ما رُسم على اللوحات، وما نُفِّذ من خدمات، وما قيس من
@@ -117,6 +153,7 @@ function SectionCard({
 }
 
 export default function VisitCanvasDetail({ visitId }: { visitId: string }) {
+  const { toast } = useToast();
   const dental = useQuery({
     queryKey: ["visit-dental-chart", visitId],
     enabled: Boolean(visitId),
@@ -147,23 +184,60 @@ export default function VisitCanvasDetail({ visitId }: { visitId: string }) {
   });
 
   /**
-   * الخدمات المنفَّذة. تلميح القيد `!visit_services_item_tenant_fk` إلزامي:
-   * بين `patient_visit_services` و`items` قيدان أجنبيان (المعرّف المفرد من
-   * 0053 وقيد عزل المنشآت المركّب)، وبدون التلميح يرفض PostgREST الاستعلام
-   * بـPGRST201 «أكثر من علاقة ممكنة» — وهو خطأ لا يظهر إلا وقت التشغيل.
+   * الخدمات المنفَّذة وحالاتها.
+   *
+   * يُقرأ من `v_visit_services_status` (0073) لا من الجدول: المنظور يضمّ اسم
+   * الخدمة ورقم الفاتورة والحالة في استعلام واحد، ويحلّ محلّ تلميح القيد
+   * `!visit_services_item_tenant_fk` الذي كان لازمًا لأن بين الجدولين قيدين
+   * أجنبيين فيرفض PostgREST الاستعلام بـPGRST201 بدونه.
    */
   const services = useQuery({
     queryKey: ["visit-services-detail", visitId],
     enabled: Boolean(visitId),
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("patient_visit_services")
-        .select("id, qty, unit_price, note, item:items!visit_services_item_tenant_fk(name_ar)")
+        .from("v_visit_services_status")
+        .select("id, qty, unit_price, line_total, item_name, status, status_note, invoice_id")
         .eq("visit_id", visitId)
         .order("created_at");
       if (error) throw error;
       return (data ?? []) as any[];
     },
+  });
+
+  /**
+   * إلغاء خدمة مسجَّلة بالخطأ.
+   *
+   * يمرّ بـ`app_set_visit_service_status` لا بحذف الصفّ: الحذف يمحو أن
+   * الخدمة سُجِّلت أصلًا، والإلغاء يبقيها بحالتها وسببها فيُراجَع لاحقًا من
+   * سجلّ التدقيق. والدالة ترفض إلغاء خدمة على فاتورة سارية.
+   */
+  const [cancelTarget, setCancelTarget] = useState<any | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+
+  const cancelService = useMutation({
+    mutationFn: async () => {
+      if (!cancelTarget) return;
+      if (!cancelReason.trim()) throw new Error("سبب الإلغاء مطلوب");
+      const { error } = await supabase.rpc("app_set_visit_service_status", {
+        p_visit_service_id: cancelTarget.id,
+        p_status: "cancelled",
+        p_note: cancelReason.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      services.refetch();
+      toast({ title: "أُلغيت الخدمة" });
+      setCancelTarget(null);
+      setCancelReason("");
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الإلغاء",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
   });
 
   const vitals = useQuery({
@@ -296,6 +370,39 @@ export default function VisitCanvasDetail({ visitId }: { visitId: string }) {
         </SectionCard>
       )}
 
+      <Dialog open={Boolean(cancelTarget)} onOpenChange={(open) => !open && setCancelTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>إلغاء خدمة</DialogTitle>
+            <DialogDescription>
+              لا تُحذف الخدمة: تبقى بحالة «ملغاة» وسببها في سجلّ التدقيق.
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-sm font-medium">{cancelTarget?.item_name}</p>
+          <div className="flex flex-col gap-1.5">
+            <Label>سبب الإلغاء *</Label>
+            <Textarea
+              rows={2}
+              value={cancelReason}
+              onChange={(e) => setCancelReason(e.target.value)}
+              placeholder="مثال: سُجّلت على المريض الخطأ"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setCancelTarget(null)}>
+              تراجع
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!cancelReason.trim() || cancelService.isPending}
+              onClick={() => cancelService.mutate()}
+            >
+              {cancelService.isPending ? "..." : "إلغاء الخدمة"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {serviceRows.length > 0 && (
         <SectionCard
           icon={<Wrench className="h-3.5 w-3.5 text-muted-foreground" />}
@@ -303,18 +410,34 @@ export default function VisitCanvasDetail({ visitId }: { visitId: string }) {
           badges={<Badge variant="outline" className="text-[10px]">{serviceRows.length}</Badge>}
         >
           <div className="flex flex-col gap-1">
-            {serviceRows.map((row) => {
-              const item = Array.isArray(row.item) ? row.item[0] : row.item;
-              return (
-                <div key={row.id} className="flex items-center gap-2 text-sm">
-                  <span className="min-w-0 flex-1 truncate">{item?.name_ar ?? "صنف محذوف"}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {Number(row.qty)} ×{" "}
-                    {row.unit_price === null ? "—" : Number(row.unit_price).toLocaleString("ar-SA")}
-                  </span>
-                </div>
-              );
-            })}
+            {serviceRows.map((row) => (
+              <div key={row.id} className="flex items-center gap-2 text-sm">
+                <span className="min-w-0 flex-1 truncate">{row.item_name ?? "صنف محذوف"}</span>
+                <Badge
+                  variant={SERVICE_STATUS_STYLES[row.status] ?? "outline"}
+                  className="text-[10px]"
+                  title={row.status_note ?? undefined}
+                >
+                  {SERVICE_STATUS_LABELS[row.status] ?? row.status}
+                </Badge>
+                <span className="text-xs text-muted-foreground">
+                  {Number(row.qty)} ×{" "}
+                  {row.unit_price === null ? "—" : Number(row.unit_price).toLocaleString("ar-SA")}
+                </span>
+                {/* الإلغاء متاح قبل الفوترة فقط — والقاعدة ترفضه بعدها على
+                    كل حال، فإخفاء الزر يمنع محاولةً مصيرها الرفض. */}
+                {["draft", "ordered", "performed"].includes(row.status) && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 px-2 text-xs"
+                    onClick={() => setCancelTarget(row)}
+                  >
+                    إلغاء
+                  </Button>
+                )}
+              </div>
+            ))}
           </div>
         </SectionCard>
       )}

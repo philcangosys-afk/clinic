@@ -266,6 +266,7 @@ function NewVisitDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { branch } = useOrganizationAccess();
   const doctors = useDoctorsList(organizationId);
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [doctorId, setDoctorId] = useState("");
@@ -702,25 +703,79 @@ function NewVisitDialog({
               ما تسجّله هنا يُقترح تلقائيًا كبنود فاتورة في شاشة الفوترة — ولا يُفوتَر مرتين.
             </p>
             <ItemPicker
-              onSelect={(item) =>
-                setServices((prev) =>
-                  // نفس الخدمة مرتين في زيارة واحدة تعني زيادة الكمية لا سطرًا
-                  // ثانيًا — والسطر الثاني كان سيُفوتَر منفصلًا ويشوّش الفاتورة.
-                  prev.some((s) => s.itemId === item.id)
-                    ? prev.map((s) => (s.itemId === item.id ? { ...s, qty: s.qty + 1 } : s))
-                    : [
-                        ...prev,
-                        {
-                          key: `${item.id}-${Date.now()}`,
-                          itemId: item.id,
-                          name: item.name_ar,
-                          qty: 1,
-                          price: Number(item.price) || 0,
-                          note: "",
-                        },
-                      ],
-                )
-              }
+              onSelect={async (item) => {
+                // نفس الخدمة مرتين في زيارة واحدة تعني زيادة الكمية لا سطرًا
+                // ثانيًا — والسطر الثاني كان سيُفوتَر منفصلًا ويشوّش الفاتورة.
+                if (services.some((s) => s.itemId === item.id)) {
+                  setServices((prev) =>
+                    prev.map((s) => (s.itemId === item.id ? { ...s, qty: s.qty + 1 } : s)),
+                  );
+                  return;
+                }
+
+                // الملاءمة والسعر يُحسمان في القاعدة لا هنا: العمر والجنس
+                // والمورد والموافقة المسبقة تمنع، والسعر يأتي من قائمة
+                // الأسعار المطابقة لا من `items.price` — الذي قد يكون
+                // مختلفًا تمامًا لمريض تأمين.
+                let price = Number(item.price) || 0;
+                if (patient) {
+                  const [eligibility, resolved] = await Promise.all([
+                    supabase.rpc("app_check_service_eligibility", {
+                      p_item_id: item.id,
+                      p_patient_id: patient.id,
+                      p_branch_id: branch?.id ?? null,
+                    }),
+                    supabase.rpc("app_resolve_item_price", {
+                      p_organization_id: organizationId,
+                      p_item_id: item.id,
+                      p_branch_id: branch?.id ?? null,
+                    }),
+                  ]);
+
+                  const check = eligibility.data as
+                    | { ok: boolean; blocks: string[]; warnings: string[] }
+                    | null;
+                  if (eligibility.error) {
+                    toast({
+                      variant: "destructive",
+                      title: "تعذّر فحص ملاءمة الخدمة",
+                      description: eligibility.error.message,
+                    });
+                    return;
+                  }
+                  if (check && !check.ok) {
+                    toast({
+                      variant: "destructive",
+                      title: `لا يمكن إضافة «${item.name_ar}»`,
+                      description: (check.blocks ?? []).join(" — "),
+                    });
+                    return;
+                  }
+                  if (check && (check.warnings ?? []).length > 0) {
+                    toast({
+                      title: `تنبيهات ${item.name_ar}`,
+                      description: check.warnings.join(" — "),
+                    });
+                  }
+
+                  const row = Array.isArray(resolved.data) ? resolved.data[0] : resolved.data;
+                  if (!resolved.error && row && row.price !== null && row.price !== undefined) {
+                    price = Number(row.price);
+                  }
+                }
+
+                setServices((prev) => [
+                  ...prev,
+                  {
+                    key: `${item.id}-${Date.now()}`,
+                    itemId: item.id,
+                    name: item.name_ar,
+                    qty: 1,
+                    price,
+                    note: "",
+                  },
+                ]);
+              }}
             />
             {services.length > 0 && (
               <div className="flex flex-col gap-1 rounded-md border bg-background p-2">

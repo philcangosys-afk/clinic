@@ -397,17 +397,28 @@ function PatientSubscriptionsTab({ organizationId }: { organizationId: string | 
   const { toast } = useToast();
 
   const useBalance = useMutation({
+    /**
+     * الاستهلاك يمرّ بـ`app_consume_package_item` لا بإدراج مباشر (0075).
+     * الدالة تقفل الاشتراك — فطلبان متزامنان على باقة فيها جلسة واحدة لا
+     * يستهلكانها مرتين — وترفض بندًا من باقة أخرى، وتفحص ملاءمة الخدمة
+     * للمريض، وتعيد الرصيد المتبقي وتنبيهات التحضير كي يراها الموظف.
+     */
     mutationFn: async (row: PatientPackageBalanceView) => {
-      const { error } = await supabase.from("patient_package_usages").insert({
-        patient_package_id: row.patient_package_id,
-        package_item_id: row.package_item_id,
-        quantity_used: 1,
+      const { data, error } = await supabase.rpc("app_consume_package_item", {
+        p_patient_package_id: row.patient_package_id,
+        p_package_item_id: row.package_item_id,
+        p_quantity: 1,
       });
       if (error) throw error;
+      return data as { quantity_remaining: number; warnings: string[] } | null;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["patient-package-balances", organizationId] });
-      toast({ title: "تم تسجيل استهلاك جلسة واحدة" });
+      const warnings = result?.warnings ?? [];
+      toast({
+        title: `سُجّل الاستهلاك — المتبقي ${result?.quantity_remaining ?? "?"}`,
+        description: warnings.length > 0 ? warnings.join(" — ") : undefined,
+      });
     },
     onError: (error: unknown) =>
       toast({

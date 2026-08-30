@@ -17,6 +17,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ReceptionReports from "@/components/reports/ReceptionReports";
+import UnbilledServices from "@/components/reports/UnbilledServices";
+import PendingConsents from "@/components/reports/PendingConsents";
 import { useToast } from "@/hooks/use-toast";
 
 const EXAM_PURPOSE_LABELS: Record<OccupationalExamPurpose, string> = {
@@ -88,6 +90,7 @@ export default function Reports() {
       <Tabs defaultValue="revenue">
         <TabsList>
           <TabsTrigger value="reception">الاستقبال والمواعيد</TabsTrigger>
+          <TabsTrigger value="unbilled">المعلّقات</TabsTrigger>
           <TabsTrigger value="revenue">الإيراد</TabsTrigger>
           <TabsTrigger value="sales">المبيعات والعروض</TabsTrigger>
           <TabsTrigger value="profitability">الربحية</TabsTrigger>
@@ -98,6 +101,11 @@ export default function Reports() {
         </TabsList>
         <TabsContent value="reception" className="mt-4">
           <ReceptionReports />
+        </TabsContent>
+
+        <TabsContent value="unbilled" className="mt-4 flex flex-col gap-4">
+          <UnbilledServices />
+          <PendingConsents />
         </TabsContent>
 
         <TabsContent value="revenue">
