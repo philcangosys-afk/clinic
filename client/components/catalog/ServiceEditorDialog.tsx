@@ -43,6 +43,7 @@ export const MEDICAL_SERVICE_TYPES: Record<string, string> = {
   physiotherapy: "علاج طبيعي",
   vaccination: "تطعيم",
   nursing: "تمريض",
+  home_visit: "زيارة منزلية",
   dressing: "تضميد",
   injection: "حقن",
   screening: "فحص دوري",
@@ -324,48 +325,14 @@ export default function ServiceEditorDialog({
         cogs_account_id: draft.cogs_account_id || null,
       };
 
-      let savedId = itemId;
-      if (isNew) {
-        const { data, error } = await supabase.from("items").insert(payload).select("id").single();
-        if (error) throw error;
-        savedId = data.id;
-      } else {
-        // `.select("id")` مقصود: تحديث لا يطابق صفًا يعود بلا خطأ من
-        // PostgREST، فيظهر «تم الحفظ» ولم يُحفظ شيء.
-        const { data, error } = await supabase.from("items").update(payload).eq("id", itemId).select("id");
-        if (error) throw error;
-        if (!data || data.length === 0) throw new Error("لم يُحدَّث أي صنف — تحقّق من صلاحيتك");
-      }
-
-      // الفروع والموارد: استبدال كامل، فالمجموعة هي المقصودة لا الإضافة إليها.
-      const delBranches = await supabase.from("item_branches").delete().eq("item_id", savedId);
-      if (delBranches.error) throw delBranches.error;
-      if (branchIds.length > 0) {
-        const { error } = await supabase.from("item_branches").insert(
-          branchIds.map((branchId) => ({
-            organization_id: organizationId,
-            item_id: savedId,
-            branch_id: branchId,
-          })),
-        );
-        if (error) throw error;
-      }
-
-      const delResources = await supabase.from("item_resources").delete().eq("item_id", savedId);
-      if (delResources.error) throw delResources.error;
-      if (resourceIds.length > 0) {
-        const { error } = await supabase.from("item_resources").insert(
-          resourceIds.map((resourceId) => ({
-            organization_id: organizationId,
-            item_id: savedId,
-            resource_id: resourceId,
-            is_required: true,
-          })),
-        );
-        if (error) throw error;
-      }
-
-      return savedId;
+      const { data: savedId, error } = await supabase.rpc("app_save_catalog_item", {
+        p_item: payload,
+        p_branch_ids: branchIds,
+        p_resource_ids: resourceIds,
+        p_item_id: itemId,
+      });
+      if (error) throw error;
+      return savedId as string;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["items-catalog"] });

@@ -35,6 +35,7 @@ function useItemsList(organizationId: string | undefined) {
         .select("id, name_ar")
         .eq("organization_id", organizationId)
         .eq("is_disabled", false)
+        .eq("is_archived", false)
         .order("name_ar");
       if (error) throw error;
       return data ?? [];

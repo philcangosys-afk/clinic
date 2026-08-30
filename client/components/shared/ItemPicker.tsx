@@ -31,6 +31,7 @@ export default function ItemPicker({ onSelect }: { onSelect: (item: ItemSearchRe
         .select("id, code, name_ar, price, is_vat_exempt")
         .eq("organization_id", organization.id)
         .eq("is_disabled", false)
+        .eq("is_archived", false)
         .or(`name_ar.ilike.%${term.trim()}%,code.ilike.%${term.trim()}%,barcode.ilike.%${term.trim()}%`)
         .limit(8);
       setResults((data as ItemSearchResult[]) ?? []);

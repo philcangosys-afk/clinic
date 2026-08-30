@@ -372,6 +372,7 @@ function useDrugsList(organizationId: string | undefined) {
         .eq("organization_id", organizationId)
         .eq("item_type", "drug")
         .eq("is_disabled", false)
+        .eq("is_archived", false)
         .order("name_ar");
       if (error) throw error;
       return data ?? [];
