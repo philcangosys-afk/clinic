@@ -5,9 +5,13 @@ import {
   CheckCircle2,
   LogIn,
   Megaphone,
+  FileText,
   Plus,
+  Receipt,
+  Stethoscope,
   UserX,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
@@ -16,6 +20,8 @@ import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -47,6 +53,34 @@ function endOfTodayIso() {
   return date.toISOString();
 }
 
+type ReceptionAppointment = AppointmentWithRelations & {
+  priority: "normal" | "urgent" | "emergency" | "elderly" | "accessibility";
+  queue_number: number | null;
+  invoices?: { id: string; status: string; remaining_amount: number; is_temporary: boolean }[];
+  patient?: (NonNullable<AppointmentWithRelations["patient"]> & {
+    insurance_company_name: string | null;
+    insurance_policy_number: string | null;
+  }) | null;
+};
+
+type ReceptionAction = "arrive" | "check_in" | "call" | "start" | "finish" | "no_show";
+
+const PRIORITY_ORDER: Record<ReceptionAppointment["priority"], number> = {
+  emergency: 0,
+  urgent: 1,
+  accessibility: 2,
+  elderly: 3,
+  normal: 4,
+};
+
+const PRIORITY_LABEL: Record<ReceptionAppointment["priority"], string> = {
+  emergency: "طارئ",
+  urgent: "عاجل",
+  accessibility: "ذوو الإعاقة",
+  elderly: "كبار السن",
+  normal: "عادي",
+};
+
 const ACTIVE_STATUSES: AppointmentStatus[] = [
   "new",
   "scheduled",
@@ -69,7 +103,7 @@ function useTodayQueue(organizationId: string | undefined, doctorFilter: string)
       let query = supabase
         .from("appointments")
         .select(
-          "id, scheduled_start, scheduled_end, status, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, note, doctor_id, patient_id, clinic_id, patient:patients(id, name_ar, mobile_number, file_number), doctor:doctors(id, name_ar), clinic:clinics(id, name)",
+          "id, organization_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, clinic_id, patient:patients(id, name_ar, mobile_number, file_number, insurance_company_name, insurance_policy_number), doctor:doctors(id, name_ar), clinic:clinics(id, name), invoices:sales_invoices(id, status, remaining_amount, is_temporary)",
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
         // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
@@ -80,7 +114,7 @@ function useTodayQueue(organizationId: string | undefined, doctorFilter: string)
       if (doctorFilter !== "all") query = query.eq("doctor_id", doctorFilter);
       const { data, error } = await query;
       if (error) throw error;
-      return (data ?? []) as unknown as AppointmentWithRelations[];
+      return (data ?? []) as unknown as ReceptionAppointment[];
     },
   });
 }
@@ -95,6 +129,7 @@ function useDoctorsList(organizationId: string | undefined) {
         .select("id, name_ar")
         .eq("organization_id", organizationId)
         .eq("is_enabled", true)
+        .eq("disabled_from_booking", false)
         .order("name_ar");
       if (error) throw error;
       return data ?? [];
@@ -103,45 +138,45 @@ function useDoctorsList(organizationId: string | undefined) {
 }
 
 export default function Reception() {
-  const { organization } = useOrganizationAccess();
+  const { organization, membership, legacyMode } = useOrganizationAccess();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [doctorFilter, setDoctorFilter] = useState("all");
   const [addOpen, setAddOpen] = useState(false);
+  const [noShowTarget, setNoShowTarget] = useState<ReceptionAppointment | null>(null);
+  const [noShowReason, setNoShowReason] = useState("");
 
+  const canManageQueue = legacyMode || ["owner", "organization_admin", "branch_manager", "receptionist"].includes(membership?.role_key ?? "");
+  const canEditClinical = legacyMode || ["owner", "organization_admin", "doctor", "nurse"].includes(membership?.role_key ?? "");
   const queue = useTodayQueue(organization?.id, doctorFilter);
   const doctors = useDoctorsList(organization?.id);
 
   const grouped = useMemo(() => {
     const rows = queue.data ?? [];
-    const active = rows.filter((row) => ACTIVE_STATUSES.includes(row.status));
+    const active = rows.filter((row) => ACTIVE_STATUSES.includes(row.status)).sort((a, b) =>
+      PRIORITY_ORDER[a.priority ?? "normal"] - PRIORITY_ORDER[b.priority ?? "normal"] ||
+      (a.queue_number ?? Number.MAX_SAFE_INTEGER) - (b.queue_number ?? Number.MAX_SAFE_INTEGER) ||
+      new Date(a.scheduled_start).getTime() - new Date(b.scheduled_start).getTime());
     const done = rows.filter((row) => !ACTIVE_STATUSES.includes(row.status));
     return { active, done };
   }, [queue.data]);
 
   const updateStatus = useMutation({
-    mutationFn: async ({
-      id,
-      status,
-      timestampField,
-    }: {
-      id: string;
-      status: AppointmentStatus;
-      timestampField?: "checked_in_1_at" | "checked_in_2_at" | "called_at" | "entered_at" | "left_at";
-    }) => {
-      const patch: Record<string, unknown> = { status };
-      if (timestampField) patch[timestampField] = new Date().toISOString();
-      const { data, error } = await supabase
-        .from("appointments")
-        .update(patch)
-        .eq("id", id)
-        .select("id");
+    mutationFn: async ({ id, action, reason }: { id: string; action: ReceptionAction; reason?: string }) => {
+      const { data, error } = await supabase.rpc("app_reception_transition", {
+        p_appointment_id: id,
+        p_action: action,
+        p_reason: reason ?? null,
+      });
       if (error) throw error;
-      // تحديث لا يطابق صفًا ليس خطأً في PostgREST — بلا هذا الفحص يتحرك الصف
-      // في الطابور بصريًا ثم يعود لحالته عند أول تحديث للقائمة.
-      if (!data || data.length === 0) throw new Error("لم يُحفظ التغيير — راجع صلاحيتك");
+      return { id, action, result: Array.isArray(data) ? data[0] : data };
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["reception-queue"] }),
+    onSuccess: ({ id, action }) => {
+      queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
+      queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
+      if (action === "start" && canEditClinical) navigate(`/medical-records?appointmentId=${id}`);
+    },
     onError: (error: unknown) =>
       toast({
         variant: "destructive",
@@ -171,17 +206,17 @@ export default function Reception() {
               ))}
             </SelectContent>
           </Select>
-          <Button onClick={() => setAddOpen(true)}>
+          {canManageQueue && <Button onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" />
             إضافة للطابور
-          </Button>
+          </Button>}
         </div>
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle>قيد الانتظار الآن ({grouped.active.length})</CardTitle>
-          <CardDescription>بالترتيب الزمني حسب وقت الموعد المجدول</CardDescription>
+          <CardDescription>حسب الأولوية ثم رقم الدور ووقت الموعد</CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {queue.isLoading &&
@@ -193,9 +228,12 @@ export default function Reception() {
             <QueueRow
               key={appointment.id}
               appointment={appointment}
-              onUpdate={(status, timestampField) =>
-                updateStatus.mutate({ id: appointment.id, status, timestampField })
-              }
+              onUpdate={(action) => action === "no_show"
+                ? setNoShowTarget(appointment)
+                : updateStatus.mutate({ id: appointment.id, action })}
+              onPatient={() => navigate(`/patients/${appointment.patient_id}`)}
+              onVisit={() => navigate(canEditClinical ? `/medical-records?appointmentId=${appointment.id}` : `/patients/${appointment.patient_id}`)}
+              onInvoice={() => navigate(`/billing?appointmentId=${appointment.id}`)}
             />
           ))}
         </CardContent>
@@ -211,15 +249,29 @@ export default function Reception() {
               <QueueRow
                 key={appointment.id}
                 appointment={appointment}
-                onUpdate={(status, timestampField) =>
-                  updateStatus.mutate({ id: appointment.id, status, timestampField })
-                }
+                onUpdate={(action) => action === "no_show"
+                ? setNoShowTarget(appointment)
+                : updateStatus.mutate({ id: appointment.id, action })}
+              onPatient={() => navigate(`/patients/${appointment.patient_id}`)}
+              onVisit={() => navigate(canEditClinical ? `/medical-records?appointmentId=${appointment.id}` : `/patients/${appointment.patient_id}`)}
+              onInvoice={() => navigate(`/billing?appointmentId=${appointment.id}`)}
                 readOnly
               />
             ))}
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={Boolean(noShowTarget)} onOpenChange={(open) => { if (!open) { setNoShowTarget(null); setNoShowReason(""); } }}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>تسجيل عدم الحضور</DialogTitle><DialogDescription>سيُحفظ السبب في سجل الموعد والتدقيق.</DialogDescription></DialogHeader>
+          <Textarea value={noShowReason} onChange={(event) => setNoShowReason(event.target.value)} placeholder="سبب عدم الحضور أو ملاحظة التواصل" rows={3} />
+          <DialogFooter><Button variant="destructive" disabled={!noShowReason.trim() || updateStatus.isPending} onClick={() => {
+            if (!noShowTarget) return;
+            updateStatus.mutate({ id: noShowTarget.id, action: "no_show", reason: noShowReason }, { onSuccess: () => { setNoShowTarget(null); setNoShowReason(""); } });
+          }}>تأكيد عدم الحضور</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AddToQueueDialog
         open={addOpen}
@@ -240,7 +292,7 @@ export default function Reception() {
  * ولا كم استغرقت الجلسة — وهي أهم رقمين تشغيليين في شاشة الاستقبال، ومطلوبان
  * في مؤشرات CBAHI لزمن الانتظار.
  */
-function QueueTimeline({ appointment }: { appointment: AppointmentWithRelations }) {
+function QueueTimeline({ appointment }: { appointment: ReceptionAppointment }) {
   const fmt = (value: string | null | undefined) =>
     value
       ? new Date(value).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })
@@ -286,10 +338,16 @@ function QueueTimeline({ appointment }: { appointment: AppointmentWithRelations 
 function QueueRow({
   appointment,
   onUpdate,
+  onPatient,
+  onVisit,
+  onInvoice,
   readOnly,
 }: {
-  appointment: AppointmentWithRelations;
-  onUpdate: (status: AppointmentStatus, timestampField?: "checked_in_1_at" | "checked_in_2_at" | "called_at" | "entered_at" | "left_at") => void;
+  appointment: ReceptionAppointment;
+  onUpdate: (action: ReceptionAction) => void;
+  onPatient: () => void;
+  onVisit: () => void;
+  onInvoice: () => void;
   readOnly?: boolean;
 }) {
   const time = new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", {
@@ -304,45 +362,45 @@ function QueueRow({
         {time}
       </div>
       <div className="min-w-[10rem] flex-1">
-        <p className="text-sm font-semibold">{appointment.patient?.name_ar ?? "—"}</p>
-        <p className="text-xs text-muted-foreground">
-          #{appointment.patient?.file_number} · {appointment.patient?.mobile_number ?? "—"}
-        </p>
+        <button type="button" className="text-right" onClick={onPatient}>
+          <p className="text-sm font-semibold hover:text-primary">{appointment.patient?.name_ar ?? "—"}</p>
+          <p className="text-xs text-muted-foreground">#{appointment.patient?.file_number} · {appointment.patient?.mobile_number ?? "—"}</p>
+        </button>
+        <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
+          {appointment.queue_number && <Badge variant="outline">الدور {appointment.queue_number}</Badge>}
+          {appointment.priority !== "normal" && <Badge variant={appointment.priority === "emergency" ? "destructive" : "warning"}>{PRIORITY_LABEL[appointment.priority]}</Badge>}
+          {appointment.patient?.insurance_company_name && <Badge variant="outline">تأمين: {appointment.patient.insurance_company_name}</Badge>}
+          {(appointment.invoices ?? []).filter((invoice) => !invoice.is_temporary).map((invoice) => (
+            <Badge key={invoice.id} variant={invoice.remaining_amount > 0 ? "warning" : "success"}>
+              {invoice.remaining_amount > 0 ? `متبقي ${Number(invoice.remaining_amount).toFixed(2)}` : "مدفوع"}
+            </Badge>
+          ))}
+        </div>
       </div>
       <div className="min-w-[8rem] text-sm text-muted-foreground">د. {appointment.doctor?.name_ar ?? "—"}</div>
       <Badge className={statusBadgeClass(appointment.status)}>{statusLabel(appointment.status)}</Badge>
       {!readOnly && (
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="outline" onClick={() => onUpdate("arrived", "checked_in_1_at")}>
-            <LogIn className="h-3.5 w-3.5" />
-            حضر
-          </Button>
-          {/*
-            استقبال 2 — نقطة التحقق الثانية (بعد استكمال إجراء أو دفع مثلًا).
-            العمود checked_in_2_at موجود في appointments منذ 0002 ولم يكن له
-            زر إطلاقًا. يظهر فقط بعد الاستقبال الأول لأنه لا معنى له قبله.
-          */}
-          {appointment.checked_in_1_at && !appointment.checked_in_2_at && (
-            <Button size="sm" variant="outline" onClick={() => onUpdate("arrived", "checked_in_2_at")}>
-              <LogIn className="h-3.5 w-3.5" />
-              استقبال 2
-            </Button>
+        <div className="flex flex-wrap items-center gap-1">
+          {["new", "scheduled", "confirmed", "unconfirmed"].includes(appointment.status) && (
+            <Button size="sm" variant="outline" onClick={() => onUpdate("arrive")}><LogIn className="h-3.5 w-3.5" />حضر</Button>
           )}
-          <Button size="sm" variant="outline" onClick={() => onUpdate("called", "called_at")}>
-            <Megaphone className="h-3.5 w-3.5" />
-            نداء
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => onUpdate("in_progress", "entered_at")}>
-            دخول
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => onUpdate("completed", "left_at")}>
-            <CheckCircle2 className="h-3.5 w-3.5" />
-            إنهاء
-          </Button>
-          <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onUpdate("no_show")}>
-            <UserX className="h-3.5 w-3.5" />
-            لم يحضر
-          </Button>
+          {appointment.status === "arrived" && appointment.checked_in_1_at && !appointment.checked_in_2_at && (
+            <Button size="sm" variant="outline" onClick={() => onUpdate("check_in")}><LogIn className="h-3.5 w-3.5" />استقبال 2</Button>
+          )}
+          {["arrived", "checked_in", "waiting", "walk_in"].includes(appointment.status) && (
+            <Button size="sm" variant="outline" onClick={() => onUpdate("call")}><Megaphone className="h-3.5 w-3.5" />نداء</Button>
+          )}
+          {["arrived", "checked_in", "called", "waiting", "walk_in"].includes(appointment.status) && (
+            <Button size="sm" variant="outline" onClick={() => onUpdate("start")}><Stethoscope className="h-3.5 w-3.5" />دخول</Button>
+          )}
+          {appointment.status === "in_progress" && (
+            <Button size="sm" variant="outline" onClick={() => onUpdate("finish")}><CheckCircle2 className="h-3.5 w-3.5" />إنهاء</Button>
+          )}
+          {["new", "scheduled", "confirmed", "unconfirmed", "arrived"].includes(appointment.status) && (
+            <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onUpdate("no_show")}><UserX className="h-3.5 w-3.5" />لم يحضر</Button>
+          )}
+          <Button size="sm" variant="ghost" onClick={onVisit}><FileText className="h-3.5 w-3.5" />السجل</Button>
+          <Button size="sm" variant="ghost" onClick={onInvoice}><Receipt className="h-3.5 w-3.5" />الفاتورة</Button>
         </div>
       )}
       <QueueTimeline appointment={appointment} />
@@ -365,21 +423,34 @@ function AddToQueueDialog({
   const { toast } = useToast();
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [doctorId, setDoctorId] = useState("");
+  const [clinicId, setClinicId] = useState("none");
+  const [priority, setPriority] = useState("normal");
+  const [note, setNote] = useState("");
   const [quickAddOpen, setQuickAddOpen] = useState(false);
+
+  const clinics = useQuery({
+    queryKey: ["reception-clinics", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase.from("clinics").select("id, name")
+        .eq("organization_id", organizationId).eq("is_disabled", false).order("name");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
 
   const createAppointment = useMutation({
     mutationFn: async () => {
       if (!organizationId || !patient || !doctorId) throw new Error("أكمل بيانات المريض والطبيب");
       // نفس الحظر المطبَّق في شاشة المواعيد — الطابور مسار إنشاء موعد آخر
       await assertPatientNotBlocked(patient.id, "appointments");
-      const now = new Date();
-      const { error } = await supabase.from("appointments").insert({
-        organization_id: organizationId,
-        doctor_id: doctorId,
-        patient_id: patient.id,
-        scheduled_start: now.toISOString(),
-        scheduled_end: new Date(now.getTime() + 30 * 60_000).toISOString(),
-        status: "waiting",
+      const { error } = await supabase.rpc("app_add_walk_in", {
+        p_organization_id: organizationId,
+        p_patient_id: patient.id,
+        p_doctor_id: doctorId,
+        p_clinic_id: clinicId === "none" ? null : clinicId,
+        p_priority: priority,
+        p_note: note.trim() || null,
       });
       if (error) throw error;
     },
@@ -388,6 +459,9 @@ function AddToQueueDialog({
       toast({ title: "تمت الإضافة إلى الطابور" });
       setPatient(null);
       setDoctorId("");
+      setClinicId("none");
+      setPriority("normal");
+      setNote("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -420,6 +494,7 @@ function AddToQueueDialog({
               </button>
             </div>
             <div className="flex flex-col gap-1.5">
+              <Label>الطبيب *</Label>
               <Select value={doctorId} onValueChange={setDoctorId}>
                 <SelectTrigger>
                   <SelectValue placeholder="اختر الطبيب" />
@@ -433,6 +508,11 @@ function AddToQueueDialog({
                 </SelectContent>
               </Select>
             </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="flex flex-col gap-1.5"><Label>العيادة</Label><Select value={clinicId} onValueChange={setClinicId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">بدون</SelectItem>{(clinics.data ?? []).map((clinic) => <SelectItem key={clinic.id} value={clinic.id}>{clinic.name}</SelectItem>)}</SelectContent></Select></div>
+              <div className="flex flex-col gap-1.5"><Label>الأولوية</Label><Select value={priority} onValueChange={setPriority}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="normal">عادي</SelectItem><SelectItem value="urgent">عاجل</SelectItem><SelectItem value="emergency">طارئ</SelectItem><SelectItem value="elderly">كبار السن</SelectItem><SelectItem value="accessibility">ذوو الإعاقة</SelectItem></SelectContent></Select></div>
+            </div>
+            <div className="flex flex-col gap-1.5"><Label>ملاحظة الاستقبال</Label><Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} /></div>
           </div>
 
           <DialogFooter>

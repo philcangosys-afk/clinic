@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Printer, Receipt, WalletCards, Undo2 } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
@@ -54,7 +55,7 @@ function useInvoices(organizationId: string | undefined, status: string, quotesO
       let query = supabase
         .from("sales_invoices")
         .select(
-          "id, invoice_number, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, external_customer_name, zatca_invoice_number, is_insurance_invoice, created_by, nationality_value_id, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar)",
+          "id, invoice_number, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, external_customer_name, zatca_invoice_number, is_insurance_invoice, created_by, nationality_value_id, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar)",
         )
         // التصفية بالمؤسسة إلزامية: سياسة RLS تسمح بكل مؤسسة **ينتمي إليها**
         // المستخدم، لا بالمؤسسة النشطة وحدها — فبدونها كانت قائمة عضو في
@@ -180,8 +181,18 @@ function usePrintSettings(organizationId: string | undefined) {
   });
 }
 
+type BillingAppointmentContext = {
+  id: string;
+  patient_id: string;
+  doctor_id: string;
+  clinic_id: string | null;
+  patient: { id: string; name_ar: string; insurance_company_name: string | null; insurance_policy_number: string | null; insurance_policy_category: string | null; insurance_membership_number: string | null } | { id: string; name_ar: string; insurance_company_name: string | null; insurance_policy_number: string | null; insurance_policy_category: string | null; insurance_membership_number: string | null }[] | null;
+};
+
 export default function Billing() {
-  const { organization } = useOrganizationAccess();
+  const { organization, membership, legacyMode } = useOrganizationAccess();
+  const [searchParams] = useSearchParams();
+  const appointmentId = searchParams.get("appointmentId");
   const memberNames = useMemberNames(organization?.id);
   const printSettings = usePrintSettings(organization?.id);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -191,7 +202,23 @@ export default function Billing() {
   const [returnTarget, setReturnTarget] = useState<SalesInvoiceWithPatient | null>(null);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const canManageBilling = legacyMode || ["owner", "organization_admin", "accountant", "receptionist"].includes(membership?.role_key ?? "");
   const invoices = useInvoices(organization?.id, statusFilter, quotesOnly);
+  const appointment = useQuery({
+    queryKey: ["billing-appointment", organization?.id, appointmentId],
+    enabled: Boolean(organization?.id && appointmentId),
+    queryFn: async () => {
+      const { data, error } = await supabase.from("appointments")
+        .select("id, patient_id, doctor_id, clinic_id, patient:patients(id, name_ar, insurance_company_name, insurance_policy_number, insurance_policy_category, insurance_membership_number)")
+        .eq("id", appointmentId).eq("organization_id", organization?.id).maybeSingle();
+      if (error) throw error;
+      return data as BillingAppointmentContext | null;
+    },
+  });
+
+  useEffect(() => {
+    if (appointment.data && canManageBilling) setCreateOpen(true);
+  }, [appointment.data, canManageBilling]);
 
   const convertToInvoice = useMutation({
     mutationFn: async (invoiceId: string) => {
@@ -254,10 +281,10 @@ export default function Billing() {
               </SelectContent>
             </Select>
           )}
-          <Button onClick={() => setCreateOpen(true)}>
+          {canManageBilling && <Button onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" />
             {quotesOnly ? "عرض سعر جديد" : "فاتورة جديدة"}
-          </Button>
+          </Button>}
         </div>
       </div>
 
@@ -450,6 +477,7 @@ export default function Billing() {
         organizationId={organization?.id}
         vatRate={organization?.default_vat_rate ?? 15}
         isQuote={quotesOnly}
+        appointment={appointment.data ?? null}
       />
       <RecordPaymentDialog invoice={paymentTarget} onOpenChange={() => setPaymentTarget(null)} organizationId={organization?.id} />
       <ReturnInvoiceDialog
@@ -1010,12 +1038,14 @@ function NewInvoiceDialog({
   organizationId,
   vatRate,
   isQuote,
+  appointment,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   organizationId: string | undefined;
   vatRate: number;
   isQuote?: boolean;
+  appointment: BillingAppointmentContext | null;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -1056,6 +1086,21 @@ function NewInvoiceDialog({
   const quickGroups = useQuickGroups(organizationId);
   const agreementItems = useAgreementItemsForBilling(patient?.id, organizationId);
   const insuranceSettings = useInsuranceSettings(organizationId);
+
+  useEffect(() => {
+    if (!open || !appointment) return;
+    const appointmentPatient = Array.isArray(appointment.patient) ? appointment.patient[0] : appointment.patient;
+    if (appointmentPatient) {
+      setPatient({ id: appointmentPatient.id, name_ar: appointmentPatient.name_ar });
+      setIsInsurance(Boolean(appointmentPatient.insurance_company_name));
+      setInsCompany(appointmentPatient.insurance_company_name ?? "");
+      setInsPolicy(appointmentPatient.insurance_policy_number ?? "");
+      setInsClass(appointmentPatient.insurance_policy_category ?? "");
+      setInsMembership(appointmentPatient.insurance_membership_number ?? "");
+    }
+    setDoctorId(appointment.doctor_id || NONE);
+    setClinicId(appointment.clinic_id || NONE);
+  }, [appointment, open]);
 
   /**
    * إضافة بند اتفاقية كسطر فاتورة **حاملًا `agreement_item_id`**.
@@ -1180,6 +1225,7 @@ function NewInvoiceDialog({
         .insert({
           organization_id: organizationId,
           patient_id: patient?.id ?? null,
+          appointment_id: appointment?.id ?? null,
           external_customer_name: patient ? null : externalName.trim(),
           subtotal_amount: totals.subtotal,
           discount_amount: totals.discount,
@@ -1220,7 +1266,10 @@ function NewInvoiceDialog({
         agreement_item_id: line.agreement_item_id,
       }));
       const { error: linesError } = await supabase.from("sales_invoice_items").insert(itemsPayload);
-      if (linesError) throw linesError;
+      if (linesError) {
+        await supabase.from("sales_invoices").delete().eq("id", invoice.id).eq("organization_id", organizationId);
+        throw linesError;
+      }
       return invoice.id as string;
     },
     onSuccess: () => {

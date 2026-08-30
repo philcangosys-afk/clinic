@@ -239,6 +239,7 @@ export type AppointmentStatus =
   | "completed"
   | "no_show"
   | "cancelled_by_patient"
+  | "cancelled_by_staff"
   | "walk_in"
   | "waiting";
 
@@ -251,6 +252,10 @@ export interface AppointmentRow {
   scheduled_start: string;
   scheduled_end: string;
   status: AppointmentStatus;
+  priority: "normal" | "urgent" | "emergency" | "elderly" | "accessibility";
+  queue_number: number | null;
+  cancellation_reason: string | null;
+  no_show_reason: string | null;
   checked_in_1_at: string | null;
   checked_in_2_at: string | null;
   called_at: string | null;
@@ -1967,6 +1972,11 @@ export interface AppointmentWaitlistRow {
   doctor_id: UUID | null;
   specialty_value_id: UUID | null;
   registration_note: string | null;
+  appointment_id: UUID | null;
+  desired_date: string | null;
+  priority: "normal" | "urgent" | "emergency" | "elderly" | "accessibility";
+  contacted_at: string | null;
+  booked_at: string | null;
   status: WaitlistStatus;
   created_by: UUID | null;
   created_at: string;

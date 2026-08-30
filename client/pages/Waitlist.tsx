@@ -1,12 +1,14 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, Plus, Check, X } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { checkDoctorAvailability } from "@/lib/doctor-availability";
 import type { AppointmentWaitlistRow, WaitlistStatus } from "@/lib/database.types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
@@ -82,6 +84,7 @@ function useDoctors(organizationId: string | undefined) {
         // عمود التفعيل في `doctors` اسمه `is_enabled` لا `is_disabled` (0002).
         // الاستعلام القديم كان يفشل كليًا فتبقى قائمة الأطباء فارغة دائمًا.
         .eq("is_enabled", true)
+        .eq("disabled_from_booking", false)
         .order("name_ar");
       if (error) throw error;
       return (data ?? []) as { id: string; name_ar: string }[];
@@ -105,6 +108,8 @@ function AddToWaitlistDialog({
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [doctorId, setDoctorId] = useState(ANY_DOCTOR);
   const [specialtyId, setSpecialtyId] = useState("");
+  const [desiredDate, setDesiredDate] = useState("");
+  const [priority, setPriority] = useState("normal");
   const [note, setNote] = useState("");
 
   const save = useMutation({
@@ -117,6 +122,8 @@ function AddToWaitlistDialog({
         doctor_id: doctorId === ANY_DOCTOR ? null : doctorId,
         specialty_value_id: specialtyId || null,
         registration_note: note.trim() || null,
+        desired_date: desiredDate || null,
+        priority,
         status: "waiting" as const,
         created_by: session?.user.id ?? null,
       });
@@ -125,6 +132,12 @@ function AddToWaitlistDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["waitlist"] });
       toast({ title: "تمت إضافة المريض لقائمة الانتظار" });
+      setPatient(null);
+      setDoctorId(ANY_DOCTOR);
+      setSpecialtyId("");
+      setDesiredDate("");
+      setPriority("normal");
+      setNote("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -184,6 +197,10 @@ function AddToWaitlistDialog({
               placeholder="اختياري"
             />
           </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5"><Label>التاريخ المرغوب</Label><Input type="date" value={desiredDate} onChange={(event) => setDesiredDate(event.target.value)} /></div>
+            <div className="flex flex-col gap-1.5"><Label>الأولوية</Label><Select value={priority} onValueChange={setPriority}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="normal">عادي</SelectItem><SelectItem value="urgent">عاجل</SelectItem><SelectItem value="emergency">طارئ</SelectItem><SelectItem value="elderly">كبار السن</SelectItem><SelectItem value="accessibility">ذوو الإعاقة</SelectItem></SelectContent></Select></div>
+          </div>
           <div className="flex flex-col gap-1.5">
             <Label>ملاحظة التسجيل</Label>
             <Textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} />
@@ -204,11 +221,13 @@ function AddToWaitlistDialog({
 }
 
 export default function Waitlist() {
-  const { organization } = useOrganizationAccess();
+  const { organization, membership, legacyMode } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [status, setStatus] = useState("waiting");
   const [addOpen, setAddOpen] = useState(false);
+  const [convertTarget, setConvertTarget] = useState<WaitlistRowJoined | null>(null);
+  const canManageWaitlist = legacyMode || ["owner", "organization_admin", "branch_manager", "receptionist"].includes(membership?.role_key ?? "");
   const list = useWaitlist(organization?.id, status);
 
   const setRowStatus = useMutation({
@@ -242,10 +261,10 @@ export default function Waitlist() {
             مرضى بانتظار شاغر — يُحوَّلون إلى مواعيد عند توفر وقت لدى الطبيب
           </p>
         </div>
-        <Button onClick={() => setAddOpen(true)}>
+        {canManageWaitlist && <Button onClick={() => setAddOpen(true)}>
           <Plus className="h-4 w-4" />
           إضافة للانتظار
-        </Button>
+        </Button>}
       </div>
 
       <Tabs value={status} onValueChange={setStatus}>
@@ -298,13 +317,13 @@ export default function Waitlist() {
                       <Badge variant={STATUS_BADGE[row.status]}>{STATUS_LABELS[row.status]}</Badge>
                     </TableCell>
                     <TableCell>
-                      {row.status === "waiting" && (
+                      {canManageWaitlist && row.status === "waiting" && (
                         <div className="flex gap-1">
                           <Button
                             variant="ghost"
                             size="sm"
                             title="تم حجز موعد له"
-                            onClick={() => setRowStatus.mutate({ id: row.id, next: "booked" })}
+                            onClick={() => setConvertTarget(row)}
                           >
                             <Check className="h-3.5 w-3.5" />
                           </Button>
@@ -337,6 +356,87 @@ export default function Waitlist() {
       {addOpen && (
         <AddToWaitlistDialog open={addOpen} onOpenChange={setAddOpen} organizationId={organization?.id} />
       )}
+      <ConvertWaitlistDialog target={convertTarget} onOpenChange={(open) => { if (!open) setConvertTarget(null); }} organizationId={organization?.id} />
     </div>
   );
+}
+
+function ConvertWaitlistDialog({
+  target,
+  onOpenChange,
+  organizationId,
+}: {
+  target: WaitlistRowJoined | null;
+  onOpenChange: (open: boolean) => void;
+  organizationId: string | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const doctors = useDoctors(organizationId);
+  const [doctorId, setDoctorId] = useState("");
+  const [date, setDate] = useState("");
+  const [time, setTime] = useState("09:00");
+  const [duration, setDuration] = useState("30");
+  const [clinicId, setClinicId] = useState("none");
+  const [visitTypeId, setVisitTypeId] = useState("");
+  const [note, setNote] = useState("");
+
+  const clinics = useQuery({
+    queryKey: ["waitlist-clinics", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase.from("clinics").select("id, name")
+        .eq("organization_id", organizationId).eq("is_disabled", false).order("name");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name: string }[];
+    },
+  });
+
+  useEffect(() => {
+    if (!target) return;
+    setDoctorId(target.doctor_id ?? "");
+    setDate(target.desired_date ?? new Date().toLocaleDateString("en-CA"));
+    setNote(target.registration_note ?? "");
+  }, [target]);
+
+  const convert = useMutation({
+    mutationFn: async () => {
+      if (!target || !doctorId || !date || !time) throw new Error("أكمل الطبيب والتاريخ والوقت");
+      const start = new Date(`${date}T${time}:00`);
+      const end = new Date(start.getTime() + Number(duration) * 60_000);
+      const availability = await checkDoctorAvailability(doctorId, start, end);
+      if (availability.status === "blocked") throw new Error(availability.message ?? "الطبيب غير متاح");
+      if (availability.status === "outside") throw new Error(availability.message ?? "الموعد خارج دوام الطبيب");
+      const { error } = await supabase.rpc("app_convert_waitlist_to_appointment", {
+        p_waitlist_id: target.id,
+        p_doctor_id: doctorId,
+        p_scheduled_start: start.toISOString(),
+        p_scheduled_end: end.toISOString(),
+        p_clinic_id: clinicId === "none" ? null : clinicId,
+        p_visit_type_value_id: visitTypeId || null,
+        p_note: note.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["waitlist"] });
+      queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
+      toast({ title: "تم إنشاء الموعد وربطه بطلب الانتظار" });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر إنشاء الموعد", description: error instanceof Error ? error.message : "حدث خطأ" }),
+  });
+
+  return <Dialog open={Boolean(target)} onOpenChange={onOpenChange}>
+    <DialogContent>
+      <DialogHeader><DialogTitle>تحويل إلى موعد</DialogTitle><DialogDescription>سيُنشأ موعد فعلي للمريض {target?.patient?.name_ar} ويُربط بطلب الانتظار.</DialogDescription></DialogHeader>
+      <div className="space-y-3">
+        <div><Label>الطبيب *</Label><Select value={doctorId} onValueChange={setDoctorId}><SelectTrigger><SelectValue placeholder="اختر الطبيب" /></SelectTrigger><SelectContent>{(doctors.data ?? []).map((doctor) => <SelectItem key={doctor.id} value={doctor.id}>{doctor.name_ar}</SelectItem>)}</SelectContent></Select></div>
+        <div className="grid grid-cols-3 gap-2"><div><Label>التاريخ</Label><Input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></div><div><Label>الوقت</Label><Input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></div><div><Label>المدة</Label><Input type="number" min={5} step={5} value={duration} onChange={(event) => setDuration(event.target.value)} /></div></div>
+        <div className="grid gap-3 sm:grid-cols-2"><div><Label>العيادة</Label><Select value={clinicId} onValueChange={setClinicId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">بدون</SelectItem>{(clinics.data ?? []).map((clinic) => <SelectItem key={clinic.id} value={clinic.id}>{clinic.name}</SelectItem>)}</SelectContent></Select></div><div><Label>نوع الزيارة</Label><LookupSelect categoryKey="visit_types" value={visitTypeId} onChange={setVisitTypeId} placeholder="بدون" /></div></div>
+        <div><Label>ملاحظة الموعد</Label><Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} /></div>
+      </div>
+      <DialogFooter><Button disabled={convert.isPending || !doctorId || !date} onClick={() => convert.mutate()}>{convert.isPending ? "جارٍ إنشاء الموعد..." : "إنشاء الموعد"}</Button></DialogFooter>
+    </DialogContent>
+  </Dialog>;
 }

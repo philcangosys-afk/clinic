@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ClipboardList, Plus, Save } from "lucide-react";
+import { useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
@@ -70,8 +71,25 @@ function useRecentVisits(organizationId: string | undefined) {
 
 export default function MedicalRecords() {
   const { organization } = useOrganizationAccess();
+  const [searchParams] = useSearchParams();
+  const appointmentId = searchParams.get("appointmentId");
   const [createOpen, setCreateOpen] = useState(false);
   const visits = useRecentVisits(organization?.id);
+  const appointment = useQuery({
+    queryKey: ["medical-visit-appointment", organization?.id, appointmentId],
+    enabled: Boolean(organization?.id && appointmentId),
+    queryFn: async () => {
+      const { data, error } = await supabase.from("appointments")
+        .select("id, patient_id, doctor_id, clinic_id, patient:patients(id, name_ar)")
+        .eq("id", appointmentId).eq("organization_id", organization?.id).maybeSingle();
+      if (error) throw error;
+      return data as AppointmentVisitContext | null;
+    },
+  });
+
+  useEffect(() => {
+    if (appointment.data) setCreateOpen(true);
+  }, [appointment.data]);
 
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
@@ -116,7 +134,7 @@ export default function MedicalRecords() {
         </CardContent>
       </Card>
 
-      <NewVisitDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
+      <NewVisitDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} appointment={appointment.data ?? null} />
     </div>
   );
 }
@@ -221,14 +239,24 @@ function extractVitals(values: Record<string, string>) {
   return Object.values(row).some((value) => value !== null) ? row : null;
 }
 
+type AppointmentVisitContext = {
+  id: string;
+  patient_id: string;
+  doctor_id: string;
+  clinic_id: string | null;
+  patient: { id: string; name_ar: string } | { id: string; name_ar: string }[] | null;
+};
+
 function NewVisitDialog({
   open,
   onOpenChange,
   organizationId,
+  appointment,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   organizationId: string | undefined;
+  appointment: AppointmentVisitContext | null;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -274,6 +302,13 @@ function NewVisitDialog({
     setFieldValues({});
   }, [template.data?.id]);
 
+  useEffect(() => {
+    if (!open || !appointment) return;
+    const appointmentPatient = Array.isArray(appointment.patient) ? appointment.patient[0] : appointment.patient;
+    if (appointmentPatient) setPatient({ id: appointmentPatient.id, name_ar: appointmentPatient.name_ar });
+    setDoctorId(appointment.doctor_id);
+  }, [appointment, open]);
+
   // تعبئة جهة العمل تلقائيًا من ملف المريض عند اختيار قالب الفحص المهني — نفس
   // حقل patients.work_entity_value_id المستخدم أصلًا في ملف المريض (0028)
   useEffect(() => {
@@ -296,22 +331,29 @@ function NewVisitDialog({
       if (!organizationId || !patient || !doctorId) throw new Error("أكمل بيانات المريض والطبيب");
       // حظر الملف يمنع فتح زيارة جديدة عليه — كان معروضًا في الملف بلا فرض
       await assertPatientNotBlocked(patient.id, "file");
-      const { data: visit, error: visitError } = await supabase
-        .from("patient_visits")
-        .insert({
-          organization_id: organizationId,
-          patient_id: patient.id,
-          doctor_id: doctorId,
-          template_id: template.data?.id ?? null,
-          canvas_type: template.data?.canvas_type ?? "none",
-          main_complaint: mainComplaint.trim() || null,
-          exam_data: fieldValues,
-          notes: notes.trim() || null,
-          next_visit_plan: nextVisitPlan.trim() || null,
-        })
-        .select("id")
-        .single();
-      if (visitError) throw visitError;
+      const visitPayload = {
+        organization_id: organizationId,
+        patient_id: patient.id,
+        doctor_id: doctorId,
+        clinic_id: appointment?.clinic_id ?? null,
+        appointment_id: appointment?.id ?? null,
+        template_id: template.data?.id ?? null,
+        canvas_type: template.data?.canvas_type ?? "none",
+        main_complaint: mainComplaint.trim() || null,
+        exam_data: fieldValues,
+        notes: notes.trim() || null,
+        next_visit_plan: nextVisitPlan.trim() || null,
+        created_by: session?.user.id ?? null,
+      };
+      const existingVisit = appointment?.id
+        ? await supabase.from("patient_visits").select("id").eq("appointment_id", appointment.id).maybeSingle()
+        : { data: null, error: null };
+      if (existingVisit.error) throw existingVisit.error;
+      const visitResult = existingVisit.data
+        ? await supabase.from("patient_visits").update(visitPayload).eq("id", existingVisit.data.id).eq("organization_id", organizationId).select("id").single()
+        : await supabase.from("patient_visits").insert(visitPayload).select("id").single();
+      if (visitResult.error) throw visitResult.error;
+      const visit = visitResult.data;
 
       if (diagnoses.length > 0) {
         const { error: diagnosesError } = await supabase.from("patient_visit_diagnoses").insert(

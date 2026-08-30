@@ -16,6 +16,7 @@ export const APPOINTMENT_STATUS_LABELS: Record<AppointmentStatus, string> = {
   completed: "مكتمل",
   no_show: "لم يحضر",
   cancelled_by_patient: "ألغاه المريض",
+  cancelled_by_staff: "ألغته المنشأة",
   walk_in: "حضور مباشر",
   waiting: "في الانتظار",
 };
@@ -32,6 +33,7 @@ export const APPOINTMENT_STATUS_BADGE: Record<AppointmentStatus, string> = {
   completed: "bg-emerald-100 text-emerald-700",
   no_show: "bg-rose-100 text-rose-700",
   cancelled_by_patient: "bg-rose-100 text-rose-700",
+  cancelled_by_staff: "bg-rose-100 text-rose-700",
   walk_in: "bg-teal-100 text-teal-700",
   waiting: "bg-amber-100 text-amber-700",
 };

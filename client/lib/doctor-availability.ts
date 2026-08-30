@@ -42,9 +42,7 @@ export async function checkDoctorAvailability(
     .lt("starts_at", endIso)
     .gt("ends_at", startIso);
 
-  // فشل القراءة لا يمنع الحجز: التحقق مساعدة تشغيلية لا قيد سلامة، ومنع موعد
-  // مشروع بسبب انقطاع شبكة أسوأ من السماح بموعد خارج الدوام.
-  if (error) return { status: "unknown", message: null };
+  if (error) throw new Error(`تعذر التحقق من دوام الطبيب: ${error.message}`);
 
   const overlapping = (data ?? []) as {
     starts_at: string;
@@ -96,7 +94,8 @@ export async function checkDoctorAvailability(
     .select("id", { count: "exact", head: true })
     .eq("doctor_id", doctorId);
 
-  if (countError || !count) return { status: "unknown", message: null };
+  if (countError) throw new Error(`تعذر التحقق من جدول الطبيب: ${countError.message}`);
+  if (!count) return { status: "unknown", message: null };
 
   return {
     status: "outside",
