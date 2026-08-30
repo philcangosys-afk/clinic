@@ -62,6 +62,8 @@ const OrganizationSettings = lazy(() => import("./pages/OrganizationSettings"));
 const Content = lazy(() => import("./pages/Content"));
 const Settings = lazy(() => import("./pages/Settings"));
 const ReferenceData = lazy(() => import("./pages/ReferenceData"));
+const PriceLists = lazy(() => import("./pages/PriceLists"));
+const Resources = lazy(() => import("./pages/Resources"));
 import { OrganizationAccessProvider } from "./contexts/OrganizationAccessContext";
 import AppShell from "./components/layout/AppShell";
 import RouteGuard from "./components/layout/RouteGuard";
@@ -82,6 +84,8 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   doctors: Doctors,
   departments: Departments,
   services: Services,
+  "price-lists": PriceLists,
+  resources: Resources,
   "medical-records": MedicalRecords,
   insurance: Insurance,
   employees: Employees,

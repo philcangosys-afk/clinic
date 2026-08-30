@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import PatientPicker from "@/components/shared/PatientPicker";
+import ItemPicker from "@/components/shared/ItemPicker";
 import LookupSelect from "@/components/shared/LookupSelect";
 import CannedTextPicker, { appendCannedText } from "@/components/shared/CannedTextPicker";
 import QuickAddPatientDialog from "@/components/shared/QuickAddPatientDialog";
@@ -490,6 +491,14 @@ function CreateAppointmentDialog({
   const [date, setDate] = useState(defaultDay);
   const [time, setTime] = useState("09:00");
   const [duration, setDuration] = useState("30");
+  /**
+   * الخدمة المطلوبة.
+   *
+   * `items.duration_minutes` كان مخزَّنًا منذ 0071 ولا يقرؤه أحد، فكان كل
+   * موعد ٣٠ دقيقة سواء كان كشفًا أو تنظيرًا. اختيار الخدمة هنا يضبط المدة
+   * ويشتقّ العيادة، والقاعدة تفحص ملاءمتها للمريض قبل الحفظ.
+   */
+  const [service, setService] = useState<{ id: string; name: string } | null>(null);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   /**
    * العيادة ونوع الزيارة والملاحظة أعمدة في `appointments` منذ 0002 لم تكن
@@ -561,6 +570,7 @@ function CreateAppointmentDialog({
         scheduled_end: end.toISOString(),
         status: "scheduled",
         clinic_id: clinicId === NONE_VALUE ? null : clinicId,
+        item_id: service?.id ?? null,
         visit_type_value_id: visitTypeValueId || null,
         priority,
         note: note.trim() || null,
@@ -573,6 +583,7 @@ function CreateAppointmentDialog({
       toast({ title: "تم حجز الموعد" });
       setPatient(null);
       setDoctorId("");
+      setService(null);
       setClinicId(NONE_VALUE);
       setVisitTypeValueId("");
       setPriority("normal");
@@ -624,6 +635,34 @@ function CreateAppointmentDialog({
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>الخدمة المطلوبة (اختياري)</Label>
+              {service ? (
+                <div className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm">
+                  {service.name}
+                  <Button size="sm" variant="ghost" className="ms-auto" onClick={() => setService(null)}>
+                    تغيير
+                  </Button>
+                </div>
+              ) : (
+                <ItemPicker
+                  onSelect={async (item: any) => {
+                    setService({ id: item.id, name: item.name_ar });
+                    const { data } = await supabase
+                      .from("items")
+                      .select("duration_minutes, default_clinic_id, requires_appointment")
+                      .eq("id", item.id)
+                      .maybeSingle();
+                    if (data?.duration_minutes) setDuration(String(data.duration_minutes));
+                    if (data?.default_clinic_id && clinicId === NONE_VALUE)
+                      setClinicId(data.default_clinic_id);
+                  }}
+                />
+              )}
+              <p className="text-xs text-muted-foreground">
+                تحديد الخدمة يضبط المدة والعيادة، ويمنع حجزًا لا يصلح للمريض.
+              </p>
             </div>
             <div className="grid grid-cols-3 gap-2">
               <div className="flex flex-col gap-1.5">
