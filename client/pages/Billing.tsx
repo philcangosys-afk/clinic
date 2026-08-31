@@ -439,9 +439,13 @@ export default function Billing() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">كل الحالات</SelectItem>
+                <SelectItem value="draft">مسوّدة</SelectItem>
                 <SelectItem value="unpaid">غير مدفوعة</SelectItem>
                 <SelectItem value="partial">مدفوعة جزئيًا</SelectItem>
                 <SelectItem value="paid">مدفوعة بالكامل</SelectItem>
+                <SelectItem value="partially_refunded">مستردّة جزئيًا</SelectItem>
+                <SelectItem value="refunded">مستردّة بالكامل</SelectItem>
+                <SelectItem value="void">ملغاة</SelectItem>
               </SelectContent>
             </Select>
           )}

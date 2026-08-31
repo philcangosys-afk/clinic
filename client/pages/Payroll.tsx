@@ -37,11 +37,10 @@ function nextMonthStart(month: string) {
   return new Date(Date.UTC(year, monthIndex, 1)).toISOString().slice(0, 10);
 }
 
-function startOfMonthIso() {
+function currentMonthStart() {
   const date = new Date();
-  date.setDate(1);
-  date.setHours(0, 0, 0, 0);
-  return date.toISOString();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-01`;
 }
 
 function useEmployeesWithPayroll(organizationId: string | undefined) {
@@ -64,7 +63,7 @@ function useEmployeesWithPayroll(organizationId: string | undefined) {
         .select("employee_ref_id, amount, voucher_date")
         .eq("organization_id", organizationId)
         .eq("voucher_type", "salary")
-        .gte("voucher_date", startOfMonthIso().slice(0, 10));
+        .gte("voucher_date", currentMonthStart());
       if (vouchersError) throw vouchersError;
 
       const paidThisMonth = new Set((vouchers ?? []).map((voucher) => voucher.employee_ref_id));
@@ -282,6 +281,7 @@ function PaySalaryDialog({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["employees-payroll"] });
+      queryClient.invalidateQueries({ queryKey: ["payroll-history"] });
       toast({ title: "تم صرف الراتب" });
       setAmount("");
       onOpenChange();

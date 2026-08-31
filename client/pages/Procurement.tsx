@@ -848,6 +848,7 @@ function NewPurchaseInvoiceDialog({
             vat_rate: orgVatRate,
             vat_amount: lineVat,
             net_amount: line.netTaxable + lineVat,
+            lot_number: line.lotNumber.trim() || null,
             expiry_date: line.expiryDate || null,
           })
           .select("id")
