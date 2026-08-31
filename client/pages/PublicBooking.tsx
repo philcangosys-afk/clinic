@@ -278,55 +278,8 @@ export default function PublicBooking() {
   };
 
   const printInvoice = () => {
-    const invoice = document.getElementById("booking-invoice");
-    if (!invoice) return;
-
-    const printWindow = window.open("", "_blank", "width=900,height=1000");
-    if (!printWindow) {
-      window.alert("يرجى السماح بالنوافذ المنبثقة لطباعة الفاتورة");
-      return;
-    }
-
-    printWindow.document.open();
-    printWindow.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة رقم ${result?.invoice_number ?? ""}</title></head><body></body></html>`);
-    printWindow.document.close();
-
-    const stylesheetPromises: Promise<void>[] = [];
-    document.querySelectorAll<HTMLLinkElement | HTMLStyleElement>('link[rel="stylesheet"], style').forEach((stylesheet) => {
-      const copy = stylesheet.cloneNode(true) as HTMLLinkElement | HTMLStyleElement;
-      if (copy instanceof HTMLLinkElement) {
-        stylesheetPromises.push(new Promise((resolve) => {
-          copy.onload = () => resolve();
-          copy.onerror = () => resolve();
-        }));
-      }
-      printWindow.document.head.appendChild(copy);
-    });
-
-    const printStyles = printWindow.document.createElement("style");
-    printStyles.textContent = `
-      @page { size: A4; margin: 10mm; }
-      html, body { margin: 0; padding: 0; background: #fff; direction: rtl; }
-      body { color: #172c27; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
-      body * { visibility: visible !important; }
-      #booking-invoice { position: static !important; inset: auto !important; width: 100% !important; max-width: none !important; border-radius: 0 !important; box-shadow: none !important; break-inside: avoid; }
-    `;
-    printWindow.document.head.appendChild(printStyles);
-
-    const invoiceCopy = invoice.cloneNode(true) as HTMLElement;
-    printWindow.document.body.appendChild(invoiceCopy);
-    const imagePromises = Array.from(printWindow.document.images).map((image) => image.complete ? Promise.resolve() : new Promise<void>((resolve) => {
-      image.onload = () => resolve();
-      image.onerror = () => resolve();
-    }));
-
-    void Promise.all([...stylesheetPromises, ...imagePromises]).then(() => {
-      window.setTimeout(() => {
-        printWindow.focus();
-        printWindow.onafterprint = () => printWindow.close();
-        printWindow.print();
-      }, 300);
-    });
+    if (!document.getElementById("booking-invoice")) return;
+    window.print();
   };
 
   const submit = async (event: FormEvent) => {
