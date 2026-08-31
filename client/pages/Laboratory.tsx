@@ -118,7 +118,7 @@ function useLabTests(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("lab_tests")
-        .select("id, code, name_ar, unit, specimen_type, normal_range_text, normal_range_min, normal_range_max, turnaround_hours, is_active, category_id, category:lab_test_categories(name_ar), billing_item_id, billing_item:items(id, name_ar, price)")
+        .select("id, code, name_ar, unit, specimen_type, normal_range_text, normal_range_min, normal_range_max, turnaround_hours, is_active, category_id, category:lab_test_categories(name_ar), billing_item_id, billing_item:items!lab_tests_billing_item_id_fkey(id, name_ar, price)")
         .eq("organization_id", organizationId)
         .order("name_ar");
       if (error) throw error;

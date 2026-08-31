@@ -122,7 +122,7 @@ function useRadiologyExams(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("radiology_exams")
-        .select("id, code, name_ar, modality, body_part, requires_contrast, preparation_instructions, is_active, category_id, category:radiology_exam_categories(name_ar), billing_item_id, billing_item:items(id, name_ar, price)")
+        .select("id, code, name_ar, modality, body_part, requires_contrast, preparation_instructions, is_active, category_id, category:radiology_exam_categories(name_ar), billing_item_id, billing_item:items!radiology_exams_billing_item_id_fkey(id, name_ar, price)")
         .eq("organization_id", organizationId)
         .order("name_ar");
       if (error) throw error;
