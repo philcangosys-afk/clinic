@@ -153,3 +153,28 @@
     white-space: pre;
   }
 }
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+
+  #booking-invoice,
+  #booking-invoice * {
+    visibility: visible;
+  }
+
+  #booking-invoice {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+}

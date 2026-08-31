@@ -9,6 +9,8 @@ import {
   MapPin,
   Menu,
   Phone,
+  Printer,
+  ReceiptText,
   ShieldCheck,
   Sparkles,
   Stethoscope,
@@ -42,11 +44,22 @@ type Catalog = {
 };
 type BookingResult = {
   booking_reference: string;
+  invoice_number: number;
+  invoice_date: string;
   scheduled_start: string;
+  scheduled_end: string;
+  patient_name: string;
+  patient_mobile: string;
+  patient_email: string | null;
   service_name: string;
   doctor_name: string;
   clinic_name: string;
+  invoice_subtotal: number;
+  vat_rate: number;
+  vat_amount: number;
   invoice_total: number;
+  legal_name: string;
+  vat_registration_number: string | null;
   currency: string;
 };
 
@@ -209,18 +222,85 @@ export default function PublicBooking() {
 
             <div id="booking" className="scroll-mt-28 rounded-[24px] border border-white/40 bg-white/95 p-5 text-[#0b1f1c] shadow-2xl backdrop-blur-xl sm:p-7">
               {result ? (
-                <div className="py-5 text-center">
-                  <span className="mx-auto grid h-16 w-16 place-items-center rounded-full bg-[#cfeee6] text-[#067663]"><CheckCircle2 className="h-9 w-9" /></span>
-                  <h2 className="mt-5 text-2xl font-extrabold">تم تأكيد حجزك</h2>
-                  <p className="mt-2 text-[#6e827d]">وصل الموعد والفاتورة مباشرةً إلى نظام المركز.</p>
-                  <div className="mt-6 rounded-2xl bg-[#eaf1ef] p-5 text-start">
-                    <p><span className="text-[#6e827d]">رقم الحجز:</span> <strong dir="ltr">{result.booking_reference}</strong></p>
-                    <p className="mt-2"><span className="text-[#6e827d]">الموعد:</span> <strong>{new Date(result.scheduled_start).toLocaleString("ar-SA")}</strong></p>
-                    <p className="mt-2"><span className="text-[#6e827d]">الطبيب:</span> <strong>د. {result.doctor_name}</strong></p>
-                    <p className="mt-2"><span className="text-[#6e827d]">الخدمة:</span> <strong>{result.service_name}</strong></p>
-                    <p className="mt-2"><span className="text-[#6e827d]">إجمالي المسودة:</span> <strong>{formatMoney(Number(result.invoice_total))}</strong></p>
+                <div className="py-2">
+                  <div className="mb-5 text-center print:hidden">
+                    <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#cfeee6] text-[#067663]"><CheckCircle2 className="h-8 w-8" /></span>
+                    <h2 className="mt-3 text-2xl font-extrabold">تم تأكيد حجزك وإصدار فاتورتك</h2>
+                    <p className="mt-1 text-sm text-[#6e827d]">وصل الموعد والفاتورة مباشرةً إلى نظام المركز.</p>
                   </div>
-                  <button type="button" onClick={() => setResult(null)} className="mt-6 rounded-xl bg-[#0baa8e] px-6 py-3 font-bold text-white">حجز موعد آخر</button>
+
+                  <article id="booking-invoice" className="overflow-hidden rounded-2xl border border-[#c8d8d4] bg-white text-[#172c27] shadow-sm">
+                    <header className="flex flex-wrap items-start justify-between gap-5 border-b-4 border-[#0baa8e] bg-[#f7fbfa] p-5">
+                      <div className="flex items-center gap-3">
+                        <span className="grid h-20 w-20 place-items-center overflow-hidden rounded-xl border border-[#d9e4e1] bg-white p-1">
+                          <img src={LOGO_IMAGE} alt="شعار أسناني My Teeth" className="h-full w-full object-contain" />
+                        </span>
+                        <div>
+                          <h2 className="text-lg font-extrabold">{result.legal_name || catalog.site_name}</h2>
+                          <p className="mt-1 text-xs text-[#60746f]">{catalog.address || "المملكة العربية السعودية"}</p>
+                          <p className="mt-1 text-xs text-[#60746f]" dir="ltr">{catalog.phone}</p>
+                          <p className="mt-1 text-xs text-[#60746f]">الرقم الضريبي: <span dir="ltr">{result.vat_registration_number || "غير مسجل"}</span></p>
+                        </div>
+                      </div>
+                      <div className="rounded-xl bg-[#0b1f1c] px-4 py-3 text-white">
+                        <div className="flex items-center gap-2"><ReceiptText className="h-5 w-5 text-[#1fcfb8]" /><strong>فاتورة ضريبية مبسطة</strong></div>
+                        <p className="mt-2 text-xs text-white/70">رقم الفاتورة</p>
+                        <p className="font-mono text-lg font-extrabold" dir="ltr">#{result.invoice_number}</p>
+                        <p className="mt-1 text-xs text-white/70">{new Date(result.invoice_date).toLocaleString("ar-SA")}</p>
+                      </div>
+                    </header>
+
+                    <div className="grid gap-4 border-b border-[#d9e4e1] p-5 sm:grid-cols-2">
+                      <section className="rounded-xl bg-[#f4f8f7] p-4">
+                        <h3 className="text-xs font-extrabold text-[#0a816d]">بيانات العميل</h3>
+                        <dl className="mt-3 space-y-2 text-sm">
+                          <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">الاسم</dt><dd className="font-bold">{result.patient_name}</dd></div>
+                          <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">الجوال</dt><dd className="font-bold" dir="ltr">{result.patient_mobile}</dd></div>
+                          {result.patient_email && <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">البريد</dt><dd className="break-all font-medium" dir="ltr">{result.patient_email}</dd></div>}
+                        </dl>
+                      </section>
+                      <section className="rounded-xl bg-[#f4f8f7] p-4">
+                        <h3 className="text-xs font-extrabold text-[#0a816d]">تفاصيل الموعد</h3>
+                        <dl className="mt-3 space-y-2 text-sm">
+                          <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">رقم الحجز</dt><dd className="font-mono font-bold" dir="ltr">{result.booking_reference}</dd></div>
+                          <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">الموعد</dt><dd className="font-bold">{new Date(result.scheduled_start).toLocaleString("ar-SA")}</dd></div>
+                          <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">الطبيب</dt><dd className="font-bold">د. {result.doctor_name}</dd></div>
+                          <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">العيادة</dt><dd className="font-bold">{result.clinic_name}</dd></div>
+                        </dl>
+                      </section>
+                    </div>
+
+                    <div className="p-5">
+                      <div className="overflow-x-auto rounded-xl border border-[#d9e4e1]">
+                        <table className="w-full min-w-[560px] text-sm">
+                          <thead className="bg-[#0b1f1c] text-white">
+                            <tr><th className="p-3 text-start">الخدمة</th><th className="p-3">الكمية</th><th className="p-3">السعر</th><th className="p-3">الضريبة</th><th className="p-3">الإجمالي</th></tr>
+                          </thead>
+                          <tbody>
+                            <tr className="border-b border-[#e4ecea]"><td className="p-3 font-bold">{result.service_name}</td><td className="p-3 text-center">1</td><td className="p-3 text-center">{formatMoney(Number(result.invoice_subtotal))}</td><td className="p-3 text-center">{Number(result.vat_rate)}%</td><td className="p-3 text-center font-bold">{formatMoney(Number(result.invoice_total))}</td></tr>
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="mt-4 me-auto w-full max-w-xs space-y-2 rounded-xl bg-[#f4f8f7] p-4 text-sm">
+                        <div className="flex justify-between"><span className="text-[#60746f]">المجموع قبل الضريبة</span><strong>{formatMoney(Number(result.invoice_subtotal))}</strong></div>
+                        <div className="flex justify-between"><span className="text-[#60746f]">ضريبة القيمة المضافة ({Number(result.vat_rate)}%)</span><strong>{formatMoney(Number(result.vat_amount))}</strong></div>
+                        <div className="flex justify-between border-t-2 border-[#0baa8e] pt-3 text-lg"><span className="font-extrabold">الإجمالي</span><strong className="text-[#067663]">{formatMoney(Number(result.invoice_total))}</strong></div>
+                        <div className="flex justify-between"><span className="text-[#60746f]">المدفوع</span><strong>{formatMoney(0)}</strong></div>
+                        <div className="flex justify-between rounded-lg bg-amber-50 px-2 py-1.5 text-amber-800"><span className="font-bold">المتبقي</span><strong>{formatMoney(Number(result.invoice_total))}</strong></div>
+                      </div>
+
+                      <div className="mt-5 flex items-center justify-between gap-4 border-t border-dashed border-[#c8d8d4] pt-4 text-xs text-[#60746f]">
+                        <span>حالة الفاتورة: <strong className="text-amber-700">غير مدفوعة</strong></span>
+                        <span>شكرًا لاختياركم {catalog.site_name}</span>
+                      </div>
+                    </div>
+                  </article>
+
+                  <div className="mt-5 flex flex-wrap justify-center gap-3 print:hidden">
+                    <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-xl bg-[#0b1f1c] px-6 py-3 font-bold text-white"><Printer className="h-4 w-4" /> طباعة الفاتورة</button>
+                    <button type="button" onClick={() => setResult(null)} className="rounded-xl border border-[#0baa8e] bg-white px-6 py-3 font-bold text-[#067663]">حجز موعد آخر</button>
+                  </div>
                 </div>
               ) : (
                 <form onSubmit={submit} className="space-y-4">
