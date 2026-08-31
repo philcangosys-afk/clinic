@@ -5,6 +5,8 @@ import {
   Banknote,
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   CreditCard,
   HeartPulse,
@@ -109,7 +111,12 @@ export default function PublicBooking() {
   const [clinicId, setClinicId] = useState("");
   const [doctorId, setDoctorId] = useState("");
   const [serviceId, setServiceId] = useState("");
-  const [date, setDate] = useState(tomorrowDate);
+  const [date, setDate] = useState("");
+  const [visibleMonth, setVisibleMonth] = useState(() => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    return new Date(tomorrow.getFullYear(), tomorrow.getMonth(), 1);
+  });
   const [selectedSlotStart, setSelectedSlotStart] = useState("");
   const [availableSlots, setAvailableSlots] = useState<AvailableSlot[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
@@ -166,6 +173,8 @@ export default function PublicBooking() {
     let active = true;
     setSlotsLoading(true);
     setSlotsError("");
+    setDate("");
+    setSelectedSlotStart("");
     void supabase.rpc("app_public_doctor_slots", {
       p_slug: slug,
       p_doctor_id: doctorId,
@@ -183,8 +192,10 @@ export default function PublicBooking() {
         const slots = ((data as SlotsResponse | null)?.slots ?? []);
         setAvailableSlots(slots);
         const first = slots[0];
-        setSelectedSlotStart(first?.start ?? "");
-        if (first) setDate(tomorrowDateFor(new Date(first.start)));
+        if (first) {
+          const firstDate = new Date(first.start);
+          setVisibleMonth(new Date(firstDate.getFullYear(), firstDate.getMonth(), 1));
+        }
       }
       setSlotsLoading(false);
     });
@@ -202,6 +213,28 @@ export default function PublicBooking() {
 
   const availableDates = [...slotsByDate.keys()];
   const selectedDateSlots = slotsByDate.get(date) ?? [];
+  const availableMonthKeys = [...new Set(availableDates.map((availableDate) => availableDate.slice(0, 7)))].sort();
+  const visibleMonthKey = tomorrowDateFor(visibleMonth).slice(0, 7);
+  const visibleMonthIndex = availableMonthKeys.indexOf(visibleMonthKey);
+  const calendarDays = useMemo(() => {
+    const year = visibleMonth.getFullYear();
+    const month = visibleMonth.getMonth();
+    const leadingDays = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    return [
+      ...Array.from({ length: leadingDays }, () => null),
+      ...Array.from({ length: daysInMonth }, (_, index) => tomorrowDateFor(new Date(year, month, index + 1))),
+    ];
+  }, [visibleMonth]);
+
+  const showMonth = (offset: number) => {
+    const targetKey = availableMonthKeys[visibleMonthIndex + offset];
+    if (!targetKey) return;
+    const [year, month] = targetKey.split("-").map(Number);
+    setVisibleMonth(new Date(year, month - 1, 1));
+    setDate("");
+    setSelectedSlotStart("");
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -418,30 +451,47 @@ export default function PublicBooking() {
                   </div>
                   <div className="rounded-2xl border border-[#d9e4e1] p-4">
                     <div className="flex items-center justify-between gap-3">
-                      <div><h3 className="text-sm font-extrabold">الأيام والأوقات المتاحة للطبيب</h3><p className="mt-1 text-xs text-[#6e827d]">تُعرض بعد احتساب دوام الطبيب وإجازاته والحجوزات الحالية.</p></div>
+                      <div><h3 className="text-sm font-extrabold">تاريخ الحجز</h3><p className="mt-1 text-xs text-[#6e827d]">اختر يومًا متاحًا، ثم اختر الوقت المناسب.</p></div>
                       {slotsLoading && <span className="text-xs font-bold text-[#0a816d]">جارٍ التحديث...</span>}
                     </div>
                     {slotsError && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{slotsError}</p>}
                     {!slotsLoading && !slotsError && availableDates.length === 0 && <p className="mt-3 rounded-lg bg-amber-50 px-3 py-3 text-sm font-bold text-amber-800">لا توجد مواعيد متاحة لهذا الطبيب خلال الثلاثين يومًا القادمة.</p>}
                     {availableDates.length > 0 && (
-                      <div className="mt-4 space-y-4">
-                        <div className="flex gap-2 overflow-x-auto pb-1">
-                          {availableDates.map((availableDate) => (
-                            <button key={availableDate} type="button" onClick={() => {
-                              setDate(availableDate);
-                              setSelectedSlotStart(slotsByDate.get(availableDate)?.[0]?.start ?? "");
-                            }} className={`min-w-fit rounded-xl border px-3 py-2 text-xs font-bold ${date === availableDate ? "border-[#0baa8e] bg-[#0baa8e] text-white" : "border-[#d9e4e1] bg-white text-[#37514b]"}`}>
-                              {new Date(`${availableDate}T12:00:00`).toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "short" })}
-                            </button>
-                          ))}
+                      <div className="mx-auto mt-4 max-w-sm">
+                        <div className="flex items-center justify-between rounded-xl bg-[#f4f8f7] px-2 py-2">
+                          <button type="button" aria-label="الشهر السابق" disabled={visibleMonthIndex <= 0} onClick={() => showMonth(-1)} className="grid h-8 w-8 place-items-center rounded-lg text-[#37514b] hover:bg-white disabled:cursor-not-allowed disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button>
+                          <strong className="text-sm">{visibleMonth.toLocaleDateString("ar-SA", { month: "long", year: "numeric" })}</strong>
+                          <button type="button" aria-label="الشهر التالي" disabled={visibleMonthIndex < 0 || visibleMonthIndex >= availableMonthKeys.length - 1} onClick={() => showMonth(1)} className="grid h-8 w-8 place-items-center rounded-lg text-[#37514b] hover:bg-white disabled:cursor-not-allowed disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button>
                         </div>
-                        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                          {selectedDateSlots.map((slot) => (
-                            <button key={slot.start} type="button" onClick={() => setSelectedSlotStart(slot.start)} className={`rounded-lg border px-2 py-2.5 text-xs font-bold ${selectedSlotStart === slot.start ? "border-[#0baa8e] bg-[#e8f8f4] text-[#067663] ring-1 ring-[#0baa8e]" : "border-[#d9e4e1] bg-white hover:border-[#0baa8e]"}`}>
-                              {new Date(slot.start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
-                            </button>
-                          ))}
+                        <div className="mt-2 grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-[#6e827d]">
+                          {["أحد", "اثن", "ثلا", "أرب", "خمي", "جمع", "سبت"].map((dayName) => <span key={dayName} className="py-1">{dayName}</span>)}
+                          {calendarDays.map((calendarDate, index) => {
+                            if (!calendarDate) return <span key={`empty-${index}`} />;
+                            const isAvailable = slotsByDate.has(calendarDate);
+                            const isSelected = date === calendarDate;
+                            return (
+                              <button key={calendarDate} type="button" disabled={!isAvailable} onClick={() => {
+                                setDate(calendarDate);
+                                setSelectedSlotStart("");
+                              }} className={`aspect-square rounded-lg text-xs font-extrabold transition ${isSelected ? "bg-[#0baa8e] text-white shadow-sm" : isAvailable ? "border border-[#9ed8cb] bg-[#e8f8f4] text-[#067663] hover:border-[#0baa8e]" : "cursor-not-allowed bg-[#f1f3f2] text-[#adb8b5]"}`}>
+                                {Number(calendarDate.slice(-2)).toLocaleString("ar-SA")}
+                              </button>
+                            );
+                          })}
                         </div>
+                        <div className="mt-3 flex items-center justify-center gap-4 text-[11px] text-[#6e827d]"><span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-[#e8f8f4] ring-1 ring-[#9ed8cb]" />متاح</span><span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-[#f1f3f2]" />غير متاح</span></div>
+                        {date && (
+                          <div className="mt-4 border-t border-[#e3ebe9] pt-3">
+                            <div className="mb-2 flex items-center justify-between"><strong className="text-xs">اختر الوقت</strong><span className="text-[11px] text-[#6e827d]">{new Date(`${date}T12:00:00`).toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "long" })}</span></div>
+                            <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4">
+                              {selectedDateSlots.map((slot) => (
+                                <button key={slot.start} type="button" onClick={() => setSelectedSlotStart(slot.start)} className={`rounded-lg border px-1.5 py-2 text-xs font-bold ${selectedSlotStart === slot.start ? "border-[#0baa8e] bg-[#0baa8e] text-white" : "border-[#d9e4e1] bg-white text-[#37514b] hover:border-[#0baa8e]"}`}>
+                                  {new Date(slot.start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

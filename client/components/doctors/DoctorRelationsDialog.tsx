@@ -608,7 +608,7 @@ function ScheduleTab({
       const { data, error } = await supabase
         .from("doctor_schedules")
         .select(
-          "id, clinic_id, recurrence_type, pattern_anchor_date, day_of_week, start_time, end_time, slot_duration_minutes, capacity, effective_from, effective_to, is_active, clinic:clinics(name)",
+          "id, clinic_id, recurrence_type, pattern_anchor_date, day_of_week, start_time, end_time, slot_duration_minutes, capacity, effective_from, effective_to, is_active, clinic:clinics!doctor_schedules_clinic_id_fkey(name)",
         )
         .eq("doctor_id", doctorId)
         .order("day_of_week")
