@@ -164,12 +164,14 @@ function toDateKey(date: Date) {
 
 export default function AppointmentCalendar({
   organizationId,
+  selectedDay,
   doctors,
   clinics,
   onCreateAt,
   onOpenAppointment,
 }: {
   organizationId: string | undefined;
+  selectedDay: string;
   doctors: { id: string; name_ar: string }[];
   clinics: { id: string; name: string }[];
   onCreateAt: (start: Date, doctorId: string | null, clinicId: string | null) => void;
@@ -188,6 +190,10 @@ export default function AppointmentCalendar({
     doctorId: string;
     clinicId: string | null;
   } | null>(null);
+
+  useEffect(() => {
+    setAnchor(startOfDay(new Date(`${selectedDay}T00:00:00`)));
+  }, [selectedDay]);
 
   const range = useMemo(() => {
     if (view === "week") return { from: startOfWeek(anchor), to: addDays(startOfWeek(anchor), 7) };

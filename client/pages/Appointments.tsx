@@ -76,6 +76,28 @@ function useDoctorsList(organizationId: string | undefined) {
   });
 }
 
+function useUpcomingWebsiteAppointments(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["appointments-website-upcoming", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("appointments")
+        .select(
+          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
+        )
+        .eq("organization_id", organizationId)
+        .ilike("note", "حجز من الموقع الإلكتروني%")
+        .gte("scheduled_start", new Date().toISOString())
+        .not("status", "in", "(completed,no_show,cancelled_by_patient,cancelled_by_staff)")
+        .order("scheduled_start", { ascending: true })
+        .limit(8);
+      if (error) throw error;
+      return (data ?? []) as unknown as AppointmentWithRelations[];
+    },
+  });
+}
+
 function useDayAppointments(organizationId: string | undefined, day: string) {
   return useQuery({
     queryKey: ["appointments-day", organizationId, day],
@@ -132,6 +154,7 @@ export default function Appointments() {
     },
   });
   const appointments = useDayAppointments(organization?.id, day);
+  const websiteAppointments = useUpcomingWebsiteAppointments(organization?.id);
   const canSchedule = legacyMode || ["owner", "organization_admin", "branch_manager", "receptionist"].includes(membership?.role_key ?? "");
 
   const filteredAppointments = useMemo(() => (appointments.data ?? []).filter((appointment) => {
@@ -156,6 +179,7 @@ export default function Appointments() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
+      queryClient.invalidateQueries({ queryKey: ["appointments-website-upcoming"] });
       queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
       toast({ title: "تم تأكيد الموعد" });
     },
@@ -236,9 +260,44 @@ export default function Appointments() {
         </CardContent>
       </Card>
 
+      {!websiteAppointments.isLoading && (websiteAppointments.data ?? []).length > 0 && (
+        <Card className="border-emerald-200 bg-emerald-50/50">
+          <CardHeader className="pb-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <CardTitle className="text-base">حجوزات الموقع القادمة</CardTitle>
+              <Badge variant="success">{websiteAppointments.data?.length ?? 0} حجز</Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            {(websiteAppointments.data ?? []).map((appointment) => (
+              <button
+                key={appointment.id}
+                type="button"
+                onClick={() => setDay(toDateInputValue(new Date(appointment.scheduled_start)))}
+                className="rounded-lg border border-emerald-200 bg-white p-3 text-start transition hover:border-emerald-400 hover:shadow-sm"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <strong className="text-sm">{appointment.patient?.name_ar ?? "مريض"}</strong>
+                  <Badge className={statusBadgeClass(appointment.status)}>{statusLabel(appointment.status)}</Badge>
+                </div>
+                <p className="mt-2 text-xs font-medium">
+                  {new Date(appointment.scheduled_start).toLocaleString("ar-SA", {
+                    weekday: "short", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit",
+                  })}
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  د. {appointment.doctor?.name_ar ?? "—"} · {appointment.clinic?.name ?? "—"}
+                </p>
+              </button>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {mode === "calendar" && (
         <AppointmentCalendar
           organizationId={organization?.id}
+          selectedDay={day}
           doctors={doctors.data ?? []}
           clinics={clinicList.data ?? []}
           onCreateAt={(start, doctorId, clinicId) => {
