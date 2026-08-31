@@ -200,40 +200,36 @@ html {
 }
 
 @media print {
-  html,
-  body {
-    height: 100%;
-    margin: 0;
-    overflow: hidden;
-    background: white;
-  }
-
-  #root {
-    min-height: 0 !important;
-    height: 0 !important;
-  }
-
-  body * {
-    visibility: hidden;
-  }
-
-  #booking-invoice,
-  #booking-invoice * {
-    visibility: visible;
-  }
-
-  #booking-invoice {
-    position: fixed;
-    inset: 0;
-    width: 100%;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
-    break-inside: avoid;
-  }
-
   @page {
     size: A4;
     margin: 10mm;
+  }
+
+  body.invoice-printing {
+    margin: 0;
+    overflow: visible;
+    background: white;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  body.invoice-printing > *:not(#booking-invoice) {
+    display: none !important;
+  }
+
+  body.invoice-printing #booking-invoice {
+    display: block !important;
+    position: static !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    overflow: visible !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  body.invoice-printing #booking-invoice > * {
+    break-inside: avoid;
   }
 }

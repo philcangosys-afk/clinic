@@ -278,7 +278,24 @@ export default function PublicBooking() {
   };
 
   const printInvoice = () => {
-    if (!document.getElementById("booking-invoice")) return;
+    const invoice = document.getElementById("booking-invoice");
+    const parent = invoice?.parentNode;
+    if (!invoice || !parent) return;
+
+    const nextSibling = invoice.nextSibling;
+    let restored = false;
+    const restoreInvoice = () => {
+      if (restored) return;
+      restored = true;
+      document.body.classList.remove("invoice-printing");
+      if (nextSibling && nextSibling.parentNode === parent) parent.insertBefore(invoice, nextSibling);
+      else parent.appendChild(invoice);
+      window.removeEventListener("afterprint", restoreInvoice);
+    };
+
+    document.body.classList.add("invoice-printing");
+    document.body.appendChild(invoice);
+    window.addEventListener("afterprint", restoreInvoice);
     window.print();
   };
 
