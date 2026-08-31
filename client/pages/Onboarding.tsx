@@ -52,17 +52,14 @@ export default function Onboarding() {
     if (!access.session) return;
     setBusy(true);
     setError("");
-    const { error: insertError } = await supabase.from("organizations").insert({
-      name: name.trim(),
-      organization_type: organizationType.value,
-      created_by: access.session.user.id,
+    const { error: createError } = await supabase.rpc("app_create_medical_center", {
+      p_name: name.trim(),
     });
-    if (insertError) {
-      setError(insertError.message);
+    if (createError) {
+      setError(createError.message);
       setBusy(false);
       return;
     }
-    await new Promise((resolve) => window.setTimeout(resolve, 500));
     await access.refresh();
     setBusy(false);
     navigate("/", { replace: true });
