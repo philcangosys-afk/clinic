@@ -97,7 +97,7 @@ export default function PublicBooking() {
   const [date, setDate] = useState(tomorrowDate);
   const [time, setTime] = useState("10:00");
   const [note, setNote] = useState("");
-  const [paymentMethod, setPaymentMethod] = useState<"test_card" | "cash_at_center">("test_card");
+  const [paymentMethod, setPaymentMethod] = useState<"test_card" | "cash_at_center" | null>(null);
   const [cardNumber, setCardNumber] = useState("4111 1111 1111 1111");
   const [cardExpiry, setCardExpiry] = useState("12/30");
   const [cardCvv, setCardCvv] = useState("123");
@@ -144,6 +144,10 @@ export default function PublicBooking() {
     setSubmitError("");
     if (!clinicId || !doctorId || !serviceId) {
       setSubmitError("اختر العيادة والطبيب والخدمة");
+      return;
+    }
+    if (!paymentMethod) {
+      setSubmitError("اختر طريقة الدفع بالبطاقة أو الدفع كاش في المركز");
       return;
     }
     if (paymentMethod === "test_card") {
@@ -377,16 +381,16 @@ export default function PublicBooking() {
                           <label className="text-xs font-bold sm:col-span-2">اسم حامل البطاقة<input required dir="ltr" value={cardholder} onChange={(e) => setCardholder(e.target.value)} autoComplete="off" className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 text-start uppercase outline-none focus:border-[#0baa8e]" /></label>
                         </div>
                       </div>
-                    ) : (
+                    ) : paymentMethod === "cash_at_center" ? (
                       <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">ستصدر الفاتورة غير مدفوعة، ويرجى إكمال الدفع نقدًا في المركز.</p>
-                    )}
+                    ) : null}
                   </fieldset>
 
                   <label className="hidden" aria-hidden="true">الموقع<input tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} /></label>
                   <label className="flex items-start gap-2 text-xs leading-5 text-[#516761]"><input required type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1 h-4 w-4 accent-[#0baa8e]" /> أوافق على استخدام بياناتي لغرض إنشاء الملف والموعد والفاتورة وفق سياسة الخصوصية.</label>
                   {selectedService && <div className="flex items-center justify-between rounded-xl bg-[#eaf1ef] px-4 py-3 text-sm"><span>القيمة التقديرية قبل الضريبة</span><strong>{formatMoney(Number(selectedService.price))}</strong></div>}
                   {submitError && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{submitError}</p>}
-                  <button disabled={submitting} className="w-full rounded-xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-5 py-4 font-extrabold text-white shadow-lg transition hover:-translate-y-0.5 disabled:opacity-60">{submitting ? "جارٍ إكمال العملية..." : paymentMethod === "test_card" ? "الدفع التجريبي وتأكيد الحجز" : "تأكيد الحجز والدفع في المركز"}</button>
+                  <button disabled={submitting} className="w-full rounded-xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-5 py-4 font-extrabold text-white shadow-lg transition hover:-translate-y-0.5 disabled:opacity-60">{submitting ? "جارٍ إكمال العملية..." : paymentMethod === "test_card" ? "الدفع التجريبي وتأكيد الحجز" : paymentMethod === "cash_at_center" ? "تأكيد الحجز والدفع في المركز" : "اختر طريقة الدفع لإكمال الحجز"}</button>
                 </form>
               )}
             </div>
