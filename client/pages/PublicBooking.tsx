@@ -267,6 +267,58 @@ export default function PublicBooking() {
     requestAnimationFrame(() => document.getElementById("booking")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
+  const printInvoice = () => {
+    const invoice = document.getElementById("booking-invoice");
+    if (!invoice) return;
+
+    const printWindow = window.open("", "_blank", "width=900,height=1000");
+    if (!printWindow) {
+      window.alert("يرجى السماح بالنوافذ المنبثقة لطباعة الفاتورة");
+      return;
+    }
+
+    printWindow.document.open();
+    printWindow.document.write(`<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>فاتورة رقم ${result?.invoice_number ?? ""}</title></head><body></body></html>`);
+    printWindow.document.close();
+
+    const stylesheetPromises: Promise<void>[] = [];
+    document.querySelectorAll<HTMLLinkElement | HTMLStyleElement>('link[rel="stylesheet"], style').forEach((stylesheet) => {
+      const copy = stylesheet.cloneNode(true) as HTMLLinkElement | HTMLStyleElement;
+      if (copy instanceof HTMLLinkElement) {
+        stylesheetPromises.push(new Promise((resolve) => {
+          copy.onload = () => resolve();
+          copy.onerror = () => resolve();
+        }));
+      }
+      printWindow.document.head.appendChild(copy);
+    });
+
+    const printStyles = printWindow.document.createElement("style");
+    printStyles.textContent = `
+      @page { size: A4; margin: 10mm; }
+      html, body { margin: 0; padding: 0; background: #fff; direction: rtl; }
+      body { color: #172c27; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+      body * { visibility: visible !important; }
+      #booking-invoice { position: static !important; inset: auto !important; width: 100% !important; max-width: none !important; border-radius: 0 !important; box-shadow: none !important; break-inside: avoid; }
+    `;
+    printWindow.document.head.appendChild(printStyles);
+
+    const invoiceCopy = invoice.cloneNode(true) as HTMLElement;
+    printWindow.document.body.appendChild(invoiceCopy);
+    const imagePromises = Array.from(printWindow.document.images).map((image) => image.complete ? Promise.resolve() : new Promise<void>((resolve) => {
+      image.onload = () => resolve();
+      image.onerror = () => resolve();
+    }));
+
+    void Promise.all([...stylesheetPromises, ...imagePromises]).then(() => {
+      window.setTimeout(() => {
+        printWindow.focus();
+        printWindow.onafterprint = () => printWindow.close();
+        printWindow.print();
+      }, 300);
+    });
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitError("");
@@ -362,8 +414,8 @@ export default function PublicBooking() {
         <section className="relative isolate overflow-hidden bg-[#0b1f1c] text-white">
           <img src={HERO_IMAGE} alt="طبيبة أسنان تقدم الرعاية لمريضة في عيادة حديثة" className="absolute inset-0 -z-20 h-full w-full object-cover object-center" />
           <div className="absolute inset-0 -z-10 bg-[linear-gradient(90deg,rgba(11,31,28,.72),rgba(11,31,28,.92)),radial-gradient(circle_at_20%_30%,rgba(11,170,142,.45),transparent_55%)]" />
-          <div className="mx-auto grid min-h-[690px] max-w-7xl items-center gap-12 px-5 py-20 lg:grid-cols-[1.05fr_.95fr] lg:px-10">
-            <div data-reveal className="booking-reveal max-w-2xl">
+          <div className={`mx-auto grid min-h-[690px] max-w-7xl items-center gap-12 px-5 py-20 lg:px-10 ${result ? "lg:grid-cols-1" : "lg:grid-cols-[1.05fr_.95fr]"}`}>
+            <div data-reveal className={`${result ? "lg:hidden" : ""} booking-reveal max-w-2xl`}>
               <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold backdrop-blur"><Sparkles className="h-4 w-4 text-[#1fcfb8]" /> ابتسامة صحية، ثقة تدوم</span>
               <h1 className="mt-6 text-4xl font-extrabold leading-[1.15] sm:text-5xl lg:text-6xl">{catalog.hero_title}</h1>
               <p className="mt-5 max-w-xl text-lg leading-8 text-white/80">{catalog.hero_subtitle}</p>
@@ -378,12 +430,12 @@ export default function PublicBooking() {
               </div>
             </div>
 
-            <div id="booking" data-reveal className={`${mobileBookingOpen || result ? "block" : "hidden"} booking-reveal scroll-mt-28 rounded-[24px] border border-white/40 bg-white/95 p-5 text-[#0b1f1c] shadow-2xl backdrop-blur-xl sm:p-7 lg:block`}>
+            <div id="booking" data-reveal className={`${mobileBookingOpen || result ? "block" : "hidden"} booking-reveal min-w-0 scroll-mt-28 rounded-[24px] border border-white/40 bg-white/95 p-4 text-[#0b1f1c] shadow-2xl backdrop-blur-xl sm:p-7 lg:block ${result ? "mx-auto w-full max-w-5xl" : ""}`}>
               {result ? (
-                <div className="py-2">
+                <div id="booking-result" className="min-w-0 py-2">
                   <div className="mb-5 text-center print:hidden">
                     <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#cfeee6] text-[#067663]"><CheckCircle2 className="h-8 w-8" /></span>
-                    <h2 className="mt-3 text-2xl font-extrabold">تم تأكيد حجزك وإصدار فاتورتك</h2>
+                    <h2 className="mt-3 text-xl font-extrabold sm:text-2xl">تم تأكيد حجزك وإصدار فاتورتك</h2>
                     <p className="mt-1 text-sm text-[#6e827d]">وصل الموعد والفاتورة مباشرةً إلى نظام المركز.</p>
                     {result.payment_method === "test_card" ? (
                       <p className="mt-3 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">تم تسجيل الدفع بالبطاقة التجريبية بنجاح.</p>
@@ -392,20 +444,20 @@ export default function PublicBooking() {
                     )}
                   </div>
 
-                  <article id="booking-invoice" className="overflow-hidden rounded-2xl border border-[#c8d8d4] bg-white text-[#172c27] shadow-sm">
-                    <header className="flex flex-wrap items-start justify-between gap-5 border-b-4 border-[#0baa8e] bg-[#f7fbfa] p-5">
-                      <div className="flex items-center gap-3">
-                        <span className="grid h-20 w-20 place-items-center overflow-hidden rounded-xl border border-[#d9e4e1] bg-white p-1">
+                  <article id="booking-invoice" className="min-w-0 overflow-hidden rounded-2xl border border-[#c8d8d4] bg-white text-[#172c27] shadow-sm">
+                    <header className="flex flex-col items-stretch gap-4 border-b-4 border-[#0baa8e] bg-[#f7fbfa] p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-xl border border-[#d9e4e1] bg-white p-1 sm:h-20 sm:w-20">
                           <img src={LOGO_IMAGE} alt="شعار أسناني My Teeth" className="h-full w-full object-contain" />
                         </span>
-                        <div>
-                          <h2 className="text-lg font-extrabold">{result.legal_name || catalog.site_name}</h2>
+                        <div className="min-w-0">
+                          <h2 className="text-base font-extrabold sm:text-lg">{result.legal_name || catalog.site_name}</h2>
                           <p className="mt-1 text-xs text-[#60746f]">{catalog.address || "المملكة العربية السعودية"}</p>
                           <p className="mt-1 text-xs text-[#60746f]" dir="ltr">{catalog.phone}</p>
                           <p className="mt-1 text-xs text-[#60746f]">الرقم الضريبي: <span dir="ltr">{result.vat_registration_number || "غير مسجل"}</span></p>
                         </div>
                       </div>
-                      <div className="rounded-xl bg-[#0b1f1c] px-4 py-3 text-white">
+                      <div className="w-full rounded-xl bg-[#0b1f1c] px-4 py-3 text-white sm:w-auto sm:min-w-52">
                         <div className="flex items-center gap-2"><ReceiptText className="h-5 w-5 text-[#1fcfb8]" /><strong>فاتورة ضريبية مبسطة</strong></div>
                         <p className="mt-2 text-xs text-white/70">رقم الفاتورة</p>
                         <p className="font-mono text-lg font-extrabold" dir="ltr">#{result.invoice_number}</p>
@@ -413,7 +465,7 @@ export default function PublicBooking() {
                       </div>
                     </header>
 
-                    <div className="grid gap-4 border-b border-[#d9e4e1] p-5 sm:grid-cols-2">
+                    <div className="grid gap-3 border-b border-[#d9e4e1] p-3 sm:grid-cols-2 sm:gap-4 sm:p-5">
                       <section className="rounded-xl bg-[#f4f8f7] p-4">
                         <h3 className="text-xs font-extrabold text-[#0a816d]">بيانات العميل</h3>
                         <dl className="mt-3 space-y-2 text-sm">
@@ -433,9 +485,9 @@ export default function PublicBooking() {
                       </section>
                     </div>
 
-                    <div className="p-5">
-                      <div className="overflow-x-auto rounded-xl border border-[#d9e4e1]">
-                        <table className="w-full min-w-[560px] text-sm">
+                    <div className="p-3 sm:p-5">
+                      <div className="hidden overflow-x-auto rounded-xl border border-[#d9e4e1] sm:block">
+                        <table className="w-full text-sm">
                           <thead className="bg-[#0b1f1c] text-white">
                             <tr><th className="p-3 text-start">الخدمة</th><th className="p-3">الكمية</th><th className="p-3">السعر</th><th className="p-3">الضريبة</th><th className="p-3">الإجمالي</th></tr>
                           </thead>
@@ -445,7 +497,17 @@ export default function PublicBooking() {
                         </table>
                       </div>
 
-                      <div className="mt-4 me-auto w-full max-w-xs space-y-2 rounded-xl bg-[#f4f8f7] p-4 text-sm">
+                      <div className="rounded-xl border border-[#d9e4e1] sm:hidden">
+                        <div className="border-b border-[#e4ecea] bg-[#0b1f1c] px-3 py-2.5 text-sm font-bold text-white">تفاصيل الخدمة</div>
+                        <div className="space-y-2 p-3 text-xs">
+                          <div className="flex justify-between gap-3"><span className="text-[#60746f]">الخدمة</span><strong className="text-end">{result.service_name}</strong></div>
+                          <div className="flex justify-between gap-3"><span className="text-[#60746f]">الكمية</span><strong>1</strong></div>
+                          <div className="flex justify-between gap-3"><span className="text-[#60746f]">السعر</span><strong>{formatMoney(Number(result.invoice_subtotal))}</strong></div>
+                          <div className="flex justify-between gap-3"><span className="text-[#60746f]">الضريبة</span><strong>{Number(result.vat_rate)}%</strong></div>
+                        </div>
+                      </div>
+
+                      <div className="mt-4 me-auto w-full space-y-2 rounded-xl bg-[#f4f8f7] p-4 text-xs sm:max-w-xs sm:text-sm">
                         <div className="flex justify-between"><span className="text-[#60746f]">المجموع قبل الضريبة</span><strong>{formatMoney(Number(result.invoice_subtotal))}</strong></div>
                         <div className="flex justify-between"><span className="text-[#60746f]">ضريبة القيمة المضافة ({Number(result.vat_rate)}%)</span><strong>{formatMoney(Number(result.vat_amount))}</strong></div>
                         <div className="flex justify-between border-t-2 border-[#0baa8e] pt-3 text-lg"><span className="font-extrabold">الإجمالي</span><strong className="text-[#067663]">{formatMoney(Number(result.invoice_total))}</strong></div>
@@ -453,7 +515,7 @@ export default function PublicBooking() {
                         <div className={`flex justify-between rounded-lg px-2 py-1.5 ${result.invoice_status === "paid" ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}><span className="font-bold">المتبقي</span><strong>{formatMoney(Number(result.remaining_amount))}</strong></div>
                       </div>
 
-                      <div className="mt-5 flex items-center justify-between gap-4 border-t border-dashed border-[#c8d8d4] pt-4 text-xs text-[#60746f]">
+                      <div className="mt-5 flex flex-col gap-2 border-t border-dashed border-[#c8d8d4] pt-4 text-xs text-[#60746f] sm:flex-row sm:items-center sm:justify-between sm:gap-4">
                         <span>حالة الفاتورة: <strong className={result.invoice_status === "paid" ? "text-emerald-700" : "text-amber-700"}>{result.invoice_status === "paid" ? "مدفوعة" : "غير مدفوعة"}</strong></span>
                         <span>{result.payment_method === "test_card" ? "بطاقة تجريبية عبر الموقع" : "الدفع نقدًا في المركز"}</span>
                         <span>شكرًا لاختياركم {catalog.site_name}</span>
@@ -462,7 +524,7 @@ export default function PublicBooking() {
                   </article>
 
                   <div className="mt-5 flex flex-wrap justify-center gap-3 print:hidden">
-                    <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-xl bg-[#0b1f1c] px-6 py-3 font-bold text-white"><Printer className="h-4 w-4" /> طباعة الفاتورة</button>
+                    <button type="button" onClick={printInvoice} className="inline-flex items-center gap-2 rounded-xl bg-[#0b1f1c] px-6 py-3 font-bold text-white"><Printer className="h-4 w-4" /> طباعة الفاتورة</button>
                     <button type="button" onClick={() => setResult(null)} className="rounded-xl border border-[#0baa8e] bg-white px-6 py-3 font-bold text-[#067663]">حجز موعد آخر</button>
                   </div>
                 </div>
