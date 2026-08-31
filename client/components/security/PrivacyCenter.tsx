@@ -440,7 +440,7 @@ function AccessLogPanel() {
       since.setDate(since.getDate() - Number(days));
       const { data, error } = await supabase
         .from("v_medical_record_access_log_detail")
-        .select("id, occurred_at, access_type, context, reason, patient_name, file_number, user_name, user_email, branch_name, device_name")
+        .select("id, occurred_at, access_type, context, reason, patient_name, file_number, user_name, user_id, branch_name, device_name")
         .eq("organization_id", organization!.id)
         .gte("occurred_at", since.toISOString())
         .order("occurred_at", { ascending: false })
@@ -498,7 +498,7 @@ function AccessLogPanel() {
                     </TableCell>
                     <TableCell className="text-sm">
                       <p className="font-medium">{r.user_name ?? "—"}</p>
-                      <p className="text-xs text-muted-foreground" dir="ltr">{r.user_email ?? "—"}</p>
+                      <p className="font-mono text-xs text-muted-foreground" dir="ltr">{r.user_id?.slice(0, 8) ?? "—"}</p>
                     </TableCell>
                     <TableCell className="text-sm">
                       <p className="font-medium">{r.patient_name ?? "—"}</p>

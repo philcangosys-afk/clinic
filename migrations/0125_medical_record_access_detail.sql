@@ -69,7 +69,8 @@ revoke all on function public.app_log_record_access(uuid, text, text, text, uuid
 grant execute on function public.app_log_record_access(uuid, text, text, text, uuid, text)
   to authenticated;
 
-create or replace view public.v_medical_record_access_log_detail as
+create or replace view public.v_medical_record_access_log_detail
+with (security_invoker = on) as
 select
   log.id,
   log.organization_id,
@@ -79,23 +80,7 @@ select
   patient.name_ar as patient_name,
   patient.file_number,
   log.user_id,
-  coalesce(
-    (select doctor.name_ar
-       from public.doctors doctor
-      where doctor.organization_id = log.organization_id
-        and doctor.user_id = log.user_id
-      order by doctor.created_at
-      limit 1),
-    (select employee.name_ar
-       from public.employees employee
-      where employee.organization_id = log.organization_id
-        and employee.user_id = log.user_id
-      order by employee.created_at
-      limit 1),
-    auth_user.email,
-    'مستخدم غير محدد'
-  ) as user_name,
-  auth_user.email as user_email,
+  coalesce(member.display_name, 'مستخدم غير محدد') as user_name,
   log.access_type,
   log.context,
   log.reason,
@@ -106,9 +91,9 @@ select
 from public.medical_record_access_log log
 join public.patients patient on patient.id = log.patient_id
 left join public.branches branch on branch.id = log.branch_id
-left join auth.users auth_user on auth_user.id = log.user_id
-where public.app_is_member(log.organization_id)
-  and public.app_has_permission(log.organization_id, 'audit.access_log');
+left join public.v_organization_members_directory member
+  on member.organization_id = log.organization_id
+ and member.user_id = log.user_id;
 
 grant select on public.v_medical_record_access_log_detail to authenticated;
 revoke all on public.v_medical_record_access_log_detail from anon;
