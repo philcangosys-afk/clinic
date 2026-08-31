@@ -109,7 +109,10 @@ export default function PublicBooking() {
   const [loadError, setLoadError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState("");
-  const [result, setResult] = useState<BookingResult | null>(null);
+  const [result, setResult] = useState<BookingResult | null>(() => {
+    const savedBooking = window.history.state?.publicBookingResult;
+    return savedBooking?.slug === slug ? savedBooking.result as BookingResult : null;
+  });
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
   const [email, setEmail] = useState("");
@@ -267,6 +270,13 @@ export default function PublicBooking() {
     requestAnimationFrame(() => document.getElementById("booking")?.scrollIntoView({ behavior: "smooth", block: "start" }));
   };
 
+  const clearBookingResult = () => {
+    setResult(null);
+    const nextState = { ...(window.history.state ?? {}) };
+    delete nextState.publicBookingResult;
+    window.history.replaceState(nextState, "");
+  };
+
   const printInvoice = () => {
     const invoice = document.getElementById("booking-invoice");
     if (!invoice) return;
@@ -362,8 +372,10 @@ export default function PublicBooking() {
     setSubmitting(false);
     if (error) setSubmitError(error.message);
     else {
-      setResult(data as BookingResult);
-      requestAnimationFrame(() => document.getElementById("booking")?.scrollIntoView({ behavior: "smooth" }));
+      const bookingResult = data as BookingResult;
+      setResult(bookingResult);
+      window.history.replaceState({ ...(window.history.state ?? {}), publicBookingResult: { slug, result: bookingResult } }, "");
+      requestAnimationFrame(() => document.getElementById("booking")?.scrollIntoView({ behavior: "smooth", block: "start" }));
     }
   };
 
@@ -411,11 +423,11 @@ export default function PublicBooking() {
       </header>
 
       <main id="top">
-        <section className="relative isolate overflow-hidden bg-[#0b1f1c] text-white">
-          <img src={HERO_IMAGE} alt="طبيبة أسنان تقدم الرعاية لمريضة في عيادة حديثة" className="absolute inset-0 -z-20 h-full w-full object-cover object-center" />
-          <div className="absolute inset-0 -z-10 bg-[linear-gradient(90deg,rgba(11,31,28,.72),rgba(11,31,28,.92)),radial-gradient(circle_at_20%_30%,rgba(11,170,142,.45),transparent_55%)]" />
-          <div className={`mx-auto grid min-h-[690px] max-w-7xl items-center gap-12 px-5 py-20 lg:px-10 ${result ? "lg:grid-cols-1" : "lg:grid-cols-[1.05fr_.95fr]"}`}>
-            <div data-reveal className={`${result ? "lg:hidden" : ""} booking-reveal max-w-2xl`}>
+        <section className={`relative isolate ${result ? "bg-[#f4f8f7] text-[#0b1f1c]" : "overflow-hidden bg-[#0b1f1c] text-white"}`}>
+          {!result && <img src={HERO_IMAGE} alt="طبيبة أسنان تقدم الرعاية لمريضة في عيادة حديثة" className="absolute inset-0 -z-20 h-full w-full object-cover object-center" />}
+          {!result && <div className="absolute inset-0 -z-10 bg-[linear-gradient(90deg,rgba(11,31,28,.72),rgba(11,31,28,.92)),radial-gradient(circle_at_20%_30%,rgba(11,170,142,.45),transparent_55%)]" />}
+          <div className={`mx-auto grid max-w-7xl items-center gap-12 px-4 lg:px-10 ${result ? "min-h-0 py-8 lg:grid-cols-1 lg:py-12" : "min-h-[690px] py-20 lg:grid-cols-[1.05fr_.95fr]"}`}>
+            {!result && <div data-reveal className="booking-reveal max-w-2xl">
               <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold backdrop-blur"><Sparkles className="h-4 w-4 text-[#1fcfb8]" /> ابتسامة صحية، ثقة تدوم</span>
               <h1 className="mt-6 text-4xl font-extrabold leading-[1.15] sm:text-5xl lg:text-6xl">{catalog.hero_title}</h1>
               <p className="mt-5 max-w-xl text-lg leading-8 text-white/80">{catalog.hero_subtitle}</p>
@@ -428,9 +440,9 @@ export default function PublicBooking() {
                 <div><strong className="block text-2xl text-[#1fcfb8]">+20K</strong><span className="text-xs text-white/65">ابتسامة سعيدة</span></div>
                 <div><strong className="block text-2xl text-[#1fcfb8]">98%</strong><span className="text-xs text-white/65">رضا المراجعين</span></div>
               </div>
-            </div>
+            </div>}
 
-            <div id="booking" data-reveal className={`${mobileBookingOpen || result ? "block" : "hidden"} booking-reveal min-w-0 scroll-mt-28 rounded-[24px] border border-white/40 bg-white/95 p-4 text-[#0b1f1c] shadow-2xl backdrop-blur-xl sm:p-7 lg:block ${result ? "mx-auto w-full max-w-5xl" : ""}`}>
+            <div id="booking" className={`${mobileBookingOpen || result ? "block" : "hidden"} min-w-0 scroll-mt-28 rounded-[24px] border border-white/40 bg-white/95 p-4 text-[#0b1f1c] shadow-2xl backdrop-blur-xl sm:p-7 lg:block ${result ? "mx-auto w-full max-w-5xl" : ""}`}>
               {result ? (
                 <div id="booking-result" className="min-w-0 py-2">
                   <div className="mb-5 text-center print:hidden">
@@ -525,7 +537,7 @@ export default function PublicBooking() {
 
                   <div className="mt-5 flex flex-wrap justify-center gap-3 print:hidden">
                     <button type="button" onClick={printInvoice} className="inline-flex items-center gap-2 rounded-xl bg-[#0b1f1c] px-6 py-3 font-bold text-white"><Printer className="h-4 w-4" /> طباعة الفاتورة</button>
-                    <button type="button" onClick={() => setResult(null)} className="rounded-xl border border-[#0baa8e] bg-white px-6 py-3 font-bold text-[#067663]">حجز موعد آخر</button>
+                    <button type="button" onClick={clearBookingResult} className="rounded-xl border border-[#0baa8e] bg-white px-6 py-3 font-bold text-[#067663]">حجز موعد آخر</button>
                   </div>
                 </div>
               ) : (
