@@ -146,8 +146,8 @@ function SidebarGroup({
         className={cn(
           "group flex w-full flex-row-reverse items-center gap-2.5 rounded-md border px-3 py-2.5 text-start transition-all duration-200",
           isOpen
-            ? "border-primary/30 bg-primary/12 text-primary"
-            : "border-primary/15 bg-primary/5 text-primary/85 hover:bg-primary/10 hover:text-primary",
+            ? "border-blue-700 bg-blue-600 text-white"
+            : "border-blue-600/70 bg-blue-500 text-white hover:bg-blue-600",
         )}
       >
         <ChevronDown
@@ -160,7 +160,7 @@ function SidebarGroup({
           {section}
         </span>
         {!isOpen && totalBadge > 0 && (
-          <span className="rounded-md bg-primary/15 px-1.5 py-0.5 text-[10px] font-bold text-primary tabular-nums">
+          <span className="rounded-md bg-white/25 px-1.5 py-0.5 text-[10px] font-bold text-white tabular-nums">
             {totalBadge}
           </span>
         )}
