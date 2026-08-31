@@ -244,7 +244,7 @@ export default function ReceptionBoard({
                   <TableCell>
                     <button
                       type="button"
-                      className="text-right"
+                      className="text-start"
                       onClick={() => navigate(`/patients/${row.patient_id}`)}
                     >
                       <div className="font-medium hover:text-primary">{row.patient_name}</div>

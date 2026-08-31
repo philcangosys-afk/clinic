@@ -92,7 +92,7 @@ export default function Onboarding() {
               <AuthField label="اسم المنشأة"><input required value={name} onChange={(event) => setName(event.target.value)} className={controlClass} placeholder="مثال: مجمع زين الطبي" /></AuthField>
               <div>
                 <div className="mb-2 text-[11px] font-bold text-[#698783]">نوع المنشأة</div>
-                <div className="rounded-xl border border-[#72bbb2] bg-[#eaf7f4] p-4 text-right">
+                <div className="rounded-xl border border-[#72bbb2] bg-[#eaf7f4] p-4 text-start">
                   <div className="text-xs font-bold text-[#315d5a]">{organizationType.label}</div>
                   <div className="mt-1 text-[10px] text-[#698783]">{organizationType.detail}</div>
                 </div>

@@ -368,7 +368,7 @@ function DepartmentsTab({
                       {row.is_active ? "نشط" : "معطَّل"}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-left">
+                  <TableCell className="text-end">
                     {canManage && (
                       <Button size="sm" variant="ghost" onClick={() => onEdit(row)}>
                         <Pencil className="h-4 w-4" />
@@ -548,7 +548,7 @@ function ClinicsTab({
                       {row.is_disabled ? "معطَّلة" : "نشطة"}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-left">
+                  <TableCell className="text-end">
                     <div className="flex justify-end gap-1">
                       {canManage && (
                         <>

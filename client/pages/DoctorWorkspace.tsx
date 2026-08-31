@@ -241,7 +241,7 @@ function CriticalPanel() {
                         </span>
                       )}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {r.is_open && (
                         <div className="flex justify-end gap-1">
                           {can("critical.oversee") && !r.phoned_at && (
@@ -518,7 +518,7 @@ function OpenVisitsPanel() {
                   </TableCell>
                   <TableCell className="font-mono text-xs">{r.service_count}</TableCell>
                   <TableCell className="text-xs">{r.status}</TableCell>
-                  <TableCell className="text-left">
+                  <TableCell className="text-end">
                     <Link to="/patient-visits">
                       <Button size="sm" variant="ghost">فتح</Button>
                     </Link>

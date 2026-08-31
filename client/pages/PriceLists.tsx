@@ -149,7 +149,7 @@ export default function PriceLists() {
                         {row.is_active ? "مفعَّلة" : "معطَّلة"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <Button size="sm" variant="ghost" onClick={() => setSelected(row)}>
                         <ListPlus className="h-4 w-4" />
                         الأسعار

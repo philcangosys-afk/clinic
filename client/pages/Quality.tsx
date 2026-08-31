@@ -235,7 +235,7 @@ function Scorecard() {
                     <TableCell className="font-mono text-[10px]">
                       {r.period_start ? `${r.period_start} → ${r.period_end}` : "—"}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {can("quality.manage") && (
                         <Button size="sm" variant="ghost" onClick={() => openMeasure(r)}>
                           قياس
@@ -498,7 +498,7 @@ function Incidents() {
                         </span>
                       )}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {r.is_open && can("quality.investigate") && (
                         <Button size="sm" variant="outline"
                                 onClick={() => {

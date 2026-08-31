@@ -321,7 +321,7 @@ function RunsPanel() {
                     <TableCell className="font-mono text-xs font-semibold">
                       {money(r.total_net)}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <div className="flex justify-end gap-1">
                         <Button size="sm" variant="ghost" onClick={() => setOpenRun(r.id)}>
                           <FileText className="h-3.5 w-3.5" />
@@ -504,7 +504,7 @@ function PayslipRow({ item }: { item: any }) {
         <TableCell className="font-mono text-xs">{money(item.loan_deduction)}</TableCell>
         <TableCell className="font-mono text-xs">{money(item.other_deductions)}</TableCell>
         <TableCell className="font-mono text-xs font-semibold">{money(item.net_salary)}</TableCell>
-        <TableCell className="text-left">
+        <TableCell className="text-end">
           <Button size="sm" variant="ghost" onClick={() => setOpen((v) => !v)}>
             {open ? "إخفاء" : "تفصيل"}
           </Button>
@@ -1234,7 +1234,7 @@ function AttendancePanel() {
                     <TableCell className="text-sm">{a.employee?.name_ar ?? "—"}</TableCell>
                     <TableCell className="font-mono text-xs">{a.work_date}</TableCell>
                     <TableCell className="font-mono text-xs">{a.overtime_minutes}</TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {can("hr.overtime_approve") && (
                         <Button size="sm" variant="outline" disabled={approveOvertime.isPending}
                                 onClick={() => approveOvertime.mutate(a.id)}>
@@ -1354,7 +1354,7 @@ function AttendancePanel() {
                         {SWAP_STATUS[s.status]?.label ?? s.status}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {s.status === "accepted" && can("hr.attendance") && (
                         <Button size="sm" variant="outline" disabled={approveSwap.isPending}
                                 onClick={() => approveSwap.mutate(s.id)}>

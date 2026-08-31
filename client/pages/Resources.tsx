@@ -160,7 +160,7 @@ export default function Resources() {
                         {row.is_active ? "متاح" : "معطَّل"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {canManage && (
                         <Button
                           size="sm"

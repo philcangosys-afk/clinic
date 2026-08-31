@@ -300,7 +300,7 @@ export default function PatientJourney() {
             <div className="sticky top-0 z-10 bg-background/95 py-1 text-sm font-medium text-muted-foreground backdrop-blur">
               {day} · {events.length} حدث
             </div>
-            <div className="relative flex flex-col gap-2 border-r pr-4">
+            <div className="relative flex flex-col gap-2 border-e pr-4">
               {events.map((event) => {
                 const meta = EVENT_META[event.event_type] ?? {
                   label: event.event_type,

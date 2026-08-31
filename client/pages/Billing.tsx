@@ -2183,7 +2183,7 @@ function NewInvoiceDialog({
                       : "نسبة الخصم %"
                   }
                 />
-                <span className="col-span-1 text-left text-xs font-semibold">{line.net.toFixed(2)}</span>
+                <span className="col-span-1 text-end text-xs font-semibold">{line.net.toFixed(2)}</span>
                 <Button variant="ghost" size="sm" className="col-span-1" onClick={() => removeLine(line.key)}>
                   حذف
                 </Button>

@@ -222,7 +222,7 @@ function RequestsPanel() {
                     <TableCell className="font-mono text-xs">
                       {new Date(r.created_at).toLocaleDateString("ar-SA")}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {can("portal.requests") && (
                         <div className="flex justify-end gap-1">
                           {r.request_kind === "appointment" ? (
@@ -488,7 +488,7 @@ function AccountsPanel() {
                     <TableCell className="max-w-48 truncate text-xs text-muted-foreground">
                       {a.revoke_reason ?? "—"}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {a.status === "active" && can("portal.manage") && (
                         <Button size="sm" variant="ghost"
                                 onClick={() => { setRevoking(a); setReason(""); }}>

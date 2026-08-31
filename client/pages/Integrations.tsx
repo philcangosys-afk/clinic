@@ -280,7 +280,7 @@ function DeadLettersPanel() {
                         ? new Date(r.dead_lettered_at).toLocaleString("ar-SA")
                         : "—"}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {can("integrations.retry") && (
                         <Button size="sm" variant="outline"
                                 onClick={() => { setRequeueing(r); setReason(""); }}>
@@ -474,7 +474,7 @@ function EndpointsPanel() {
                       {e.is_active ? "مفعَّل" : "معطَّل"}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-left">
+                  <TableCell className="text-end">
                     {can("integrations.manage") && (
                       <Button size="sm" variant="ghost" disabled={toggle.isPending}
                               onClick={() => toggle.mutate({ id: e.id, active: !e.is_active })}>

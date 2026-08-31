@@ -423,7 +423,7 @@ export default function NewPatientDialog({
                   onOpenChange(false);
                   navigate(`/patients/${row.patient_id}`);
                 }}
-                className="flex flex-wrap items-center gap-2 rounded-md border bg-background px-2 py-1 text-right text-xs hover:bg-muted"
+                className="flex flex-wrap items-center gap-2 rounded-md border bg-background px-2 py-1 text-start text-xs hover:bg-muted"
               >
                 <span className="font-medium">{row.name_ar}</span>
                 {row.file_number && <span className="text-muted-foreground">ملف {row.file_number}</span>}

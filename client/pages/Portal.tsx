@@ -223,7 +223,7 @@ function PortalAppointments({ orgId }: { orgId: string }) {
                       {a.status}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-left">
+                  <TableCell className="text-end">
                     {a.is_upcoming && !String(a.status).startsWith("cancelled") && (
                       <Button size="sm" variant="ghost"
                               onClick={() => { setCancelling(a); setReason(""); }}>
@@ -481,7 +481,7 @@ function PortalDocuments() {
                   <TableCell className="font-mono text-xs">
                     {new Date(d.created_at).toLocaleDateString("ar-SA")}
                   </TableCell>
-                  <TableCell className="text-left">
+                  <TableCell className="text-end">
                     <Button size="sm" variant="ghost" onClick={() => open.mutate(d)}>
                       فتح
                     </Button>

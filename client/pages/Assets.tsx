@@ -350,7 +350,7 @@ function RegisterPanel() {
                     <TableCell className="font-mono text-xs">
                       {money(a.maintenance_cost_total)}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <div className="flex justify-end gap-1">
                         {a.status !== "disposed" && can("assets.maintenance") && (
                           <Button size="sm" variant="ghost"
@@ -1059,7 +1059,7 @@ function MaintenancePanel() {
                       {new Date(r.reported_at).toLocaleDateString("ar-SA")}
                     </TableCell>
                     <TableCell className="text-sm">{r.status}</TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {can("assets.maintenance") && (
                         <Button size="sm" variant="outline" disabled={createOrder.isPending}
                                 onClick={() => createOrder.mutate({
@@ -1159,7 +1159,7 @@ function MaintenancePanel() {
                         <Badge variant="destructive" className="ms-1">متأخّرة</Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {can("assets.maintenance") && (
                         <Button size="sm" variant="outline" disabled={createOrder.isPending}
                                 onClick={() => createOrder.mutate({
@@ -1242,7 +1242,7 @@ function MaintenancePanel() {
                     <TableCell className="max-w-48 truncate text-xs text-muted-foreground">
                       {o.actions_taken ?? "—"}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {["draft", "scheduled", "in_progress"].includes(o.status) &&
                         can("assets.maintenance") && (
                           <div className="flex justify-end gap-2">

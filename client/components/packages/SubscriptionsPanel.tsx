@@ -303,7 +303,7 @@ export default function SubscriptionsPanel() {
                         {r.invoice_status ?? ""}
                       </span>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <div className="flex justify-end gap-1">
                         {can("billing.issue") && r.effective_status === "active" && (
                           <Button
@@ -549,7 +549,7 @@ function UsageLogPanel() {
                       <Badge variant="success">مخصوم</Badge>
                     )}
                   </TableCell>
-                  <TableCell className="text-left">
+                  <TableCell className="text-end">
                     {!u.is_reversed && can("billing.issue") && (
                       <Button
                         size="sm"

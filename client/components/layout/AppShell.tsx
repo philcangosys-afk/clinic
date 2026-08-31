@@ -86,7 +86,7 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground text-base font-extrabold shadow-sm shadow-primary/20">
           ز
         </div>
-        <div className="flex min-w-0 flex-col text-right leading-tight">
+        <div className="flex min-w-0 flex-col text-start leading-tight">
           <span className="truncate text-[15px] font-bold">{organization?.name ?? "المركز الطبي"}</span>
           <span className="mt-0.5 truncate text-xs font-medium text-muted-foreground">{branch?.name ?? "المنشأة الرئيسية"}</span>
         </div>
@@ -144,7 +144,7 @@ function SidebarGroup({
         onClick={onToggle}
         aria-expanded={isOpen}
         className={cn(
-          "group flex w-full items-center gap-2.5 rounded-xl border border-transparent px-3 py-2.5 text-right transition-all duration-200",
+          "group flex w-full items-center gap-2.5 rounded-xl border border-transparent px-3 py-2.5 text-start transition-all duration-200",
           isOpen
             ? "border-sidebar-border/70 bg-sidebar-accent/65 text-sidebar-accent-foreground"
             : "text-muted-foreground hover:border-sidebar-border/60 hover:bg-sidebar-accent/45 hover:text-foreground",
@@ -213,7 +213,7 @@ function SidebarLink({
       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/70 text-current shadow-sm ring-1 ring-border/60">
         <Icon className="h-4 w-4" />
       </span>
-      <span className="flex-1 truncate text-right">{label}</span>
+      <span className="flex-1 truncate text-start">{label}</span>
       {badge && (
         <Badge variant="secondary" className="min-w-6 justify-center px-1.5 py-0.5 text-[11px] tabular-nums">
           {badge}
@@ -234,9 +234,9 @@ export default function AppShell() {
   };
 
   return (
-    <div dir="rtl" className="flex h-screen w-full overflow-hidden bg-muted/30 text-right">
+    <div dir="rtl" className="flex h-screen w-full overflow-hidden bg-muted/30 text-start">
       {/* الشريط الجانبي — سطح المكتب */}
-      <aside className="hidden w-72 shrink-0 border-l border-sidebar-border bg-background shadow-sm md:flex">
+      <aside className="hidden w-72 shrink-0 border-s border-sidebar-border bg-background shadow-sm md:flex">
         <SidebarContent />
       </aside>
 
@@ -258,7 +258,7 @@ export default function AppShell() {
             <input
               dir="rtl"
               placeholder="بحث عن مريض، موعد، فاتورة..."
-              className="flex-1 bg-transparent text-right text-sm outline-none placeholder:text-muted-foreground"
+              className="flex-1 bg-transparent text-start text-sm outline-none placeholder:text-muted-foreground"
             />
           </div>
           <div className="flex-1 sm:hidden" />
@@ -275,11 +275,11 @@ export default function AppShell() {
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-2 rounded-xl border border-transparent px-2.5 py-1.5 text-right transition-colors hover:border-border hover:bg-muted">
+              <button className="flex items-center gap-2 rounded-xl border border-transparent px-2.5 py-1.5 text-start transition-colors hover:border-border hover:bg-muted">
                 <Avatar className="h-8 w-8">
                   <AvatarFallback>{initialsOf(organization?.name)}</AvatarFallback>
                 </Avatar>
-                <div className="hidden flex-col items-start text-right leading-tight sm:flex">
+                <div className="hidden flex-col items-start text-start leading-tight sm:flex">
                   <span className="text-sm font-medium">{organization?.name ?? "حسابي"}</span>
                   <span className="text-xs text-muted-foreground">{membership?.role_key ?? ""}</span>
                 </div>
@@ -302,7 +302,7 @@ export default function AppShell() {
           </DropdownMenu>
         </header>
 
-        <main dir="rtl" className="flex-1 overflow-y-auto text-right">
+        <main dir="rtl" className="flex-1 overflow-y-auto text-start">
           <Outlet />
         </main>
       </div>

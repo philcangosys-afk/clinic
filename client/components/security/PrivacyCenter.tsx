@@ -341,7 +341,7 @@ function ConsentsPanel() {
                         <TableCell className="max-w-48 truncate text-xs text-muted-foreground">
                           {c.withdrawal_reason ?? "—"}
                         </TableCell>
-                        <TableCell className="text-left">
+                        <TableCell className="text-end">
                           {c.status === "granted" && can("privacy.consents") && (
                             <Button
                               size="sm"
@@ -739,7 +739,7 @@ function RetentionPanel() {
                         {p.is_active ? "سارية" : "معطّلة"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {can("privacy.retention") && (
                         <div className="flex justify-end gap-1">
                           {/* حساب الأثر قبل التطبيق: لا يحذف ولا يعدّل صفًّا */}

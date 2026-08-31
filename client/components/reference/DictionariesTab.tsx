@@ -307,7 +307,7 @@ export default function DictionariesTab({ readOnly }: { readOnly: boolean }) {
                         {row.is_disabled ? "معطَّل" : "نشط"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {canEdit && (
                         <div className="flex justify-end gap-1">
                           <Button size="sm" variant="ghost" onClick={() => setEditing(row)}>

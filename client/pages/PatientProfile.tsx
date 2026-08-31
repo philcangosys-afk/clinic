@@ -1114,7 +1114,7 @@ function InvoicesTab({ patientId }: { patientId: string }) {
               <p className="text-sm font-medium">فاتورة #{invoice.invoice_number}</p>
               <p className="text-xs text-muted-foreground">{new Date(invoice.created_at).toLocaleString("ar-SA")}</p>
             </div>
-            <div className="text-left">
+            <div className="text-end">
               <p className="text-sm font-semibold">{Number(invoice.net_amount).toLocaleString("ar-SA")} ر.س</p>
               {Number(invoice.remaining_amount) > 0 && (
                 <p className="text-xs text-rose-600">متبقي {Number(invoice.remaining_amount).toLocaleString("ar-SA")}</p>

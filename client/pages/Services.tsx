@@ -412,7 +412,7 @@ export default function Services() {
                           </Badge>
                         )}
                       </TableCell>
-                      <TableCell className="text-left">
+                      <TableCell className="text-end">
                         <div className="flex justify-end gap-1">
                           <Button
                             size="sm"

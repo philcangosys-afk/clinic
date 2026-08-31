@@ -2571,7 +2571,7 @@ function PoliciesTab({ organizationId }: { organizationId: string | undefined })
                         {w.is_active ? "نشطة" : "معطَّلة"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {editable && (
                         <Button size="sm" variant="ghost" disabled={toggleHours.isPending}
                                 onClick={() => toggleHours.mutate({ id: w.id, active: !w.is_active })}>

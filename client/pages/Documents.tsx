@@ -190,7 +190,7 @@ function AllDocuments() {
                               : <Badge variant="destructive">بلا توقيع</Badge>)
                           : <Badge variant="secondary">نشط</Badge>}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <Button variant="ghost" size="sm" onClick={() => open.mutate(r)}>
                         فتح
                       </Button>

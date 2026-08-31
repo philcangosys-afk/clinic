@@ -920,7 +920,7 @@ function InternalChatTab() {
                       key={m.user_id}
                       type="button"
                       onClick={() => startConversation.mutate(m.user_id)}
-                      className="flex items-center gap-2 rounded-md px-3 py-2 text-right text-sm hover:bg-muted"
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-start text-sm hover:bg-muted"
                     >
                       <Users className="h-4 w-4 text-muted-foreground" />
                       {m.display_name}
@@ -977,7 +977,7 @@ function InternalChatTab() {
                   key={c.id}
                   type="button"
                   onClick={() => setSelectedConversationId(c.id)}
-                  className={`flex items-center justify-between rounded-md px-3 py-2 text-right text-sm ${
+                  className={`flex items-center justify-between rounded-md px-3 py-2 text-start text-sm ${
                     selectedConversationId === c.id ? "bg-muted font-medium" : "hover:bg-muted/50"
                   }`}
                 >

@@ -284,7 +284,7 @@ function PeriodsPanel() {
                         "متوازنة"
                       )}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <div className="flex justify-end gap-1">
                         {p.status === "open" && can("gl.close_period") && (
                           <>
@@ -530,7 +530,7 @@ function EntriesPanel() {
                           <span className="block text-[10px] text-muted-foreground">معكوس</span>
                         )}
                       </TableCell>
-                      <TableCell className="text-left">
+                      <TableCell className="text-end">
                         <div className="flex justify-end gap-1">
                           {e.status === "draft" && can("gl.post") && (
                             <Button size="sm" variant="outline" disabled={post.isPending}
@@ -1263,7 +1263,7 @@ function BankPanel() {
                         {r.status === "completed" ? "مكتملة" : "مسوّدة"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {r.status === "draft" && can("gl.reconcile") && (
                         <Button size="sm" variant="outline" disabled={complete.isPending}
                                 onClick={() => complete.mutate(r.id)}>

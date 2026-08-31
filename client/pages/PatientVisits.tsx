@@ -681,7 +681,7 @@ function VisitTable({ rows, onOpen }: { rows: any[]; onOpen: (row: any) => void 
                 {row.reopened_at ? " ↻" : ""}
               </Badge>
             </TableCell>
-            <TableCell className="text-left">
+            <TableCell className="text-end">
               <Button size="sm" variant="ghost" onClick={() => onOpen(row)}>
                 <ClipboardList className="h-4 w-4" />
               </Button>

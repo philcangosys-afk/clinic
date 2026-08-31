@@ -552,7 +552,7 @@ function ServicesTab({
                         ? Number(item.price).toLocaleString("ar-SA")
                         : "—"}
                   </TableCell>
-                  <TableCell className="text-left">
+                  <TableCell className="text-end">
                     {canManage && (
                       <Button size="sm" variant="ghost" onClick={() => remove.mutate(row.id)}>
                         <Trash2 className="h-4 w-4" />
@@ -804,7 +804,7 @@ function ScheduleTab({
                 <TableCell className="font-mono text-xs">
                   {row.effective_from} → {row.effective_to ?? "مفتوح"}
                 </TableCell>
-                <TableCell className="text-left">
+                <TableCell className="text-end">
                   {canManage && (
                     <Button size="sm" variant="ghost" onClick={() => remove.mutate(row.id)}>
                       <Trash2 className="h-4 w-4" />
@@ -1001,7 +1001,7 @@ function ExceptionsTab({
                 <TableCell className="text-sm text-muted-foreground">
                   {row.reason ?? row.note ?? "—"}
                 </TableCell>
-                <TableCell className="text-left">
+                <TableCell className="text-end">
                   {canManage && (
                     <Button size="sm" variant="ghost" onClick={() => remove.mutate(row.id)}>
                       <Trash2 className="h-4 w-4" />

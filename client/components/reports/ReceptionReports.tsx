@@ -329,7 +329,7 @@ export default function ReceptionReports() {
                 `/appointments${card.status ? `?status=${card.status}` : ""}`,
               )
             }
-            className="rounded-lg border p-3 text-right transition hover:border-primary hover:bg-primary/5"
+            className="rounded-lg border p-3 text-start transition hover:border-primary hover:bg-primary/5"
           >
             <div className="text-xs text-muted-foreground">{card.label}</div>
             <div className="text-xl font-bold tabular-nums">

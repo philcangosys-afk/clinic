@@ -281,7 +281,7 @@ export default function Appointments() {
                   {list.map((appointment) => (
                     <div key={appointment.id} className="rounded-lg border px-2.5 py-2">
                       <div className="flex items-start justify-between gap-2">
-                        <button type="button" className="text-right" onClick={() => navigate(`/patients/${appointment.patient_id}`)}>
+                        <button type="button" className="text-start" onClick={() => navigate(`/patients/${appointment.patient_id}`)}>
                           <p className="text-sm font-medium hover:text-primary">{appointment.patient?.name_ar}</p>
                           <p className="text-xs text-muted-foreground">
                             {new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}

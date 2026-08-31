@@ -172,7 +172,7 @@ export default function ExamTemplates() {
                         {row.is_disabled ? "معطَّل" : "مفعَّل"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <Button size="sm" variant="ghost" onClick={() => setSelected(row.id)}>
                         <Layers className="h-4 w-4" />
                         البناء

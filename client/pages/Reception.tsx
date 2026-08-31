@@ -410,7 +410,7 @@ function QueueRow({
         {time}
       </div>
       <div className="min-w-[10rem] flex-1">
-        <button type="button" className="text-right" onClick={onPatient}>
+        <button type="button" className="text-start" onClick={onPatient}>
           <p className="text-sm font-semibold hover:text-primary">{appointment.patient?.name_ar ?? "—"}</p>
           <p className="text-xs text-muted-foreground">#{appointment.patient?.file_number} · {appointment.patient?.mobile_number ?? "—"}</p>
         </button>

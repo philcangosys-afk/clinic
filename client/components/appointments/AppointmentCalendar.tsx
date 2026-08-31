@@ -463,7 +463,7 @@ function DayGrid({
     <div className="overflow-x-auto rounded-lg border">
       <div className="flex min-w-[36rem]">
         {/* عمود الساعات */}
-        <div className="w-16 shrink-0 border-l bg-muted/30">
+        <div className="w-16 shrink-0 border-s bg-muted/30">
           <div className="h-10 border-b" />
           <div className="relative" style={{ height: TOTAL_MINUTES * PX_PER_MINUTE }}>
             {slots.map((slot, index) => (
@@ -490,7 +490,7 @@ function DayGrid({
             groupBy === "doctor" ? windows.filter((w) => w.doctor_id === column.id) : [];
 
           return (
-            <div key={column.id} className="min-w-[12rem] flex-1 border-l last:border-l-0">
+            <div key={column.id} className="min-w-[12rem] flex-1 border-s last:border-s-0">
               <div className="flex h-10 items-center justify-center border-b bg-muted/30 px-2 text-xs font-medium">
                 {column.name}
               </div>
@@ -652,7 +652,7 @@ function EventBlock({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className={`absolute right-1 left-1 z-10 cursor-pointer overflow-hidden rounded border-r-4 px-1.5 py-0.5 text-[11px] shadow-sm ${style.className}`}
+      className={`absolute right-1 left-1 z-10 cursor-pointer overflow-hidden rounded border-e-4 px-1.5 py-0.5 text-[11px] shadow-sm ${style.className}`}
       style={{ top: Math.max(0, top) * PX_PER_MINUTE, height: duration * PX_PER_MINUTE - 2 }}
       title={`${appointment.patient?.name_ar ?? ""} — ${fmtTime(appointment.scheduled_start)}`}
     >
@@ -707,7 +707,7 @@ function WeekGrid({
   return (
     <div className="overflow-x-auto rounded-lg border">
       <div className="flex min-w-[48rem]">
-        <div className="w-14 shrink-0 border-l bg-muted/30">
+        <div className="w-14 shrink-0 border-s bg-muted/30">
           <div className="h-10 border-b" />
           <div className="relative" style={{ height: TOTAL_MINUTES * PX_PER_MINUTE }}>
             {slots.map((minute) => (
@@ -726,7 +726,7 @@ function WeekGrid({
           const dayAppointments = appointments.filter((row) => sameDay(new Date(row.scheduled_start), day));
           const isToday = sameDay(day, new Date());
           return (
-            <div key={day.toISOString()} className="min-w-[8rem] flex-1 border-l last:border-l-0">
+            <div key={day.toISOString()} className="min-w-[8rem] flex-1 border-s last:border-s-0">
               <div className={`flex h-10 flex-col items-center justify-center border-b text-xs ${isToday ? "bg-primary/10 font-bold" : "bg-muted/30"}`}>
                 <span>{day.toLocaleDateString("ar-SA", { weekday: "short" })}</span>
                 <span className="text-[10px] text-muted-foreground">
@@ -802,7 +802,7 @@ function MonthGrid({
     <div className="overflow-x-auto rounded-lg border">
       <div className="grid min-w-[40rem] grid-cols-7">
         {["السبت", "الأحد", "الاثنين", "الثلاثاء", "الأربعاء", "الخميس", "الجمعة"].map((name) => (
-          <div key={name} className="border-b border-l p-2 text-center text-xs font-medium last:border-l-0 bg-muted/30">
+          <div key={name} className="border-b border-s p-2 text-center text-xs font-medium last:border-s-0 bg-muted/30">
             {name}
           </div>
         ))}
@@ -815,7 +815,7 @@ function MonthGrid({
               key={day.toISOString()}
               type="button"
               onClick={() => onSelectDay(startOfDay(day))}
-              className={`min-h-[5.5rem] border-b border-l p-1 text-right align-top last:border-l-0 hover:bg-primary/5 ${outside ? "bg-muted/20 text-muted-foreground" : ""}`}
+              className={`min-h-[5.5rem] border-b border-s p-1 text-start align-top last:border-s-0 hover:bg-primary/5 ${outside ? "bg-muted/20 text-muted-foreground" : ""}`}
             >
               <div className={`mb-1 text-xs ${isToday ? "font-bold text-primary" : ""}`}>
                 {day.toLocaleDateString("ar-SA", { day: "numeric" })}
@@ -824,7 +824,7 @@ function MonthGrid({
                 {rows.slice(0, 3).map((row) => {
                   const style = STATUS_STYLES[row.status] ?? STATUS_STYLES.scheduled;
                   return (
-                    <span key={row.id} className={`truncate rounded border-r-2 px-1 text-[10px] ${style.className}`}>
+                    <span key={row.id} className={`truncate rounded border-e-2 px-1 text-[10px] ${style.className}`}>
                       {fmtTime(row.scheduled_start)} {row.patient?.name_ar ?? ""}
                     </span>
                   );
@@ -863,7 +863,7 @@ function ListView({
             key={row.id}
             type="button"
             onClick={() => onOpenAppointment(row.id)}
-            className="flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-right text-sm hover:bg-muted/40"
+            className="flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-start text-sm hover:bg-muted/40"
           >
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
               <Clock className="h-3.5 w-3.5" />

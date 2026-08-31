@@ -350,7 +350,7 @@ export default function VisitOrders({
                 <button
                   key={drug.id}
                   type="button"
-                  className="flex w-full items-center px-3 py-1.5 text-right text-sm hover:bg-muted"
+                  className="flex w-full items-center px-3 py-1.5 text-start text-sm hover:bg-muted"
                   onClick={() => {
                     setDrugTerm("");
                     // الدواء نفسه مرتين في وصفة واحدة خطأ إدخال لا نيّة: يُتجاهل.

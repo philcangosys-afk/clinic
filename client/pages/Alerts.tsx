@@ -240,7 +240,7 @@ export default function Alerts() {
                       <TableCell>
                         <Badge variant={status.variant}>{status.label}</Badge>
                       </TableCell>
-                      <TableCell className="text-left">
+                      <TableCell className="text-end">
                         {ALERT_TYPE_PATHS[row.alert_type] && (
                           <Button asChild variant="ghost" size="sm">
                             <Link to={ALERT_TYPE_PATHS[row.alert_type]}>فتح القسم</Link>
@@ -388,7 +388,7 @@ function NotificationInbox() {
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 pb-3">
+        <CardHeader className="flex flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
               <Inbox className="h-4 w-4" />
@@ -399,7 +399,7 @@ function NotificationInbox() {
               ما يخصّك أنت وفق صلاحياتك — لا يراه غيرك.
             </CardDescription>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="ghost" onClick={() => setOnlyUnread((v) => !v)}>
               {onlyUnread ? "عرض الكل" : "غير المقروء فقط"}
             </Button>
@@ -451,7 +451,7 @@ function NotificationInbox() {
                     <TableCell className="font-mono text-xs">
                       {new Date(n.created_at).toLocaleString("ar-SA")}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <div className="flex justify-end gap-1">
                         {n.action_path && (
                           <Link to={n.action_path}>
@@ -605,7 +605,7 @@ function RoutingRules() {
                     {r.target_permission ?? r.target_role_key ?? "—"}
                   </TableCell>
                   <TableCell className="text-xs">داخل النظام</TableCell>
-                  <TableCell className="text-left">
+                  <TableCell className="text-end">
                     {can("notifications.manage") && (
                       <Button
                         variant={r.is_active ? "ghost" : "outline"}

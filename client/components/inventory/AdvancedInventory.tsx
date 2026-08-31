@@ -233,7 +233,7 @@ function TransfersPanel() {
                   <TableCell className="max-w-40 truncate text-xs text-muted-foreground">
                     {t.rejected_reason ?? t.reason ?? "—"}
                   </TableCell>
-                  <TableCell className="text-left">
+                  <TableCell className="text-end">
                     <div className="flex justify-end gap-1">
                       {["draft", "requested"].includes(t.status) &&
                         can("inventory.transfer_approve") && (
@@ -481,7 +481,7 @@ function CountsPanel() {
                     <TableCell className="font-mono text-xs">
                       {new Date(c.started_at).toLocaleDateString("ar-SA")}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <div className="flex justify-end gap-1">
                         <Button size="sm" variant="ghost" onClick={() => setOpenCount(c.id)}>
                           البنود
@@ -570,7 +570,7 @@ function CountsPanel() {
                       <TableCell className="max-w-40 truncate text-xs text-muted-foreground">
                         {l.variance_reason ?? "—"}
                       </TableCell>
-                      <TableCell className="text-left">
+                      <TableCell className="text-end">
                         {["open", "counted"].includes(l.status) && can("inventory.count") && (
                           <Button size="sm" variant="ghost" disabled={record.isPending}
                                   onClick={() => {
@@ -1073,7 +1073,7 @@ function AgingPanel() {
                           : l.lot_status === "recalled" ? "مسحوبة" : "منتهية"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <div className="flex justify-end gap-1">
                         {l.lot_status === "available" && can("inventory.count") && (
                           <Button size="sm" variant="ghost"

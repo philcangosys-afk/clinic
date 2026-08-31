@@ -309,7 +309,7 @@ function RequestsPanel() {
                     <TableCell className="max-w-48 truncate text-xs text-muted-foreground">
                       {r.justification ?? "—"}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <div className="flex justify-end gap-1">
                         {r.status === "draft" && can("purchasing.request") && (
                           <Button size="sm" variant="ghost" disabled={submit.isPending}
@@ -683,7 +683,7 @@ function OrdersPanel() {
                       )}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{o.expected_date ?? "—"}</TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {can("purchasing.receive") &&
                         ["draft", "sent", "partially_received"].includes(o.status) && (
                           <Button size="sm" variant="outline" onClick={() => setReceiving(o)}>
@@ -857,7 +857,7 @@ function PostedReceiptsCard({ onInvoice }: { onInvoice: (receiptId: string) => v
                     <TableCell className="font-mono text-xs">
                       {inv ? inv.invoice_number : <Badge variant="destructive">بلا فاتورة</Badge>}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {!inv && can("purchasing.invoice") && (
                         <Button size="sm" variant="outline" onClick={() => onInvoice(g.id)}>
                           تسجيل الفاتورة
@@ -1209,7 +1209,7 @@ function SupplierBalancesPanel() {
                         "—"
                       )}
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       <Button size="sm" variant="ghost" onClick={() => setSelected(b)}>
                         كشف الحساب
                       </Button>
@@ -1277,7 +1277,7 @@ function SupplierBalancesPanel() {
                           </Badge>
                         )}
                       </TableCell>
-                      <TableCell className="text-left">
+                      <TableCell className="text-end">
                         {l.entry_kind === "invoice" && l.status !== "paid" &&
                           can("suppliers.pay") && (
                             <Button
@@ -1461,7 +1461,7 @@ function ReturnsAndCostsPanel() {
                           : r.status === "cancelled" ? "ملغى" : "مسوّدة"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {r.status === "draft" && can("purchasing.return") && (
                         <Button size="sm" variant="outline" disabled={postReturn.isPending}
                                 onClick={() => postReturn.mutate(r.id)}>
@@ -1528,7 +1528,7 @@ function ReturnsAndCostsPanel() {
                         {e.is_allocated ? "موزَّع" : "غير موزَّع"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-left">
+                    <TableCell className="text-end">
                       {!e.is_allocated && can("purchasing.invoice") && (
                         <Button size="sm" variant="outline" disabled={allocate.isPending}
                                 onClick={() => allocate.mutate(e.id)}>
