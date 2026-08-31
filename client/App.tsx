@@ -68,6 +68,7 @@ const Assets = lazy(() => import("./pages/Assets"));
 const Documents = lazy(() => import("./pages/Documents"));
 const PatientPortalAdmin = lazy(() => import("./pages/PatientPortalAdmin"));
 const Portal = lazy(() => import("./pages/Portal"));
+const PublicBooking = lazy(() => import("./pages/PublicBooking"));
 const DoctorWorkspace = lazy(() => import("./pages/DoctorWorkspace"));
 const Quality = lazy(() => import("./pages/Quality"));
 const Integrations = lazy(() => import("./pages/Integrations"));
@@ -177,6 +178,7 @@ const App = () => (
             <Route path="/onboarding" element={<Onboarding />} />
             {/* بوابة المريض خارج قشرة النظام: المريض ليس عضوًا في المنشأة */}
             <Route path="/portal" element={<Portal />} />
+            <Route path="/booking/:slug" element={<PublicBooking />} />
             <Route
               element={
                 <RouteGuard>

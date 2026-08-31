@@ -6,6 +6,8 @@ import {
   Menu,
   Search,
   Settings2,
+  Globe2,
+  ExternalLink,
   type LucideIcon,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
@@ -115,6 +117,21 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           )}
         </nav>
       </ScrollArea>
+      <div className="border-t border-sidebar-border p-3">
+        <Link
+          to="/booking/asnan-premium"
+          target="_blank"
+          rel="noreferrer"
+          onClick={onNavigate}
+          className="flex min-h-12 flex-row-reverse items-center gap-3 rounded-md border border-emerald-700 bg-emerald-600 px-3 py-2.5 font-bold text-white shadow-sm transition hover:bg-emerald-700"
+        >
+          <ExternalLink className="h-4 w-4 shrink-0" />
+          <span className="flex-1 text-end">الموقع الإلكتروني</span>
+          <span className="grid h-8 w-8 place-items-center rounded-md bg-white/15">
+            <Globe2 className="h-4 w-4" />
+          </span>
+        </Link>
+      </div>
     </div>
   );
 }
