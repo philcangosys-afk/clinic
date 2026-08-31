@@ -1,5 +1,5 @@
 /** @import must precede all other statements */
-@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Arabic:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;600;700;800&display=swap");
 
 @import "tailwindcss";
 
@@ -105,7 +105,8 @@
   }
 
   html {
-    font-family: "IBM Plex Sans Arabic", "Inter", sans-serif;
+    font-family: "Tajawal", system-ui, sans-serif;
+    font-size: 16.5px;
     background: hsl(var(--background));
     direction: rtl;
   }
@@ -113,10 +114,32 @@
   body {
     @apply bg-background text-foreground;
     min-width: 320px;
+    direction: rtl;
+    text-align: right;
   }
 
-  button, input, select {
+  #root {
+    min-height: 100vh;
+    direction: rtl;
+  }
+
+  button,
+  input,
+  textarea,
+  select {
     font: inherit;
+  }
+
+  input,
+  textarea,
+  select {
+    direction: rtl;
+    text-align: right;
+  }
+
+  [dir="ltr"] {
+    direction: ltr;
+    text-align: left;
   }
 
   :where(p, span, li, h1, h2, h3, h4, h5, h6, a, button, label, td, th) {
