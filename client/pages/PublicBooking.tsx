@@ -130,6 +130,8 @@ export default function PublicBooking() {
   const [consent, setConsent] = useState(false);
   const [website, setWebsite] = useState("");
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [mobileBookingOpen, setMobileBookingOpen] = useState(false);
+  const [appointmentPickerOpen, setAppointmentPickerOpen] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -163,6 +165,7 @@ export default function PublicBooking() {
   }, [doctorId, doctors, serviceId, services]);
 
   const selectedService = services.find((service) => service.id === serviceId);
+  const bookingDetailsComplete = Boolean(name.trim() && mobile.trim() && gender && clinicId && serviceId && doctorId);
 
   useEffect(() => {
     if (!clinicId || !doctorId || !serviceId) {
@@ -175,6 +178,7 @@ export default function PublicBooking() {
     setSlotsError("");
     setDate("");
     setSelectedSlotStart("");
+    setAppointmentPickerOpen(false);
     void supabase.rpc("app_public_doctor_slots", {
       p_slug: slug,
       p_doctor_id: doctorId,
@@ -236,6 +240,12 @@ export default function PublicBooking() {
     setSelectedSlotStart("");
   };
 
+  const openBooking = () => {
+    setMobileBookingOpen(true);
+    setMobileMenu(false);
+    requestAnimationFrame(() => document.getElementById("booking")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitError("");
@@ -288,7 +298,7 @@ export default function PublicBooking() {
   if (loadError || !catalog) return <main dir="rtl" className="grid min-h-screen place-items-center bg-[#f4f8f7] p-6 text-center text-[#0b1f1c]"><div><h1 className="text-2xl font-bold">موقع الحجز غير متاح</h1><p className="mt-2 text-[#6e827d]">{loadError}</p></div></main>;
 
   return (
-    <div dir="rtl" className="min-h-screen bg-[#f4f8f7] text-start text-[#0b1f1c]">
+    <div dir="rtl" className="min-h-screen bg-[#f4f8f7] pb-20 text-start text-[#0b1f1c] lg:pb-0">
       <div className="bg-[#0b1f1c] text-xs text-white/75">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-2 px-5 py-2.5 lg:px-10">
           <span className="flex items-center gap-2"><Clock3 className="h-3.5 w-3.5 text-[#1fcfb8]" /> السبت – الخميس، 9 صباحًا – 10 مساءً</span>
@@ -310,7 +320,7 @@ export default function PublicBooking() {
             <a href="#doctors" className="hover:text-[#0baa8e]">أطباؤنا</a>
             <a href="#about" className="hover:text-[#0baa8e]">عن المركز</a>
           </nav>
-          <a href="#booking" className="hidden rounded-full bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-5 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-700/20 sm:block">احجز موعدك</a>
+          <button type="button" onClick={openBooking} className="hidden rounded-full bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-5 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-700/20 sm:block">احجز موعدك</button>
           <button type="button" aria-label="القائمة" aria-expanded={mobileMenu} onClick={() => setMobileMenu((open) => !open)} className="grid h-10 w-10 place-items-center rounded-xl border border-[#bfd0cb] lg:hidden"><Menu className="h-5 w-5" /></button>
         </div>
         {mobileMenu && (
@@ -319,7 +329,7 @@ export default function PublicBooking() {
               <a onClick={() => setMobileMenu(false)} href="#top" className="border-b border-[#eaf1ef] py-3">الرئيسية</a>
               <a onClick={() => setMobileMenu(false)} href="#services" className="border-b border-[#eaf1ef] py-3">خدماتنا</a>
               <a onClick={() => setMobileMenu(false)} href="#doctors" className="border-b border-[#eaf1ef] py-3">أطباؤنا</a>
-              <a onClick={() => setMobileMenu(false)} href="#booking" className="py-3 text-[#067663]">احجز موعدك</a>
+              <button type="button" onClick={openBooking} className="py-3 text-start text-[#067663]">احجز موعدك</button>
             </div>
           </nav>
         )}
@@ -335,7 +345,7 @@ export default function PublicBooking() {
               <h1 className="mt-6 text-4xl font-extrabold leading-[1.15] sm:text-5xl lg:text-6xl">{catalog.hero_title}</h1>
               <p className="mt-5 max-w-xl text-lg leading-8 text-white/80">{catalog.hero_subtitle}</p>
               <div className="mt-8 flex flex-wrap gap-3">
-                <a href="#booking" className="rounded-xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-6 py-3.5 font-bold text-white shadow-xl">احجز موعدك الآن</a>
+                <button type="button" onClick={openBooking} className="rounded-xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-6 py-3.5 font-bold text-white shadow-xl">احجز موعدك الآن</button>
                 <a href="#doctors" className="rounded-xl border border-white/30 bg-white/10 px-6 py-3.5 font-bold backdrop-blur">تعرّف على أطبائنا</a>
               </div>
               <div className="mt-10 grid max-w-xl grid-cols-3 gap-4 border-t border-white/15 pt-7 text-center sm:text-start">
@@ -345,7 +355,7 @@ export default function PublicBooking() {
               </div>
             </div>
 
-            <div id="booking" className="scroll-mt-28 rounded-[24px] border border-white/40 bg-white/95 p-5 text-[#0b1f1c] shadow-2xl backdrop-blur-xl sm:p-7">
+            <div id="booking" className={`${mobileBookingOpen || result ? "block" : "hidden"} scroll-mt-28 rounded-[24px] border border-white/40 bg-white/95 p-5 text-[#0b1f1c] shadow-2xl backdrop-blur-xl sm:p-7 lg:block`}>
               {result ? (
                 <div className="py-2">
                   <div className="mb-5 text-center print:hidden">
@@ -449,43 +459,50 @@ export default function PublicBooking() {
                     <label className="text-sm font-bold">الخدمة<select required value={serviceId} onChange={(e) => setServiceId(e.target.value)} className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 outline-none focus:border-[#0baa8e]">{services.map((service) => <option key={service.id} value={service.id}>{service.name} — {formatMoney(Number(service.price))}</option>)}</select></label>
                     <label className="text-sm font-bold">الطبيب<select required value={doctorId} onChange={(e) => setDoctorId(e.target.value)} className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 outline-none focus:border-[#0baa8e]">{doctors.map((doctor) => <option key={doctor.id} value={doctor.id}>د. {doctor.name}</option>)}</select></label>
                   </div>
-                  <div className="rounded-2xl border border-[#d9e4e1] p-4">
-                    <div className="flex items-center justify-between gap-3">
-                      <div><h3 className="text-sm font-extrabold">تاريخ الحجز</h3><p className="mt-1 text-xs text-[#6e827d]">اختر يومًا متاحًا، ثم اختر الوقت المناسب.</p></div>
-                      {slotsLoading && <span className="text-xs font-bold text-[#0a816d]">جارٍ التحديث...</span>}
-                    </div>
-                    {slotsError && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{slotsError}</p>}
-                    {!slotsLoading && !slotsError && availableDates.length === 0 && <p className="mt-3 rounded-lg bg-amber-50 px-3 py-3 text-sm font-bold text-amber-800">لا توجد مواعيد متاحة لهذا الطبيب خلال الثلاثين يومًا القادمة.</p>}
-                    {availableDates.length > 0 && (
-                      <div className="mx-auto mt-4 max-w-sm">
-                        <div className="flex items-center justify-between rounded-xl bg-[#f4f8f7] px-2 py-2">
-                          <button type="button" aria-label="الشهر السابق" disabled={visibleMonthIndex <= 0} onClick={() => showMonth(-1)} className="grid h-8 w-8 place-items-center rounded-lg text-[#37514b] hover:bg-white disabled:cursor-not-allowed disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button>
-                          <strong className="text-sm">{visibleMonth.toLocaleDateString("ar-SA", { month: "long", year: "numeric" })}</strong>
-                          <button type="button" aria-label="الشهر التالي" disabled={visibleMonthIndex < 0 || visibleMonthIndex >= availableMonthKeys.length - 1} onClick={() => showMonth(1)} className="grid h-8 w-8 place-items-center rounded-lg text-[#37514b] hover:bg-white disabled:cursor-not-allowed disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button>
-                        </div>
-                        <div className="mt-2 grid grid-cols-7 gap-1 text-center text-[11px] font-bold text-[#6e827d]">
-                          {["أحد", "اثن", "ثلا", "أرب", "خمي", "جمع", "سبت"].map((dayName) => <span key={dayName} className="py-1">{dayName}</span>)}
-                          {calendarDays.map((calendarDate, index) => {
-                            if (!calendarDate) return <span key={`empty-${index}`} />;
-                            const isAvailable = slotsByDate.has(calendarDate);
-                            const isSelected = date === calendarDate;
-                            return (
-                              <button key={calendarDate} type="button" disabled={!isAvailable} onClick={() => {
-                                setDate(calendarDate);
-                                setSelectedSlotStart("");
-                              }} className={`aspect-square rounded-lg text-xs font-extrabold transition ${isSelected ? "bg-[#0baa8e] text-white shadow-sm" : isAvailable ? "border border-[#9ed8cb] bg-[#e8f8f4] text-[#067663] hover:border-[#0baa8e]" : "cursor-not-allowed bg-[#f1f3f2] text-[#adb8b5]"}`}>
-                                {Number(calendarDate.slice(-2)).toLocaleString("ar-SA")}
-                              </button>
-                            );
-                          })}
-                        </div>
-                        <div className="mt-3 flex items-center justify-center gap-4 text-[11px] text-[#6e827d]"><span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-[#e8f8f4] ring-1 ring-[#9ed8cb]" />متاح</span><span className="flex items-center gap-1.5"><i className="h-2.5 w-2.5 rounded-sm bg-[#f1f3f2]" />غير متاح</span></div>
-                        {date && (
-                          <div className="mt-4 border-t border-[#e3ebe9] pt-3">
-                            <div className="mb-2 flex items-center justify-between"><strong className="text-xs">اختر الوقت</strong><span className="text-[11px] text-[#6e827d]">{new Date(`${date}T12:00:00`).toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "long" })}</span></div>
-                            <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4">
+                  <div className="overflow-hidden rounded-2xl border border-[#d9e4e1]">
+                    <button type="button" disabled={!bookingDetailsComplete || slotsLoading} onClick={() => setAppointmentPickerOpen((open) => !open)} className="flex w-full items-center justify-between gap-3 bg-[#f7fbfa] px-4 py-3 text-start hover:bg-[#eef7f4] disabled:cursor-not-allowed disabled:opacity-60">
+                      <span><strong className="block text-sm">{selectedSlotStart ? "الموعد المختار" : "تاريخ الحجز"}</strong><small className="mt-0.5 block text-[#6e827d]">{selectedSlotStart ? new Date(selectedSlotStart).toLocaleString("ar-SA", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : bookingDetailsComplete ? "اضغط لاختيار اليوم والوقت" : "أكمل البيانات بالأعلى أولًا"}</small></span>
+                      <ChevronLeft className={`h-5 w-5 text-[#0a816d] transition-transform ${appointmentPickerOpen ? "-rotate-90" : ""}`} />
+                    </button>
+                    {appointmentPickerOpen && (
+                      <div className="border-t border-[#e3ebe9] p-3 sm:p-4">
+                        {slotsLoading && <p className="text-center text-xs font-bold text-[#0a816d]">جارٍ تحديث المواعيد...</p>}
+                        {slotsError && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{slotsError}</p>}
+                        {!slotsLoading && !slotsError && availableDates.length === 0 && <p className="rounded-lg bg-amber-50 px-3 py-3 text-sm font-bold text-amber-800">لا توجد مواعيد متاحة لهذا الطبيب خلال الثلاثين يومًا القادمة.</p>}
+                        {!slotsLoading && availableDates.length > 0 && !date && (
+                          <div className="mx-auto max-w-xs">
+                            <div className="flex items-center justify-between rounded-lg bg-[#f4f8f7] px-1.5 py-1.5">
+                              <button type="button" aria-label="الشهر السابق" disabled={visibleMonthIndex <= 0} onClick={() => showMonth(-1)} className="grid h-7 w-7 place-items-center rounded-md hover:bg-white disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button>
+                              <strong className="text-xs sm:text-sm">{visibleMonth.toLocaleDateString("ar-SA", { month: "long", year: "numeric" })}</strong>
+                              <button type="button" aria-label="الشهر التالي" disabled={visibleMonthIndex < 0 || visibleMonthIndex >= availableMonthKeys.length - 1} onClick={() => showMonth(1)} className="grid h-7 w-7 place-items-center rounded-md hover:bg-white disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button>
+                            </div>
+                            <div className="mt-1.5 grid grid-cols-7 gap-1 text-center text-[9px] font-bold text-[#6e827d] sm:text-[10px]">
+                              {["أحد", "اثن", "ثلا", "أرب", "خمي", "جمع", "سبت"].map((dayName) => <span key={dayName} className="py-0.5">{dayName}</span>)}
+                              {calendarDays.map((calendarDate, index) => {
+                                if (!calendarDate) return <span key={`empty-${index}`} />;
+                                const isAvailable = slotsByDate.has(calendarDate);
+                                return (
+                                  <button key={calendarDate} type="button" disabled={!isAvailable} onClick={() => {
+                                    setDate(calendarDate);
+                                    setSelectedSlotStart("");
+                                  }} className={`h-8 rounded-md text-[10px] font-extrabold transition sm:h-9 sm:text-xs ${isAvailable ? "border border-[#9ed8cb] bg-[#e8f8f4] text-[#067663] hover:border-[#0baa8e]" : "cursor-not-allowed bg-[#f1f3f2] text-[#adb8b5]"}`}>
+                                    {Number(calendarDate.slice(-2)).toLocaleString("ar-SA")}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            <div className="mt-2 flex items-center justify-center gap-4 text-[10px] text-[#6e827d]"><span className="flex items-center gap-1"><i className="h-2 w-2 rounded-sm bg-[#e8f8f4] ring-1 ring-[#9ed8cb]" />متاح</span><span className="flex items-center gap-1"><i className="h-2 w-2 rounded-sm bg-[#f1f3f2]" />غير متاح</span></div>
+                          </div>
+                        )}
+                        {!slotsLoading && date && (
+                          <div className="mx-auto max-w-xs">
+                            <div className="mb-3 flex items-center justify-between gap-2">
+                              <button type="button" onClick={() => { setDate(""); setSelectedSlotStart(""); }} className="inline-flex items-center gap-1 rounded-lg border border-[#d9e4e1] px-2 py-1.5 text-xs font-bold text-[#067663]"><ChevronRight className="h-4 w-4" /> رجوع</button>
+                              <span className="text-xs font-bold">{new Date(`${date}T12:00:00`).toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "long" })}</span>
+                            </div>
+                            <div className="grid max-h-44 grid-cols-3 gap-1.5 overflow-y-auto pe-1 sm:grid-cols-4">
                               {selectedDateSlots.map((slot) => (
-                                <button key={slot.start} type="button" onClick={() => setSelectedSlotStart(slot.start)} className={`rounded-lg border px-1.5 py-2 text-xs font-bold ${selectedSlotStart === slot.start ? "border-[#0baa8e] bg-[#0baa8e] text-white" : "border-[#d9e4e1] bg-white text-[#37514b] hover:border-[#0baa8e]"}`}>
+                                <button key={slot.start} type="button" onClick={() => { setSelectedSlotStart(slot.start); setAppointmentPickerOpen(false); }} className={`rounded-lg border px-1 py-2 text-[11px] font-bold ${selectedSlotStart === slot.start ? "border-[#0baa8e] bg-[#0baa8e] text-white" : "border-[#d9e4e1] bg-white text-[#37514b] hover:border-[#0baa8e]"}`}>
                                   {new Date(slot.start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
                                 </button>
                               ))}
@@ -553,6 +570,12 @@ export default function PublicBooking() {
 
         <section id="about" className="mx-auto max-w-7xl px-5 py-24 lg:px-10"><div className="grid gap-8 lg:grid-cols-3">{[{ icon: CalendarDays, n: "01", title: "اختر موعدك", body: "حدد الخدمة والطبيب والوقت المناسب." }, { icon: Users, n: "02", title: "يصل الحجز فورًا", body: "يظهر الموعد مباشرةً لفريق الاستقبال." }, { icon: CheckCircle2, n: "03", title: "ابدأ رحلتك", body: "احضر في الوقت المحدد وأكمل خطة الرعاية." }].map(({ icon: Icon, n, title, body }) => <div key={n} className="rounded-[22px] border border-[#d9e4e1] bg-white p-7"><div className="flex items-center justify-between"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#cfeee6] font-extrabold text-[#067663]">{n}</span><Icon className="h-6 w-6 text-[#0baa8e]" /></div><h3 className="mt-6 text-xl font-extrabold">{title}</h3><p className="mt-2 text-[#6e827d]">{body}</p></div>)}</div></section>
       </main>
+
+      {!mobileBookingOpen && !result && (
+        <button type="button" onClick={openBooking} className="fixed inset-x-4 bottom-4 z-50 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-5 py-4 font-extrabold text-white shadow-[0_12px_35px_rgba(6,118,99,.38)] lg:hidden">
+          <CalendarDays className="h-5 w-5" /> احجز موعدك الآن
+        </button>
+      )}
 
       <footer className="bg-[#0b1f1c] py-14 text-white/70"><div className="mx-auto flex max-w-7xl flex-wrap justify-between gap-8 px-5 lg:px-10"><div className="flex items-center gap-4"><span className="grid h-20 w-20 place-items-center overflow-hidden rounded-2xl bg-white p-1"><img src={LOGO_IMAGE} alt="شعار أسناني My Teeth" className="h-full w-full object-contain" /></span><div><strong className="text-lg text-white">{catalog.site_name}</strong><p className="mt-2 max-w-md text-sm leading-6">رعاية طبية متخصصة تجمع الخبرة والتقنية والاهتمام بالتفاصيل.</p></div></div><div className="space-y-2 text-sm"><p className="flex items-center gap-2"><Phone className="h-4 w-4 text-[#1fcfb8]" /> {catalog.phone}</p><p className="flex items-center gap-2"><MapPin className="h-4 w-4 text-[#1fcfb8]" /> {catalog.address || "المملكة العربية السعودية"}</p></div></div><div className="mx-auto mt-10 max-w-7xl border-t border-white/10 px-5 pt-6 text-xs lg:px-10">© {new Date().getFullYear()} {catalog.site_name}. جميع الحقوق محفوظة.</div></footer>
     </div>
