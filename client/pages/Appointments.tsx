@@ -180,6 +180,7 @@ export default function Appointments() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
       queryClient.invalidateQueries({ queryKey: ["appointments-website-upcoming"] });
+      queryClient.invalidateQueries({ queryKey: ["calendar-appointments"] });
       queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
       toast({ title: "تم تأكيد الموعد" });
     },
@@ -268,16 +269,13 @@ export default function Appointments() {
               <Badge variant="success">{websiteAppointments.data?.length ?? 0} حجز</Badge>
             </div>
           </CardHeader>
-          <CardContent className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {(websiteAppointments.data ?? []).map((appointment) => (
-              <button
-                key={appointment.id}
-                type="button"
-                onClick={() => setDay(toDateInputValue(new Date(appointment.scheduled_start)))}
-                className="rounded-lg border border-emerald-200 bg-white p-3 text-start transition hover:border-emerald-400 hover:shadow-sm"
-              >
+              <div key={appointment.id} className="rounded-lg border border-emerald-200 bg-white p-3 text-start">
                 <div className="flex items-start justify-between gap-2">
-                  <strong className="text-sm">{appointment.patient?.name_ar ?? "مريض"}</strong>
+                  <button type="button" onClick={() => navigate(`/patients/${appointment.patient_id}`)} className="text-sm font-bold hover:text-primary hover:underline">
+                    {appointment.patient?.name_ar ?? "مريض"}
+                  </button>
                   <Badge className={statusBadgeClass(appointment.status)}>{statusLabel(appointment.status)}</Badge>
                 </div>
                 <p className="mt-2 text-xs font-medium">
@@ -288,7 +286,25 @@ export default function Appointments() {
                 <p className="mt-1 text-xs text-muted-foreground">
                   د. {appointment.doctor?.name_ar ?? "—"} · {appointment.clinic?.name ?? "—"}
                 </p>
-              </button>
+                <div className="mt-3 flex flex-wrap gap-1.5 border-t border-emerald-100 pt-3">
+                  {canSchedule && ["new", "scheduled", "unconfirmed"].includes(appointment.status) && (
+                    <Button size="sm" onClick={() => confirmAppointment.mutate(appointment)} disabled={confirmAppointment.isPending}>
+                      <Check className="h-3.5 w-3.5" /> تأكيد
+                    </Button>
+                  )}
+                  {canSchedule && !["completed", "no_show", "cancelled_by_patient", "cancelled_by_staff"].includes(appointment.status) && (
+                    <Button size="sm" variant="outline" onClick={() => setManagedAppointment(appointment)}>
+                      <Edit3 className="h-3.5 w-3.5" /> تعديل
+                    </Button>
+                  )}
+                  <Button size="sm" variant="outline" onClick={() => navigate(`/reception?appointmentId=${appointment.id}`)}>
+                    <ExternalLink className="h-3.5 w-3.5" /> الاستقبال
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setDay(toDateInputValue(new Date(appointment.scheduled_start)))}>
+                    عرض في التقويم
+                  </Button>
+                </div>
+              </div>
             ))}
           </CardContent>
         </Card>
@@ -443,6 +459,8 @@ function ManageAppointmentDialog({
 
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
+    queryClient.invalidateQueries({ queryKey: ["appointments-website-upcoming"] });
+    queryClient.invalidateQueries({ queryKey: ["calendar-appointments"] });
     queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
   };
 
