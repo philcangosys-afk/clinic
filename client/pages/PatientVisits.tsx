@@ -6,6 +6,7 @@ import {
   ClipboardList,
   Download,
   ExternalLink,
+  FileSignature,
   History,
   Receipt,
 } from "lucide-react";
@@ -504,6 +505,78 @@ function Filter({
 }
 
 function VisitTable({ rows, onOpen }: { rows: any[]; onOpen: (row: any) => void }) {
+  const { can } = usePermissions();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  /**
+   * إنشاء الفاتورة **من الزيارة** لا من شاشة الفوترة.
+   *
+   * `app_create_invoice_from_visit` (0091) يجمع كل ما نُفِّذ ولم يُفوتَر —
+   * خدمات وأدوية مصروفة — ويسعّره من قائمة العقد أو التأمين أو الأساس، ويوزّع
+   * حصّتَي المريض والشركة، ويحسب الضريبة لكل بند على حدة. قبله كان الموظف
+   * يعيد إدخال البنود يدويًا في شاشة الفوترة، فما نسيه لا يُفوتَر.
+   */
+  const createInvoice = useMutation({
+    mutationFn: async (visitId: string) => {
+      const { data, error } = await supabase.rpc("app_create_invoice_from_visit", {
+        p_visit_id: visitId,
+        p_use_insurance: true,
+        p_membership_id: null,
+        p_note: null,
+      });
+      if (error) throw error;
+      return data as string;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["visit-register"] });
+      queryClient.invalidateQueries({ queryKey: ["incomplete-visits"] });
+      toast({
+        title: "أُنشئت الفاتورة كمسوّدة",
+        description: "راجعها في شاشة الفوترة ثم أصدرها",
+      });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر إنشاء الفاتورة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  /**
+   * إنشاء المطالبة **من الزيارة** بعد إصدار فاتورة تأمينية.
+   *
+   * `app_create_claim_from_visit` (0093) يقرأ التشخيصات وبنود الفاتورة
+   * بحصّة الشركة، ويرث رقم الموافقة المسبقة من بند الفاتورة إن وُجد،
+   * ويرفض الإنشاء إذا كانت المطالبة موجودة أو الفاتورة غير تأمينية.
+   * ما يُنشأ هنا مسوّدة تُراجَع في مساحة المطالبات قبل الإرسال.
+   */
+  const createClaim = useMutation({
+    mutationFn: async (row: any) => {
+      const { data, error } = await supabase.rpc("app_create_claim_from_visit", {
+        p_visit_id: row.id,
+        p_invoice_id: row.invoice_id ?? null,
+        p_form_type: "ucaf",
+      });
+      if (error) throw error;
+      return data as string;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["visit-register"] });
+      toast({
+        title: "أُنشئت المطالبة كمسوّدة",
+        description: "راجع بنودها في التأمين ← معالجة المطالبات ثم أرسلها",
+      });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر إنشاء المطالبة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
   return (
     <Table>
       <TableHeader>
@@ -563,13 +636,44 @@ function VisitTable({ rows, onOpen }: { rows: any[]; onOpen: (row: any) => void 
                   </span>
                 </span>
               ) : row.has_services_no_invoice ? (
-                <Badge variant="destructive">بلا فاتورة</Badge>
+                <div className="flex flex-col items-start gap-1">
+                  <Badge variant="destructive">بلا فاتورة</Badge>
+                  {can("billing.issue") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={createInvoice.isPending}
+                      onClick={() => createInvoice.mutate(row.id)}
+                    >
+                      <Receipt className="h-3.5 w-3.5" />
+                      إنشاء فاتورة
+                    </Button>
+                  )}
+                </div>
               ) : (
                 "—"
               )}
             </TableCell>
             <TableCell className="text-sm text-muted-foreground">
-              {row.claim_status ? (CLAIM_STATUS[row.claim_status] ?? row.claim_status) : "—"}
+              {row.claim_status ? (
+                CLAIM_STATUS[row.claim_status] ?? row.claim_status
+              ) : row.is_insurance_invoice && row.invoice_id ? (
+                can("insurance.claims") ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={createClaim.isPending}
+                    onClick={() => createClaim.mutate(row)}
+                  >
+                    <FileSignature className="h-3.5 w-3.5" />
+                    إنشاء مطالبة
+                  </Button>
+                ) : (
+                  <Badge variant="outline">بلا مطالبة</Badge>
+                )
+              ) : (
+                "—"
+              )}
             </TableCell>
             <TableCell>
               <Badge variant={STATUS_BADGE[row.status] ?? "secondary"} title={row.reopened_at ? "أُعيد فتحها" : undefined}>

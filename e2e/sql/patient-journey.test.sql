@@ -1,3 +1,9 @@
+-- ############################################################################
+-- ##  ⚠️  ملف اختبار — لا يُنفَّذ على قاعدة الإنتاج (Supabase) إطلاقًا.       ##
+-- ##  يُنشئ منشأة ومرضى وفواتير وهمية للتحقّق من القواعد، ثم يتراجع عنها     ##
+-- ##  (begin … rollback). الملفات التي تُنفَّذ على القاعدة هي ملفات مجلد     ##
+-- ##  `migrations` فقط، بالترتيب الرقمي.                                    ##
+-- ############################################################################
 -- ---------------------------------------------------------------------------
 -- رحلة المريض الكاملة — المرحلة العاشرة
 -- ---------------------------------------------------------------------------
@@ -586,8 +592,9 @@ begin
     perform app_set_lab_order_status(v_lo2, 'received');
     perform app_set_lab_order_status(v_lo2, 'in_progress');
     perform app_enter_lab_result((select id from lab_order_items where lab_order_id = v_lo2 limit 1), '25', 25);
-    if not exists (select 1 from v_lab_critical_results where lab_order_id = v_lo2) then
-      raise exception 'فشل حديّ ٦: نتيجة فوق الحدّ الحرج لم تظهر في منظور الحرِجة';
+    if not exists (select 1 from v_critical_results
+                    where source_order_id = v_lo2 and source_kind = 'lab' and is_open) then
+      raise exception 'فشل حديّ ٦: نتيجة فوق الحدّ الحرج لم تُنشئ بلاغًا مفتوحًا';
     end if;
   end;
   raise notice '✅ حديّ ٦: النتيجة الحرجة تُعلَّم وتظهر لمن يجب أن يراها';

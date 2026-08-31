@@ -1,17 +1,21 @@
 import { useEffect, useState } from "react";
 import { Package, Search } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { localName, useLocaleSettings } from "@/lib/locale";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import type { ItemRow } from "@/lib/database.types";
 import { Input } from "@/components/ui/input";
 
-type ItemSearchResult = Pick<ItemRow, "id" | "code" | "name_ar" | "price" | "is_vat_exempt">;
+type ItemSearchResult = Pick<ItemRow, "id" | "code" | "name_ar" | "price" | "is_vat_exempt"> & {
+  name_en?: string | null;
+};
 
 /**
  * حقل بحث عن صنف/خدمة من كتالوج items لإضافته كبند في الفاتورة — بدل تكرار
  * منطق البحث في كل شاشة فوترة على حدة.
  */
 export default function ItemPicker({ onSelect }: { onSelect: (item: ItemSearchResult) => void }) {
+  const { dataLanguage } = useLocaleSettings();
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<ItemSearchResult[]>([]);
   const [open, setOpen] = useState(false);
@@ -28,11 +32,12 @@ export default function ItemPicker({ onSelect }: { onSelect: (item: ItemSearchRe
       // فبدونه كان صنف مؤسسة أخرى يُضاف كبند في فاتورة هذه المؤسسة.
       const { data } = await supabase
         .from("items")
-        .select("id, code, name_ar, price, is_vat_exempt")
+        .select("id, code, name_ar, name_en, price, is_vat_exempt")
         .eq("organization_id", organization.id)
         .eq("is_disabled", false)
         .eq("is_archived", false)
-        .or(`name_ar.ilike.%${term.trim()}%,code.ilike.%${term.trim()}%,barcode.ilike.%${term.trim()}%`)
+        // البحث يشمل الاسم الإنجليزي: من يعمل بالإنجليزية يبحث بها
+        .or(`name_ar.ilike.%${term.trim()}%,name_en.ilike.%${term.trim()}%,code.ilike.%${term.trim()}%,barcode.ilike.%${term.trim()}%`)
         .limit(8);
       setResults((data as ItemSearchResult[]) ?? []);
     }, 250);
@@ -69,7 +74,7 @@ export default function ItemPicker({ onSelect }: { onSelect: (item: ItemSearchRe
               className="flex w-full items-center gap-2 px-3 py-2 text-right text-sm hover:bg-muted"
             >
               <Package className="h-4 w-4 text-muted-foreground" />
-              <span className="flex-1">{item.name_ar}</span>
+              <span className="flex-1">{localName(item, dataLanguage)}</span>
               <span className="text-xs text-muted-foreground">{Number(item.price).toLocaleString("ar-SA")} ر.س</span>
             </button>
           ))}

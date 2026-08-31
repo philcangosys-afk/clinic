@@ -25,10 +25,10 @@ export default function PendingConsents() {
       const { data, error } = await supabase
         .from("v_pending_consents")
         .select(
-          "visit_service_id, patient_name, file_number, item_name, consent_note_ar, visit_date, status, has_signed_consent",
+          "visit_service_id, patient_name, file_number, item_name, consent_note_ar, visit_date, status, consent_status, consent_override_reason",
         )
         .eq("organization_id", organizationId)
-        .eq("has_signed_consent", false)
+        .neq("consent_status", "signed")
         .order("visit_date", { ascending: false })
         .limit(200);
       if (error) throw error;
@@ -44,7 +44,8 @@ export default function PendingConsents() {
           إقرارات مطلوبة ولم تُوقَّع
         </CardTitle>
         <CardDescription>
-          خدمات مسجَّلة تشترط إقرارًا من المريض، ولا يوجد في ملفه إقرار موقَّع سارٍ.
+          خدمات مسجَّلة تشترط إقرارًا، ولا يوجد إقرار موقَّع سارٍ **لهذا الإجراء
+          تحديدًا** — إقرار إجراءٍ آخر لا يُحتسب.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
@@ -71,6 +72,7 @@ export default function PendingConsents() {
                 <TableHead>المريض</TableHead>
                 <TableHead>الخدمة</TableHead>
                 <TableHead>نصّ الإقرار</TableHead>
+                <TableHead>الحالة</TableHead>
                 <TableHead>تاريخ الزيارة</TableHead>
               </TableRow>
             </TableHeader>
@@ -89,6 +91,17 @@ export default function PendingConsents() {
                   <TableCell className="max-w-md text-sm text-muted-foreground">
                     {row.consent_note_ar ?? "—"}
                   </TableCell>
+                  <TableCell>
+                    {row.consent_override_reason ? (
+                      <Badge variant="secondary" title={row.consent_override_reason}>
+                        نُفّذ بتجاوز موثَّق
+                      </Badge>
+                    ) : (
+                      <Badge variant="destructive">
+                        {row.consent_status === "expired" ? "موافقة منتهية" : "بلا موافقة"}
+                      </Badge>
+                    )}
+                  </TableCell>
                   <TableCell className="font-mono text-xs">
                     {String(row.visit_date).slice(0, 10)}
                   </TableCell>
@@ -96,7 +109,7 @@ export default function PendingConsents() {
               ))}
               {(rows.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
                     لا توجد إقرارات معلّقة.
                   </TableCell>
                 </TableRow>

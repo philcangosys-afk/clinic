@@ -116,6 +116,37 @@ function usePermissions(organizationId: string | undefined, userId: string | und
   });
 }
 
+/**
+ * الصلاحية الفعلية ومصدرها لكل عضو — المرحلة 28.
+ *
+ * الاستثناءات وحدها لا تكفي: المستخدم قد يملك الصلاحية من افتراض دوره،
+ * أو من صفته الإدارية، ولا شيء منها يظهر في جدول الاستثناءات. هذا المنظور
+ * يجمع الطبقات الثلاث ويقول من أين جاءت كل صلاحية.
+ */
+function useEffectivePermissions(organizationId: string | undefined, userId: string | undefined) {
+  return useQuery({
+    queryKey: ["effective-permissions", organizationId, userId],
+    enabled: Boolean(organizationId && userId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_user_effective_permissions")
+        .select("permission_key, is_allowed, source")
+        .eq("organization_id", organizationId)
+        .eq("user_id", userId);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+}
+
+const SOURCE_LABEL: Record<string, string> = {
+  admin: "صفة إدارية",
+  explicit_grant: "منح صريح",
+  explicit_deny: "منع صريح",
+  role_default: "افتراض الدور",
+  none: "غير ممنوحة",
+};
+
 /** كل صلاحيات العرض المتاحة، مشتقّة من سجل الموديولات نفسه. */
 function useAvailablePermissions() {
   return useMemo(() => {
@@ -139,7 +170,11 @@ function PermissionsDialog({
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const permissions = usePermissions(organizationId, member?.user_id);
+  const effective = useEffectivePermissions(organizationId, member?.user_id);
   const available = useAvailablePermissions();
+  const effectiveMap = new Map(
+    (effective.data ?? []).map((row: any) => [row.permission_key, row]),
+  );
 
   const isAdmin = member ? isOrganizationAdmin(member.role_key) : false;
   const overrides = new Map((permissions.data ?? []).map((row) => [row.permission_key, row.granted]));
@@ -147,32 +182,31 @@ function PermissionsDialog({
   const setPermission = useMutation({
     mutationFn: async ({ key, granted }: { key: string; granted: boolean | null }) => {
       if (!organizationId || !member) throw new Error("بيانات غير مكتملة");
+      // المنح والمنع يمرّان بدوالّ المرحلة 28: تتحقّق من الصلاحية، وتتأكّد
+      // أن المفتاح موجود في الكتالوج، وتكتب في سجل التدقيق. الكتابة المباشرة
+      // في الجدول كانت تتجاوز ذلك كله.
       if (granted === null) {
-        // العودة لسلوك الصفة الافتراضي = حذف الاستثناء
-        const { data: affectedRows, error } = await supabase
-          .from("membership_permissions")
-          .delete()
-          .eq("organization_id", organizationId)
-          .eq("user_id", member.user_id)
-          .eq("permission_key", key)
-          .select();
+        const { error } = await supabase.rpc("app_clear_member_permission", {
+          p_org: organizationId,
+          p_user_id: member.user_id,
+          p_permission: key,
+        });
         if (error) throw error;
-        // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-        // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-        if (!affectedRows || affectedRows.length === 0)
-          throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
         return;
       }
-      const { error } = await supabase.from("membership_permissions").upsert({
-        organization_id: organizationId,
-        user_id: member.user_id,
-        permission_key: key,
-        granted,
+      const { error } = await supabase.rpc("app_set_member_permission", {
+        p_org: organizationId,
+        p_user_id: member.user_id,
+        p_permission: key,
+        p_granted: granted,
+        p_reason: null,
       });
       if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["membership-permissions"] });
+      queryClient.invalidateQueries({ queryKey: ["effective-permissions"] });
+      queryClient.invalidateQueries({ queryKey: ["duty-conflicts"] });
       toast({ title: "تم تحديث الصلاحية" });
     },
     onError: (error: unknown) =>
@@ -218,6 +252,21 @@ function PermissionsDialog({
                     <p className="truncate font-mono text-[10px] text-muted-foreground">
                       {permission.key}
                     </p>
+                    {effectiveMap.get(permission.key) && (
+                      <p className="text-[10px]">
+                        <span className={
+                          (effectiveMap.get(permission.key) as any).is_allowed
+                            ? "text-emerald-600" : "text-muted-foreground"}>
+                          {(effectiveMap.get(permission.key) as any).is_allowed
+                            ? "الوضع الفعلي: مسموح" : "الوضع الفعلي: ممنوع"}
+                        </span>
+                        <span className="text-muted-foreground">
+                          {" · "}
+                          {SOURCE_LABEL[(effectiveMap.get(permission.key) as any).source]
+                            ?? (effectiveMap.get(permission.key) as any).source}
+                        </span>
+                      </p>
+                    )}
                   </div>
                   <Select
                     value={state}
@@ -379,9 +428,32 @@ export default function Users() {
       };
     }) => {
       if (!organization?.id) throw new Error("لا توجد مؤسسة نشطة");
+
+      // الدور والتفعيل يمرّان بدوالّهما: تتحقّقان من الصلاحية وتكتبان في
+      // سجل التدقيق، وحماية آخر مالك ومنع ترقية النفس مطبَّقتان في القاعدة.
+      if (patch.role_key !== undefined) {
+        const { error } = await supabase.rpc("app_set_membership_role", {
+          p_org: organization.id, p_user_id: userId, p_role_key: patch.role_key,
+          p_reason: null,
+        });
+        if (error) throw error;
+      }
+      if (patch.is_active !== undefined) {
+        const { error } = await supabase.rpc("app_set_member_active", {
+          p_org: organization.id, p_user_id: userId, p_active: patch.is_active,
+          p_reason: patch.is_active ? null : "تعطيل من شاشة المستخدمين",
+        });
+        if (error) throw error;
+      }
+
+      const rest: Record<string, any> = { ...patch };
+      delete rest.role_key;
+      delete rest.is_active;
+      if (Object.keys(rest).length === 0) return;
+
       const { data: affectedRows, error } = await supabase
         .from("organization_memberships")
-        .update(patch)
+        .update(rest)
         .eq("organization_id", organization.id)
         .eq("user_id", userId)
         .select();
@@ -408,6 +480,9 @@ export default function Users() {
   /**
    * حمايتان مقصودتان: لا يستطيع المستخدم تعطيل حسابه هو (فيفقد الوصول
    * فورًا)، ولا يمكن إزالة آخر مالك نشط (فتبقى المنشأة بلا من يديرها).
+   *
+   * وكلتاهما صارتا مطبَّقتين **في قاعدة البيانات** منذ المرحلة 28، فما هنا
+   * رسالةٌ مبكّرة للمستخدم لا خطُّ الدفاع الوحيد كما كان.
    */
   const guard = (row: MemberRow, nextActive: boolean, nextRole: OrganizationRole) => {
     if (row.user_id === session?.user.id && (!nextActive || !isOrganizationAdmin(nextRole))) {
@@ -436,6 +511,8 @@ export default function Users() {
           المناسبة. لا يُنشأ الحساب من هذه الشاشة لأسباب أمنية.
         </span>
       </div>
+
+      <DutyConflictsCard organizationId={organization?.id} />
 
       {!viewerIsAdmin && (
         <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -606,5 +683,69 @@ export default function Users() {
         saving={updateMember.isPending}
       />
     </div>
+  );
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * تعارض المهام — المرحلة 28
+ *
+ * النظام يمنع التنفيذ المزدوج وقت العمل (من احتسب المسيّر لا يعتمده)، لكن
+ * وجود التعارض نفسه ملاحظةٌ إدارية تُرفع قبل أن يُستعمل.
+ * ════════════════════════════════════════════════════════════════════════ */
+function DutyConflictsCard({ organizationId }: { organizationId: string | undefined }) {
+  const conflicts = useQuery({
+    queryKey: ["duty-conflicts", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_duty_conflicts").select("*")
+        .eq("organization_id", organizationId);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const names = useQuery({
+    queryKey: ["conflict-member-names", organizationId],
+    enabled: Boolean(organizationId) && (conflicts.data ?? []).length > 0,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_members_overview").select("user_id, email, doctor_name")
+        .eq("organization_id", organizationId);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  if (!conflicts.data || conflicts.data.length === 0) return null;
+
+  const nameOf = (userId: string) => {
+    const row = (names.data ?? []).find((n) => n.user_id === userId);
+    return row?.doctor_name || row?.email || "مستخدم";
+  };
+
+  return (
+    <Card className="border-amber-300">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">تعارض في المهام</CardTitle>
+        <CardDescription>
+          أعضاء يملكون طرفَي عملية واحدة. النظام يمنع التنفيذ المزدوج وقت
+          العمل، لكن الأصل أن يُوزَّع الطرفان على شخصين.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-2">
+        {(conflicts.data ?? []).map((c) => (
+          <div key={`${c.user_id}-${c.conflict_key}`}
+               className="flex flex-wrap items-center gap-2 text-sm">
+            <Badge variant="destructive">{c.conflict_name}</Badge>
+            <span>{nameOf(c.user_id)}</span>
+            <span className="font-mono text-[10px] text-muted-foreground">
+              {c.perm_a} + {c.perm_b}
+            </span>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
   );
 }

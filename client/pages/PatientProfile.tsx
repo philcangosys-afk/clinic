@@ -47,6 +47,32 @@ export default function PatientProfile() {
   const { id } = useParams();
   const patient = usePatient(id);
 
+  /**
+   * تسجيل الاطّلاع على الملف الطبي (المرحلة 15).
+   *
+   * القراءة لا تُطلق مُحفِّزًا في القاعدة، فسجل التدقيق أعمى عنها؛ ولو
+   * سُجّلت من داخل استعلام القراءة لتكرّرت مع كل إعادة جلب. لذلك تُسجَّل
+   * مرّةً واحدة عند فتح الملف فعلًا: `id` في قائمة الاعتماديات وحده.
+   */
+  useEffect(() => {
+    if (!id) return;
+    let cancelled = false;
+    void (async () => {
+      const { error } = await supabase.rpc("app_log_record_access", {
+        p_patient_id: id,
+        p_access_type: "view",
+        p_context: "ملف المريض",
+        p_reason: null,
+        p_visit_id: null,
+      });
+      // فشل التسجيل لا يمنع الطبيب من رؤية الملف — يُسجَّل في الطرفية فقط
+      if (error && !cancelled) console.warn("access-log", error.message);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [id]);
+
   if (patient.isLoading) {
     return (
       <div className="mx-auto flex max-w-5xl flex-col gap-4 p-6">

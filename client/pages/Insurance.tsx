@@ -39,6 +39,7 @@ import NewClaimFormDialog from "@/components/insurance/NewClaimFormDialog";
 import { useInsuranceSettings } from "@/lib/insurance-settings";
 import { InsuranceSettingsTab } from "@/pages/OperationsSettings";
 import FormRequirementsTab from "@/components/insurance/FormRequirementsTab";
+import ClaimsWorkspace from "@/components/insurance/ClaimsWorkspace";
 import { useToast } from "@/hooks/use-toast";
 
 /**
@@ -94,6 +95,7 @@ export default function Insurance() {
           <TabsTrigger value="companies">شركات التأمين والبوليصات</TabsTrigger>
           <TabsTrigger value="contracts">العقود والتغطية</TabsTrigger>
           <TabsTrigger value="claims">المطالبات</TabsTrigger>
+          <TabsTrigger value="processing">معالجة المطالبات والتحصيل</TabsTrigger>
           <TabsTrigger value="batches">دفعات المطالبات</TabsTrigger>
           <TabsTrigger value="preauth">الموافقات المسبقة</TabsTrigger>
           <TabsTrigger value="form-fields">خانات النماذج</TabsTrigger>
@@ -108,6 +110,9 @@ export default function Insurance() {
         </TabsContent>
         <TabsContent value="claims">
           <ClaimsTab />
+        </TabsContent>
+        <TabsContent value="processing" className="mt-4">
+          <ClaimsWorkspace />
         </TabsContent>
         <TabsContent value="batches">
           <ClaimBatchesTab />
@@ -134,7 +139,7 @@ function useCompanies(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("insurance_companies")
         .select(
-          "id, name_ar, name_en, phone, email, tax_number, address, is_disabled, insurance_policies(id, policy_name, policy_number, default_copay_percent, is_disabled)",
+          "id, name_ar, name_en, phone, email, tax_number, address, is_disabled, nphies_enabled, nphies_payer_id, insurance_policies(id, policy_name, policy_number, default_copay_percent, is_disabled)",
         )
         .eq("organization_id", organizationId)
         .order("name_ar");
@@ -151,6 +156,7 @@ function CompaniesTab() {
   const [companyDialogOpen, setCompanyDialogOpen] = useState(false);
   const [policyDialogFor, setPolicyDialogFor] = useState<string | null>(null);
   const [membershipDialogOpen, setMembershipDialogOpen] = useState(false);
+  const [nphiesDialogFor, setNphiesDialogFor] = useState<any | null>(null);
 
   const toggleCompanyDisabled = useMutation({
     mutationFn: async ({ id, is_disabled }: { id: string; is_disabled: boolean }) => {
@@ -218,10 +224,22 @@ function CompaniesTab() {
                 </Badge>
               </button>
             </div>
-            <Button size="sm" variant="outline" onClick={() => setPolicyDialogFor(company.id)}>
-              <Plus className="h-3.5 w-3.5" />
-              بوليصة جديدة
-            </Button>
+            <div className="flex items-center gap-2">
+              {/* ربط نفيس يُضبط لكل شركة على حدة: الشركات القديمة سُجّلت قبل
+                  وجود هذين الحقلين، ولولا هذا الزرّ لتعذّر تفعيلها إطلاقًا. */}
+              <Button size="sm" variant="ghost" onClick={() => setNphiesDialogFor(company)}>
+                <ShieldCheck className="h-3.5 w-3.5" />
+                <Badge variant={company.nphies_enabled ? "success" : "secondary"}>
+                  {company.nphies_enabled
+                    ? `نفيس · ${company.nphies_payer_id ?? "بلا معرّف"}`
+                    : "نفيس معطّل"}
+                </Badge>
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => setPolicyDialogFor(company.id)}>
+                <Plus className="h-3.5 w-3.5" />
+                بوليصة جديدة
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {(company.name_en || company.email || company.tax_number || company.address) && (
@@ -254,6 +272,7 @@ function CompaniesTab() {
       <MembershipsList organizationId={organization?.id} />
 
       <NewCompanyDialog open={companyDialogOpen} onOpenChange={setCompanyDialogOpen} organizationId={organization?.id} />
+      <NphiesLinkDialog company={nphiesDialogFor} onClose={() => setNphiesDialogFor(null)} />
       <NewPolicyDialog
         companyId={policyDialogFor}
         onOpenChange={() => setPolicyDialogFor(null)}
@@ -341,6 +360,94 @@ function MembershipsList({ organizationId }: { organizationId: string | undefine
   );
 }
 
+/**
+ * ضبط ربط نفيس لشركة قائمة.
+ *
+ * `app_queue_nphies_message` (0093) يرفض إدراج رسالة لشركة غير مفعَّلة أو بلا
+ * معرّف دافع، لأن الرفض بعد الإدراج يترك المطالبة موسومة "مُرسَلة" بلا مقابل
+ * لدى البوّابة. وهذه الشاشة هي المكان الوحيد الذي يُضبط منه الحقلان.
+ * **لا مفاتيح ربط هنا**: المفاتيح والشهادات مكانها الخدمة الخلفية وحدها.
+ */
+function NphiesLinkDialog({ company, onClose }: { company: any | null; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [enabled, setEnabled] = useState(false);
+  const [payerId, setPayerId] = useState("");
+
+  useEffect(() => {
+    setEnabled(Boolean(company?.nphies_enabled));
+    setPayerId(company?.nphies_payer_id ?? "");
+  }, [company?.id, company?.nphies_enabled, company?.nphies_payer_id]);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!company?.id) throw new Error("لا شركة محدَّدة");
+      if (enabled && !payerId.trim()) {
+        throw new Error("معرّف الدافع (Payer ID) مطلوب عند تفعيل نفيس");
+      }
+      const { data, error } = await supabase
+        .from("insurance_companies")
+        .update({ nphies_enabled: enabled, nphies_payer_id: payerId.trim() || null })
+        .eq("id", company.id)
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["insurance-companies"] });
+      toast({ title: "حُفظ ربط نفيس" });
+      onClose();
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Dialog open={Boolean(company)} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>ربط نفيس — {company?.name_ar}</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-2">
+            <input
+              id="nphies-link-enabled"
+              type="checkbox"
+              className="h-4 w-4"
+              checked={enabled}
+              onChange={(e) => setEnabled(e.target.checked)}
+            />
+            <Label htmlFor="nphies-link-enabled" className="cursor-pointer">
+              مفعَّلة على نفيس
+            </Label>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>معرّف الدافع (Payer ID){enabled ? " *" : ""}</Label>
+            <Input
+              value={payerId}
+              onChange={(e) => setPayerId(e.target.value)}
+              placeholder="المعرّف المسجَّل لدى نفيس"
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            مفاتيح الربط والشهادات لا تُحفظ في النظام ولا تمرّ عبر المتصفّح؛ الإرسال الفعليّ
+            من خدمة خلفية محميّة. البيئة الحالية اختبارية.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button disabled={save.isPending} onClick={() => save.mutate()}>
+            {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function NewCompanyDialog({
   open,
   onOpenChange,
@@ -358,10 +465,17 @@ function NewCompanyDialog({
   const [email, setEmail] = useState("");
   const [taxNumber, setTaxNumber] = useState("");
   const [address, setAddress] = useState("");
+  const [nphiesEnabled, setNphiesEnabled] = useState(false);
+  const [nphiesPayerId, setNphiesPayerId] = useState("");
 
   const createCompany = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
+      // تفعيل نفيس بلا معرّف دافع يعني رسائل تُرفض من البوّابة لاحقًا،
+      // فنمنعه هنا كما تمنعه القاعدة عند الإدراج في الطابور.
+      if (nphiesEnabled && !nphiesPayerId.trim()) {
+        throw new Error("معرّف الدافع (Payer ID) مطلوب عند تفعيل نفيس");
+      }
       const { error } = await supabase.from("insurance_companies").insert({
         organization_id: organizationId,
         name_ar: nameAr.trim(),
@@ -370,6 +484,8 @@ function NewCompanyDialog({
         email: email.trim() || null,
         tax_number: taxNumber.trim() || null,
         address: address.trim() || null,
+        nphies_enabled: nphiesEnabled,
+        nphies_payer_id: nphiesPayerId.trim() || null,
       });
       if (error) throw error;
     },
@@ -382,6 +498,8 @@ function NewCompanyDialog({
       setEmail("");
       setTaxNumber("");
       setAddress("");
+      setNphiesEnabled(false);
+      setNphiesPayerId("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -424,6 +542,34 @@ function NewCompanyDialog({
               <Label>العنوان</Label>
               <Input value={address} onChange={(e) => setAddress(e.target.value)} />
             </div>
+          </div>
+          <div className="rounded-md border p-3">
+            <div className="flex items-center gap-2">
+              <input
+                id="nphies-enabled"
+                type="checkbox"
+                className="h-4 w-4"
+                checked={nphiesEnabled}
+                onChange={(e) => setNphiesEnabled(e.target.checked)}
+              />
+              <Label htmlFor="nphies-enabled" className="cursor-pointer">
+                مفعَّلة على نفيس
+              </Label>
+            </div>
+            {nphiesEnabled && (
+              <div className="mt-2 flex flex-col gap-1.5">
+                <Label>معرّف الدافع (Payer ID) *</Label>
+                <Input
+                  value={nphiesPayerId}
+                  onChange={(e) => setNphiesPayerId(e.target.value)}
+                  placeholder="المعرّف المسجَّل لدى نفيس"
+                />
+                <p className="text-xs text-muted-foreground">
+                  بلا هذا المعرّف تُرفض رسائل المطالبات. مفاتيح الربط لا تُحفظ هنا؛ مكانها
+                  الخدمة الخلفية.
+                </p>
+              </div>
+            )}
           </div>
         </div>
         <DialogFooter>

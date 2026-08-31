@@ -33,6 +33,14 @@ import PatientPicker from "@/components/shared/PatientPicker";
 import ItemPicker from "@/components/shared/ItemPicker";
 import { printHtml, type PaperSize } from "@/lib/document-merge";
 import { useToast } from "@/hooks/use-toast";
+import { usePermissions } from "@/lib/permissions";
+import TaxSettingsTab, {
+  EInvoicePanel,
+  VatReturnPanel,
+  TaxInvoicePreview,
+} from "@/components/billing/TaxSettingsTab";
+import { Textarea } from "@/components/ui/textarea";
+import { Separator } from "@/components/ui/separator";
 
 const STATUS_LABELS: Record<SalesInvoiceStatus, string> = {
   unpaid: "غير مدفوعة",
@@ -45,6 +53,9 @@ const STATUS_BADGE: Record<SalesInvoiceStatus, string> = {
   partial: "bg-amber-100 text-amber-700",
   paid: "bg-emerald-100 text-emerald-700",
   void: "bg-slate-100 text-slate-500",
+  draft: "bg-amber-100 text-amber-800",
+  partially_refunded: "bg-orange-100 text-orange-800",
+  refunded: "bg-rose-100 text-rose-700",
 };
 
 function useInvoices(organizationId: string | undefined, status: string, quotesOnly: boolean) {
@@ -55,7 +66,7 @@ function useInvoices(organizationId: string | undefined, status: string, quotesO
       let query = supabase
         .from("sales_invoices")
         .select(
-          "id, invoice_number, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, insurance_share_amount, patient_share_amount, insurance_company_name, external_customer_name, zatca_invoice_number, zatca_qr, is_insurance_invoice, created_by, nationality_value_id, patient:patients!sales_invoices_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!sales_invoices_doctor_tenant_fk(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar)",
+          "id, invoice_number, document_number, document_type, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, insurance_share_amount, patient_share_amount, insurance_company_name, external_customer_name, zatca_invoice_number, zatca_qr, is_insurance_invoice, created_by, nationality_value_id, patient:patients!sales_invoices_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!sales_invoices_doctor_tenant_fk(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar)",
         )
         // التصفية بالمؤسسة إلزامية: سياسة RLS تسمح بكل مؤسسة **ينتمي إليها**
         // المستخدم، لا بالمؤسسة النشطة وحدها — فبدونها كانت قائمة عضو في
@@ -227,6 +238,12 @@ export default function Billing() {
   const printSettings = usePrintSettings(organization?.id);
   const [statusFilter, setStatusFilter] = useState("all");
   const [quotesOnly, setQuotesOnly] = useState(false);
+  const [showShifts, setShowShifts] = useState(false);
+  const [showTax, setShowTax] = useState(false);
+  const [discountTarget, setDiscountTarget] = useState<SalesInvoiceWithPatient | null>(null);
+  const [discountAmount, setDiscountAmount] = useState("");
+  const [discountReason, setDiscountReason] = useState("");
+  const { can } = usePermissions();
   const [createOpen, setCreateOpen] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState<SalesInvoiceWithPatient | null>(null);
   const [returnTarget, setReturnTarget] = useState<SalesInvoiceWithPatient | null>(null);
@@ -272,6 +289,98 @@ export default function Billing() {
       }),
   });
 
+  const billingFail = (title: string) => (error: unknown) =>
+    toast({
+      variant: "destructive",
+      title,
+      description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+    });
+
+  /**
+   * الإصدار والإلغاء يمرّان بـ`app_set_invoice_status` (0091) لا بتحديث مباشر:
+   * الدالة تفرض قواعد الانتقال، وتُلزم بسبب للإلغاء، وترفض إلغاء فاتورة عليها
+   * مبلغ محصَّل لم يُستردّ، وتُعيد خدمات الزيارة إلى «منفَّذة» فتُفوتَر ثانيةً.
+   */
+  const issueInvoice = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.rpc("app_set_invoice_status", {
+        p_invoice_id: id,
+        p_status: "unpaid",
+        p_reason: null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+      toast({ title: "صدرت الفاتورة" });
+    },
+    onError: billingFail("تعذر الإصدار"),
+  });
+
+  const voidInvoice = useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const { error } = await supabase.rpc("app_set_invoice_status", {
+        p_invoice_id: id,
+        p_status: "void",
+        p_reason: reason,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+      toast({ title: "أُلغيت الفاتورة وعادت خدماتها قابلة للفوترة" });
+    },
+    onError: billingFail("تعذر الإلغاء"),
+  });
+
+  /**
+   * الإشعار الدائن — تصحيح الفاتورة الصادرة.
+   *
+   * الفاتورة الصادرة لا تُعدَّل ولا تُحذف (0092): تصحيحها يكون بإشعارٍ يتبعها
+   * ويحمل سببه، فيبقى الأصل شاهدًا والتصحيح ظاهرًا. وهذا ما تشترطه المراجعة
+   * الضريبية: لا مستند يختفي.
+   */
+  const creditNote = useMutation({
+    mutationFn: async ({ id, reason, type }: { id: string; reason: string; type: string }) => {
+      const { error } = await supabase.rpc("app_create_credit_note", {
+        p_invoice_id: id,
+        p_reason: reason,
+        p_lines: null,
+        p_note_type: type,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+      toast({
+        title: "صدر الإشعار كمسوّدة",
+        description: "راجع بنوده ثم أصدره",
+      });
+    },
+    onError: billingFail("تعذر إصدار الإشعار"),
+  });
+
+  const applyDiscount = useMutation({
+    mutationFn: async () => {
+      if (!discountTarget) throw new Error("لا فاتورة");
+      if (!discountReason.trim()) throw new Error("اكتب سبب الخصم");
+      const { error } = await supabase.rpc("app_apply_invoice_discount", {
+        p_invoice_id: discountTarget.id,
+        p_amount: Number(discountAmount) || 0,
+        p_reason: discountReason.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+      toast({ title: "طُبّق الخصم" });
+      setDiscountTarget(null);
+      setDiscountAmount("");
+      setDiscountReason("");
+    },
+    onError: billingFail("تعذر الخصم"),
+  });
+
   const totals = useMemo(() => {
     const rows = invoices.data ?? [];
     return {
@@ -291,11 +400,33 @@ export default function Billing() {
         </div>
         <div className="flex items-center gap-2">
           <div className="flex rounded-lg border p-0.5">
-            <Button size="sm" variant={!quotesOnly ? "default" : "ghost"} onClick={() => setQuotesOnly(false)}>
+            <Button
+              size="sm"
+              variant={!quotesOnly && !showShifts && !showTax ? "default" : "ghost"}
+              onClick={() => { setQuotesOnly(false); setShowShifts(false); setShowTax(false); }}
+            >
               الفواتير
             </Button>
-            <Button size="sm" variant={quotesOnly ? "default" : "ghost"} onClick={() => setQuotesOnly(true)}>
+            <Button
+              size="sm"
+              variant={quotesOnly && !showShifts && !showTax ? "default" : "ghost"}
+              onClick={() => { setQuotesOnly(true); setShowShifts(false); setShowTax(false); }}
+            >
               عروض الأسعار
+            </Button>
+            <Button
+              size="sm"
+              variant={showShifts ? "default" : "ghost"}
+              onClick={() => { setShowShifts(true); setShowTax(false); }}
+            >
+              الصناديق
+            </Button>
+            <Button
+              size="sm"
+              variant={showTax ? "default" : "ghost"}
+              onClick={() => { setShowTax(true); setShowShifts(false); }}
+            >
+              الضريبة والفوترة الإلكترونية
             </Button>
           </div>
           {!quotesOnly && (
@@ -318,9 +449,19 @@ export default function Billing() {
         </div>
       </div>
 
-      {!quotesOnly && <InvoiceKpiBar organizationId={organization?.id} />}
+      {!quotesOnly && !showShifts && !showTax && <InvoiceKpiBar organizationId={organization?.id} />}
+      {!quotesOnly && !showShifts && !showTax && <ReceivablesBar organizationId={organization?.id} />}
 
-      <Card>
+      {showShifts && <CashShiftsPanel organizationId={organization?.id} />}
+      {showTax && (
+        <div className="flex flex-col gap-4">
+          <TaxSettingsTab />
+          <VatReturnPanel />
+          <EInvoicePanel />
+        </div>
+      )}
+
+      {!showShifts && !showTax && <Card>
         <CardHeader>
           <CardTitle>{quotesOnly ? "عروض الأسعار" : "الفواتير"}</CardTitle>
           <CardDescription>آخر 50 {quotesOnly ? "عرض سعر" : "فاتورة"}</CardDescription>
@@ -485,6 +626,65 @@ export default function Billing() {
                             <Undo2 className="h-3.5 w-3.5" />
                           </Button>
                         )}
+                      {/* المسوّدة: خصم ثم إصدار. الصادرة: إلغاء بسبب. */}
+                      {invoice.status === "draft" && can("billing.discount") && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="خصم"
+                          onClick={() => setDiscountTarget(invoice)}
+                        >
+                          خصم
+                        </Button>
+                      )}
+                      {invoice.status === "draft" && can("billing.issue") && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          title="إصدار الفاتورة"
+                          onClick={() => issueInvoice.mutate(invoice.id)}
+                        >
+                          إصدار
+                        </Button>
+                      )}
+                      {["unpaid", "partial", "paid", "partially_refunded"].includes(invoice.status) &&
+                        !["credit_note", "debit_note"].includes(
+                          (invoice as any).document_type ?? "",
+                        ) &&
+                        can("billing.refund") && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            title="إشعار دائن"
+                            onClick={() => {
+                              const reason = window.prompt("سبب الإشعار الدائن؟");
+                              if (reason && reason.trim())
+                                creditNote.mutate({
+                                  id: invoice.id,
+                                  reason: reason.trim(),
+                                  type: "credit_note",
+                                });
+                            }}
+                          >
+                            إشعار دائن
+                          </Button>
+                        )}
+                      {["unpaid", "partial", "refunded"].includes(invoice.status) &&
+                        can("billing.void") && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-destructive"
+                            title="إلغاء الفاتورة"
+                            onClick={() => {
+                              const reason = window.prompt("سبب إلغاء الفاتورة؟");
+                              if (reason && reason.trim())
+                                voidInvoice.mutate({ id: invoice.id, reason: reason.trim() });
+                            }}
+                          >
+                            إلغاء
+                          </Button>
+                        )}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -499,7 +699,43 @@ export default function Billing() {
             </Table>
           )}
         </CardContent>
-      </Card>
+      </Card>}
+
+      <Dialog open={Boolean(discountTarget)} onOpenChange={(next) => !next && setDiscountTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>خصم على الفاتورة #{discountTarget?.invoice_number}</DialogTitle>
+            <DialogDescription>
+              الإجمالي قبل الخصم {Number(discountTarget?.subtotal_amount ?? 0).toLocaleString("ar-SA")} ر.س.
+              الخصم يُمنح على المسوّدة قبل الإصدار، ويُسجَّل بسببه ومانحه.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>مبلغ الخصم *</Label>
+              <Input
+                type="number"
+                min={0}
+                value={discountAmount}
+                onChange={(e) => setDiscountAmount(e.target.value)}
+                autoFocus
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>سبب الخصم *</Label>
+              <Textarea rows={2} value={discountReason} onChange={(e) => setDiscountReason(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              disabled={!discountAmount || !discountReason.trim() || applyDiscount.isPending}
+              onClick={() => applyDiscount.mutate()}
+            >
+              تطبيق الخصم
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <NewInvoiceDialog
         open={createOpen}
@@ -1972,6 +2208,101 @@ function NewInvoiceDialog({
   );
 }
 
+// ---------------------------------------------------------------------------
+// تسجيل الدفعة
+//
+// كان المسار طلبين: إدراج `financial_vouchers` ثم إدراج
+// `voucher_invoice_allocations`. فشل الثاني يترك سندًا معلّقًا لا يخصم من
+// فاتورة — مالٌ في السجل لا يُنسب إلى شيء. ولم يكن ثمّة سقف: توزيع ٥٠٠٠ على
+// فاتورة بـ٣٠٠ يمرّ ويترك المتبقّي سالبًا.
+//
+// الآن نداء واحد `app_receive_invoice_payment` يفعل الاثنين معًا، ويرفض
+// التجاوز، ويشترط مناوبة صندوق مفتوحة للنقد.
+// ---------------------------------------------------------------------------
+type PaymentMethodRow = {
+  id: string;
+  code: string | null;
+  name_ar: string;
+  affects_drawer: boolean;
+};
+
+function usePaymentMethods() {
+  return useQuery({
+    queryKey: ["payment-methods"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("lookup_values")
+        .select("id, code, name_ar, extra, category:lookup_categories!inner(key)")
+        .eq("lookup_categories.key", "payment_methods")
+        .eq("is_disabled", false)
+        .order("sort_order");
+      if (error) throw error;
+      return ((data ?? []) as any[]).map((r) => ({
+        id: r.id,
+        code: r.code,
+        name_ar: r.name_ar,
+        affects_drawer: Boolean(r.extra?.affects_drawer),
+      })) as PaymentMethodRow[];
+    },
+  });
+}
+
+function useCashRegisters(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["cash-registers", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cash_registers")
+        .select("id, name, branch_id, requires_shift")
+        .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as {
+        id: string;
+        name: string;
+        branch_id: string | null;
+        requires_shift: boolean;
+      }[];
+    },
+  });
+}
+
+function useOpenShift(registerId: string) {
+  return useQuery({
+    queryKey: ["open-shift", registerId],
+    enabled: Boolean(registerId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cash_register_shifts")
+        .select("id, shift_number, opened_at, opening_balance")
+        .eq("cash_register_id", registerId)
+        .eq("status", "open")
+        .maybeSingle();
+      if (error) throw error;
+      return data as { id: string; shift_number: number; opening_balance: number } | null;
+    },
+  });
+}
+
+function useInvoicePayments(invoiceId: string | undefined) {
+  return useQuery({
+    queryKey: ["invoice-payments", invoiceId],
+    enabled: Boolean(invoiceId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("voucher_invoice_allocations")
+        .select(
+          "id, amount, voucher:financial_vouchers(id, voucher_number, voucher_type, voucher_date, is_void, void_reason, description, refund_of_voucher_id, method:lookup_values(name_ar))",
+        )
+        .eq("sales_invoice_id", invoiceId);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+}
+
 function RecordPaymentDialog({
   invoice,
   onOpenChange,
@@ -1983,69 +2314,640 @@ function RecordPaymentDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { can } = usePermissions();
+  const methods = usePaymentMethods();
+  const registers = useCashRegisters(organizationId);
+  const payments = useInvoicePayments(invoice?.id);
+
   const [amount, setAmount] = useState("");
+  const [methodId, setMethodId] = useState("");
+  const [registerId, setRegisterId] = useState("");
+  const [reference, setReference] = useState("");
+  const [refundMode, setRefundMode] = useState(false);
+  const [refundReason, setRefundReason] = useState("");
 
-  const recordPayment = useMutation({
+  const shift = useOpenShift(registerId);
+  const method = (methods.data ?? []).find((m) => m.id === methodId);
+  const needsDrawer = Boolean(method?.affects_drawer);
+  const register = (registers.data ?? []).find((r) => r.id === registerId);
+  const shiftMissing = needsDrawer && register?.requires_shift && !shift.data;
+
+  const remaining = Number(invoice?.remaining_amount ?? 0);
+  const paid = Number(invoice?.paid_amount ?? 0);
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+    queryClient.invalidateQueries({ queryKey: ["invoice-payments", invoice?.id] });
+    queryClient.invalidateQueries({ queryKey: ["open-shift", registerId] });
+    queryClient.invalidateQueries({ queryKey: ["cash-shifts", organizationId] });
+  };
+
+  const fail = (title: string) => (error: unknown) =>
+    toast({
+      variant: "destructive",
+      title,
+      description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+    });
+
+  const reset = () => {
+    setAmount("");
+    setReference("");
+    setRefundReason("");
+    setRefundMode(false);
+  };
+
+  const receive = useMutation({
     mutationFn: async () => {
-      if (!organizationId || !invoice) throw new Error("بيانات غير مكتملة");
-      const paymentAmount = Number(amount);
-      if (!paymentAmount || paymentAmount <= 0) throw new Error("أدخل مبلغًا صحيحًا");
-
-      const { data: voucher, error: voucherError } = await supabase
-        .from("financial_vouchers")
-        .insert({
-          organization_id: organizationId,
-          voucher_type: "receipt",
-          amount: paymentAmount,
-          patient_id: invoice.patient?.id ?? null,
-          related_sales_invoice_id: invoice.id,
-          description: `دفعة على الفاتورة #${invoice.invoice_number}`,
-        })
-        .select("id")
-        .single();
-      if (voucherError) throw voucherError;
-
-      const { error: allocationError } = await supabase.from("voucher_invoice_allocations").insert({
-        voucher_id: voucher.id,
-        sales_invoice_id: invoice.id,
-        amount: paymentAmount,
+      if (!invoice) throw new Error("لا فاتورة");
+      if (!methodId) throw new Error("اختر طريقة الدفع");
+      const value = Number(amount);
+      if (!value || value <= 0) throw new Error("أدخل مبلغًا صحيحًا");
+      const { error } = await supabase.rpc("app_receive_invoice_payment", {
+        p_invoice_id: invoice.id,
+        p_amount: value,
+        p_payment_method_value_id: methodId,
+        p_cash_register_id: needsDrawer ? registerId || null : registerId || null,
+        p_reference: reference.trim() || null,
+        p_note: null,
       });
-      if (allocationError) throw allocationError;
+      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
-      toast({ title: "تم تسجيل الدفعة" });
-      setAmount("");
-      onOpenChange();
+      invalidate();
+      toast({ title: "سُجّلت الدفعة" });
+      reset();
     },
-    onError: (error: unknown) =>
-      toast({
-        variant: "destructive",
-        title: "تعذر تسجيل الدفعة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
-      }),
+    onError: fail("تعذر تسجيل الدفعة"),
+  });
+
+  const refund = useMutation({
+    mutationFn: async () => {
+      if (!invoice) throw new Error("لا فاتورة");
+      const value = Number(amount);
+      if (!value || value <= 0) throw new Error("أدخل مبلغًا صحيحًا");
+      if (!refundReason.trim()) throw new Error("اكتب سبب الاسترداد");
+      const { error } = await supabase.rpc("app_refund_invoice_payment", {
+        p_invoice_id: invoice.id,
+        p_amount: value,
+        p_reason: refundReason.trim(),
+        p_cash_register_id: registerId || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "سُجّل الاسترداد" });
+      reset();
+    },
+    onError: fail("تعذر الاسترداد"),
+  });
+
+  const voidVoucher = useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const { error } = await supabase.rpc("app_void_financial_voucher", {
+        p_voucher_id: id,
+        p_reason: reason,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "أُلغي السند وأُعيد حساب الفاتورة" });
+    },
+    onError: fail("تعذر إلغاء السند"),
   });
 
   return (
     <Dialog open={Boolean(invoice)} onOpenChange={(next) => !next && onOpenChange()}>
-      <DialogContent>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>تسجيل دفعة</DialogTitle>
+          <DialogTitle>{refundMode ? "استرداد" : "تسجيل دفعة"}</DialogTitle>
           <DialogDescription>
-            فاتورة #{invoice?.invoice_number} — المتبقي {Number(invoice?.remaining_amount ?? 0).toLocaleString("ar-SA")} ر.س
+            فاتورة #{invoice?.invoice_number} — الإجمالي{" "}
+            {Number(invoice?.net_amount ?? 0).toLocaleString("ar-SA")} · المحصَّل{" "}
+            {paid.toLocaleString("ar-SA")} · المتبقّي {remaining.toLocaleString("ar-SA")} ر.س
           </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-1.5">
-          <Label>المبلغ المستلم</Label>
-          <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
+
+        {can("billing.refund") && paid > 0 && (
+          <div className="flex rounded-lg border p-0.5">
+            <Button
+              size="sm"
+              className="flex-1"
+              variant={!refundMode ? "default" : "ghost"}
+              onClick={() => setRefundMode(false)}
+            >
+              تحصيل
+            </Button>
+            <Button
+              size="sm"
+              className="flex-1"
+              variant={refundMode ? "destructive" : "ghost"}
+              onClick={() => setRefundMode(true)}
+            >
+              استرداد
+            </Button>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>المبلغ *</Label>
+            <div className="flex gap-2">
+              <Input
+                type="number"
+                min={0}
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                autoFocus
+              />
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setAmount(String(refundMode ? paid : remaining))}
+              >
+                الكل
+              </Button>
+            </div>
+          </div>
+          {!refundMode && (
+            <div className="flex flex-col gap-1.5">
+              <Label>طريقة الدفع *</Label>
+              <Select value={methodId} onValueChange={setMethodId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="اختر الطريقة" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(methods.data ?? []).map((m) => (
+                    <SelectItem key={m.id} value={m.id}>
+                      {m.name_ar}
+                      {m.affects_drawer ? " (نقد)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          {(needsDrawer || refundMode) && (
+            <div className="col-span-2 flex flex-col gap-1.5">
+              <Label>الصندوق {needsDrawer ? "*" : ""}</Label>
+              <Select value={registerId} onValueChange={setRegisterId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="اختر الصندوق" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(registers.data ?? []).map((r) => (
+                    <SelectItem key={r.id} value={r.id}>
+                      {r.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {shiftMissing && (
+                <p className="text-xs text-destructive">
+                  لا مناوبة مفتوحة على هذا الصندوق — افتح مناوبة من تبويب الصناديق قبل القبض
+                  النقدي.
+                </p>
+              )}
+              {needsDrawer && shift.data && (
+                <p className="text-xs text-emerald-700">
+                  مناوبة #{shift.data.shift_number} مفتوحة برصيد افتتاحي{" "}
+                  {Number(shift.data.opening_balance).toLocaleString("ar-SA")} ر.س
+                </p>
+              )}
+            </div>
+          )}
+          {!refundMode && !needsDrawer && methodId && (
+            <div className="col-span-2 flex flex-col gap-1.5">
+              <Label>مرجع العملية</Label>
+              <Input
+                value={reference}
+                onChange={(e) => setReference(e.target.value)}
+                placeholder="رقم الحوالة أو العملية"
+                dir="ltr"
+              />
+            </div>
+          )}
+          {refundMode && (
+            <div className="col-span-2 flex flex-col gap-1.5">
+              <Label>سبب الاسترداد *</Label>
+              <Textarea
+                rows={2}
+                value={refundReason}
+                onChange={(e) => setRefundReason(e.target.value)}
+              />
+            </div>
+          )}
         </div>
+
+        <p className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
+          الدفع المختلط: سجّل كل وسيلة دفعةً مستقلّة — نقدًا ثم مدى مثلًا — والفاتورة تجمعها.
+        </p>
+
+        <TaxInvoicePreview invoiceId={invoice?.id ?? null} />
+
+        {(payments.data ?? []).length > 0 && (
+          <>
+            <Separator />
+            <div className="flex flex-col gap-2">
+              <h4 className="text-sm font-medium">سندات هذه الفاتورة</h4>
+              {(payments.data ?? []).map((a) => {
+                const v = Array.isArray(a.voucher) ? a.voucher[0] : a.voucher;
+                if (!v) return null;
+                const isRefund = Boolean(v.refund_of_voucher_id);
+                return (
+                  <div
+                    key={a.id}
+                    className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
+                  >
+                    <div>
+                      <span className={isRefund ? "text-rose-700" : "text-emerald-700"}>
+                        {isRefund ? "استرداد" : "قبض"} #{v.voucher_number} —{" "}
+                        {Number(a.amount).toLocaleString("ar-SA")} ر.س
+                      </span>
+                      <span className="block text-xs text-muted-foreground">
+                        {v.voucher_date}
+                        {v.method?.name_ar ? ` · ${v.method.name_ar}` : ""}
+                        {v.is_void ? ` · ملغى: ${v.void_reason ?? ""}` : ""}
+                      </span>
+                    </div>
+                    {!v.is_void && can("billing.void") && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          const reason = window.prompt("سبب إلغاء السند؟");
+                          if (reason && reason.trim())
+                            voidVoucher.mutate({ id: v.id, reason: reason.trim() });
+                        }}
+                      >
+                        إلغاء السند
+                      </Button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </>
+        )}
+
         <DialogFooter>
-          <Button disabled={recordPayment.isPending || !amount} onClick={() => recordPayment.mutate()}>
-            {recordPayment.isPending ? "جارٍ الحفظ..." : "تسجيل الدفعة"}
-          </Button>
+          {refundMode ? (
+            <Button
+              variant="destructive"
+              disabled={!amount || !refundReason.trim() || refund.isPending}
+              onClick={() => refund.mutate()}
+            >
+              {refund.isPending ? "جارٍ الاسترداد..." : "تنفيذ الاسترداد"}
+            </Button>
+          ) : (
+            <Button
+              disabled={!amount || !methodId || shiftMissing || receive.isPending}
+              onClick={() => receive.mutate()}
+            >
+              {receive.isPending ? "جارٍ الحفظ..." : "تسجيل الدفعة"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// الصناديق والمناوبات
+//
+// `cash_registers` موجودة منذ 0001 بلا فتح ولا إغلاق ولا جرد: صناديق لا يُعرف
+// من قبض فيها ولا كم في الدرج. المناوبة هي ما يجعل النقد قابلًا للمساءلة.
+// ---------------------------------------------------------------------------
+type ShiftRow = {
+  id: string;
+  cash_register_id: string;
+  register_name: string;
+  branch_name: string | null;
+  shift_number: number;
+  status: string;
+  opened_at: string;
+  closed_at: string | null;
+  opening_balance: number;
+  total_receipts: number;
+  total_expenses: number;
+  voucher_count: number;
+  expected_balance: number | null;
+  counted_balance: number | null;
+  variance_amount: number | null;
+  variance_reason: string | null;
+  closed_by: string | null;
+};
+
+function CashShiftsPanel({ organizationId }: { organizationId: string | undefined }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { can } = usePermissions();
+  const registers = useCashRegisters(organizationId);
+  const [openTarget, setOpenTarget] = useState<string>("");
+  const [opening, setOpening] = useState("0");
+  const [closeTarget, setCloseTarget] = useState<ShiftRow | null>(null);
+  const [counted, setCounted] = useState("");
+  const [varianceReason, setVarianceReason] = useState("");
+
+  const shifts = useQuery({
+    queryKey: ["cash-shifts", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_cash_shift_summary")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .order("opened_at", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return (data ?? []) as ShiftRow[];
+    },
+  });
+
+  const expected = useQuery({
+    queryKey: ["shift-expected", closeTarget?.id],
+    enabled: Boolean(closeTarget?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_cash_shift_expected", {
+        p_shift_id: closeTarget?.id,
+      });
+      if (error) throw error;
+      return Number(data ?? 0);
+    },
+  });
+
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["cash-shifts", organizationId] });
+  const fail = (title: string) => (error: unknown) =>
+    toast({
+      variant: "destructive",
+      title,
+      description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+    });
+
+  const openShift = useMutation({
+    mutationFn: async () => {
+      if (!openTarget) throw new Error("اختر الصندوق");
+      const { error } = await supabase.rpc("app_open_cash_shift", {
+        p_cash_register_id: openTarget,
+        p_opening_balance: Number(opening) || 0,
+        p_note: null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "فُتحت المناوبة" });
+      setOpenTarget("");
+      setOpening("0");
+    },
+    onError: fail("تعذر فتح المناوبة"),
+  });
+
+  const closeShift = useMutation({
+    mutationFn: async () => {
+      if (!closeTarget) throw new Error("لا مناوبة");
+      if (counted === "") throw new Error("أدخل الرصيد الفعليّ المجرود");
+      const { error } = await supabase.rpc("app_close_cash_shift", {
+        p_shift_id: closeTarget.id,
+        p_counted_balance: Number(counted),
+        p_variance_reason: varianceReason.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "أُغلقت المناوبة" });
+      setCloseTarget(null);
+      setCounted("");
+      setVarianceReason("");
+    },
+    onError: fail("تعذر إغلاق المناوبة"),
+  });
+
+  const approveShift = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.rpc("app_approve_cash_shift", {
+        p_shift_id: id,
+        p_note: null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({ title: "اعتُمدت المناوبة" });
+    },
+    onError: fail("تعذر الاعتماد"),
+  });
+
+  const liveVariance =
+    counted === "" || expected.data == null ? null : Number(counted) - expected.data;
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>الصناديق والمناوبات</CardTitle>
+        <CardDescription>
+          لا قبض نقديّ بلا مناوبة مفتوحة — والإغلاق يحتاج جردًا فعليًا، والفرق يحتاج سببًا
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        {can("cashier.open") && (
+          <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>الصندوق</Label>
+              <Select value={openTarget} onValueChange={setOpenTarget}>
+                <SelectTrigger className="w-56">
+                  <SelectValue placeholder="اختر الصندوق" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(registers.data ?? []).map((r) => (
+                    <SelectItem key={r.id} value={r.id}>
+                      {r.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>الرصيد الافتتاحي</Label>
+              <Input
+                type="number"
+                min={0}
+                className="w-32"
+                value={opening}
+                onChange={(e) => setOpening(e.target.value)}
+              />
+            </div>
+            <Button disabled={!openTarget || openShift.isPending} onClick={() => openShift.mutate()}>
+              فتح مناوبة
+            </Button>
+          </div>
+        )}
+
+        {shifts.isLoading && <Skeleton className="h-40 w-full" />}
+        {!shifts.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>الصندوق</TableHead>
+                <TableHead>المناوبة</TableHead>
+                <TableHead>افتتاحي</TableHead>
+                <TableHead>مقبوضات</TableHead>
+                <TableHead>متوقّع / مجرود</TableHead>
+                <TableHead>الفرق</TableHead>
+                <TableHead>الحالة</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(shifts.data ?? []).map((s) => (
+                <TableRow key={s.id}>
+                  <TableCell className="font-medium">
+                    {s.register_name}
+                    {s.branch_name && (
+                      <span className="block text-xs text-muted-foreground">{s.branch_name}</span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    #{s.shift_number}
+                    <span className="block text-xs text-muted-foreground">
+                      {new Date(s.opened_at).toLocaleString("ar-SA")}
+                    </span>
+                  </TableCell>
+                  <TableCell>{Number(s.opening_balance).toLocaleString("ar-SA")}</TableCell>
+                  <TableCell>
+                    {Number(s.total_receipts).toLocaleString("ar-SA")}
+                    <span className="block text-xs text-muted-foreground">
+                      {s.voucher_count} سند
+                    </span>
+                  </TableCell>
+                  <TableCell>
+                    {s.expected_balance != null
+                      ? `${Number(s.expected_balance).toLocaleString("ar-SA")} / ${Number(
+                          s.counted_balance ?? 0,
+                        ).toLocaleString("ar-SA")}`
+                      : "—"}
+                  </TableCell>
+                  <TableCell>
+                    {s.variance_amount != null ? (
+                      <Badge variant={Number(s.variance_amount) === 0 ? "success" : "destructive"}>
+                        {Number(s.variance_amount).toLocaleString("ar-SA")}
+                      </Badge>
+                    ) : (
+                      "—"
+                    )}
+                    {s.variance_reason && (
+                      <span className="block text-xs text-muted-foreground">
+                        {s.variance_reason}
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell>
+                    <Badge
+                      variant={
+                        s.status === "open"
+                          ? "default"
+                          : s.status === "approved"
+                            ? "success"
+                            : "secondary"
+                      }
+                    >
+                      {s.status === "open"
+                        ? "مفتوحة"
+                        : s.status === "closed"
+                          ? "مغلقة"
+                          : "معتمَدة"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell>
+                    {s.status === "open" && can("cashier.close") && (
+                      <Button size="sm" variant="outline" onClick={() => setCloseTarget(s)}>
+                        إغلاق
+                      </Button>
+                    )}
+                    {s.status === "closed" && can("cashier.approve") && (
+                      <Button size="sm" variant="ghost" onClick={() => approveShift.mutate(s.id)}>
+                        اعتماد
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {(shifts.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                    لا مناوبات بعد.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+
+      <Dialog open={Boolean(closeTarget)} onOpenChange={(next) => !next && setCloseTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>إغلاق المناوبة #{closeTarget?.shift_number}</DialogTitle>
+            <DialogDescription>
+              عُدّ ما في الدرج فعلًا وأدخله. الرصيد المتوقّع يُحسب من النقد وحده — التحويل
+              البنكي ومدى لا يدخلان الدرج.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <div className="rounded-md bg-muted p-3 text-sm">
+              الرصيد المتوقّع:{" "}
+              <span className="font-semibold">
+                {expected.data != null ? expected.data.toLocaleString("ar-SA") : "…"} ر.س
+              </span>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>الرصيد الفعليّ المجرود *</Label>
+              <Input
+                type="number"
+                value={counted}
+                onChange={(e) => setCounted(e.target.value)}
+                autoFocus
+              />
+            </div>
+            {liveVariance != null && liveVariance !== 0 && (
+              <>
+                <p
+                  className={`text-sm font-medium ${
+                    liveVariance < 0 ? "text-destructive" : "text-amber-700"
+                  }`}
+                >
+                  فرق: {liveVariance.toLocaleString("ar-SA")} ر.س
+                  {liveVariance < 0 ? " (عجز)" : " (زيادة)"}
+                </p>
+                <div className="flex flex-col gap-1.5">
+                  <Label>سبب الفرق *</Label>
+                  <Textarea
+                    rows={2}
+                    value={varianceReason}
+                    onChange={(e) => setVarianceReason(e.target.value)}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            <Button
+              disabled={
+                counted === "" ||
+                (liveVariance != null && liveVariance !== 0 && !varianceReason.trim()) ||
+                closeShift.isPending
+              }
+              onClick={() => closeShift.mutate()}
+            >
+              {closeShift.isPending ? "جارٍ الإغلاق..." : "إغلاق المناوبة"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Card>
   );
 }
 
@@ -2152,5 +3054,95 @@ function InvoiceKpiBar({ organizationId }: { organizationId: string | undefined 
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// الذمم: ما لم يُحصَّل بعد
+//
+// كان الجواب عن «كم لنا عند المرضى؟» يتطلّب فتح كل فاتورة على حدة. المنظوران
+// `v_invoice_register` و`v_patient_balance` (0091) يحسبانه في القاعدة على كل
+// الفواتير لا على الخمسين المعروضة.
+// ---------------------------------------------------------------------------
+function ReceivablesBar({ organizationId }: { organizationId: string | undefined }) {
+  const overdue = useQuery({
+    queryKey: ["invoice-register-overdue", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_invoice_register")
+        .select("id, invoice_number, patient_name, net_amount, remaining_amount, age_days, is_overdue")
+        .eq("organization_id", organizationId)
+        .eq("is_overdue", true)
+        .order("age_days", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const debtors = useQuery({
+    queryKey: ["patient-balances", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_patient_balance")
+        .select("patient_id, patient_name, file_number, balance_due, open_invoices")
+        .eq("organization_id", organizationId)
+        .gt("balance_due", 0)
+        .order("balance_due", { ascending: false })
+        .limit(10);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const overdueTotal = (overdue.data ?? []).reduce(
+    (s, r) => s + Number(r.remaining_amount ?? 0),
+    0,
+  );
+  const debtorsTotal = (debtors.data ?? []).reduce((s, r) => s + Number(r.balance_due ?? 0), 0);
+
+  if (overdue.isLoading || debtors.isLoading) return <Skeleton className="h-20 w-full" />;
+  if ((overdue.data ?? []).length === 0 && (debtors.data ?? []).length === 0) return null;
+
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      <Card>
+        <CardHeader className="pb-2">
+          <CardDescription>فواتير تجاوزت ٣٠ يومًا بلا سداد</CardDescription>
+          <CardTitle className="text-xl">
+            {(overdue.data ?? []).length} فاتورة · {overdueTotal.toLocaleString("ar-SA")} ر.س
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {(overdue.data ?? []).slice(0, 3).map((r) => (
+              <span key={r.id}>
+                #{r.invoice_number} — {r.patient_name} —{" "}
+                {Number(r.remaining_amount).toLocaleString("ar-SA")} ر.س ({r.age_days} يومًا)
+              </span>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+      <Card>
+        <CardHeader className="pb-2">
+          <CardDescription>أعلى الذمم على المرضى</CardDescription>
+          <CardTitle className="text-xl">{debtorsTotal.toLocaleString("ar-SA")} ر.س</CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <div className="flex flex-col gap-1 text-xs text-muted-foreground">
+            {(debtors.data ?? []).slice(0, 3).map((r) => (
+              <span key={r.patient_id}>
+                {r.patient_name}
+                {r.file_number ? ` (${r.file_number})` : ""} —{" "}
+                {Number(r.balance_due).toLocaleString("ar-SA")} ر.س · {r.open_invoices} فاتورة
+              </span>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
   );
 }

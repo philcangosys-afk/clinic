@@ -102,11 +102,23 @@ export default function Payroll() {
   const history = useSalaryHistory(organization?.id, historyMonth);
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
       <div>
         <h1 className="text-2xl font-bold">الرواتب</h1>
-        <p className="text-sm text-muted-foreground">صرف رواتب شهر {currentMonthLabel()}</p>
+        <p className="text-sm text-muted-foreground">مسيّرات الرواتب وصرفها — شهر {currentMonthLabel()}</p>
       </div>
+
+      <Tabs defaultValue="runs">
+        <TabsList>
+          <TabsTrigger value="runs">المسيّرات والقسائم</TabsTrigger>
+          <TabsTrigger value="quick">الصرف الفرديّ</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="runs" className="mt-4">
+          <PayrollRuns />
+        </TabsContent>
+
+        <TabsContent value="quick" className="mt-4 flex flex-col gap-5">
 
       <Card>
         <CardHeader>
@@ -229,6 +241,8 @@ export default function Payroll() {
       </Card>
 
       <PaySalaryDialog target={payTarget} onOpenChange={() => setPayTarget(null)} organizationId={organization?.id} />
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

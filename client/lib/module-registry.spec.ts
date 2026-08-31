@@ -36,6 +36,13 @@ const databaseFeatureKeys: FeatureKey[] = [
   "accounting",
   "procurement",
   "inventory",
+  "assets",
+  "documents",
+  "notifications",
+  "patient_portal",
+  "doctor_workspace",
+  "quality",
+  "integrations",
   "messaging",
   "audit_log",
   "settings",
@@ -65,7 +72,7 @@ describe("organization module access", () => {
       expect(databaseFeatureKeys).toContain(module.featureKey);
       expect(module.requiredPermission).toBe(`${module.featureKey}.view`);
     });
-    expect(new Set(databaseFeatureKeys).size).toBe(34);
+    expect(new Set(databaseFeatureKeys).size).toBe(41);
   });
 
   it("allows a doctor only the configured clinical modules", () => {
@@ -107,7 +114,7 @@ describe("organization module access", () => {
   });
 
   it("uses the exact clinic defaults and blocks expanded modules", () => {
-    expect(CLINIC_DEFAULT_FEATURES).toHaveLength(16);
+    expect(CLINIC_DEFAULT_FEATURES).toHaveLength(23);
     const configuration = resolveOrganizationAccessConfiguration({
       authenticated: false,
       legacyMode: true,
@@ -130,7 +137,7 @@ describe("organization module access", () => {
       enabledFeatures: [],
       permissions: [],
     });
-    expect(getOrganizationPlanDefaultFeatures("medical_center")).toHaveLength(28);
+    expect(getOrganizationPlanDefaultFeatures("medical_center")).toHaveLength(35);
     expect(canAccessFeature({ ...configuration, featureKey: "laboratory", permissionKey: "laboratory.view" })).toBe(true);
     expect(canAccessFeature({ ...configuration, featureKey: "pharmacy", permissionKey: "pharmacy.view" })).toBe(true);
     expect(canAccessFeature({ ...configuration, featureKey: "accounting", permissionKey: "accounting.view" })).toBe(true);

@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import PurchaseCycle from "@/components/purchasing/PurchaseCycle";
 import { useToast } from "@/hooks/use-toast";
 import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDialog";
 import LookupSelect from "@/components/shared/LookupSelect";
@@ -81,9 +82,13 @@ export default function Procurement() {
 
       <Tabs defaultValue="invoices">
         <TabsList>
+          <TabsTrigger value="cycle">دورة الشراء</TabsTrigger>
           <TabsTrigger value="invoices">فواتير الشراء</TabsTrigger>
           <TabsTrigger value="distributors">الموردون</TabsTrigger>
         </TabsList>
+        <TabsContent value="cycle" className="mt-4">
+          <PurchaseCycle />
+        </TabsContent>
         <TabsContent value="invoices" className="mt-4">
           <PurchaseInvoicesTab />
         </TabsContent>
@@ -331,6 +336,31 @@ function NewDistributorDialog({
   const [note, setNote] = useState(initial?.note ?? "");
   const [typeValueId, setTypeValueId] = useState(initial?.distributor_type_value_id ?? "");
   const [isDentalLab, setIsDentalLab] = useState(Boolean(initial?.is_dental_lab));
+  const [legalName, setLegalName] = useState(initial?.legal_name ?? "");
+  const [commercialRegister, setCommercialRegister] = useState(initial?.commercial_register ?? "");
+  const [bankName, setBankName] = useState(initial?.bank_name ?? "");
+  const [bankIban, setBankIban] = useState(initial?.bank_iban ?? "");
+  const [bankAccountName, setBankAccountName] = useState(initial?.bank_account_name ?? "");
+  const [paymentTermsDays, setPaymentTermsDays] = useState(
+    String(initial?.payment_terms_days ?? 0),
+  );
+  const [creditLimit, setCreditLimit] = useState(
+    initial?.credit_limit != null ? String(initial.credit_limit) : "",
+  );
+  const [allowedBranchIds, setAllowedBranchIds] = useState<string[]>(
+    initial?.allowed_branch_ids ?? [],
+  );
+  const supplierBranches = useQuery({
+    queryKey: ["supplier-branches", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("branches").select("id, name")
+        .eq("organization_id", organizationId).order("name");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
 
   const resetForm = () => {
     setNameAr("");
@@ -355,6 +385,14 @@ function NewDistributorDialog({
     setNote("");
     setTypeValueId("");
     setIsDentalLab(false);
+    setLegalName("");
+    setCommercialRegister("");
+    setBankName("");
+    setBankIban("");
+    setBankAccountName("");
+    setPaymentTermsDays("0");
+    setCreditLimit("");
+    setAllowedBranchIds([]);
   };
 
   const createDistributor = useMutation({
@@ -384,6 +422,15 @@ function NewDistributorDialog({
         is_dental_lab: isDentalLab,
         lab_technician_name: labTechnicianName.trim() || null,
         lab_technician_mobile: labTechnicianMobile.trim() || null,
+        legal_name: legalName.trim() || null,
+        commercial_register: commercialRegister.trim() || null,
+        bank_name: bankName.trim() || null,
+        bank_iban: bankIban.trim() || null,
+        bank_account_name: bankAccountName.trim() || null,
+        // المهلة تُشتقّ منها تواريخ الاستحقاق، فلا يُحسب التأخير بالتقدير
+        payment_terms_days: Number(paymentTermsDays) || 0,
+        credit_limit: creditLimit ? Number(creditLimit) : null,
+        allowed_branch_ids: allowedBranchIds.length > 0 ? allowedBranchIds : null,
       };
       if (initial) {
         const { data: affectedRows, error } = await supabase.from("distributors").update(payload).eq("id", initial.id)
@@ -426,6 +473,60 @@ function NewDistributorDialog({
           <div className="flex flex-col gap-1.5">
             <Label>الاسم بالإنجليزية</Label>
             <Input value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الاسم القانوني</Label>
+            <Input value={legalName} onChange={(e) => setLegalName(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>السجل التجاري</Label>
+            <Input value={commercialRegister}
+                   onChange={(e) => setCommercialRegister(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>مهلة السداد (أيام)</Label>
+            <Input type="number" min={0} value={paymentTermsDays}
+                   onChange={(e) => setPaymentTermsDays(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>حدّ الائتمان</Label>
+            <Input type="number" min={0} value={creditLimit}
+                   onChange={(e) => setCreditLimit(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>البنك</Label>
+            <Input value={bankName} onChange={(e) => setBankName(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>اسم صاحب الحساب</Label>
+            <Input value={bankAccountName}
+                   onChange={(e) => setBankAccountName(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label>الآيبان</Label>
+            <Input value={bankIban} onChange={(e) => setBankIban(e.target.value)}
+                   placeholder="SA..." />
+            <p className="text-xs text-muted-foreground">
+              بيانات تحويلٍ فقط. لا تُحفظ هنا أي بيانات دخول أو مفاتيح.
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label>الفروع التي يتعامل معها (اتركها فارغة للجميع)</Label>
+            <div className="flex flex-wrap gap-1.5 rounded-md border p-2">
+              {(supplierBranches.data ?? []).map((b: any) => {
+                const checked = allowedBranchIds.includes(b.id);
+                return (
+                  <button key={b.id} type="button"
+                          onClick={() => setAllowedBranchIds((ids) =>
+                            checked ? ids.filter((x) => x !== b.id) : [...ids, b.id])}>
+                    <Badge variant={checked ? "success" : "outline"}>{b.name}</Badge>
+                  </button>
+                );
+              })}
+              {(supplierBranches.data ?? []).length === 0 && (
+                <span className="text-xs text-muted-foreground">لا فروع مسجّلة.</span>
+              )}
+            </div>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>نوع المورد</Label>

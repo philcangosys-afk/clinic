@@ -64,6 +64,15 @@ const Settings = lazy(() => import("./pages/Settings"));
 const ReferenceData = lazy(() => import("./pages/ReferenceData"));
 const PriceLists = lazy(() => import("./pages/PriceLists"));
 const Resources = lazy(() => import("./pages/Resources"));
+const Assets = lazy(() => import("./pages/Assets"));
+const Documents = lazy(() => import("./pages/Documents"));
+const PatientPortalAdmin = lazy(() => import("./pages/PatientPortalAdmin"));
+const Portal = lazy(() => import("./pages/Portal"));
+const DoctorWorkspace = lazy(() => import("./pages/DoctorWorkspace"));
+const Quality = lazy(() => import("./pages/Quality"));
+const Integrations = lazy(() => import("./pages/Integrations"));
+const Analytics = lazy(() => import("./pages/Analytics"));
+const LaunchReadiness = lazy(() => import("./pages/LaunchReadiness"));
 import { OrganizationAccessProvider } from "./contexts/OrganizationAccessContext";
 import AppShell from "./components/layout/AppShell";
 import RouteGuard from "./components/layout/RouteGuard";
@@ -103,6 +112,14 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   accounting: Accounting,
   procurement: Procurement,
   inventory: Inventory,
+  assets: Assets,
+  documents: Documents,
+  "patient-portal": PatientPortalAdmin,
+  "doctor-workspace": DoctorWorkspace,
+  quality: Quality,
+  integrations: Integrations,
+  analytics: Analytics,
+  "launch-readiness": LaunchReadiness,
   "dental-lab": DentalLab,
   messaging: Messaging,
   audit: AuditLog,
@@ -158,6 +175,8 @@ const App = () => (
           >
           <Routes>
             <Route path="/onboarding" element={<Onboarding />} />
+            {/* بوابة المريض خارج قشرة النظام: المريض ليس عضوًا في المنشأة */}
+            <Route path="/portal" element={<Portal />} />
             <Route
               element={
                 <RouteGuard>

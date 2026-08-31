@@ -52,6 +52,7 @@ import {
   type SmsCreditBalanceRow,
 } from "@/lib/database.types";
 import LookupSelect, { useLookupValues } from "@/components/shared/LookupSelect";
+import { usePermissions } from "@/lib/permissions";
 import ItemPicker from "@/components/shared/ItemPicker";
 
 const ROLE_LABELS_AR: Record<string, string> = {
@@ -126,7 +127,8 @@ export default function OperationsSettings() {
         <div>
           <h1 className="text-2xl font-bold">إعدادات التشغيل</h1>
           <p className="text-sm text-muted-foreground">
-            إعدادات مستوى المؤسسة — الطباعة، الضريبة، الخصومات، الكشفية، التأمين، والمراسلة الداخلية
+            إعدادات مستوى المؤسسة — السياسات التشغيلية وأوقات العمل، والطباعة والضريبة
+            والخصومات والكشفية والتأمين والمراسلة الداخلية
           </p>
         </div>
       </div>
@@ -139,8 +141,10 @@ export default function OperationsSettings() {
         </Card>
       )}
 
-      <Tabs defaultValue="print" className="flex flex-col gap-4">
+      <Tabs defaultValue="policies" className="flex flex-col gap-4">
         <TabsList className="flex h-auto flex-wrap justify-start gap-1">
+          <TabsTrigger value="policies">السياسات التشغيلية</TabsTrigger>
+          <TabsTrigger value="locale">اللغة والبلد</TabsTrigger>
           <TabsTrigger value="print">الطباعة</TabsTrigger>
           <TabsTrigger value="vat">الضريبة</TabsTrigger>
           <TabsTrigger value="discounts">الخصومات</TabsTrigger>
@@ -152,6 +156,12 @@ export default function OperationsSettings() {
           <TabsTrigger value="lookups">القوائم المرجعية</TabsTrigger>
         </TabsList>
 
+        <TabsContent value="policies">
+          <PoliciesTab organizationId={organization?.id} />
+        </TabsContent>
+        <TabsContent value="locale">
+          <LocaleTab organizationId={organization?.id} />
+        </TabsContent>
         <TabsContent value="print">
           <PrintSettingsTab organizationId={organization?.id} readOnly={!isAdmin} />
         </TabsContent>
@@ -2251,5 +2261,625 @@ function SettingsSkeleton() {
         ))}
       </CardContent>
     </Card>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// السياسات التشغيلية وأوقات العمل — المرحلة 27
+//
+// كل رقم هنا كان مثبَّتًا في الشيفرة: مهلة الإقرار بالقيمة الحرجة، وحدّ طلبات
+// المواعيد، ومهلة تنبيه انتهاء المستندات. صار كلٌّ منها سياسةً **تقرؤها
+// الدوال نفسها** — وفحصٌ ذاتيّ في الهجرة يفشل إن أُضيفت سياسة لا يقرؤها أحد.
+// ---------------------------------------------------------------------------
+function PoliciesTab({ organizationId }: { organizationId: string | undefined }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { can } = usePermissions();
+  const editable = can("policies.manage");
+
+  const [draft, setDraft] = useState<Record<string, any>>({});
+  const [newDay, setNewDay] = useState("0");
+  const [opens, setOpens] = useState("08:00");
+  const [closes, setCloses] = useState("16:00");
+  const [branchId, setBranchId] = useState("");
+  const [holidayDate, setHolidayDate] = useState("");
+  const [holidayName, setHolidayName] = useState("");
+
+  const policy = useQuery({
+    queryKey: ["org-policies", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_organization_policies").select("*")
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      if (error) throw error;
+      return data as any;
+    },
+  });
+
+  const branches = useQuery({
+    queryKey: ["policy-branches", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("branches").select("id, name")
+        .eq("organization_id", organizationId).order("name");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const schedule = useQuery({
+    queryKey: ["branch-schedule", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_branch_schedule").select("*")
+        .eq("organization_id", organizationId)
+        .order("branch_name").order("weekday");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const holidays = useQuery({
+    queryKey: ["org-holidays", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("organization_holidays").select("*")
+        .eq("organization_id", organizationId)
+        .order("holiday_date", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const fail = (title: string) => (error: unknown) =>
+    toast({
+      variant: "destructive", title,
+      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+    });
+
+  const save = useMutation({
+    mutationFn: async (changes: Record<string, any>) => {
+      const { error } = await supabase.rpc("app_save_org_policies", {
+        p_org: organizationId, p_changes: changes,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["org-policies", organizationId] });
+      setDraft({});
+      toast({ title: "حُفظت السياسات وسرت على النظام فورًا" });
+    },
+    onError: fail("تعذر الحفظ"),
+  });
+
+  const addHours = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.from("branch_working_hours").insert({
+        organization_id: organizationId,
+        branch_id: branchId,
+        weekday: Number(newDay),
+        opens_at: opens,
+        closes_at: closes,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["branch-schedule", organizationId] });
+      toast({ title: "أُضيفت فترة الدوام" });
+    },
+    onError: fail("تعذرت الإضافة"),
+  });
+
+  const toggleHours = useMutation({
+    mutationFn: async ({ id, active }: { id: string; active: boolean }) => {
+      const { data, error } = await supabase
+        .from("branch_working_hours").update({ is_active: active })
+        .eq("id", id).select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["branch-schedule", organizationId] });
+    },
+    onError: fail("تعذر التحديث"),
+  });
+
+  const addHoliday = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.from("organization_holidays").insert({
+        organization_id: organizationId,
+        branch_id: branchId || null,
+        holiday_date: holidayDate,
+        name_ar: holidayName.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["org-holidays", organizationId] });
+      setHolidayDate(""); setHolidayName("");
+      toast({ title: "أُضيفت العطلة" });
+    },
+    onError: fail("تعذرت الإضافة"),
+  });
+
+  const p = policy.data;
+  const val = (key: string) => (draft[key] !== undefined ? draft[key] : p?.[key] ?? "");
+  const set = (key: string, value: any) => setDraft((d) => ({ ...d, [key]: value }));
+
+  const NUMBERS: { key: string; label: string; hint: string }[] = [
+    {
+      key: "critical_ack_minutes",
+      label: "مهلة الإقرار بالقيمة الحرجة (دقيقة)",
+      hint: "بعدها يُصعَّد البلاغ إلى من يتابع القيم الحرجة",
+    },
+    {
+      key: "portal_open_requests_limit",
+      label: "حدّ طلبات المواعيد المفتوحة لكل مريض",
+      hint: "بابٌ مفتوح بلا حدّ يُغرق الاستقبال",
+    },
+    {
+      key: "portal_cancel_cutoff_hours",
+      label: "إقفال الإلغاء من البوابة قبل الموعد (ساعة)",
+      hint: "صفر يعني السماح بالإلغاء حتى لحظة الموعد",
+    },
+    {
+      key: "document_expiry_notice_days",
+      label: "التنبيه قبل انتهاء المستند (يوم)",
+      hint: "يُستعمل عند توليد تنبيهات الانتهاء",
+    },
+    {
+      key: "visit_open_alert_days",
+      label: "الزيارة تُعدّ متأخّرة بعد (يوم)",
+      hint: "لتمييز الزيارات المفتوحة في مساحة عمل الطبيب",
+    },
+  ];
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">السياسات التشغيلية</CardTitle>
+          <CardDescription>
+            هذه الأرقام كانت مثبَّتة في الشيفرة، وصارت **تُقرأ من هنا فعليًّا**:
+            تغييرها يغيّر سلوك النظام في اللحظة نفسها.
+            {p && !p.is_customized && " — المنشأة تعمل الآن على الافتراضات."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {policy.isLoading && <Skeleton className="h-40 w-full" />}
+          {!policy.isLoading && p && (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {NUMBERS.map((f) => (
+                  <div key={f.key} className="flex flex-col gap-1.5">
+                    <Label>{f.label}</Label>
+                    <Input
+                      type="number"
+                      disabled={!editable}
+                      value={val(f.key)}
+                      onChange={(e) => set(f.key, Number(e.target.value))}
+                    />
+                    <span className="text-[10px] text-muted-foreground">{f.hint}</span>
+                  </div>
+                ))}
+              </div>
+
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  disabled={!editable}
+                  checked={Boolean(val("enforce_working_hours"))}
+                  onChange={(e) => set("enforce_working_hours", e.target.checked)}
+                />
+                فرض أوقات عمل الفروع والعطل على الحجز
+              </label>
+              <span className="-mt-2 text-[10px] text-muted-foreground">
+                معطَّل افتراضًا: تفعيله يمنع أيّ حجز خارج جدول الفرع أو في يوم عطلة،
+                فلا تفعّله قبل إدخال جداول فروعك أدناه.
+              </span>
+
+              {editable && (
+                <Button
+                  className="self-start"
+                  disabled={Object.keys(draft).length === 0 || save.isPending}
+                  onClick={() => save.mutate(draft)}
+                >
+                  حفظ السياسات
+                </Button>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">أوقات عمل الفروع</CardTitle>
+          <CardDescription>
+            فترة أو أكثر لكل يوم. الفرع بلا جدول لا يُقيَّد — القيد يأتي من
+            جدولٍ موضوع لا من فراغه.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {editable && (
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="flex w-44 flex-col gap-1.5">
+                <Label>الفرع</Label>
+                <Select value={branchId} onValueChange={setBranchId}>
+                  <SelectTrigger><SelectValue placeholder="اختر" /></SelectTrigger>
+                  <SelectContent>
+                    {(branches.data ?? []).map((b) => (
+                      <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex w-32 flex-col gap-1.5">
+                <Label>اليوم</Label>
+                <Select value={newDay} onValueChange={setNewDay}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {["الأحد","الإثنين","الثلاثاء","الأربعاء","الخميس","الجمعة","السبت"]
+                      .map((d, i) => (
+                        <SelectItem key={i} value={String(i)}>{d}</SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex w-28 flex-col gap-1.5">
+                <Label>من</Label>
+                <Input type="time" value={opens} onChange={(e) => setOpens(e.target.value)} />
+              </div>
+              <div className="flex w-28 flex-col gap-1.5">
+                <Label>إلى</Label>
+                <Input type="time" value={closes} onChange={(e) => setCloses(e.target.value)} />
+              </div>
+              <Button disabled={!branchId || addHours.isPending}
+                      onClick={() => addHours.mutate()}>
+                إضافة
+              </Button>
+            </div>
+          )}
+
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>الفرع</TableHead>
+                  <TableHead>اليوم</TableHead>
+                  <TableHead>من</TableHead>
+                  <TableHead>إلى</TableHead>
+                  <TableHead>الحالة</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(schedule.data ?? []).map((w) => (
+                  <TableRow key={w.id} className={w.is_active ? undefined : "opacity-60"}>
+                    <TableCell className="text-sm">{w.branch_name}</TableCell>
+                    <TableCell className="text-sm">{w.weekday_name}</TableCell>
+                    <TableCell className="font-mono text-xs">{w.opens_at}</TableCell>
+                    <TableCell className="font-mono text-xs">{w.closes_at}</TableCell>
+                    <TableCell>
+                      <Badge variant={w.is_active ? "success" : "secondary"}>
+                        {w.is_active ? "نشطة" : "معطَّلة"}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-left">
+                      {editable && (
+                        <Button size="sm" variant="ghost" disabled={toggleHours.isPending}
+                                onClick={() => toggleHours.mutate({ id: w.id, active: !w.is_active })}>
+                          {w.is_active ? "تعطيل" : "تفعيل"}
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(schedule.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-6 text-center text-sm text-muted-foreground">
+                      لا جداول دوام — الفروع غير مقيَّدة بأوقات.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">العطل الرسمية</CardTitle>
+          <CardDescription>
+            العطلة تمنع الحجز ولو كان داخل ساعات العمل (عند تفعيل الفرض).
+            اتركها بلا فرع لتشمل المنشأة كلها.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {editable && (
+            <div className="flex flex-wrap items-end gap-2">
+              <div className="flex w-40 flex-col gap-1.5">
+                <Label>التاريخ</Label>
+                <Input type="date" value={holidayDate}
+                       onChange={(e) => setHolidayDate(e.target.value)} />
+              </div>
+              <div className="flex min-w-48 flex-1 flex-col gap-1.5">
+                <Label>المناسبة</Label>
+                <Input value={holidayName} onChange={(e) => setHolidayName(e.target.value)} />
+              </div>
+              <Button disabled={!holidayDate || !holidayName.trim() || addHoliday.isPending}
+                      onClick={() => addHoliday.mutate()}>
+                إضافة
+              </Button>
+            </div>
+          )}
+          <div className="overflow-x-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>التاريخ</TableHead>
+                  <TableHead>المناسبة</TableHead>
+                  <TableHead>النطاق</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(holidays.data ?? []).map((h) => (
+                  <TableRow key={h.id}>
+                    <TableCell className="font-mono text-xs">{h.holiday_date}</TableCell>
+                    <TableCell className="text-sm">{h.name_ar}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {h.branch_id
+                        ? (branches.data ?? []).find((b) => b.id === h.branch_id)?.name ?? "فرع"
+                        : "المنشأة كلها"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(holidays.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
+                      لا عطل مسجّلة.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// اللغة والبلد ودعم الخليج — المرحلة 29
+//
+// «لغة عرض البيانات» لا «لغة النظام»: ما يتغيّر هو أسماء الخدمات والفحوص
+// والفروع وتنسيق التواريخ والعملة. نصوص الواجهة تبقى عربية في هذه المرحلة،
+// وتسميته «لغة النظام» وعدٌ لا يُنفَّذ.
+// ---------------------------------------------------------------------------
+function LocaleTab({ organizationId }: { organizationId: string | undefined }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { can } = usePermissions();
+  const editable = can("policies.manage");
+  const [draft, setDraft] = useState<Record<string, any>>({});
+
+  const settings = useQuery({
+    queryKey: ["locale-settings-admin", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_locale_settings").select("*")
+        .eq("organization_id", organizationId).maybeSingle();
+      if (error) throw error;
+      return data as any;
+    },
+  });
+
+  const coverage = useQuery({
+    queryKey: ["translation-coverage", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_translation_coverage").select("*")
+        .eq("organization_id", organizationId);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.rpc("app_save_locale_settings", {
+        p_org: organizationId, p_changes: draft,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["locale-settings-admin", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["locale-settings", organizationId] });
+      setDraft({});
+      toast({ title: "حُفظت إعدادات اللغة والبلد" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive", title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  const s = settings.data;
+  const val = (k: string) => (draft[k] !== undefined ? draft[k] : s?.[k] ?? "");
+  const set = (k: string, v: any) => setDraft((d) => ({ ...d, [k]: v }));
+
+  const COUNTRIES: Record<string, string> = {
+    SA: "السعودية", AE: "الإمارات", KW: "الكويت",
+    QA: "قطر", BH: "البحرين", OM: "عُمان",
+  };
+  const ENTITIES: Record<string, string> = {
+    items: "الخدمات والأصناف",
+    lab_tests: "فحوص المختبر",
+    radiology_exams: "فحوص الأشعة",
+    clinics: "العيادات",
+    doctors: "الأطباء",
+  };
+
+  const totalMissing = (coverage.data ?? []).reduce(
+    (sum, r) => sum + Number(r.missing_en ?? 0), 0,
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">اللغة والبلد</CardTitle>
+          <CardDescription>
+            البلد يحدّد العملة ونسبة الضريبة المقترحة وصيغة رقم الهوية والهاتف.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {settings.isLoading && <Skeleton className="h-32 w-full" />}
+          {!settings.isLoading && s && (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="flex flex-col gap-1.5">
+                  <Label>الدولة</Label>
+                  <Select value={String(val("country_code"))} disabled={!editable}
+                          onValueChange={(v) => set("country_code", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(COUNTRIES).map(([k, v]) => (
+                        <SelectItem key={k} value={k}>{v}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="text-[10px] text-muted-foreground">
+                    الضريبة المقترحة لهذه الدولة: {s.country_default_vat}% · مفتاح الهاتف{" "}
+                    {s.phone_prefix}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>العملة</Label>
+                  <Select value={String(val("currency_code"))} disabled={!editable}
+                          onValueChange={(v) => set("currency_code", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {["SAR","AED","KWD","QAR","BHD","OMR"].map((c) => (
+                        <SelectItem key={c} value={c}>{c}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>لغة عرض البيانات</Label>
+                  <Select value={String(val("data_language"))} disabled={!editable}
+                          onValueChange={(v) => set("data_language", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="ar">العربية</SelectItem>
+                      <SelectItem value="en">English</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <span className="text-[10px] text-muted-foreground">
+                    تغيّر أسماء الخدمات والفحوص والفروع وتنسيق الأرقام — **نصوص
+                    الواجهة تبقى عربية في هذه المرحلة**
+                  </span>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>التقويم المعروض</Label>
+                  <Select value={String(val("calendar_display"))} disabled={!editable}
+                          onValueChange={(v) => set("calendar_display", v)}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="gregorian">ميلادي</SelectItem>
+                      <SelectItem value="hijri">هجري (أم القرى)</SelectItem>
+                      <SelectItem value="both">كلاهما</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input type="checkbox" className="h-4 w-4" disabled={!editable}
+                       checked={Boolean(val("enforce_id_validation"))}
+                       onChange={(e) => set("enforce_id_validation", e.target.checked)} />
+                فرض التحقّق من رقم الهوية عند فتح الملفات
+              </label>
+              <span className="-mt-2 text-[10px] text-muted-foreground">
+                للسعودية تحقّق حقيقيّ برقم التحقّق؛ ولبقيّة الدول فحص الطول فقط.
+                التفعيل يُرفض ما دامت في ملفاتك أرقام لا تجتازه — الرسالة تخبرك بعددها.
+              </span>
+
+              {editable && (
+                <Button className="self-start"
+                        disabled={Object.keys(draft).length === 0 || save.isPending}
+                        onClick={() => save.mutate()}>
+                  حفظ
+                </Button>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">تغطية الترجمة</CardTitle>
+          <CardDescription>
+            قبل تشغيل لغة عرض البيانات بالإنجليزية: ما ينقصه الاسم الإنجليزي
+            يُعرض بالعربية بدل أن يظهر فارغًا.
+            {totalMissing > 0 && ` — ينقص ${totalMissing} اسمًا.`}
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          {coverage.isLoading && <Skeleton className="h-24 w-full" />}
+          {!coverage.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>الكتالوج</TableHead>
+                  <TableHead>الإجمالي</TableHead>
+                  <TableHead>ينقصه الإنجليزي</TableHead>
+                  <TableHead>التغطية</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(coverage.data ?? []).map((r) => {
+                  const total = Number(r.total ?? 0);
+                  const missing = Number(r.missing_en ?? 0);
+                  const pct = total === 0 ? 100 : Math.round(((total - missing) / total) * 100);
+                  return (
+                    <TableRow key={r.entity}>
+                      <TableCell className="text-sm">{ENTITIES[r.entity] ?? r.entity}</TableCell>
+                      <TableCell className="font-mono text-xs">{total}</TableCell>
+                      <TableCell className="font-mono text-xs">{missing}</TableCell>
+                      <TableCell>
+                        <Badge variant={pct === 100 ? "success" : pct >= 50 ? "default" : "destructive"}>
+                          {pct}%
+                        </Badge>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {(coverage.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
+                      لا كتالوجات بعد.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

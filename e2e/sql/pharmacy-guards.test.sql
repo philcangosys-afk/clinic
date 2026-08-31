@@ -1,3 +1,9 @@
+-- ############################################################################
+-- ##  ⚠️  ملف اختبار — لا يُنفَّذ على قاعدة الإنتاج (Supabase) إطلاقًا.       ##
+-- ##  يُنشئ منشأة ومرضى وفواتير وهمية للتحقّق من القواعد، ثم يتراجع عنها     ##
+-- ##  (begin … rollback). الملفات التي تُنفَّذ على القاعدة هي ملفات مجلد     ##
+-- ##  `migrations` فقط، بالترتيب الرقمي.                                    ##
+-- ############################################################################
 -- ---------------------------------------------------------------------------
 -- اختبارات الصيدلية والمخزون — 0088
 -- ---------------------------------------------------------------------------
@@ -589,6 +595,7 @@ begin
     values (v_pr, v_ctrl, 5) returning id into v_pic;
 
   perform set_config('app.test_org',   v_org::text,   false);
+  perform set_config('app.test_owner', v_owner::text, false);
   perform set_config('app.test_pharm', v_pharm::text, false);
   perform set_config('app.test_recep', v_recep::text, false);
   perform set_config('app.test_pr',    v_pr::text,    false);
@@ -661,7 +668,9 @@ reset role;
 
 do $$
 begin
-  perform set_config('request.jwt.claim.sub', current_setting('app.test_pharm'), true);
+  -- المنع يضعه مسؤولٌ آخر لا الصيدلانيّ نفسه: القاعدة تمنع تعديل المرء
+  -- صلاحياته بنفسه (المرحلة 28).
+  perform set_config('request.jwt.claim.sub', current_setting('app.test_owner'), true);
   insert into membership_permissions (organization_id, user_id, permission_key, granted)
     values (current_setting('app.test_org')::uuid, current_setting('app.test_pharm')::uuid,
             'pharmacy.dispense_controlled', false);

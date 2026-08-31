@@ -17,6 +17,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import ReceptionReports from "@/components/reports/ReceptionReports";
+import ReportCenter from "@/components/reports/ReportCenter";
 import UnbilledServices from "@/components/reports/UnbilledServices";
 import PendingConsents from "@/components/reports/PendingConsents";
 import { useToast } from "@/hooks/use-toast";
@@ -89,6 +90,7 @@ export default function Reports() {
 
       <Tabs defaultValue="revenue">
         <TabsList>
+          <TabsTrigger value="center">مركز التقارير</TabsTrigger>
           <TabsTrigger value="reception">الاستقبال والمواعيد</TabsTrigger>
           <TabsTrigger value="unbilled">المعلّقات</TabsTrigger>
           <TabsTrigger value="revenue">الإيراد</TabsTrigger>
@@ -99,6 +101,9 @@ export default function Reports() {
           <TabsTrigger value="patients">إحصائيات المرضى</TabsTrigger>
           <TabsTrigger value="occupational">الفحوصات المهنية</TabsTrigger>
         </TabsList>
+        <TabsContent value="center" className="mt-4">
+          <ReportCenter />
+        </TabsContent>
         <TabsContent value="reception" className="mt-4">
           <ReceptionReports />
         </TabsContent>

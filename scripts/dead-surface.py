@@ -26,6 +26,19 @@ IGNORED_COLUMNS = {
     "id", "created_at", "updated_at", "organization_id",
 }
 
+# مناظير للمشغّل لا للعميل: صلاحيتها منزوعة عن `authenticated` عمدًا، فغيابها
+# من الواجهة هو التصميم المقصود لا سهوٌ.
+OPERATOR_ONLY_VIEWS = {
+    "v_security_advisor",
+}
+
+# دوال يستدعيها **عاملٌ خلفيّ** لا المتصفّح، بحكم التصميم: نتيجة محاولة
+# الإرسال إلى مزوّد خارجي لا يعرفها إلا من أرسل. تُستثنى صراحةً لا صمتًا،
+# ولكلٍّ منها مستهلكٌ فعليّ في `supabase/functions/`.
+WORKER_ONLY_FUNCTIONS = {
+    "app_mark_integration_attempt",
+}
+
 # بادئات دوال لا يستدعيها العميل بطبيعتها.
 TRIGGER_FUNCTION_HINTS = ("app_enforce_", "app_validate_", "app_derive_", "app_fill_",
                           "app_check_contact_block", "app_audit_", "app_set_updated_at")
@@ -79,6 +92,8 @@ def main():
             continue
         if fn.startswith(TRIGGER_FUNCTION_HINTS):
             continue
+        if fn in WORKER_ONLY_FUNCTIONS:
+            continue
         called_by_client = f'"{fn}"' in client or f"'{fn}'" in client
         # مربوطة بمشغّل؟
         is_trigger = re.search(rf"execute\s+(?:function|procedure)\s+{re.escape(fn)}\s*\(",
@@ -105,6 +120,8 @@ def main():
     # ---- مناظير ----
     print("\n### مناظير لا يقرؤها العميل\n")
     for view in sorted(views):
+        if view in OPERATOR_ONLY_VIEWS:
+            continue
         if f'"{view}"' not in client:
             print(f"  {view}")
             problems += 1
@@ -122,9 +139,15 @@ def main():
             if column in IGNORED_COLUMNS:
                 continue
             in_client = re.search(rf"\b{re.escape(column)}\b", client) is not None
-            # الكتابة من القاعدة: `set <col> =` أو ذكره في insert
+            # الكتابة من القاعدة: `set <col> =` أو ذكره في insert.
+            #
+            # العمود الثاني فصاعدًا في قائمة `set` متعدّدة الأسطر لا يسبقه
+            # `set` بل فاصلة، فكان يُعدّ "لا يُكتب فيه" خطأً. نقبل الفاصلة
+            # أو بداية السطر قبل `<col> =` ما دام النمط داخل جملة تحديث.
+            col = re.escape(column)
             written_in_db = re.search(
-                rf"(set\s+{re.escape(column)}\s*=|new\.{re.escape(column)}\s*:=|,\s*{re.escape(column)}\s*[,)])",
+                rf"(set\s+{col}\s*=|new\.{col}\s*:=|,\s*{col}\s*[,)]"
+                rf"|[,\n]\s*{col}\s*=[^=])",
                 migrations, re.I | re.S) is not None
             if not in_client and not written_in_db:
                 print(f"  {table}.{column}")

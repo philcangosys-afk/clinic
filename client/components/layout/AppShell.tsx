@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import {
-  Bell,
   ChevronDown,
   LogOut,
   Menu,
@@ -9,6 +8,7 @@ import {
   Settings2,
   type LucideIcon,
 } from "lucide-react";
+import NotificationBell from "./NotificationBell";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { useLiveBadgeCounts, formatBadgeNumber } from "@/hooks/use-live-badges";
 import {
@@ -33,7 +33,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Sheet, SheetContent } from "@/components/ui/sheet";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 function initialsOf(name: string | undefined | null) {
   if (!name) return "؟";
@@ -256,14 +255,7 @@ export default function AppShell() {
           </div>
           <div className="flex-1 sm:hidden" />
 
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon">
-                <Bell className="h-5 w-5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>التنبيهات</TooltipContent>
-          </Tooltip>
+          <NotificationBell />
 
           <Link to="/operations-settings">
             <Button variant="ghost" size="icon">

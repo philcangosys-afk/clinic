@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { BellRing, TriangleAlert } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
+import { BellRing, Inbox, Settings2, TriangleAlert } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -8,6 +9,10 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { usePermissions } from "@/lib/permissions";
+import { useToast } from "@/hooks/use-toast";
 
 /**
  * التنبيهات الموحّدة (لقطة 80).
@@ -32,6 +37,28 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   employee_document_expiry: "وثيقة موظف",
   insurance_membership_expiry: "عضوية تأمين",
   employee_contract_expiry: "عقد موظف",
+  // المرحلتان 21 و22: الأجهزة ومستنداتها ومستندات المرضى والكيانات
+  asset_warranty_expiry: "ضمان جهاز",
+  asset_service_contract_expiry: "عقد صيانة جهاز",
+  asset_calibration_due: "معايرة جهاز",
+  patient_document_expiry: "مستند مريض",
+  entity_document_expiry: "مستند كيان",
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+  clinical: "سريري",
+  financial: "مالي",
+  operational: "تشغيلي",
+  inventory: "مخزون",
+  hr: "موارد بشرية",
+  compliance: "التزام ورقابة",
+  system: "النظام",
+};
+
+const SEVERITY: Record<string, { label: string; variant: any }> = {
+  info: { label: "معلومة", variant: "secondary" },
+  warning: { label: "تحذير", variant: "default" },
+  critical: { label: "حرِج", variant: "destructive" },
 };
 
 const WINDOWS = [
@@ -98,10 +125,22 @@ export default function Alerts() {
       <div>
         <h1 className="text-2xl font-bold">التنبيهات</h1>
         <p className="text-sm text-muted-foreground">
-          كل ما يوشك على الانتهاء في مكان واحد — تراخيص، مخزون، وثائق وعقود الموظفين، عضويات التأمين
+          ما يصلك من أحداث النظام، وما يوشك على الانتهاء — والقواعد التي تحدّد
+          من يصله كل تنبيه
         </p>
       </div>
 
+      <Tabs defaultValue="inbox">
+        <TabsList>
+          <TabsTrigger value="inbox">صندوق تنبيهاتي</TabsTrigger>
+          <TabsTrigger value="expiry">ما يوشك على الانتهاء</TabsTrigger>
+          <TabsTrigger value="rules">قواعد التوجيه</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="inbox" className="mt-4"><NotificationInbox /></TabsContent>
+        <TabsContent value="rules" className="mt-4"><RoutingRules /></TabsContent>
+
+        <TabsContent value="expiry" className="mt-4 flex flex-col gap-4">
       {expiredCount > 0 && (
         <div className="flex items-center gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
           <TriangleAlert className="h-4 w-4 shrink-0 text-destructive" />
@@ -186,6 +225,366 @@ export default function Alerts() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+      </Tabs>
     </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * صندوق تنبيهاتي — المرحلة 23
+ * ════════════════════════════════════════════════════════════════════════ */
+function NotificationInbox() {
+  const { organization } = useOrganizationAccess();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [onlyUnread, setOnlyUnread] = useState(false);
+
+  const notifications = useQuery({
+    queryKey: ["my-notifications", organization?.id],
+    enabled: Boolean(organization?.id),
+    refetchInterval: 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_my_notifications").select("*")
+        .eq("organization_id", organization!.id)
+        .order("created_at", { ascending: false })
+        .limit(200);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const preferences = useQuery({
+    queryKey: ["notification-preferences", organization?.id],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("notification_preferences").select("category, is_muted")
+        .eq("organization_id", organization!.id);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: ["my-notifications", organization?.id] });
+    queryClient.invalidateQueries({ queryKey: ["notification-summary", organization?.id] });
+    queryClient.invalidateQueries({ queryKey: ["notification-preferences", organization?.id] });
+  };
+  const fail = (title: string) => (error: unknown) =>
+    toast({
+      variant: "destructive", title,
+      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+    });
+
+  const markRead = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.rpc("app_mark_notification_read", { p_id: id });
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+    onError: fail("تعذر التعليم كمقروء"),
+  });
+
+  const markAll = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.rpc("app_mark_all_notifications_read", {
+        p_org: organization!.id,
+      });
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+    onError: fail("تعذر التعليم"),
+  });
+
+  const dismiss = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.rpc("app_dismiss_notification", { p_id: id });
+      if (error) throw error;
+    },
+    onSuccess: invalidate,
+    onError: fail("تعذر الإخفاء"),
+  });
+
+  const mute = useMutation({
+    mutationFn: async ({ category, muted }: { category: string; muted: boolean }) => {
+      const { error } = await supabase.rpc("app_set_notification_preference", {
+        p_org: organization!.id, p_category: category, p_muted: muted,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidate();
+      toast({
+        title: "حُدّثت التفضيلات",
+        description: "التنبيه الحرِج يصلك دائمًا ولو كُتمت فئته",
+      });
+    },
+    onError: fail("تعذر الحفظ"),
+  });
+
+  const generate = useMutation({
+    mutationFn: async () => {
+      const { data, error } = await supabase.rpc("app_generate_expiry_notifications", {
+        p_org: organization!.id, p_days: 30,
+      });
+      if (error) throw error;
+      return data as number;
+    },
+    onSuccess: (count) => {
+      invalidate();
+      toast({
+        title: `وُلّد ${count ?? 0} تنبيه انتهاء`,
+        description: "تكرار التوليد لا يضاعف التنبيهات",
+      });
+    },
+    onError: fail("تعذر التوليد"),
+  });
+
+  const muted = new Set(
+    (preferences.data ?? []).filter((p) => p.is_muted).map((p) => p.category),
+  );
+  const rows = (notifications.data ?? []).filter((n) => !onlyUnread || n.is_unread);
+  const unread = (notifications.data ?? []).filter((n) => n.is_unread).length;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 pb-3">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Inbox className="h-4 w-4" />
+              صندوق تنبيهاتي
+              {unread > 0 && <Badge variant="destructive">{unread} غير مقروء</Badge>}
+            </CardTitle>
+            <CardDescription>
+              ما يخصّك أنت وفق صلاحياتك — لا يراه غيرك.
+            </CardDescription>
+          </div>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={() => setOnlyUnread((v) => !v)}>
+              {onlyUnread ? "عرض الكل" : "غير المقروء فقط"}
+            </Button>
+            <Button variant="outline" disabled={generate.isPending}
+                    onClick={() => generate.mutate()}>
+              توليد تنبيهات الانتهاء
+            </Button>
+            <Button disabled={unread === 0 || markAll.isPending}
+                    onClick={() => markAll.mutate()}>
+              تعليم الكل كمقروء
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          {notifications.isLoading && <Skeleton className="h-40 w-full" />}
+          {!notifications.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>التنبيه</TableHead>
+                  <TableHead>الفئة</TableHead>
+                  <TableHead>الخطورة</TableHead>
+                  <TableHead>الوقت</TableHead>
+                  <TableHead />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((n) => (
+                  <TableRow key={n.id} className={n.is_unread ? "font-medium" : "opacity-70"}>
+                    <TableCell className="max-w-96">
+                      <span className="block truncate">{n.title}</span>
+                      {n.body && (
+                        <span className="block truncate text-xs font-normal text-muted-foreground">
+                          {n.body}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      {CATEGORY_LABELS[n.category] ?? n.category}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={SEVERITY[n.severity]?.variant ?? "secondary"}>
+                        {SEVERITY[n.severity]?.label ?? n.severity}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {new Date(n.created_at).toLocaleString("ar-SA")}
+                    </TableCell>
+                    <TableCell className="text-left">
+                      <div className="flex justify-end gap-1">
+                        {n.action_path && (
+                          <Link to={n.action_path}>
+                            <Button variant="ghost" size="sm">فتح</Button>
+                          </Link>
+                        )}
+                        {n.is_unread && (
+                          <Button variant="ghost" size="sm"
+                                  onClick={() => markRead.mutate(n.id)}>
+                            مقروء
+                          </Button>
+                        )}
+                        <Button variant="ghost" size="sm"
+                                onClick={() => dismiss.mutate(n.id)}>
+                          إخفاء
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {rows.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                      لا تنبيهات.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-base">فئات أتابعها</CardTitle>
+          <CardDescription>
+            كتم فئة يوقف تنبيهاتها العادية عنك — **أمّا الحرِج فيصلك دائمًا**.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="flex flex-wrap gap-2">
+          {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
+            <Button
+              key={key}
+              variant={muted.has(key) ? "outline" : "default"}
+              size="sm"
+              disabled={mute.isPending}
+              onClick={() => mute.mutate({ category: key, muted: !muted.has(key) })}
+            >
+              {label} {muted.has(key) ? "— مكتومة" : ""}
+            </Button>
+          ))}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * قواعد التوجيه
+ * ════════════════════════════════════════════════════════════════════════ */
+function RoutingRules() {
+  const { organization } = useOrganizationAccess();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { can } = usePermissions();
+
+  const rules = useQuery({
+    queryKey: ["notification-rules", organization?.id],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("notification_rules").select("*")
+        .eq("organization_id", organization!.id)
+        .order("category").order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const toggle = useMutation({
+    mutationFn: async ({ id, active }: { id: string; active: boolean }) => {
+      const { data, error } = await supabase
+        .from("notification_rules").update({ is_active: active, updated_at: new Date().toISOString() })
+        .eq("id", id).select("id");
+      if (error) throw error;
+      if (!data || data.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["notification-rules", organization?.id] });
+      toast({ title: "حُدّثت القاعدة" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive", title: "تعذر التحديث",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Settings2 className="h-4 w-4" />
+          قواعد التوجيه
+        </CardTitle>
+        <CardDescription>
+          التنبيه يُوجَّه **بالصلاحية لا بالاسم**: من يملك صلاحية اعتماد
+          الرواتب هو من يُنبَّه، فلا يضيع التنبيه عند تغيّر الموظف.
+          القناة الوحيدة المتاحة الآن داخل النظام — لا رسائل خارجية.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        {rules.isLoading && <Skeleton className="h-40 w-full" />}
+        {!rules.isLoading && (
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>الحدث</TableHead>
+                <TableHead>الفئة</TableHead>
+                <TableHead>الخطورة</TableHead>
+                <TableHead>يُوجَّه إلى</TableHead>
+                <TableHead>القناة</TableHead>
+                <TableHead />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(rules.data ?? []).map((r) => (
+                <TableRow key={r.id} className={r.is_active ? undefined : "opacity-60"}>
+                  <TableCell className="text-sm">
+                    {r.name_ar}
+                    <span className="block font-mono text-[10px] text-muted-foreground">
+                      {r.event_key}
+                    </span>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    {CATEGORY_LABELS[r.category] ?? r.category}
+                  </TableCell>
+                  <TableCell>
+                    <Badge variant={SEVERITY[r.severity]?.variant ?? "secondary"}>
+                      {SEVERITY[r.severity]?.label ?? r.severity}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {r.target_permission ?? r.target_role_key ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-xs">داخل النظام</TableCell>
+                  <TableCell className="text-left">
+                    {can("notifications.manage") && (
+                      <Button
+                        variant={r.is_active ? "ghost" : "outline"}
+                        size="sm"
+                        disabled={toggle.isPending}
+                        onClick={() => toggle.mutate({ id: r.id, active: !r.is_active })}
+                      >
+                        {r.is_active ? "تعطيل" : "تفعيل"}
+                      </Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {(rules.data ?? []).length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                    لا قواعد توجيه.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+    </Card>
   );
 }

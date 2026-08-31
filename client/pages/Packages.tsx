@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import SubscriptionsPanel from "@/components/packages/SubscriptionsPanel";
 import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
 
@@ -39,6 +40,61 @@ function useItemsList(organizationId: string | undefined) {
         .order("name_ar");
       if (error) throw error;
       return data ?? [];
+    },
+  });
+}
+
+/**
+ * `v_package_catalog` يحسب سعر القائمة والوفر من البنود، فلا يُكتب وفرٌ
+ * يدويًّا قد يخالف الأسعار الفعلية.
+ */
+function useDoctorsForPackages(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["doctors-for-packages", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar, specialty_value_id")
+        .eq("organization_id", organizationId)
+        .eq("is_enabled", true)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+}
+
+function useSpecialtiesForPackages(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["specialties-for-packages", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_reference_data")
+        .select("value_id, name_ar, category_key, is_disabled")
+        .eq("category_key", "medical_specialties")
+        .eq("is_disabled", false)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+}
+
+function usePackageCatalogView(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["package-catalog-view", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_package_catalog")
+        .select("*")
+        .eq("organization_id", organizationId)
+        .eq("is_archived", false)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as any[];
     },
   });
 }
@@ -65,6 +121,8 @@ export default function Packages() {
   const [subscribeOpen, setSubscribeOpen] = useState(false);
   const packages = usePackagesCatalog(organization?.id);
 
+  const catalogView = usePackageCatalogView(organization?.id);
+
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -88,6 +146,7 @@ export default function Packages() {
         <TabsList>
           <TabsTrigger value="catalog">كتالوج الباقات</TabsTrigger>
           <TabsTrigger value="subscriptions">باقات المرضى وأرصدتها</TabsTrigger>
+          <TabsTrigger value="manage">إدارة الاشتراكات</TabsTrigger>
         </TabsList>
 
         <TabsContent value="catalog" className="mt-4">
@@ -115,6 +174,9 @@ export default function Packages() {
                       <p className="mt-1 text-xs text-muted-foreground">
                         {pkg.validity_days ? `صلاحية ${pkg.validity_days} يومًا من تاريخ الشراء` : "بلا تاريخ انتهاء"}
                       </p>
+                      {/* الوفر والأهلية والسياسة تُقرأ من المنظور لا من الجدول:
+                          سعر القائمة محسوب من البنود، فلا يظهر وفرٌ وهميّ. */}
+                      <PackageMetaRow meta={catalogView.data?.find((c) => c.id === pkg.id)} />
                       <ul className="mt-2 flex flex-wrap gap-2 text-xs">
                         {(pkg.package_items ?? []).map((pi) => {
                           const item = Array.isArray(pi.item) ? pi.item[0] : pi.item;
@@ -134,6 +196,10 @@ export default function Packages() {
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="manage" className="mt-4">
+          <SubscriptionsPanel />
         </TabsContent>
 
         <TabsContent value="subscriptions" className="mt-4">
@@ -165,7 +231,21 @@ function NewPackageDialog({
   const [nameAr, setNameAr] = useState("");
   const [price, setPrice] = useState("0");
   const [validityDays, setValidityDays] = useState("");
-  const [lines, setLines] = useState<{ itemId: string; quantity: string }[]>([]);
+  const [subscriptionType, setSubscriptionType] = useState("one_time");
+  const [minAge, setMinAge] = useState("");
+  const [maxAge, setMaxAge] = useState("");
+  const [gender, setGender] = useState("any");
+  const [isTransferable, setIsTransferable] = useState(false);
+  const [isRefundable, setIsRefundable] = useState(true);
+  const [refundPolicy, setRefundPolicy] = useState("");
+  const [maxRenewals, setMaxRenewals] = useState("");
+  const [allowedDoctorIds, setAllowedDoctorIds] = useState<string[]>([]);
+  const [specialtyId, setSpecialtyId] = useState("any");
+  const doctors = useDoctorsForPackages(organizationId);
+  const specialties = useSpecialtiesForPackages(organizationId);
+  const [lines, setLines] = useState<
+    { itemId: string; quantity: string; maxPerVisit: string; minDays: string }[]
+  >([]);
 
   const createPackage = useMutation({
     mutationFn: async () => {
@@ -180,6 +260,17 @@ function NewPackageDialog({
           name_ar: nameAr.trim(),
           price: Number(price) || 0,
           validity_days: validityDays ? Number(validityDays) : null,
+          subscription_type: subscriptionType,
+          min_age_years: minAge ? Number(minAge) : null,
+          max_age_years: maxAge ? Number(maxAge) : null,
+          gender_restriction: gender === "any" ? null : gender,
+          is_transferable: isTransferable,
+          is_refundable: isRefundable,
+          // سياسةٌ مكتوبة تُعرض عند الاسترداد؛ الباقة غير المستردّة تحتاج سببًا
+          refund_policy: refundPolicy.trim() || null,
+          max_renewals: maxRenewals ? Number(maxRenewals) : null,
+          allowed_doctor_ids: allowedDoctorIds.length > 0 ? allowedDoctorIds : null,
+          allowed_specialty_value_id: specialtyId === "any" ? null : specialtyId,
         })
         .select("id")
         .single();
@@ -188,8 +279,11 @@ function NewPackageDialog({
       const { error: itemsError } = await supabase.from("package_items").insert(
         validLines.map((line) => ({
           package_id: pkg.id,
+          organization_id: organizationId,
           item_id: line.itemId,
           quantity_included: Number(line.quantity) || 1,
+          max_per_visit: line.maxPerVisit ? Number(line.maxPerVisit) : null,
+          min_days_between_uses: line.minDays ? Number(line.minDays) : null,
         })),
       );
       if (itemsError) throw itemsError;
@@ -200,6 +294,16 @@ function NewPackageDialog({
       setNameAr("");
       setPrice("0");
       setValidityDays("");
+      setSubscriptionType("one_time");
+      setMinAge("");
+      setMaxAge("");
+      setGender("any");
+      setIsTransferable(false);
+      setIsRefundable(true);
+      setRefundPolicy("");
+      setMaxRenewals("");
+      setAllowedDoctorIds([]);
+      setSpecialtyId("any");
       setLines([]);
       onOpenChange(false);
     },
@@ -232,10 +336,128 @@ function NewPackageDialog({
               <Input type="number" min={1} value={validityDays} onChange={(e) => setValidityDays(e.target.value)} />
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>نوع الاشتراك</Label>
+              <Select value={subscriptionType} onValueChange={setSubscriptionType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="one_time">باقة لمرة واحدة</SelectItem>
+                  <SelectItem value="monthly">اشتراك شهري</SelectItem>
+                  <SelectItem value="quarterly">اشتراك ربع سنوي</SelectItem>
+                  <SelectItem value="annual">اشتراك سنوي</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>حدّ التجديدات (اختياري)</Label>
+              <Input
+                type="number"
+                min={0}
+                value={maxRenewals}
+                onChange={(e) => setMaxRenewals(e.target.value)}
+                placeholder="بلا حدّ"
+              />
+            </div>
+          </div>
+
+          <Separator />
+          <Label className="text-xs text-muted-foreground">
+            الأهلية — تُفحص قبل البيع، فلا تُباع باقة لمن لا يستفيد منها
+          </Label>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>أقل عمر</Label>
+              <Input type="number" min={0} value={minAge} onChange={(e) => setMinAge(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>أكبر عمر</Label>
+              <Input type="number" min={0} value={maxAge} onChange={(e) => setMaxAge(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>الجنس</Label>
+              <Select value={gender} onValueChange={setGender}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="any">الجميع</SelectItem>
+                  <SelectItem value="male">ذكور</SelectItem>
+                  <SelectItem value="female">إناث</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>التخصّص المسموح (اختياري)</Label>
+            <Select value={specialtyId} onValueChange={setSpecialtyId}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="any">كل التخصّصات</SelectItem>
+                {(specialties.data ?? []).map((sp) => (
+                  <SelectItem key={sp.value_id} value={sp.value_id}>{sp.name_ar}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الأطباء المسموح لهم (اتركه فارغًا للجميع)</Label>
+            <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto rounded-md border p-2">
+              {(doctors.data ?? []).map((d) => {
+                const checked = allowedDoctorIds.includes(d.id);
+                return (
+                  <button
+                    key={d.id}
+                    type="button"
+                    onClick={() =>
+                      setAllowedDoctorIds((ids) =>
+                        checked ? ids.filter((x) => x !== d.id) : [...ids, d.id],
+                      )
+                    }
+                  >
+                    <Badge variant={checked ? "success" : "outline"}>{d.name_ar}</Badge>
+                  </button>
+                );
+              })}
+              {(doctors.data ?? []).length === 0 && (
+                <span className="text-xs text-muted-foreground">لا أطباء نشطون.</span>
+              )}
+            </div>
+          </div>
+
+          <Separator />
+          <div className="flex flex-wrap items-center gap-4">
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={isTransferable}
+                onChange={(e) => setIsTransferable(e.target.checked)}
+              />
+              قابلة للنقل لمريض آخر
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={isRefundable}
+                onChange={(e) => setIsRefundable(e.target.checked)}
+              />
+              قابلة للاسترداد
+            </label>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>سياسة الاسترداد</Label>
+            <Input
+              value={refundPolicy}
+              onChange={(e) => setRefundPolicy(e.target.value)}
+              placeholder="تُعرض للموظّف عند الإلغاء"
+            />
+          </div>
+
           <Separator />
           <div className="flex items-center justify-between">
             <Label>الأصناف المشمولة</Label>
-            <Button size="sm" variant="outline" onClick={() => setLines((ls) => [...ls, { itemId: "", quantity: "1" }])}>
+            <Button size="sm" variant="outline" onClick={() => setLines((ls) => [...ls, { itemId: "", quantity: "1", maxPerVisit: "", minDays: "" }])}>
               <Plus className="h-4 w-4" />
               إضافة صنف
             </Button>
@@ -260,10 +482,29 @@ function NewPackageDialog({
               <Input
                 type="number"
                 min={1}
-                className="w-24"
+                className="w-20"
                 placeholder="العدد"
                 value={line.quantity}
                 onChange={(e) => setLines((ls) => ls.map((l, i) => (i === index ? { ...l, quantity: e.target.value } : l)))}
+              />
+              {/* حدّ الزيارة يمنع استهلاك باقة العشرين جلسة في يوم واحد */}
+              <Input
+                type="number"
+                min={1}
+                className="w-24"
+                placeholder="حدّ/زيارة"
+                title="أقصى كمية تُخصم في زيارة واحدة"
+                value={line.maxPerVisit}
+                onChange={(e) => setLines((ls) => ls.map((l, i) => (i === index ? { ...l, maxPerVisit: e.target.value } : l)))}
+              />
+              <Input
+                type="number"
+                min={1}
+                className="w-24"
+                placeholder="أيام فاصلة"
+                title="أقل عدد أيام بين استخدامين"
+                value={line.minDays}
+                onChange={(e) => setLines((ls) => ls.map((l, i) => (i === index ? { ...l, minDays: e.target.value } : l)))}
               />
               <Button size="sm" variant="ghost" onClick={() => setLines((ls) => ls.filter((_, i) => i !== index))}>
                 <X className="h-4 w-4" />
@@ -300,20 +541,36 @@ function SubscribePatientDialog({
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [packageId, setPackageId] = useState("");
 
+  /**
+   * البيع يمرّ بـ`app_sell_package` لا بإدراج صفٍّ مباشر (0096).
+   *
+   * الإدراج المباشر كان يمنح المريض رصيدًا **بلا فاتورة**: خدماتٌ تُصرف ولا
+   * يقابلها دخل، ولا أثر لها في الإيراد ولا في ذمم المريض. الدالّة تُنشئ
+   * الفاتورة والاشتراك في عملية واحدة، وتفحص الأهلية (العمر والجنس والفرع
+   * والطبيب) قبل ذلك، وترفض باقةً ثانيةً سارية من نفس النوع.
+   */
   const subscribe = useMutation({
     mutationFn: async () => {
       if (!organizationId || !patient) throw new Error("اختر المريض أولًا");
       if (!packageId) throw new Error("اختر باقة");
-      const { error } = await supabase.from("patient_packages").insert({
-        organization_id: organizationId,
-        patient_id: patient.id,
-        package_id: packageId,
+      const { data, error } = await supabase.rpc("app_sell_package", {
+        p_package_id: packageId,
+        p_patient_id: patient.id,
+        p_branch_id: null,
+        p_doctor_id: null,
+        p_clinic_id: null,
+        p_note: null,
       });
       if (error) throw error;
+      return data as { patient_package_id: string; invoice_id: string };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["patient-package-balances", organizationId] });
-      toast({ title: "تم تسجيل اشتراك المريض في الباقة" });
+      queryClient.invalidateQueries({ queryKey: ["patient-subscriptions", organizationId] });
+      toast({
+        title: "بِيعت الباقة وأُنشئت فاتورتها",
+        description: "الفاتورة مسوّدة — أصدرها واستلم الدفع من شاشة الفوترة",
+      });
       setPatient(null);
       setPackageId("");
       onOpenChange(false);
@@ -507,5 +764,57 @@ function PatientSubscriptionsTab({ organizationId }: { organizationId: string | 
         )}
       </CardContent>
     </Card>
+  );
+}
+
+
+/**
+ * سطر بيانات الباقة المشتقّة: الوفر وشروط الأهلية والسياسات.
+ *
+ * كلّها من `v_package_catalog` لأن سعر القائمة والوفر يُحسبان هناك من البنود؛
+ * عرضُهما من حقلٍ مكتوب يدويًّا كان يُظهر وفرًا لا يطابق الأسعار الفعلية.
+ */
+function PackageMetaRow({ meta }: { meta: any | undefined }) {
+  if (!meta) return null;
+  const eligibility: string[] = [];
+  if (meta.gender_restriction === "male") eligibility.push("ذكور فقط");
+  if (meta.gender_restriction === "female") eligibility.push("إناث فقط");
+  if (meta.min_age_years !== null && meta.min_age_years !== undefined)
+    eligibility.push(`من ${meta.min_age_years} سنة`);
+  if (meta.max_age_years !== null && meta.max_age_years !== undefined)
+    eligibility.push(`حتى ${meta.max_age_years} سنة`);
+
+  const SUBSCRIPTION: Record<string, string> = {
+    one_time: "لمرة واحدة",
+    monthly: "شهري",
+    quarterly: "ربع سنوي",
+    annual: "سنوي",
+  };
+
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+      <Badge variant="outline">{SUBSCRIPTION[meta.subscription_type] ?? meta.subscription_type}</Badge>
+      {Number(meta.savings ?? 0) > 0 && (
+        <Badge variant="success">
+          وفر {Number(meta.savings).toLocaleString("ar-SA")} من {Number(meta.list_price ?? 0).toLocaleString("ar-SA")}
+        </Badge>
+      )}
+      {eligibility.map((e) => (
+        <Badge key={e} variant="secondary">{e}</Badge>
+      ))}
+      {meta.branch_name && <Badge variant="outline">فرع: {meta.branch_name}</Badge>}
+      <Badge variant={meta.is_transferable ? "outline" : "secondary"}>
+        {meta.is_transferable ? "قابلة للنقل" : "غير قابلة للنقل"}
+      </Badge>
+      <Badge variant={meta.is_refundable ? "outline" : "secondary"}>
+        {meta.is_refundable ? "قابلة للاسترداد" : "غير مستردّة"}
+      </Badge>
+      {meta.max_renewals !== null && meta.max_renewals !== undefined && (
+        <Badge variant="secondary">حدّ التجديد {meta.max_renewals}</Badge>
+      )}
+      {meta.refund_policy && (
+        <span className="text-muted-foreground">· {meta.refund_policy}</span>
+      )}
+    </div>
   );
 }

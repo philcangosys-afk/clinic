@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import AdvancedInventory from "@/components/inventory/AdvancedInventory";
 import { useToast } from "@/hooks/use-toast";
 import ItemPicker from "@/components/shared/ItemPicker";
 
@@ -96,6 +97,7 @@ export default function Inventory() {
           <TabsTrigger value="lots">الدفعات والصلاحية</TabsTrigger>
           <TabsTrigger value="alerts">التنبيهات</TabsTrigger>
           <TabsTrigger value="transfers">المناقلات</TabsTrigger>
+          <TabsTrigger value="advanced">المخزون المتقدم</TabsTrigger>
         </TabsList>
         <TabsContent value="onhand" className="mt-4">
           <OnHandTab />
@@ -108,6 +110,9 @@ export default function Inventory() {
         </TabsContent>
         <TabsContent value="alerts" className="mt-4">
           <StockAlertsTab />
+        </TabsContent>
+        <TabsContent value="advanced" className="mt-4">
+          <AdvancedInventory />
         </TabsContent>
         <TabsContent value="transfers" className="mt-4">
           <TransfersTab />

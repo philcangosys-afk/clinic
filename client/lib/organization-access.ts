@@ -27,6 +27,24 @@ export const CLINIC_DEFAULT_FEATURES: FeatureKey[] = [
   "reports",
   "audit_log",
   "settings",
+  // الأصول والصيانة (المرحلة 21) ميزة أساسية لكل منشأة — العيادة الواحدة
+  // تملك أجهزة تحتاج صيانة ومعايرة تمامًا كالمركز الطبي.
+  "assets",
+  // المستندات والموافقات (المرحلة 22): الموافقة الموقَّعة شرطٌ لتنفيذ
+  // إجراءات تطلبها — ميزة أساسية لا اختيارية.
+  "documents",
+  // التنبيهات (المرحلة 23): كل عضو يحتاج أن يصله ما يخصّه.
+  "notifications",
+  // بوابة المريض (المرحلة 24): متاحة لكل منشأة، وتُعطَّل من
+  // "التحكم في المديولات" لمن لا يريدها.
+  "patient_portal",
+  // مساحة عمل الطبيب (المرحلة 25): القيم الحرجة فيها، وهي مسألة سلامة
+  // مرضى لا رفاهية واجهة.
+  "doctor_workspace",
+  // الجودة وسلامة المرضى (المرحلة 26): بلاغ السلامة حقٌّ لكل عامل.
+  "quality",
+  // التكاملات (المرحلة 30): زاتكا ونفيس قائمتان في كل منشأة سعودية.
+  "integrations",
 ];
 
 export const MEDICAL_CENTER_ADDED_FEATURES: FeatureKey[] = [
@@ -76,6 +94,13 @@ const allFeatureKeys: FeatureKey[] = [
   "accounting",
   "procurement",
   "inventory",
+  "assets",
+  "documents",
+  "notifications",
+  "patient_portal",
+  "doctor_workspace",
+  "quality",
+  "integrations",
   "messaging",
   "audit_log",
   "settings",
@@ -100,6 +125,10 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "medical_services",
     "doctors",
     "prescriptions",
+    "documents",
+    "notifications",
+    "doctor_workspace",
+    "quality",
   ]),
   nurse: viewPermissions([
     "core_dashboard",
@@ -109,6 +138,11 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "medical_records",
     "patient_journey",
     "nursing",
+    "assets",
+    "documents",
+    "notifications",
+    "doctor_workspace",
+    "quality",
   ]),
   receptionist: viewPermissions([
     "core_dashboard",
@@ -117,15 +151,20 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "patients",
     "patient_journey",
     "billing_payments",
+    "documents",
+    "notifications",
+    "patient_portal",
   ]),
-  lab_technician: viewPermissions(["core_dashboard", "patients", "laboratory"]),
-  radiology_technician: viewPermissions(["core_dashboard", "patients", "radiology"]),
+  // فنّيو المختبر والأشعة يبلّغون عن أعطال أجهزتهم، فيحتاجون رؤية سجل الأصول.
+  lab_technician: viewPermissions(["core_dashboard", "patients", "laboratory", "assets", "notifications"]),
+  radiology_technician: viewPermissions(["core_dashboard", "patients", "radiology", "assets", "notifications"]),
   pharmacist: viewPermissions([
     "core_dashboard",
     "patients",
     "pharmacy",
     "prescriptions",
     "dispensing",
+    "notifications",
   ]),
   accountant: viewPermissions([
     "core_dashboard",
@@ -133,9 +172,13 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "insurance_claims",
     "accounting",
     "reports",
+    "assets",
+    "documents",
+    "notifications",
+    "integrations",
   ]),
-  hr_manager: viewPermissions(["core_dashboard", "hr", "reports"]),
-  employee: viewPermissions(["core_dashboard"]),
+  hr_manager: viewPermissions(["core_dashboard", "hr", "reports", "documents", "notifications"]),
+  employee: viewPermissions(["core_dashboard", "notifications"]),
 };
 
 export function isOrganizationAdmin(role: OrganizationRole | undefined) {

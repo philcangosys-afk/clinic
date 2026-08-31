@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import LedgerWorkspace from "@/components/accounting/LedgerWorkspace";
 import { useToast } from "@/hooks/use-toast";
 
 const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
@@ -58,6 +59,7 @@ export default function Accounting() {
           <TabsTrigger value="chart">دليل الحسابات</TabsTrigger>
           <TabsTrigger value="entries">القيود اليومية</TabsTrigger>
           <TabsTrigger value="trial-balance">ميزان المراجعة</TabsTrigger>
+          <TabsTrigger value="ledger">دفتر الأستاذ والقوائم</TabsTrigger>
         </TabsList>
         <TabsContent value="vouchers" className="mt-4">
           <VouchersTab />
@@ -70,6 +72,9 @@ export default function Accounting() {
         </TabsContent>
         <TabsContent value="entries" className="mt-4">
           <JournalEntriesTab />
+        </TabsContent>
+        <TabsContent value="ledger" className="mt-4">
+          <LedgerWorkspace />
         </TabsContent>
         <TabsContent value="trial-balance" className="mt-4">
           <TrialBalanceTab />
