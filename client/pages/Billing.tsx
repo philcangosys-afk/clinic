@@ -43,9 +43,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 
 const STATUS_LABELS: Record<SalesInvoiceStatus, string> = {
+  draft: "مسوّدة",
   unpaid: "غير مدفوعة",
   partial: "مدفوعة جزئيًا",
   paid: "مدفوعة بالكامل",
+  partially_refunded: "مستردّة جزئيًا",
+  refunded: "مستردّة بالكامل",
   void: "ملغاة",
 };
 const STATUS_BADGE: Record<SalesInvoiceStatus, string> = {

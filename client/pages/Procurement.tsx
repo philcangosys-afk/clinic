@@ -51,6 +51,14 @@ export type DistributorEditRow = {
   address: string | null;
   note: string | null;
   distributor_type_value_id: string | null;
+  legal_name: string | null;
+  commercial_register: string | null;
+  bank_name: string | null;
+  bank_iban: string | null;
+  bank_account_name: string | null;
+  payment_terms_days: number;
+  credit_limit: number | null;
+  allowed_branch_ids: string[] | null;
   is_dental_lab: boolean;
   is_disabled: boolean;
 };
@@ -110,7 +118,7 @@ function useDistributors(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("distributors")
-        .select("id, file_number, name_ar, name_en, sales_rep_name, sales_rep_mobile, lab_technician_name, lab_technician_mobile, nationality_value_id, id_number, tax_number, gln_number, mobile_1, mobile_2, phone_1, phone_2, email_1, email_2, fax, city_value_id, address, note, distributor_type_value_id, is_dental_lab, is_disabled")
+        .select("id, file_number, name_ar, name_en, sales_rep_name, sales_rep_mobile, lab_technician_name, lab_technician_mobile, nationality_value_id, id_number, tax_number, gln_number, mobile_1, mobile_2, phone_1, phone_2, email_1, email_2, fax, city_value_id, address, note, distributor_type_value_id, legal_name, commercial_register, bank_name, bank_iban, bank_account_name, payment_terms_days, credit_limit, allowed_branch_ids, is_dental_lab, is_disabled")
         .eq("organization_id", organizationId)
         .order("name_ar");
       if (error) throw error;

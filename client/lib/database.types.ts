@@ -292,7 +292,14 @@ export interface ItemRow {
   updated_at: string;
 }
 
-export type SalesInvoiceStatus = "unpaid" | "partial" | "paid" | "void";
+export type SalesInvoiceStatus =
+  | "draft"
+  | "unpaid"
+  | "partial"
+  | "paid"
+  | "partially_refunded"
+  | "refunded"
+  | "void";
 
 export interface SalesInvoiceRow {
   id: UUID;
