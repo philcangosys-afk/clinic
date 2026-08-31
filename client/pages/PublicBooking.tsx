@@ -24,6 +24,12 @@ import { supabase } from "@/lib/supabase";
 
 const HERO_IMAGE = "https://images.pexels.com/photos/4971512/pexels-photo-4971512.jpeg";
 const LOGO_IMAGE = "https://cdn.builder.io/api/v1/image/assets%2Fce04605038104603b965d31c7c18e8db%2F44225d3925cf48e8883d9f35b0a6e724?format=webp&width=800&height=1200";
+const DERMATOLOGY_TEAM = [
+  { name: "نوف", specialty: "الأمراض الجلدية والعناية بالبشرة" },
+  { name: "سارة", specialty: "الليزر والتجميل غير الجراحي" },
+  { name: "لينا", specialty: "علاج البشرة والشعر" },
+  { name: "ريما", specialty: "الحقن التجميلي وتجديد البشرة" },
+];
 
 type Clinic = { id: string; name: string };
 type Doctor = { id: string; name: string; job_title: string | null; clinic_id: string };
@@ -143,6 +149,21 @@ export default function PublicBooking() {
     });
     return () => { active = false; };
   }, [slug]);
+
+  useEffect(() => {
+    if (loading) return;
+    const elements = document.querySelectorAll<HTMLElement>("[data-reveal]");
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach((entry) => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add("is-visible");
+          observer.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.12 });
+    elements.forEach((element) => observer.observe(element));
+    return () => observer.disconnect();
+  }, [loading]);
 
   useEffect(() => {
     if (!catalog || clinicId) return;
@@ -318,6 +339,7 @@ export default function PublicBooking() {
             <a href="#top" className="hover:text-[#0baa8e]">الرئيسية</a>
             <a href="#services" className="hover:text-[#0baa8e]">خدماتنا</a>
             <a href="#doctors" className="hover:text-[#0baa8e]">أطباؤنا</a>
+            <a href="#dermatology" className="hover:text-[#0baa8e]">الجلدية والتجميل</a>
             <a href="#about" className="hover:text-[#0baa8e]">عن المركز</a>
           </nav>
           <button type="button" onClick={openBooking} className="hidden rounded-full bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-5 py-3 text-sm font-bold text-white shadow-lg shadow-emerald-700/20 sm:block">احجز موعدك</button>
@@ -329,6 +351,7 @@ export default function PublicBooking() {
               <a onClick={() => setMobileMenu(false)} href="#top" className="border-b border-[#eaf1ef] py-3">الرئيسية</a>
               <a onClick={() => setMobileMenu(false)} href="#services" className="border-b border-[#eaf1ef] py-3">خدماتنا</a>
               <a onClick={() => setMobileMenu(false)} href="#doctors" className="border-b border-[#eaf1ef] py-3">أطباؤنا</a>
+              <a onClick={() => setMobileMenu(false)} href="#dermatology" className="border-b border-[#eaf1ef] py-3">الجلدية والتجميل</a>
               <button type="button" onClick={openBooking} className="py-3 text-start text-[#067663]">احجز موعدك</button>
             </div>
           </nav>
@@ -340,13 +363,13 @@ export default function PublicBooking() {
           <img src={HERO_IMAGE} alt="طبيبة أسنان تقدم الرعاية لمريضة في عيادة حديثة" className="absolute inset-0 -z-20 h-full w-full object-cover object-center" />
           <div className="absolute inset-0 -z-10 bg-[linear-gradient(90deg,rgba(11,31,28,.72),rgba(11,31,28,.92)),radial-gradient(circle_at_20%_30%,rgba(11,170,142,.45),transparent_55%)]" />
           <div className="mx-auto grid min-h-[690px] max-w-7xl items-center gap-12 px-5 py-20 lg:grid-cols-[1.05fr_.95fr] lg:px-10">
-            <div className="max-w-2xl">
+            <div data-reveal className="booking-reveal max-w-2xl">
               <span className="inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-2 text-sm font-bold backdrop-blur"><Sparkles className="h-4 w-4 text-[#1fcfb8]" /> ابتسامة صحية، ثقة تدوم</span>
               <h1 className="mt-6 text-4xl font-extrabold leading-[1.15] sm:text-5xl lg:text-6xl">{catalog.hero_title}</h1>
               <p className="mt-5 max-w-xl text-lg leading-8 text-white/80">{catalog.hero_subtitle}</p>
               <div className="mt-8 flex flex-wrap gap-3">
-                <button type="button" onClick={openBooking} className="rounded-xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-6 py-3.5 font-bold text-white shadow-xl">احجز موعدك الآن</button>
-                <a href="#doctors" className="rounded-xl border border-white/30 bg-white/10 px-6 py-3.5 font-bold backdrop-blur">تعرّف على أطبائنا</a>
+                <button type="button" onClick={openBooking} className="hidden rounded-xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-6 py-3.5 font-bold text-white shadow-xl transition duration-300 hover:-translate-y-1 hover:shadow-2xl active:scale-95 lg:inline-flex">احجز موعدك الآن</button>
+                <a href="#doctors" className="rounded-xl border border-white/30 bg-white/10 px-6 py-3.5 font-bold backdrop-blur transition duration-300 hover:-translate-y-1 hover:bg-white/20 active:scale-95">تعرّف على أطبائنا</a>
               </div>
               <div className="mt-10 grid max-w-xl grid-cols-3 gap-4 border-t border-white/15 pt-7 text-center sm:text-start">
                 <div><strong className="block text-2xl text-[#1fcfb8]">+15</strong><span className="text-xs text-white/65">عامًا من الخبرة</span></div>
@@ -355,7 +378,7 @@ export default function PublicBooking() {
               </div>
             </div>
 
-            <div id="booking" className={`${mobileBookingOpen || result ? "block" : "hidden"} scroll-mt-28 rounded-[24px] border border-white/40 bg-white/95 p-5 text-[#0b1f1c] shadow-2xl backdrop-blur-xl sm:p-7 lg:block`}>
+            <div id="booking" data-reveal className={`${mobileBookingOpen || result ? "block" : "hidden"} booking-reveal scroll-mt-28 rounded-[24px] border border-white/40 bg-white/95 p-5 text-[#0b1f1c] shadow-2xl backdrop-blur-xl sm:p-7 lg:block`}>
               {result ? (
                 <div className="py-2">
                   <div className="mb-5 text-center print:hidden">
@@ -559,20 +582,42 @@ export default function PublicBooking() {
 
         <section className="bg-[#0b1f1c] py-4 text-white/80"><div className="mx-auto flex max-w-7xl flex-wrap justify-center gap-x-10 gap-y-3 px-5 text-sm font-bold"><span>تعقيم بمعايير عالية</span><span>أطباء متخصصون</span><span>تقنيات رقمية حديثة</span><span>مواعيد مرنة</span><span>خيارات دفع متعددة</span></div></section>
 
-        <section id="services" className="mx-auto max-w-7xl px-5 py-24 lg:px-10">
+        <section id="services" data-reveal className="booking-reveal mx-auto max-w-7xl px-5 py-24 lg:px-10">
           <div className="mx-auto max-w-2xl text-center"><span className="font-bold text-[#0baa8e]">خدمات مصممة لابتسامتك</span><h2 className="mt-2 text-3xl font-extrabold sm:text-4xl">رعاية شاملة للأسنان</h2><p className="mt-3 text-[#6e827d]">من الفحص الوقائي إلى تحسين الابتسامة، نقدم تجربة واضحة ومريحة في كل زيارة.</p></div>
           <div className="mt-10 grid gap-5 md:grid-cols-2 lg:grid-cols-4">
             {[{ icon: Stethoscope, title: "الفحص والتشخيص", body: "تقييم دقيق وخطة علاج واضحة." }, { icon: Sparkles, title: "تنظيف وتلميع", body: "عناية دورية لصحة اللثة والأسنان." }, { icon: HeartPulse, title: "علاج الأسنان", body: "حلول محافظة تعيد الراحة والوظيفة." }, { icon: ShieldCheck, title: "الوقاية والمتابعة", body: "متابعة مستمرة لحماية ابتسامتك." }].map(({ icon: Icon, title, body }) => <article key={title} className="rounded-[20px] border border-[#d9e4e1] bg-white p-6 shadow-[0_10px_30px_-20px_rgba(11,31,28,.35)] transition hover:-translate-y-1"><span className="grid h-14 w-14 place-items-center rounded-2xl bg-[#cfeee6] text-[#067663]"><Icon className="h-6 w-6" /></span><h3 className="mt-5 text-lg font-extrabold">{title}</h3><p className="mt-2 text-sm leading-6 text-[#6e827d]">{body}</p></article>)}
           </div>
         </section>
 
-        <section id="doctors" className="bg-white py-24"><div className="mx-auto max-w-7xl px-5 lg:px-10"><div className="flex flex-wrap items-end justify-between gap-5"><div><span className="font-bold text-[#0baa8e]">فريقنا الطبي</span><h2 className="mt-2 text-3xl font-extrabold sm:text-4xl">خبرة تضع راحتك أولًا</h2></div><a href="#booking" className="font-bold text-[#067663]">احجز مع طبيبك ←</a></div><div className="mt-10 grid gap-5 md:grid-cols-2 lg:grid-cols-3">{catalog.team.map((doctor) => <article key={doctor.id} className="flex items-center gap-4 rounded-[20px] border border-[#d9e4e1] bg-[#f4f8f7] p-5"><span className="grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-[#0baa8e] to-[#1fcfb8] text-xl font-extrabold text-white">{doctor.name.replace("د. ", "").charAt(0)}</span><div><h3 className="font-extrabold">د. {doctor.name}</h3><p className="mt-1 text-sm text-[#6e827d]">{doctor.job_title ?? "طبيب أسنان"}</p><span className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-[#067663]"><BadgeCheck className="h-4 w-4" /> متاح للحجز</span></div></article>)}</div></div></section>
+        <section id="doctors" data-reveal className="booking-reveal bg-white py-24"><div className="mx-auto max-w-7xl px-5 lg:px-10"><div className="flex flex-wrap items-end justify-between gap-5"><div><span className="font-bold text-[#0baa8e]">فريقنا الطبي</span><h2 className="mt-2 text-3xl font-extrabold sm:text-4xl">خبرة تضع راحتك أولًا</h2></div><button type="button" onClick={openBooking} className="font-bold text-[#067663] transition hover:-translate-x-1">احجز مع طبيبك ←</button></div><div className="mt-10 grid gap-5 md:grid-cols-2 lg:grid-cols-3">{catalog.team.map((doctor) => <article key={doctor.id} className="group flex items-center gap-4 rounded-[20px] border border-[#d9e4e1] bg-[#f4f8f7] p-5 transition duration-300 hover:-translate-y-1 hover:border-[#9ed8cb] hover:shadow-xl"><span className="grid h-16 w-16 place-items-center rounded-2xl bg-gradient-to-br from-[#0baa8e] to-[#1fcfb8] text-xl font-extrabold text-white transition duration-300 group-hover:rotate-3 group-hover:scale-105">{doctor.name.replace("د. ", "").charAt(0)}</span><div><h3 className="font-extrabold">د. {doctor.name}</h3><p className="mt-1 text-sm text-[#6e827d]">{doctor.job_title ?? "طبيب أسنان"}</p><span className="mt-2 inline-flex items-center gap-1 text-xs font-bold text-[#067663]"><BadgeCheck className="h-4 w-4" /> متاح للحجز</span></div></article>)}</div></div></section>
 
-        <section id="about" className="mx-auto max-w-7xl px-5 py-24 lg:px-10"><div className="grid gap-8 lg:grid-cols-3">{[{ icon: CalendarDays, n: "01", title: "اختر موعدك", body: "حدد الخدمة والطبيب والوقت المناسب." }, { icon: Users, n: "02", title: "يصل الحجز فورًا", body: "يظهر الموعد مباشرةً لفريق الاستقبال." }, { icon: CheckCircle2, n: "03", title: "ابدأ رحلتك", body: "احضر في الوقت المحدد وأكمل خطة الرعاية." }].map(({ icon: Icon, n, title, body }) => <div key={n} className="rounded-[22px] border border-[#d9e4e1] bg-white p-7"><div className="flex items-center justify-between"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#cfeee6] font-extrabold text-[#067663]">{n}</span><Icon className="h-6 w-6 text-[#0baa8e]" /></div><h3 className="mt-6 text-xl font-extrabold">{title}</h3><p className="mt-2 text-[#6e827d]">{body}</p></div>)}</div></section>
+        <section id="dermatology" data-reveal className="booking-reveal relative overflow-hidden bg-[#f3effa] py-20">
+          <div className="absolute -start-24 top-10 h-64 w-64 rounded-full bg-violet-300/25 blur-3xl" />
+          <div className="relative mx-auto max-w-7xl px-5 lg:px-10">
+            <div className="grid items-center gap-10 lg:grid-cols-[.8fr_1.2fr]">
+              <div>
+                <span className="inline-flex items-center gap-2 rounded-full bg-violet-100 px-4 py-2 text-sm font-bold text-violet-700"><Sparkles className="h-4 w-4" /> قريبًا في المركز</span>
+                <h2 className="mt-5 text-3xl font-extrabold leading-tight text-[#241a32] sm:text-4xl">عيادة الجلدية والتجميل</h2>
+                <p className="mt-4 leading-8 text-[#695d76]">تجربة عناية متكاملة تجمع التشخيص الطبي الدقيق مع أحدث تقنيات البشرة والليزر والتجميل غير الجراحي، ضمن خطط شخصية تحافظ على مظهر طبيعي وصحي.</p>
+                <div className="mt-6 grid grid-cols-2 gap-3 text-sm font-bold text-[#52455f]"><span className="rounded-xl bg-white/75 p-3">عناية بالبشرة والشعر</span><span className="rounded-xl bg-white/75 p-3">ليزر وتقنيات حديثة</span><span className="rounded-xl bg-white/75 p-3">حقن تجميلي آمن</span><span className="rounded-xl bg-white/75 p-3">خطط علاج مخصصة</span></div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {DERMATOLOGY_TEAM.map((doctor, index) => (
+                  <article key={doctor.name} className="group rounded-2xl border border-violet-200/70 bg-white/85 p-5 shadow-sm backdrop-blur transition duration-300 hover:-translate-y-1 hover:shadow-xl">
+                    <div className="flex items-center gap-3"><span className="grid h-12 w-12 place-items-center rounded-xl bg-gradient-to-br from-violet-600 to-fuchsia-500 font-extrabold text-white transition group-hover:scale-105">{doctor.name.charAt(0)}</span><div><h3 className="font-extrabold text-[#241a32]">د. {doctor.name}</h3><p className="mt-1 text-xs leading-5 text-[#776a83]">{doctor.specialty}</p></div></div>
+                    <span className="mt-4 inline-flex rounded-full bg-violet-50 px-3 py-1 text-[11px] font-bold text-violet-700">{index === 0 ? "ضمن فريق المركز" : "ينضم قريبًا"}</span>
+                  </article>
+                ))}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="about" data-reveal className="booking-reveal mx-auto max-w-7xl px-5 py-24 lg:px-10"><div className="grid gap-8 lg:grid-cols-3">{[{ icon: CalendarDays, n: "01", title: "اختر موعدك", body: "حدد الخدمة والطبيب والوقت المناسب." }, { icon: Users, n: "02", title: "يصل الحجز فورًا", body: "يظهر الموعد مباشرةً لفريق الاستقبال." }, { icon: CheckCircle2, n: "03", title: "ابدأ رحلتك", body: "احضر في الوقت المحدد وأكمل خطة الرعاية." }].map(({ icon: Icon, n, title, body }) => <div key={n} className="rounded-[22px] border border-[#d9e4e1] bg-white p-7"><div className="flex items-center justify-between"><span className="grid h-12 w-12 place-items-center rounded-full bg-[#cfeee6] font-extrabold text-[#067663]">{n}</span><Icon className="h-6 w-6 text-[#0baa8e]" /></div><h3 className="mt-6 text-xl font-extrabold">{title}</h3><p className="mt-2 text-[#6e827d]">{body}</p></div>)}</div></section>
       </main>
 
       {!mobileBookingOpen && !result && (
-        <button type="button" onClick={openBooking} className="fixed inset-x-4 bottom-4 z-50 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-5 py-4 font-extrabold text-white shadow-[0_12px_35px_rgba(6,118,99,.38)] lg:hidden">
+        <button type="button" onClick={openBooking} className="booking-float fixed inset-x-4 bottom-4 z-50 flex items-center justify-center gap-2 rounded-2xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-5 py-4 font-extrabold text-white shadow-[0_12px_35px_rgba(6,118,99,.38)] transition active:scale-[.98] lg:hidden">
           <CalendarDays className="h-5 w-5" /> احجز موعدك الآن
         </button>
       )}
