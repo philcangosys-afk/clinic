@@ -158,14 +158,13 @@ export default function Alerts() {
         </p>
       </div>
 
-      <Tabs defaultValue="inbox">
-        <TabsList>
-          <TabsTrigger value="inbox">صندوق تنبيهاتي</TabsTrigger>
-          <TabsTrigger value="expiry">ما يوشك على الانتهاء</TabsTrigger>
+      <Tabs defaultValue="inbox" dir="rtl">
+        <TabsList className="flex w-full justify-start gap-1 overflow-x-auto">
           <TabsTrigger value="rules">قواعد التوجيه</TabsTrigger>
+          <TabsTrigger value="expiry">ما يوشك على الانتهاء</TabsTrigger>
+          <TabsTrigger value="inbox">صندوق تنبيهاتي</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="inbox" className="mt-4"><NotificationInbox /></TabsContent>
         <TabsContent value="rules" className="mt-4"><RoutingRules /></TabsContent>
 
         <TabsContent value="expiry" className="mt-4 flex flex-col gap-4">
@@ -185,7 +184,7 @@ export default function Alerts() {
             قائمة التنبيهات
           </CardTitle>
           <CardDescription>مرتَّبة بالأقرب انتهاءً أولًا</CardDescription>
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="mt-2 flex flex-wrap justify-start gap-2">
             <Select value={windowDays} onValueChange={setWindowDays}>
               <SelectTrigger className="w-44">
                 <SelectValue />
@@ -263,6 +262,7 @@ export default function Alerts() {
         </CardContent>
       </Card>
         </TabsContent>
+        <TabsContent value="inbox" className="mt-4"><NotificationInbox /></TabsContent>
       </Tabs>
     </div>
   );
@@ -388,7 +388,7 @@ function NotificationInbox() {
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardHeader className="flex flex-wrap items-center justify-between gap-3 space-y-0 pb-3">
+        <CardHeader className="flex flex-col items-stretch gap-3 space-y-0 pb-3">
           <div>
             <CardTitle className="flex items-center gap-2 text-base">
               <Inbox className="h-4 w-4" />
@@ -399,7 +399,7 @@ function NotificationInbox() {
               ما يخصّك أنت وفق صلاحياتك — لا يراه غيرك.
             </CardDescription>
           </div>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap justify-start gap-2">
             <Button variant="ghost" onClick={() => setOnlyUnread((v) => !v)}>
               {onlyUnread ? "عرض الكل" : "غير المقروء فقط"}
             </Button>
@@ -492,7 +492,7 @@ function NotificationInbox() {
             كتم فئة يوقف تنبيهاتها العادية عنك — **أمّا الحرِج فيصلك دائمًا**.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap gap-2">
+        <CardContent className="flex flex-wrap justify-start gap-2 text-start">
           {preferences.isLoading && <Skeleton className="h-10 w-full" />}
           {preferences.isError && (
             <QueryError error={preferences.error} retry={() => void preferences.refetch()} />
