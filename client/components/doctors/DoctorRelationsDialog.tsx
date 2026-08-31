@@ -61,16 +61,18 @@ const NONE = "__none__";
 
 export default function DoctorRelationsDialog({
   doctor,
+  initialTab = "places",
   onClose,
 }: {
   doctor: { id: string; name_ar: string } | null;
+  initialTab?: string;
   onClose: () => void;
 }) {
   const { organization } = useOrganizationAccess();
   const { can } = usePermissions();
   const organizationId = organization?.id;
   const canManage = can("doctors.manage");
-  const [tab, setTab] = useState("places");
+  const [tab, setTab] = useState(initialTab);
 
   return (
     <Dialog open={Boolean(doctor)} onOpenChange={(open) => !open && onClose()}>
@@ -590,7 +592,9 @@ function ScheduleTab({
   const { toast } = useToast();
   const clinics = useClinics(organizationId);
   const [form, setForm] = useState<any>({
+    recurrence_type: "weekly",
     day_of_week: 7,
+    pattern_anchor_date: new Date().toISOString().slice(0, 10),
     start_time: "08:00",
     end_time: "14:00",
     slot_duration_minutes: 15,
@@ -604,7 +608,7 @@ function ScheduleTab({
       const { data, error } = await supabase
         .from("doctor_schedules")
         .select(
-          "id, clinic_id, day_of_week, start_time, end_time, slot_duration_minutes, capacity, effective_from, effective_to, is_active, clinic:clinics(name)",
+          "id, clinic_id, recurrence_type, pattern_anchor_date, day_of_week, start_time, end_time, slot_duration_minutes, capacity, effective_from, effective_to, is_active, clinic:clinics(name)",
         )
         .eq("doctor_id", doctorId)
         .order("day_of_week")
@@ -622,7 +626,9 @@ function ScheduleTab({
         organization_id: organizationId,
         doctor_id: doctorId,
         clinic_id: form.clinic_id || null,
+        recurrence_type: form.recurrence_type,
         day_of_week: Number(form.day_of_week),
+        pattern_anchor_date: form.recurrence_type === "alternate_days" ? form.pattern_anchor_date : null,
         start_time: form.start_time,
         end_time: form.end_time,
         slot_duration_minutes: Number(form.slot_duration_minutes) || 15,
@@ -664,31 +670,43 @@ function ScheduleTab({
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs text-muted-foreground">
-        الدوام الأسبوعي المتكرّر. الأوقات المتاحة تُولَّد منه، والحجز خارجه مرفوض من القاعدة.
+        اختر دوامًا أسبوعيًا لأيام محددة أو نمط يوم عمل ويوم إجازة. ويمكن تسجيل الإجازات والدوام الاستثنائي من تبويب الاستثناءات.
       </p>
 
       {canManage && (
         <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
-          <div className="w-28">
+          <div className="w-44">
             <div className="flex flex-col gap-1.5">
-              <Label>اليوم</Label>
-              <Select
-                value={String(form.day_of_week)}
-                onValueChange={(value) => set("day_of_week", Number(value))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
+              <Label>نمط الدوام</Label>
+              <Select value={form.recurrence_type} onValueChange={(value) => set("recurrence_type", value)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {DAYS.map((day) => (
-                    <SelectItem key={day.value} value={String(day.value)}>
-                      {day.label}
-                    </SelectItem>
-                  ))}
+                  <SelectItem value="weekly">أسبوعي حسب الأيام</SelectItem>
+                  <SelectItem value="alternate_days">يوم عمل ويوم إجازة</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           </div>
+          {form.recurrence_type === "weekly" ? (
+            <div className="w-28">
+              <div className="flex flex-col gap-1.5">
+                <Label>اليوم</Label>
+                <Select value={String(form.day_of_week)} onValueChange={(value) => set("day_of_week", Number(value))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {DAYS.map((day) => <SelectItem key={day.value} value={String(day.value)}>{day.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          ) : (
+            <div className="w-40">
+              <div className="flex flex-col gap-1.5">
+                <Label>أول يوم عمل</Label>
+                <Input type="date" value={form.pattern_anchor_date} onChange={(e) => set("pattern_anchor_date", e.target.value)} />
+              </div>
+            </div>
+          )}
           <div className="w-28">
             <div className="flex flex-col gap-1.5">
               <Label>من</Label>
@@ -780,7 +798,8 @@ function ScheduleTab({
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>اليوم</TableHead>
+              <TableHead>النمط</TableHead>
+              <TableHead>اليوم / البداية</TableHead>
               <TableHead>الوقت</TableHead>
               <TableHead>العيادة</TableHead>
               <TableHead>الفتحة</TableHead>
@@ -792,7 +811,8 @@ function ScheduleTab({
           <TableBody>
             {(rows.data ?? []).map((row) => (
               <TableRow key={row.id} className={row.is_active ? "" : "text-muted-foreground"}>
-                <TableCell>{DAY_LABEL[row.day_of_week] ?? row.day_of_week}</TableCell>
+                <TableCell>{row.recurrence_type === "alternate_days" ? "يوم عمل / يوم إجازة" : "أسبوعي"}</TableCell>
+                <TableCell>{row.recurrence_type === "alternate_days" ? row.pattern_anchor_date : (DAY_LABEL[row.day_of_week] ?? row.day_of_week)}</TableCell>
                 <TableCell className="font-mono text-xs">
                   {String(row.start_time).slice(0, 5)} — {String(row.end_time).slice(0, 5)}
                 </TableCell>
@@ -815,7 +835,7 @@ function ScheduleTab({
             ))}
             {(rows.data ?? []).length === 0 && (
               <TableRow>
-                <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
                   لا جدول دوام مسجَّل — الحجز مفتوح في أي وقت.
                 </TableCell>
               </TableRow>

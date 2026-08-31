@@ -44,6 +44,17 @@ type Catalog = {
   team: Doctor[];
   services: Service[];
 };
+type AvailableSlot = {
+  start: string;
+  end: string;
+  date: string;
+};
+
+type SlotsResponse = {
+  duration_minutes: number;
+  slots: AvailableSlot[];
+};
+
 type BookingResult = {
   booking_reference: string;
   invoice_number: number;
@@ -73,10 +84,14 @@ function formatMoney(value: number) {
   return new Intl.NumberFormat("ar-SA", { style: "currency", currency: "SAR" }).format(value);
 }
 
+function tomorrowDateFor(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
 function tomorrowDate() {
   const date = new Date();
   date.setDate(date.getDate() + 1);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  return tomorrowDateFor(date);
 }
 
 export default function PublicBooking() {
@@ -95,7 +110,10 @@ export default function PublicBooking() {
   const [doctorId, setDoctorId] = useState("");
   const [serviceId, setServiceId] = useState("");
   const [date, setDate] = useState(tomorrowDate);
-  const [time, setTime] = useState("10:00");
+  const [selectedSlotStart, setSelectedSlotStart] = useState("");
+  const [availableSlots, setAvailableSlots] = useState<AvailableSlot[]>([]);
+  const [slotsLoading, setSlotsLoading] = useState(false);
+  const [slotsError, setSlotsError] = useState("");
   const [note, setNote] = useState("");
   const [paymentMethod, setPaymentMethod] = useState<"test_card" | "cash_at_center" | null>(null);
   const [cardNumber, setCardNumber] = useState("4111 1111 1111 1111");
@@ -139,11 +157,61 @@ export default function PublicBooking() {
 
   const selectedService = services.find((service) => service.id === serviceId);
 
+  useEffect(() => {
+    if (!clinicId || !doctorId || !serviceId) {
+      setAvailableSlots([]);
+      setSelectedSlotStart("");
+      return;
+    }
+    let active = true;
+    setSlotsLoading(true);
+    setSlotsError("");
+    void supabase.rpc("app_public_doctor_slots", {
+      p_slug: slug,
+      p_doctor_id: doctorId,
+      p_clinic_id: clinicId,
+      p_item_id: serviceId,
+      p_from: tomorrowDate(),
+      p_days: 30,
+    }).then(({ data, error }) => {
+      if (!active) return;
+      if (error) {
+        setAvailableSlots([]);
+        setSelectedSlotStart("");
+        setSlotsError(error.message);
+      } else {
+        const slots = ((data as SlotsResponse | null)?.slots ?? []);
+        setAvailableSlots(slots);
+        const first = slots[0];
+        setSelectedSlotStart(first?.start ?? "");
+        if (first) setDate(tomorrowDateFor(new Date(first.start)));
+      }
+      setSlotsLoading(false);
+    });
+    return () => { active = false; };
+  }, [clinicId, doctorId, serviceId, slug]);
+
+  const slotsByDate = useMemo(() => {
+    const grouped = new Map<string, AvailableSlot[]>();
+    availableSlots.forEach((slot) => {
+      const key = tomorrowDateFor(new Date(slot.start));
+      grouped.set(key, [...(grouped.get(key) ?? []), slot]);
+    });
+    return grouped;
+  }, [availableSlots]);
+
+  const availableDates = [...slotsByDate.keys()];
+  const selectedDateSlots = slotsByDate.get(date) ?? [];
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitError("");
     if (!clinicId || !doctorId || !serviceId) {
       setSubmitError("اختر العيادة والطبيب والخدمة");
+      return;
+    }
+    if (!selectedSlotStart || !availableSlots.some((slot) => slot.start === selectedSlotStart)) {
+      setSubmitError("اختر موعدًا متاحًا من جدول الطبيب");
       return;
     }
     if (!paymentMethod) {
@@ -159,7 +227,7 @@ export default function PublicBooking() {
       }
     }
     setSubmitting(true);
-    const scheduledStart = new Date(`${date}T${time}:00`).toISOString();
+    const scheduledStart = selectedSlotStart;
     const { data, error } = await supabase.rpc("app_public_create_booking", {
       p_slug: slug,
       p_name: name,
@@ -348,9 +416,34 @@ export default function PublicBooking() {
                     <label className="text-sm font-bold">الخدمة<select required value={serviceId} onChange={(e) => setServiceId(e.target.value)} className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 outline-none focus:border-[#0baa8e]">{services.map((service) => <option key={service.id} value={service.id}>{service.name} — {formatMoney(Number(service.price))}</option>)}</select></label>
                     <label className="text-sm font-bold">الطبيب<select required value={doctorId} onChange={(e) => setDoctorId(e.target.value)} className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 outline-none focus:border-[#0baa8e]">{doctors.map((doctor) => <option key={doctor.id} value={doctor.id}>د. {doctor.name}</option>)}</select></label>
                   </div>
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="text-sm font-bold">التاريخ<input required type="date" min={tomorrowDate()} value={date} onChange={(e) => setDate(e.target.value)} className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 outline-none focus:border-[#0baa8e]" /></label>
-                    <label className="text-sm font-bold">الوقت<input required type="time" min="09:00" max="21:00" step="900" value={time} onChange={(e) => setTime(e.target.value)} className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 outline-none focus:border-[#0baa8e]" /></label>
+                  <div className="rounded-2xl border border-[#d9e4e1] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div><h3 className="text-sm font-extrabold">الأيام والأوقات المتاحة للطبيب</h3><p className="mt-1 text-xs text-[#6e827d]">تُعرض بعد احتساب دوام الطبيب وإجازاته والحجوزات الحالية.</p></div>
+                      {slotsLoading && <span className="text-xs font-bold text-[#0a816d]">جارٍ التحديث...</span>}
+                    </div>
+                    {slotsError && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{slotsError}</p>}
+                    {!slotsLoading && !slotsError && availableDates.length === 0 && <p className="mt-3 rounded-lg bg-amber-50 px-3 py-3 text-sm font-bold text-amber-800">لا توجد مواعيد متاحة لهذا الطبيب خلال الثلاثين يومًا القادمة.</p>}
+                    {availableDates.length > 0 && (
+                      <div className="mt-4 space-y-4">
+                        <div className="flex gap-2 overflow-x-auto pb-1">
+                          {availableDates.map((availableDate) => (
+                            <button key={availableDate} type="button" onClick={() => {
+                              setDate(availableDate);
+                              setSelectedSlotStart(slotsByDate.get(availableDate)?.[0]?.start ?? "");
+                            }} className={`min-w-fit rounded-xl border px-3 py-2 text-xs font-bold ${date === availableDate ? "border-[#0baa8e] bg-[#0baa8e] text-white" : "border-[#d9e4e1] bg-white text-[#37514b]"}`}>
+                              {new Date(`${availableDate}T12:00:00`).toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "short" })}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                          {selectedDateSlots.map((slot) => (
+                            <button key={slot.start} type="button" onClick={() => setSelectedSlotStart(slot.start)} className={`rounded-lg border px-2 py-2.5 text-xs font-bold ${selectedSlotStart === slot.start ? "border-[#0baa8e] bg-[#e8f8f4] text-[#067663] ring-1 ring-[#0baa8e]" : "border-[#d9e4e1] bg-white hover:border-[#0baa8e]"}`}>
+                              {new Date(slot.start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                   <label className="block text-sm font-bold">ملاحظة اختيارية<textarea maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} className="mt-1.5 min-h-20 w-full resize-none rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 outline-none focus:border-[#0baa8e]" placeholder="سبب الزيارة أو أي ملاحظة مهمة" /></label>
 

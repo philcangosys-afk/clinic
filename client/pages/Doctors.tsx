@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Stethoscope, Pencil, CalendarClock, Trash2, Network } from "lucide-react";
+import { Plus, Stethoscope, Pencil, CalendarClock, Network } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -95,8 +95,7 @@ export default function Doctors() {
   const { organization } = useOrganizationAccess();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<DoctorFormRow | null>(null);
-  const [hoursTarget, setHoursTarget] = useState<{ id: string; name: string } | null>(null);
-  const [relationsTarget, setRelationsTarget] = useState<{ id: string; name_ar: string } | null>(null);
+  const [relationsTarget, setRelationsTarget] = useState<{ id: string; name_ar: string; initialTab?: string } | null>(null);
   const doctors = useDoctors(organization?.id);
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -198,7 +197,7 @@ export default function Doctors() {
                           size="sm"
                           variant="ghost"
                           title="أوقات الدوام"
-                          onClick={() => setHoursTarget({ id: doctor.id, name: doctor.name_ar })}
+                          onClick={() => setRelationsTarget({ id: doctor.id, name_ar: doctor.name_ar, initialTab: "schedule" })}
                         >
                           <CalendarClock className="h-3.5 w-3.5" />
                         </Button>
@@ -247,15 +246,12 @@ export default function Doctors() {
         />
       )}
 
-      {hoursTarget && (
-        <WorkingHoursDialog
-          doctorId={hoursTarget.id}
-          doctorName={hoursTarget.name}
-          onClose={() => setHoursTarget(null)}
-        />
-      )}
-
-      <DoctorRelationsDialog doctor={relationsTarget} onClose={() => setRelationsTarget(null)} />
+      <DoctorRelationsDialog
+        key={`${relationsTarget?.id ?? "closed"}-${relationsTarget?.initialTab ?? "places"}`}
+        doctor={relationsTarget}
+        initialTab={relationsTarget?.initialTab}
+        onClose={() => setRelationsTarget(null)}
+      />
     </div>
   );
 }
@@ -544,192 +540,6 @@ function NewDoctorDialog({
           <Button disabled={!nameAr.trim() || createDoctor.isPending} onClick={() => createDoctor.mutate()}>
             <Stethoscope className="h-4 w-4" />
             {createDoctor.isPending ? "جارٍ الحفظ..." : "حفظ"}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// أوقات دوام الطبيب (لقطة 5) — جدول doctor_working_hours كان موجودًا منذ 0002
-// بلا أي واجهة، فلم يكن ممكنًا تحديد أوقات عمل طبيب أو حجب فترة من جدوله
-// ---------------------------------------------------------------------------
-
-type WorkingHourRow = {
-  id: string;
-  doctor_id: string;
-  starts_at: string;
-  ends_at: string;
-  note: string | null;
-  is_blocked: boolean;
-};
-
-
-function WorkingHoursDialog({
-  doctorId,
-  doctorName,
-  onClose,
-}: {
-  doctorId: string;
-  doctorName: string;
-  onClose: () => void;
-}) {
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
-  const [startsAt, setStartsAt] = useState("");
-  const [endsAt, setEndsAt] = useState("");
-  const [note, setNote] = useState("");
-  const [isBlocked, setIsBlocked] = useState(false);
-
-  const hours = useQuery({
-    queryKey: ["doctor-working-hours", doctorId],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("doctor_working_hours")
-        .select("*")
-        .eq("doctor_id", doctorId)
-        .order("starts_at");
-      if (error) throw error;
-      return (data ?? []) as WorkingHourRow[];
-    },
-  });
-
-  const addSlot = useMutation({
-    mutationFn: async () => {
-      if (!startsAt || !endsAt) throw new Error("حدّد وقت البداية والنهاية");
-      if (new Date(startsAt) >= new Date(endsAt))
-        throw new Error("وقت البداية يجب أن يسبق وقت النهاية");
-      // التداخل مع فترة قائمة يُرفض هنا لا في القاعدة، لأن الجدول يسمح به
-      // تقنيًا — وفترتا عمل متداخلتان تُربكان حساب المواعيد المتاحة.
-      const overlapping = (hours.data ?? []).some(
-        (row) => new Date(startsAt) < new Date(row.ends_at) && new Date(endsAt) > new Date(row.starts_at),
-      );
-      if (overlapping) throw new Error("هذه الفترة تتداخل مع فترة مسجَّلة بالفعل");
-
-      const { error } = await supabase.from("doctor_working_hours").insert({
-        doctor_id: doctorId,
-        starts_at: new Date(startsAt).toISOString(),
-        ends_at: new Date(endsAt).toISOString(),
-        note: note.trim() || null,
-        is_blocked: isBlocked,
-      });
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["doctor-working-hours", doctorId] });
-      toast({ title: "تمت إضافة الفترة" });
-      setNote("");
-    },
-    onError: (error: unknown) =>
-      toast({
-        variant: "destructive",
-        title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
-      }),
-  });
-
-  const removeSlot = useMutation({
-    mutationFn: async (id: string) => {
-      const { data: affectedRows, error } = await supabase.from("doctor_working_hours").delete().eq("id", id)
-        .select("id");
-      if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["doctor-working-hours", doctorId] }),
-  });
-
-  return (
-    <Dialog open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="max-h-[88vh] max-w-2xl overflow-y-auto">
-        <DialogHeader>
-          <DialogTitle>أوقات الدوام — د. {doctorName}</DialogTitle>
-          <DialogDescription>
-            فترات العمل تحدد المواعيد المتاحة للحجز، وفترات الحجب تمنع الحجز فيها (إجازة، اجتماع، عملية)
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="flex flex-col gap-3 rounded-lg border p-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
-              <Label>من *</Label>
-              <Input type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>إلى *</Label>
-              <Input type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
-            </div>
-            <div className="flex flex-col gap-1.5 sm:col-span-2">
-              <Label>ملاحظة</Label>
-              <Input value={note} onChange={(e) => setNote(e.target.value)} />
-            </div>
-          </div>
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={isBlocked}
-              onChange={(e) => setIsBlocked(e.target.checked)}
-              className="h-4 w-4"
-            />
-            فترة حجب (غير متاحة للحجز)
-          </label>
-          <Button className="self-start" disabled={addSlot.isPending} onClick={() => addSlot.mutate()}>
-            <Plus className="h-4 w-4" />
-            إضافة فترة
-          </Button>
-        </div>
-
-        {hours.isLoading && <Skeleton className="h-32 w-full" />}
-        {!hours.isLoading && (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>من</TableHead>
-                <TableHead>إلى</TableHead>
-                <TableHead>النوع</TableHead>
-                <TableHead>ملاحظة</TableHead>
-                <TableHead className="w-16" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(hours.data ?? []).map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell className="text-xs">
-                    {new Date(row.starts_at).toLocaleString("ar-SA")}
-                  </TableCell>
-                  <TableCell className="text-xs">{new Date(row.ends_at).toLocaleString("ar-SA")}</TableCell>
-                  <TableCell>
-                    <Badge variant={row.is_blocked ? "destructive" : "success"}>
-                      {row.is_blocked ? "محجوبة" : "عمل"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="max-w-[10rem] truncate text-sm text-muted-foreground">
-                    {row.note ?? "—"}
-                  </TableCell>
-                  <TableCell>
-                    <Button size="sm" variant="ghost" onClick={() => removeSlot.mutate(row.id)}>
-                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {(hours.data ?? []).length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
-                    لا توجد فترات دوام مسجَّلة لهذا الطبيب.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        )}
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>
-            إغلاق
           </Button>
         </DialogFooter>
       </DialogContent>
