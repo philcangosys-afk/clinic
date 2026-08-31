@@ -45,6 +45,19 @@ const ALERT_TYPE_LABELS: Record<string, string> = {
   entity_document_expiry: "مستند كيان",
 };
 
+const ALERT_TYPE_PATHS: Record<string, string> = {
+  facility_license: "/licenses",
+  inventory_lot_expiry: "/inventory",
+  employee_document_expiry: "/contracts",
+  insurance_membership_expiry: "/insurance",
+  employee_contract_expiry: "/contracts",
+  asset_warranty_expiry: "/assets",
+  asset_service_contract_expiry: "/assets",
+  asset_calibration_due: "/assets",
+  patient_document_expiry: "/documents",
+  entity_document_expiry: "/documents",
+};
+
 const CATEGORY_LABELS: Record<string, string> = {
   clinical: "سريري",
   financial: "مالي",
@@ -75,6 +88,21 @@ function daysUntil(dateStr: string) {
   const target = new Date(dateStr);
   target.setHours(0, 0, 0, 0);
   return Math.round((target.getTime() - today.getTime()) / 86_400_000);
+}
+
+function QueryError({ error, retry }: { error: unknown; retry: () => void }) {
+  const message =
+    typeof error === "object" && error && "message" in error
+      ? String(error.message)
+      : "خطأ غير متوقع";
+
+  return (
+    <div className="flex flex-col items-center gap-3 py-8 text-center">
+      <p className="text-sm font-medium text-destructive">تعذر تحميل البيانات</p>
+      <p className="max-w-xl text-xs text-muted-foreground">{message}</p>
+      <Button variant="outline" size="sm" onClick={retry}>إعادة المحاولة</Button>
+    </div>
+  );
 }
 
 function useAlerts(organizationId: string | undefined) {
@@ -187,7 +215,8 @@ export default function Alerts() {
         </CardHeader>
         <CardContent>
           {alerts.isLoading && <Skeleton className="h-40 w-full" />}
-          {!alerts.isLoading && (
+          {alerts.isError && <QueryError error={alerts.error} retry={() => void alerts.refetch()} />}
+          {!alerts.isLoading && !alerts.isError && (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -195,6 +224,7 @@ export default function Alerts() {
                   <TableHead>البند</TableHead>
                   <TableHead>تاريخ الانتهاء</TableHead>
                   <TableHead>المتبقي</TableHead>
+                  <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -210,12 +240,19 @@ export default function Alerts() {
                       <TableCell>
                         <Badge variant={status.variant}>{status.label}</Badge>
                       </TableCell>
+                      <TableCell className="text-left">
+                        {ALERT_TYPE_PATHS[row.alert_type] && (
+                          <Button asChild variant="ghost" size="sm">
+                            <Link to={ALERT_TYPE_PATHS[row.alert_type]}>فتح القسم</Link>
+                          </Button>
+                        )}
+                      </TableCell>
                     </TableRow>
                   );
                 })}
                 {rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
                       لا توجد تنبيهات ضمن النطاق المختار.
                     </TableCell>
                   </TableRow>
@@ -327,7 +364,7 @@ function NotificationInbox() {
   const generate = useMutation({
     mutationFn: async () => {
       const { data, error } = await supabase.rpc("app_generate_expiry_notifications", {
-        p_org: organization!.id, p_days: 30,
+        p_org: organization!.id, p_days: 180,
       });
       if (error) throw error;
       return data as number;
@@ -378,7 +415,10 @@ function NotificationInbox() {
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {notifications.isLoading && <Skeleton className="h-40 w-full" />}
-          {!notifications.isLoading && (
+          {notifications.isError && (
+            <QueryError error={notifications.error} retry={() => void notifications.refetch()} />
+          )}
+          {!notifications.isLoading && !notifications.isError && (
             <Table>
               <TableHeader>
                 <TableRow>
@@ -453,7 +493,11 @@ function NotificationInbox() {
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
-          {Object.entries(CATEGORY_LABELS).map(([key, label]) => (
+          {preferences.isLoading && <Skeleton className="h-10 w-full" />}
+          {preferences.isError && (
+            <QueryError error={preferences.error} retry={() => void preferences.refetch()} />
+          )}
+          {!preferences.isLoading && !preferences.isError && Object.entries(CATEGORY_LABELS).map(([key, label]) => (
             <Button
               key={key}
               variant={muted.has(key) ? "outline" : "default"}
@@ -527,7 +571,8 @@ function RoutingRules() {
       </CardHeader>
       <CardContent className="overflow-x-auto">
         {rules.isLoading && <Skeleton className="h-40 w-full" />}
-        {!rules.isLoading && (
+        {rules.isError && <QueryError error={rules.error} retry={() => void rules.refetch()} />}
+        {!rules.isLoading && !rules.isError && (
           <Table>
             <TableHeader>
               <TableRow>
