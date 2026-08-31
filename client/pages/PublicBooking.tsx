@@ -2,9 +2,11 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import {
   BadgeCheck,
+  Banknote,
   CalendarDays,
   CheckCircle2,
   Clock3,
+  CreditCard,
   HeartPulse,
   MapPin,
   Menu,
@@ -58,6 +60,10 @@ type BookingResult = {
   vat_rate: number;
   vat_amount: number;
   invoice_total: number;
+  paid_amount: number;
+  remaining_amount: number;
+  invoice_status: "paid" | "unpaid";
+  payment_method: "test_card" | "cash_at_center";
   legal_name: string;
   vat_registration_number: string | null;
   currency: string;
@@ -91,6 +97,11 @@ export default function PublicBooking() {
   const [date, setDate] = useState(tomorrowDate);
   const [time, setTime] = useState("10:00");
   const [note, setNote] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState<"test_card" | "cash_at_center">("test_card");
+  const [cardNumber, setCardNumber] = useState("4111 1111 1111 1111");
+  const [cardExpiry, setCardExpiry] = useState("12/30");
+  const [cardCvv, setCardCvv] = useState("123");
+  const [cardholder, setCardholder] = useState("TEST USER");
   const [consent, setConsent] = useState(false);
   const [website, setWebsite] = useState("");
   const [mobileMenu, setMobileMenu] = useState(false);
@@ -135,6 +146,14 @@ export default function PublicBooking() {
       setSubmitError("اختر العيادة والطبيب والخدمة");
       return;
     }
+    if (paymentMethod === "test_card") {
+      const validCard = cardNumber.replace(/\s/g, "") === "4111111111111111" &&
+        cardExpiry === "12/30" && cardCvv === "123" && cardholder.trim().toUpperCase() === "TEST USER";
+      if (!validCard) {
+        setSubmitError("بيانات البطاقة التجريبية غير صحيحة؛ استخدم البيانات الموضحة في النموذج");
+        return;
+      }
+    }
     setSubmitting(true);
     const scheduledStart = new Date(`${date}T${time}:00`).toISOString();
     const { data, error } = await supabase.rpc("app_public_create_booking", {
@@ -147,6 +166,7 @@ export default function PublicBooking() {
       p_doctor_id: doctorId,
       p_item_id: serviceId,
       p_scheduled_start: scheduledStart,
+      p_payment_method: paymentMethod,
       p_note: note || null,
       p_consent: consent,
       p_website: website || null,
@@ -227,6 +247,11 @@ export default function PublicBooking() {
                     <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-[#cfeee6] text-[#067663]"><CheckCircle2 className="h-8 w-8" /></span>
                     <h2 className="mt-3 text-2xl font-extrabold">تم تأكيد حجزك وإصدار فاتورتك</h2>
                     <p className="mt-1 text-sm text-[#6e827d]">وصل الموعد والفاتورة مباشرةً إلى نظام المركز.</p>
+                    {result.payment_method === "test_card" ? (
+                      <p className="mt-3 rounded-xl bg-emerald-50 px-4 py-3 text-sm font-bold text-emerald-800">تم تسجيل الدفع بالبطاقة التجريبية بنجاح.</p>
+                    ) : (
+                      <p className="mt-3 rounded-xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">يرجى إكمال الدفع نقدًا في المركز.</p>
+                    )}
                   </div>
 
                   <article id="booking-invoice" className="overflow-hidden rounded-2xl border border-[#c8d8d4] bg-white text-[#172c27] shadow-sm">
@@ -286,12 +311,13 @@ export default function PublicBooking() {
                         <div className="flex justify-between"><span className="text-[#60746f]">المجموع قبل الضريبة</span><strong>{formatMoney(Number(result.invoice_subtotal))}</strong></div>
                         <div className="flex justify-between"><span className="text-[#60746f]">ضريبة القيمة المضافة ({Number(result.vat_rate)}%)</span><strong>{formatMoney(Number(result.vat_amount))}</strong></div>
                         <div className="flex justify-between border-t-2 border-[#0baa8e] pt-3 text-lg"><span className="font-extrabold">الإجمالي</span><strong className="text-[#067663]">{formatMoney(Number(result.invoice_total))}</strong></div>
-                        <div className="flex justify-between"><span className="text-[#60746f]">المدفوع</span><strong>{formatMoney(0)}</strong></div>
-                        <div className="flex justify-between rounded-lg bg-amber-50 px-2 py-1.5 text-amber-800"><span className="font-bold">المتبقي</span><strong>{formatMoney(Number(result.invoice_total))}</strong></div>
+                        <div className="flex justify-between"><span className="text-[#60746f]">المدفوع</span><strong>{formatMoney(Number(result.paid_amount))}</strong></div>
+                        <div className={`flex justify-between rounded-lg px-2 py-1.5 ${result.invoice_status === "paid" ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-800"}`}><span className="font-bold">المتبقي</span><strong>{formatMoney(Number(result.remaining_amount))}</strong></div>
                       </div>
 
                       <div className="mt-5 flex items-center justify-between gap-4 border-t border-dashed border-[#c8d8d4] pt-4 text-xs text-[#60746f]">
-                        <span>حالة الفاتورة: <strong className="text-amber-700">غير مدفوعة</strong></span>
+                        <span>حالة الفاتورة: <strong className={result.invoice_status === "paid" ? "text-emerald-700" : "text-amber-700"}>{result.invoice_status === "paid" ? "مدفوعة" : "غير مدفوعة"}</strong></span>
+                        <span>{result.payment_method === "test_card" ? "بطاقة تجريبية عبر الموقع" : "الدفع نقدًا في المركز"}</span>
                         <span>شكرًا لاختياركم {catalog.site_name}</span>
                       </div>
                     </div>
@@ -323,11 +349,44 @@ export default function PublicBooking() {
                     <label className="text-sm font-bold">الوقت<input required type="time" min="09:00" max="21:00" step="900" value={time} onChange={(e) => setTime(e.target.value)} className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 outline-none focus:border-[#0baa8e]" /></label>
                   </div>
                   <label className="block text-sm font-bold">ملاحظة اختيارية<textarea maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} className="mt-1.5 min-h-20 w-full resize-none rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 outline-none focus:border-[#0baa8e]" placeholder="سبب الزيارة أو أي ملاحظة مهمة" /></label>
+
+                  <fieldset className="rounded-2xl border border-[#d9e4e1] p-4">
+                    <legend className="px-2 text-sm font-extrabold">طريقة الدفع</legend>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <label className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 ${paymentMethod === "test_card" ? "border-[#0baa8e] bg-[#e8f8f4]" : "border-[#d9e4e1]"}`}>
+                        <input type="radio" name="payment-method" checked={paymentMethod === "test_card"} onChange={() => setPaymentMethod("test_card")} className="h-4 w-4 accent-[#0baa8e]" />
+                        <CreditCard className="h-5 w-5 text-[#0a816d]" />
+                        <span><strong className="block text-sm">الدفع بالبطاقة</strong><small className="text-[#6e827d]">تجريبي داخل الموقع</small></span>
+                      </label>
+                      <label className={`flex cursor-pointer items-center gap-3 rounded-xl border p-3 ${paymentMethod === "cash_at_center" ? "border-[#0baa8e] bg-[#e8f8f4]" : "border-[#d9e4e1]"}`}>
+                        <input type="radio" name="payment-method" checked={paymentMethod === "cash_at_center"} onChange={() => setPaymentMethod("cash_at_center")} className="h-4 w-4 accent-[#0baa8e]" />
+                        <Banknote className="h-5 w-5 text-[#0a816d]" />
+                        <span><strong className="block text-sm">كاش في المركز</strong><small className="text-[#6e827d]">الدفع عند الحضور</small></span>
+                      </label>
+                    </div>
+
+                    {paymentMethod === "test_card" ? (
+                      <div className="mt-4 rounded-xl bg-slate-50 p-4">
+                        <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-xs leading-5 text-blue-800">
+                          بوابة دفع تجريبية فقط — لا تستخدم بيانات بطاقة حقيقية. البيانات التجريبية معبأة مسبقًا.
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <label className="text-xs font-bold sm:col-span-2">رقم البطاقة<input required inputMode="numeric" dir="ltr" value={cardNumber} onChange={(e) => setCardNumber(e.target.value)} maxLength={19} autoComplete="off" className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 text-start font-mono outline-none focus:border-[#0baa8e]" /></label>
+                          <label className="text-xs font-bold">تاريخ الانتهاء<input required dir="ltr" value={cardExpiry} onChange={(e) => setCardExpiry(e.target.value)} maxLength={5} autoComplete="off" className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 text-start font-mono outline-none focus:border-[#0baa8e]" /></label>
+                          <label className="text-xs font-bold">CVV<input required inputMode="numeric" dir="ltr" value={cardCvv} onChange={(e) => setCardCvv(e.target.value)} maxLength={3} autoComplete="off" className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 text-start font-mono outline-none focus:border-[#0baa8e]" /></label>
+                          <label className="text-xs font-bold sm:col-span-2">اسم حامل البطاقة<input required dir="ltr" value={cardholder} onChange={(e) => setCardholder(e.target.value)} autoComplete="off" className="mt-1.5 w-full rounded-xl border border-[#d9e4e1] bg-white px-3.5 py-3 text-start uppercase outline-none focus:border-[#0baa8e]" /></label>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="mt-4 rounded-xl bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">ستصدر الفاتورة غير مدفوعة، ويرجى إكمال الدفع نقدًا في المركز.</p>
+                    )}
+                  </fieldset>
+
                   <label className="hidden" aria-hidden="true">الموقع<input tabIndex={-1} autoComplete="off" value={website} onChange={(e) => setWebsite(e.target.value)} /></label>
                   <label className="flex items-start gap-2 text-xs leading-5 text-[#516761]"><input required type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)} className="mt-1 h-4 w-4 accent-[#0baa8e]" /> أوافق على استخدام بياناتي لغرض إنشاء الملف والموعد والفاتورة وفق سياسة الخصوصية.</label>
                   {selectedService && <div className="flex items-center justify-between rounded-xl bg-[#eaf1ef] px-4 py-3 text-sm"><span>القيمة التقديرية قبل الضريبة</span><strong>{formatMoney(Number(selectedService.price))}</strong></div>}
                   {submitError && <p role="alert" className="rounded-xl bg-red-50 px-4 py-3 text-sm font-bold text-red-700">{submitError}</p>}
-                  <button disabled={submitting} className="w-full rounded-xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-5 py-4 font-extrabold text-white shadow-lg transition hover:-translate-y-0.5 disabled:opacity-60">{submitting ? "جارٍ تثبيت الموعد..." : "تأكيد الحجز وإنشاء الفاتورة"}</button>
+                  <button disabled={submitting} className="w-full rounded-xl bg-gradient-to-l from-[#0baa8e] to-[#1fcfb8] px-5 py-4 font-extrabold text-white shadow-lg transition hover:-translate-y-0.5 disabled:opacity-60">{submitting ? "جارٍ إكمال العملية..." : paymentMethod === "test_card" ? "الدفع التجريبي وتأكيد الحجز" : "تأكيد الحجز والدفع في المركز"}</button>
                 </form>
               )}
             </div>
