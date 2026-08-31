@@ -439,8 +439,8 @@ function AccessLogPanel() {
       const since = new Date();
       since.setDate(since.getDate() - Number(days));
       const { data, error } = await supabase
-        .from("medical_record_access_log")
-        .select("id, occurred_at, access_type, context, reason, patient_id, user_id, branch_id")
+        .from("v_medical_record_access_log_detail")
+        .select("id, occurred_at, access_type, context, reason, patient_name, file_number, user_name, user_email, branch_name, device_name")
         .eq("organization_id", organization!.id)
         .gte("occurred_at", since.toISOString())
         .order("occurred_at", { ascending: false })
@@ -482,8 +482,11 @@ function AccessLogPanel() {
               <TableHeader>
                 <TableRow>
                   <TableHead>الوقت</TableHead>
+                  <TableHead>المستخدم</TableHead>
+                  <TableHead>المريض</TableHead>
+                  <TableHead>الفرع</TableHead>
                   <TableHead>النوع</TableHead>
-                  <TableHead>السياق</TableHead>
+                  <TableHead>الجهاز والسياق</TableHead>
                   <TableHead>السبب</TableHead>
                 </TableRow>
               </TableHeader>
@@ -494,9 +497,21 @@ function AccessLogPanel() {
                       {new Date(r.occurred_at).toLocaleString("ar-SA")}
                     </TableCell>
                     <TableCell className="text-sm">
+                      <p className="font-medium">{r.user_name ?? "—"}</p>
+                      <p className="text-xs text-muted-foreground" dir="ltr">{r.user_email ?? "—"}</p>
+                    </TableCell>
+                    <TableCell className="text-sm">
+                      <p className="font-medium">{r.patient_name ?? "—"}</p>
+                      <p className="font-mono text-xs text-muted-foreground">{r.file_number ?? "—"}</p>
+                    </TableCell>
+                    <TableCell className="text-sm">{r.branch_name ?? "—"}</TableCell>
+                    <TableCell className="text-sm">
                       {ACCESS_TYPES[r.access_type] ?? r.access_type}
                     </TableCell>
-                    <TableCell className="text-sm">{r.context ?? "—"}</TableCell>
+                    <TableCell className="text-sm">
+                      <p>{r.device_name ?? "—"}</p>
+                      <p className="text-xs text-muted-foreground">{r.context ?? "—"}</p>
+                    </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {r.reason ?? "—"}
                     </TableCell>
@@ -504,7 +519,7 @@ function AccessLogPanel() {
                 ))}
                 {(log.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
                       لا اطّلاعات مسجَّلة في هذه المدّة.
                     </TableCell>
                   </TableRow>

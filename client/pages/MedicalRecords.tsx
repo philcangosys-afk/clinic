@@ -270,6 +270,7 @@ function NewVisitDialog({
   const doctors = useDoctorsList(organizationId);
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [doctorId, setDoctorId] = useState("");
+  const lastLoggedPatientId = useRef<string | null>(null);
   const [mainComplaint, setMainComplaint] = useState("");
   const [notes, setNotes] = useState("");
   const [nextVisitPlan, setNextVisitPlan] = useState("");
@@ -335,6 +336,32 @@ function NewVisitDialog({
     if (appointmentPatient) setPatient({ id: appointmentPatient.id, name_ar: appointmentPatient.name_ar });
     setDoctorId(appointment.doctor_id);
   }, [appointment, open]);
+
+  useEffect(() => {
+    if (!open || !patient || lastLoggedPatientId.current === patient.id) return;
+    lastLoggedPatientId.current = patient.id;
+    void supabase.rpc("app_log_record_access", {
+      p_patient_id: patient.id,
+      p_access_type: "view",
+      p_context: appointment ? "فتح السجل من الموعد" : "فتح نموذج زيارة طبية",
+      p_reason: "تقديم الرعاية الطبية",
+      p_visit_id: null,
+      p_device_name: navigator.userAgent,
+    }).then(({ error }) => {
+      if (error) {
+        lastLoggedPatientId.current = null;
+        toast({
+          variant: "destructive",
+          title: "تعذر تسجيل الاطلاع على الملف",
+          description: error.message,
+        });
+      }
+    });
+  }, [appointment, open, patient, toast]);
+
+  useEffect(() => {
+    if (!open) lastLoggedPatientId.current = null;
+  }, [open]);
 
   // تعبئة جهة العمل تلقائيًا من ملف المريض عند اختيار قالب الفحص المهني — نفس
   // حقل patients.work_entity_value_id المستخدم أصلًا في ملف المريض (0028)
