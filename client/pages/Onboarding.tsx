@@ -1,15 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Activity, ArrowLeft, Building2, CheckCircle2, LogIn, UserPlus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import type { HealthcareOrganizationType } from "@shared/api";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
 
-export const organizationTypes: { value: HealthcareOrganizationType; label: string; detail: string }[] = [
-  { value: "clinic", label: "عيادة", detail: "الوحدات التشغيلية الأساسية للاستقبال والمواعيد والمرضى والسجل الطبي والفوترة والموارد البشرية" },
-  { value: "medical_center", label: "مركز طبي متكامل", detail: "الوحدات الأساسية مع الأقسام والمختبر والأشعة والصيدلية والتأمين والمخزون والمشتريات والتمريض والتقارير المتقدمة" },
-];
+export const organizationType = {
+  value: "medical_center" as const,
+  label: "مركز طبي متكامل",
+  detail: "جميع الأقسام والوحدات الطبية والإدارية والمالية متاحة ضمن مركز واحد متكامل",
+};
 
 export default function Onboarding() {
   const navigate = useNavigate();
@@ -18,7 +18,6 @@ export default function Onboarding() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [name, setName] = useState("");
-  const [organizationType, setOrganizationType] = useState<HealthcareOrganizationType>("clinic");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -55,7 +54,7 @@ export default function Onboarding() {
     setError("");
     const { error: insertError } = await supabase.from("organizations").insert({
       name: name.trim(),
-      organization_type: organizationType,
+      organization_type: organizationType.value,
       created_by: access.session.user.id,
     });
     if (insertError) {
@@ -94,7 +93,13 @@ export default function Onboarding() {
             <div className="mb-7"><div className="flex h-11 w-11 items-center justify-center rounded-xl bg-[#e4f5f1] text-[#0d857b]"><Building2 className="h-5 w-5" /></div><h2 className="mt-5 text-2xl font-bold">إعداد المنظمة</h2><p className="mt-2 text-xs text-[#819b98]">سننشئ الفرع الرئيسي والوحدات الافتراضية تلقائيًا.</p></div>
             <form onSubmit={createOrganization} className="space-y-5">
               <AuthField label="اسم المنشأة"><input required value={name} onChange={(event) => setName(event.target.value)} className={controlClass} placeholder="مثال: مجمع زين الطبي" /></AuthField>
-              <div><div className="mb-2 text-[11px] font-bold text-[#698783]">نوع المنشأة</div><div className="grid gap-2 sm:grid-cols-2">{organizationTypes.map((type) => <button key={type.value} type="button" onClick={() => setOrganizationType(type.value)} className={cn("rounded-xl border p-3 text-right transition", organizationType === type.value ? "border-[#72bbb2] bg-[#eaf7f4]" : "border-[#e1ecea] hover:border-[#a9d6d0]")}><div className="text-xs font-bold text-[#315d5a]">{type.label}</div><div className="mt-1 text-[10px] text-[#8ba3a0]">{type.detail}</div></button>)}</div></div>
+              <div>
+                <div className="mb-2 text-[11px] font-bold text-[#698783]">نوع المنشأة</div>
+                <div className="rounded-xl border border-[#72bbb2] bg-[#eaf7f4] p-4 text-right">
+                  <div className="text-xs font-bold text-[#315d5a]">{organizationType.label}</div>
+                  <div className="mt-1 text-[10px] text-[#698783]">{organizationType.detail}</div>
+                </div>
+              </div>
               <Status error={error} message={message} />
               <button disabled={busy} className="h-12 w-full rounded-xl bg-[#0d716a] text-xs font-bold text-white disabled:opacity-60">{busy ? "جارٍ إنشاء المنظمة..." : "إنشاء المنظمة وبدء العمل"}</button>
             </form>

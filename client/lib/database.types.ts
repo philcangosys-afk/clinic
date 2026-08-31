@@ -19,7 +19,7 @@ export type UUID = string;
 export interface OrganizationRow {
   id: UUID;
   name: string;
-  organization_type: "clinic" | "medical_center";
+  organization_type: "medical_center";
   created_by: UUID;
   legacy_full_access: boolean;
   tax_number: string | null;

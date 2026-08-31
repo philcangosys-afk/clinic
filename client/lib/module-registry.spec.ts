@@ -113,23 +113,15 @@ describe("organization module access", () => {
     expect(visible).toEqual(moduleRegistry);
   });
 
-  it("uses the exact clinic defaults and blocks expanded modules", () => {
+  it("keeps the shared core modules in the unified center", () => {
     expect(CLINIC_DEFAULT_FEATURES).toHaveLength(23);
-    const configuration = resolveOrganizationAccessConfiguration({
-      authenticated: false,
-      legacyMode: true,
-      demoOrganizationType: "clinic",
-      enabledFeatures: [],
-      permissions: [],
-    });
-    expect(canAccessFeature({ ...configuration, featureKey: "core_dashboard", permissionKey: "core_dashboard.view" })).toBe(true);
-    expect(canAccessFeature({ ...configuration, featureKey: "laboratory", permissionKey: "laboratory.view" })).toBe(false);
-    expect(canAccessFeature({ ...configuration, featureKey: "pharmacy", permissionKey: "pharmacy.view" })).toBe(false);
-    expect(canAccessFeature({ ...configuration, featureKey: "accounting", permissionKey: "accounting.view" })).toBe(false);
+    expect(getOrganizationPlanDefaultFeatures("medical_center")).toEqual(
+      expect.arrayContaining(CLINIC_DEFAULT_FEATURES),
+    );
   });
 
-  it("adds medical center defaults but leaves advanced care modules disabled", () => {
-    expect(MEDICAL_CENTER_ADDED_FEATURES).toHaveLength(12);
+  it("enables every medical and administrative module for the medical center", () => {
+    expect(MEDICAL_CENTER_ADDED_FEATURES).toHaveLength(18);
     const configuration = resolveOrganizationAccessConfiguration({
       authenticated: false,
       legacyMode: true,
@@ -137,12 +129,13 @@ describe("organization module access", () => {
       enabledFeatures: [],
       permissions: [],
     });
-    expect(getOrganizationPlanDefaultFeatures("medical_center")).toHaveLength(35);
+    expect(getOrganizationPlanDefaultFeatures("medical_center")).toHaveLength(41);
     expect(canAccessFeature({ ...configuration, featureKey: "laboratory", permissionKey: "laboratory.view" })).toBe(true);
     expect(canAccessFeature({ ...configuration, featureKey: "pharmacy", permissionKey: "pharmacy.view" })).toBe(true);
     expect(canAccessFeature({ ...configuration, featureKey: "accounting", permissionKey: "accounting.view" })).toBe(true);
-    expect(canAccessFeature({ ...configuration, featureKey: "emergency", permissionKey: "emergency.view" })).toBe(false);
-    expect(canAccessFeature({ ...configuration, featureKey: "inpatient", permissionKey: "inpatient.view" })).toBe(false);
+    expect(canAccessFeature({ ...configuration, featureKey: "emergency", permissionKey: "emergency.view" })).toBe(true);
+    expect(canAccessFeature({ ...configuration, featureKey: "dental_lab", permissionKey: "dental_lab.view" })).toBe(true);
+    expect(canAccessFeature({ ...configuration, featureKey: "inpatient", permissionKey: "inpatient.view" })).toBe(true);
   });
 
   it("ignores demo selection for authenticated access", () => {

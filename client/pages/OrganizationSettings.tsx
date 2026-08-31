@@ -44,11 +44,6 @@ const CURRENCIES = [
   { value: "OMR", label: "ريال عماني (OMR)" },
 ] as const;
 
-const ORG_TYPES = [
-  { value: "clinic", label: "عيادة" },
-  { value: "medical_center", label: "مجمع طبي" },
-] as const;
-
 // ---------------------------------------------------------------------------
 // بيانات المنشأة
 // ---------------------------------------------------------------------------
@@ -57,7 +52,6 @@ function OrganizationTab({ readOnly }: { readOnly: boolean }) {
   const { toast } = useToast();
   const [form, setForm] = useState({
     name: "",
-    organization_type: "clinic" as OrganizationRow["organization_type"],
     tax_number: "",
     currency: "SAR" as OrganizationRow["currency"],
     default_vat_rate: "15",
@@ -67,7 +61,6 @@ function OrganizationTab({ readOnly }: { readOnly: boolean }) {
     if (!organization) return;
     setForm({
       name: organization.name ?? "",
-      organization_type: organization.organization_type,
       tax_number: organization.tax_number ?? "",
       // `HealthcareOrganization.currency` معرَّف `string` في shared/api.ts لا
       // كاتحاد القيم — الإسناد المباشر خطأ ترجمة (TS2322). التحويل هنا آمن
@@ -105,7 +98,6 @@ function OrganizationTab({ readOnly }: { readOnly: boolean }) {
         .from("organizations")
         .update({
           name,
-          organization_type: form.organization_type,
           tax_number: form.tax_number.trim() || null,
           currency: form.currency,
           default_vat_rate: rate,
@@ -156,24 +148,7 @@ function OrganizationTab({ readOnly }: { readOnly: boolean }) {
 
           <div className="flex flex-col gap-1.5">
             <Label>نوع المنشأة</Label>
-            <Select
-              value={form.organization_type}
-              disabled={readOnly}
-              onValueChange={(value) =>
-                set("organization_type", value as OrganizationRow["organization_type"])
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ORG_TYPES.map((type) => (
-                  <SelectItem key={type.value} value={type.value}>
-                    {type.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Input value="مركز طبي متكامل" disabled />
           </div>
 
           <div className="flex flex-col gap-1.5">

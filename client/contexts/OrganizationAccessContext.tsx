@@ -51,7 +51,7 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
   const [demoOrganizationType, setDemoOrganizationTypeState] = useState<HealthcareOrganizationType | null>(() => {
     if (typeof window === "undefined") return null;
     const stored = window.localStorage.getItem(DEMO_ORGANIZATION_TYPE_KEY);
-    return stored === "clinic" || stored === "medical_center" ? stored : null;
+    return stored === "medical_center" ? stored : null;
   });
   const [organization, setOrganization] = useState<HealthcareOrganization | null>(null);
   const [branch, setBranch] = useState<OrganizationBranch | null>(null);
@@ -159,8 +159,9 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
   );
   const setDemoOrganizationType = useCallback((type: HealthcareOrganizationType | null) => {
     if (session) return;
-    setDemoOrganizationTypeState(type);
-    if (type) window.localStorage.setItem(DEMO_ORGANIZATION_TYPE_KEY, type);
+    const unifiedType = type ? "medical_center" : null;
+    setDemoOrganizationTypeState(unifiedType);
+    if (unifiedType) window.localStorage.setItem(DEMO_ORGANIZATION_TYPE_KEY, unifiedType);
     else window.localStorage.removeItem(DEMO_ORGANIZATION_TYPE_KEY);
   }, [session]);
   const signOut = useCallback(async () => {

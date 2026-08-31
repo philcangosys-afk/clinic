@@ -60,12 +60,16 @@ export const MEDICAL_CENTER_ADDED_FEATURES: FeatureKey[] = [
   "messaging",
   "nursing",
   "advanced_analytics",
+  "content",
+  "emergency",
+  "dental_lab",
+  "inpatient",
+  "procedures",
+  "referrals",
 ];
 
-export function getOrganizationPlanDefaultFeatures(type: HealthcareOrganizationType) {
-  return type === "clinic"
-    ? [...CLINIC_DEFAULT_FEATURES]
-    : [...CLINIC_DEFAULT_FEATURES, ...MEDICAL_CENTER_ADDED_FEATURES];
+export function getOrganizationPlanDefaultFeatures(_type: HealthcareOrganizationType) {
+  return [...CLINIC_DEFAULT_FEATURES, ...MEDICAL_CENTER_ADDED_FEATURES];
 }
 
 const allFeatureKeys: FeatureKey[] = [
@@ -106,6 +110,7 @@ const allFeatureKeys: FeatureKey[] = [
   "settings",
   "nursing",
   "emergency",
+  "dental_lab",
   "inpatient",
   "procedures",
   "referrals",
