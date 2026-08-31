@@ -144,23 +144,23 @@ function SidebarGroup({
         onClick={onToggle}
         aria-expanded={isOpen}
         className={cn(
-          "group flex w-full items-center gap-2.5 rounded-xl border border-transparent px-3 py-2.5 text-start transition-all duration-200",
+          "group flex w-full flex-row-reverse items-center gap-2.5 rounded-md border px-3 py-2.5 text-start transition-all duration-200",
           isOpen
-            ? "border-sidebar-border/70 bg-sidebar-accent/65 text-sidebar-accent-foreground"
-            : "text-muted-foreground hover:border-sidebar-border/60 hover:bg-sidebar-accent/45 hover:text-foreground",
+            ? "border-primary/30 bg-primary/12 text-primary"
+            : "border-primary/15 bg-primary/5 text-primary/85 hover:bg-primary/10 hover:text-primary",
         )}
       >
         <ChevronDown
           className={cn(
             "h-4 w-4 shrink-0 transition-transform duration-200",
-            !isOpen && "-rotate-90",
+            !isOpen && "rotate-90",
           )}
         />
-        <span className="flex-1 truncate text-xs font-bold">
+        <span className="flex-1 truncate text-end text-[13px] font-bold">
           {section}
         </span>
         {!isOpen && totalBadge > 0 && (
-          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground tabular-nums">
+          <span className="rounded-md bg-primary/15 px-1.5 py-0.5 text-[10px] font-bold text-primary tabular-nums">
             {totalBadge}
           </span>
         )}
@@ -173,7 +173,7 @@ function SidebarGroup({
         )}
       >
         <div className="min-h-0 overflow-hidden">
-          <div className="flex flex-col gap-1 py-1.5 pe-1 ps-3">
+          <div className="flex flex-col gap-1.5 py-2 pe-2 ps-2">
             {items.map((item) => (
               <SidebarLink key={item.id} id={item.id} label={item.label} icon={item.icon} badge={item.badge} onNavigate={onNavigate} />
             ))}
@@ -203,19 +203,19 @@ function SidebarLink({
       onClick={onNavigate}
       className={({ isActive }) =>
         cn(
-          "relative flex min-h-10 items-center gap-3 rounded-xl border border-transparent px-3 py-2.5 text-[14px] font-semibold transition-all duration-200",
+          "relative flex min-h-11 flex-row-reverse items-center gap-3 rounded-md border bg-card px-3 py-2.5 text-[14px] font-semibold transition-all duration-200",
           isActive
-            ? "border-primary/20 bg-primary/10 text-primary shadow-sm shadow-primary/5"
-            : "text-foreground/75 hover:border-sidebar-border/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+            ? "border-accent/60 bg-accent/15 text-accent-foreground shadow-sm"
+            : "border-border/70 text-foreground/80 hover:border-accent/40 hover:bg-accent/10 hover:text-foreground",
         )
       }
     >
-      <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-background/70 text-current shadow-sm ring-1 ring-border/60">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background text-current">
         <Icon className="h-4 w-4" />
       </span>
-      <span className="flex-1 truncate text-start">{label}</span>
+      <span className="flex-1 truncate text-end">{label}</span>
       {badge && (
-        <Badge variant="secondary" className="min-w-6 justify-center px-1.5 py-0.5 text-[11px] tabular-nums">
+        <Badge variant="secondary" className="min-w-6 justify-center rounded-md px-1.5 py-0.5 text-[11px] tabular-nums">
           {badge}
         </Badge>
       )}
