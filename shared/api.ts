@@ -25,6 +25,7 @@ export type FeatureKey =
   | "doctors"
   | "laboratory"
   | "radiology"
+  | "vitals"
   | "radiology_console"
   | "pharmacy"
   | "prescriptions"

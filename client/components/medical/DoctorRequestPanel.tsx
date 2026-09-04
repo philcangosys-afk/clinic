@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ImageIcon,
   Loader2,
+  HeartPulse,
   Microscope,
   Send,
   StickyNote,
@@ -16,6 +17,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { VITAL_MEASURES } from "@/components/medical/VitalSignsForm";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,11 +28,19 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 
-type RequestKind = "radiology" | "lab" | "call_patient" | "collect_payment" | "note" | "follow_up";
+type RequestKind =
+  | "radiology"
+  | "lab"
+  | "vitals"
+  | "call_patient"
+  | "collect_payment"
+  | "note"
+  | "follow_up";
 
 const KINDS: { key: RequestKind; label: string; icon: typeof Activity; hint: string }[] = [
   { key: "radiology", label: "طلب أشعة", icon: Activity, hint: "يصل قسم الأشعة فورًا" },
   { key: "lab", label: "طلب تحليل", icon: Microscope, hint: "يصل المختبر فورًا" },
+  { key: "vitals", label: "مؤشرات حيوية", icon: HeartPulse, hint: "يصل طابور القياس" },
   { key: "follow_up", label: "موعد متابعة", icon: CalendarClock, hint: "يصل الاستقبال ليحجزه" },
   { key: "call_patient", label: "استدعاء المريض", icon: UserRoundSearch, hint: "يصل الاستقبال" },
   { key: "collect_payment", label: "تحصيل مبلغ", icon: Banknote, hint: "يصل الاستقبال" },
@@ -64,6 +74,8 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
   const [body, setBody] = useState("");
   const [followDate, setFollowDate] = useState("");
   const [period, setPeriod] = useState("any");
+  const [vitalsKind, setVitalsKind] = useState<"general" | "custom">("general");
+  const [vitalsPicked, setVitalsPicked] = useState<string[]>([]);
 
   const patients = useQuery({
     queryKey: ["dr-req-patients", organization?.id, doctorId, search],
@@ -119,11 +131,13 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
     if (!organization?.id || !patientId) return false;
     if (kind === "radiology") return examIds.length > 0;
     if (kind === "lab") return testIds.length > 0;
+    if (kind === "vitals") return vitalsKind === "general" || vitalsPicked.length > 0;
     if (kind === "follow_up") return Boolean(followDate);
     if (kind === "collect_payment") return Number(amount) > 0;
     if (kind === "note") return body.trim().length > 0;
     return true;
-  }, [organization?.id, patientId, kind, examIds, testIds, followDate, amount, body]);
+  }, [organization?.id, patientId, kind, examIds, testIds, followDate, amount, body,
+      vitalsKind, vitalsPicked.length]);
 
   const reset = () => {
     setExamIds([]);
@@ -133,6 +147,8 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
     setAmount("");
     setBody("");
     setFollowDate("");
+    setVitalsPicked([]);
+    setVitalsKind("general");
   };
 
   const send = useMutation({
@@ -163,6 +179,21 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
           p_test_ids: testIds,
           p_priority: priority,
           p_notes: instructions.trim() || null,
+        });
+        if (error) throw error;
+        return;
+      }
+      if (kind === "vitals") {
+        const { error } = await supabase.rpc("app_request_vital_signs", {
+          p_organization_id: org,
+          p_patient_id: patientId,
+          p_doctor_id: doctorId ?? null,
+          p_request_kind: vitalsKind,
+          p_measures: vitalsKind === "custom" ? vitalsPicked : null,
+          p_priority: priority === "routine" ? "routine" : "urgent",
+          p_note: body.trim() || null,
+          p_visit_id: null,
+          p_branch_id: branch?.id ?? null,
         });
         if (error) throw error;
         return;
@@ -361,6 +392,66 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
           </>
         )}
 
+        {kind === "vitals" && (
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setVitalsKind("general")}
+                className={cn(
+                  "rounded-lg border-2 p-3 text-start transition",
+                  vitalsKind === "general" ? "border-primary bg-primary/5" : "border-border",
+                )}
+              >
+                <span className="block font-bold">عام</span>
+                <span className="block text-xs text-muted-foreground">
+                  ضغط، نبض، حرارة، تنفس، وزن، طول
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setVitalsKind("custom")}
+                className={cn(
+                  "rounded-lg border-2 p-3 text-start transition",
+                  vitalsKind === "custom" ? "border-primary bg-primary/5" : "border-border",
+                )}
+              >
+                <span className="block font-bold">خاص</span>
+                <span className="block text-xs text-muted-foreground">تختار ما يُقاس</span>
+              </button>
+            </div>
+            {vitalsKind === "custom" && (
+              <div className="flex flex-wrap gap-2">
+                {VITAL_MEASURES.map((m) => (
+                  <button
+                    key={m.key}
+                    type="button"
+                    onClick={() => toggle(vitalsPicked, setVitalsPicked, m.key)}
+                    className={cn(
+                      "rounded-full border px-3 py-1.5 text-sm transition",
+                      vitalsPicked.includes(m.key)
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : "border-border hover:border-primary/50",
+                    )}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="dr-vnote">ملاحظة للقائم بالقياس</Label>
+              <Textarea
+                id="dr-vnote"
+                dir="rtl"
+                rows={2}
+                value={body}
+                onChange={(e) => setBody(e.target.value)}
+              />
+            </div>
+          </>
+        )}
+
         {kind === "follow_up" && (
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
@@ -444,7 +535,7 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
           </div>
         )}
 
-        {(kind === "radiology" || kind === "lab" || kind === "call_patient") && (
+        {(kind === "radiology" || kind === "lab" || kind === "call_patient" || kind === "vitals") && (
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="dr-prio">الأولوية</Label>
             <select
@@ -456,7 +547,9 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
             >
               <option value="routine">عادي</option>
               <option value="urgent">عاجل</option>
-              {kind !== "call_patient" && <option value="stat">طارئ</option>}
+              {kind !== "call_patient" && kind !== "vitals" && (
+                <option value="stat">طارئ</option>
+              )}
             </select>
           </div>
         )}
@@ -470,9 +563,26 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
   );
 }
 
-/** صندوق الطبيب: ما وصله من قسم الأشعة فعلًا — بصور موجودة لا بحالة مُعلنة. */
+/** صندوق الطبيب: ما وصله فعلًا — صورٌ موجودة وقياساتٌ مسجَّلة، لا حالات مُعلنة. */
 export function DoctorInbox({ doctorId }: { doctorId?: string | null }) {
   const { organization } = useOrganizationAccess();
+
+  const vitals = useQuery({
+    queryKey: ["doctor-vitals-inbox", organization?.id, doctorId],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      let q = supabase
+        .from("v_doctor_vitals_inbox")
+        .select("*")
+        .eq("organization_id", organization!.id)
+        .order("recorded_at", { ascending: false })
+        .limit(30);
+      if (doctorId) q = q.eq("doctor_id", doctorId);
+      const { data, error } = await q;
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
 
   const inbox = useQuery({
     queryKey: ["doctor-inbox", organization?.id, doctorId],
@@ -492,10 +602,11 @@ export function DoctorInbox({ doctorId }: { doctorId?: string | null }) {
   });
 
   const rows = inbox.data ?? [];
+  const vitalRows = vitals.data ?? [];
 
   if (inbox.isLoading) return <Skeleton className="h-48 w-full" />;
 
-  if (rows.length === 0) {
+  if (rows.length === 0 && vitalRows.length === 0) {
     return (
       <Card>
         <CardContent className="grid place-items-center gap-2 py-10 text-center">
@@ -511,6 +622,49 @@ export function DoctorInbox({ doctorId }: { doctorId?: string | null }) {
 
   return (
     <div className="flex flex-col gap-3">
+      {vitalRows.map((v) => (
+        <Card key={v.id}>
+          <CardContent className="flex flex-wrap items-start justify-between gap-3 pt-5">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Badge variant="secondary" className="gap-1">
+                  <HeartPulse className="h-3 w-3" />
+                  مؤشرات حيوية
+                </Badge>
+                <Link
+                  to={`/patients/${v.patient_id}`}
+                  className="text-base font-bold underline-offset-4 hover:underline"
+                >
+                  {v.patient_name}
+                </Link>
+              </div>
+              <p className="mt-1 text-sm tabular-nums">
+                {v.blood_pressure_systolic && v.blood_pressure_diastolic
+                  ? `ضغط ${v.blood_pressure_systolic}/${v.blood_pressure_diastolic} · `
+                  : ""}
+                {v.heart_rate ? `نبض ${v.heart_rate} · ` : ""}
+                {v.temperature_celsius ? `حرارة ${v.temperature_celsius}° · ` : ""}
+                {v.respiratory_rate ? `تنفس ${v.respiratory_rate} · ` : ""}
+                {v.weight_kg ? `وزن ${v.weight_kg} · ` : ""}
+                {v.bmi ? `كتلة ${v.bmi}` : ""}
+              </p>
+              {v.request_note && (
+                <p className="mt-1 rounded-md bg-muted/60 px-2 py-1 text-sm">{v.request_note}</p>
+              )}
+              <p className="mt-1 text-xs text-muted-foreground">
+                {new Date(v.recorded_at).toLocaleString("ar")}
+              </p>
+            </div>
+            <Link to={`/patients/${v.patient_id}`}>
+              <Button size="sm" variant="outline">
+                <CheckCircle2 className="h-4 w-4" />
+                فتح ملف المريض
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      ))}
+
       {rows.map((r) => (
         <Card key={r.order_id}>
           <CardContent className="flex flex-wrap items-start justify-between gap-3 pt-5">

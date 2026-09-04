@@ -28,6 +28,7 @@ const OperationsSettings = lazy(() => import("./pages/OperationsSettings"));
 const Laboratory = lazy(() => import("./pages/Laboratory"));
 const Radiology = lazy(() => import("./pages/Radiology"));
 const RadiologyConsole = lazy(() => import("./pages/RadiologyConsole"));
+const VitalSigns = lazy(() => import("./pages/VitalSigns"));
 const Pharmacy = lazy(() => import("./pages/Pharmacy"));
 const Packages = lazy(() => import("./pages/Packages"));
 const Accounting = lazy(() => import("./pages/Accounting"));
@@ -107,6 +108,7 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   laboratory: Laboratory,
   radiology: Radiology,
   "radiology-console": RadiologyConsole,
+  vitals: VitalSigns,
   // الصيدلية/الوصفات/الصرف موديول واحد متصل فعليًا (نفس المخطط 0015) — الثلاثة
   // في القائمة الجانبية يفتحون نفس الشاشة بثلاث تبويبات (صرف/وصفات/كتالوج)
   pharmacy: Pharmacy,

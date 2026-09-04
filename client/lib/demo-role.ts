@@ -65,6 +65,7 @@ export const DEMO_ROLES: DemoRoleDefinition[] = [
       "patient-journey",
       "laboratory",
       "radiology",
+      "vitals",
       "prescriptions",
       "documents",
     ],
@@ -81,7 +82,7 @@ export const DEMO_ROLES: DemoRoleDefinition[] = [
     label: "المختبر",
     description: "طلبات التحاليل وإدخال نتائجها",
     home: "/laboratory",
-    modules: ["laboratory", "patients", "documents"],
+    modules: ["laboratory", "vitals", "patients", "documents"],
   },
   {
     key: "accountant",

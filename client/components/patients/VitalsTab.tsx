@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, Plus, TrendingUp, Info } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import RequestVitalsDialog from "@/components/medical/RequestVitalsDialog";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -135,7 +136,7 @@ function NewVitalsDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { session } = useOrganizationAccess();
+  const { session, organization, branch } = useOrganizationAccess();
   const [form, setForm] = useState<Record<string, string>>({});
 
   const set = (key: string, value: string) => setForm((prev) => ({ ...prev, [key]: value }));
@@ -175,7 +176,24 @@ function NewVitalsDialog({
       );
       if (!hasValue) throw new Error("أدخل قياسًا واحدًا على الأقل");
 
-      const { error } = await supabase.from("patient_vital_signs").insert(payload);
+      // التسجيل يمرّ بـ`app_record_vital_signs` لا بإدخالٍ مباشر: الدالّة تفحص
+      // الصلاحية (`vitals.record`)، وتتحقّق أن المريض من هذه المنشأة، وترفض
+      // القيم المستحيلة (ضغط 1200، انبساطي أعلى من الانقباضي)، وتُغلق الطلب
+      // المعلّق إن وُجد وتُخطر الطبيب. الإدخال المباشر كان يتخطّى ذلك كلّه.
+      const values: Record<string, string> = {};
+      Object.entries(payload).forEach(([key, value]) => {
+        if (["organization_id", "patient_id", "created_by"].includes(key)) return;
+        if (value !== null && value !== undefined) values[key] = String(value);
+      });
+      const { error } = await supabase.rpc("app_record_vital_signs", {
+        p_organization_id: organization?.id,
+        p_patient_id: patientId,
+        p_values: values,
+        p_request_id: null,
+        p_visit_id: null,
+        p_doctor_id: null,
+        p_branch_id: branch?.id ?? null,
+      });
       if (error) throw error;
     },
     onSuccess: () => {
@@ -265,10 +283,15 @@ export default function VitalsTab({ patientId }: { patientId: string }) {
             تُسجَّل تلقائيًا مع كل زيارة طبية، ويمكن تسجيل قياس مستقل هنا
           </CardDescription>
         </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          تسجيل قياس
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* الطلب والتسجيل جنبًا إلى جنب: الاستقبال يطلب ليصل المريض مقيسًا،
+              ومن يقيس بنفسه يسجّل مباشرة. الفعلان مختلفان فلهما زرّان. */}
+          <RequestVitalsDialog patientId={patientId} />
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            تسجيل قياس
+          </Button>
+        </div>
       </CardHeader>
 
       <CardContent className="flex flex-col gap-5">
