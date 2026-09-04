@@ -5,6 +5,8 @@ import { AlertOctagon, ClipboardList, PhoneCall, Stethoscope } from "lucide-reac
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { usePermissions } from "@/lib/permissions";
+import { useDemoRole } from "@/contexts/DemoRoleContext";
+import DoctorRequestPanel, { DoctorInbox } from "@/components/medical/DoctorRequestPanel";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,22 +30,27 @@ import {
  * به خلال المهلة يُصعَّد.
  */
 export default function DoctorWorkspace() {
+  const { doctorId } = useDemoRole();
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
       <div>
         <h1 className="text-2xl font-bold">مساحة عمل الطبيب</h1>
         <p className="text-sm text-muted-foreground">
-          القيم الحرجة أولًا، ثم يومك ومرضاك وزياراتك التي لم تُغلق
+          القيم الحرجة أولًا، ثم ما وصلك من الأشعة والمختبر، وطلباتك، ويومك
         </p>
       </div>
 
       <Tabs defaultValue="critical">
         <TabsList>
           <TabsTrigger value="critical">القيم الحرجة</TabsTrigger>
+          <TabsTrigger value="inbox">وصلني</TabsTrigger>
+          <TabsTrigger value="request">إرسال طلب</TabsTrigger>
           <TabsTrigger value="today">يومي</TabsTrigger>
           <TabsTrigger value="open">زيارات لم تُغلق</TabsTrigger>
         </TabsList>
         <TabsContent value="critical" className="mt-4"><CriticalPanel /></TabsContent>
+        <TabsContent value="inbox" className="mt-4"><DoctorInbox doctorId={doctorId} /></TabsContent>
+        <TabsContent value="request" className="mt-4"><DoctorRequestPanel doctorId={doctorId} /></TabsContent>
         <TabsContent value="today" className="mt-4"><TodayPanel /></TabsContent>
         <TabsContent value="open" className="mt-4"><OpenVisitsPanel /></TabsContent>
       </Tabs>

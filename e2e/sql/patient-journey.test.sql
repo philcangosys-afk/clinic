@@ -79,7 +79,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'jr-doctor@test.local')
     returning id into v_doc_u;
   insert into organizations (name, organization_type, created_by)
-    values ('مجمّع رحلة المريض', 'clinic', v_owner) returning id into v_org;
+    values ('مجمّع رحلة المريض', 'medical_center', v_owner) returning id into v_org;
 
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
@@ -687,7 +687,7 @@ begin
     insert into auth.users (id, email) values (gen_random_uuid(), 'jr-other@test.local')
       returning id into v_owner2;
     insert into organizations (name, organization_type, created_by)
-      values ('منشأة أخرى', 'clinic', v_owner2) returning id into v_org2;
+      values ('منشأة أخرى', 'medical_center', v_owner2) returning id into v_org2;
     perform set_config('request.jwt.claim.sub', v_owner2::text, true);
     insert into patients (organization_id, name_ar) values (v_org2, 'مريض الغير')
       returning id into v_pat2;

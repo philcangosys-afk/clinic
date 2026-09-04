@@ -15,6 +15,8 @@ create table if not exists public.public_booking_settings (
 
 alter table public.public_booking_settings enable row level security;
 
+-- إسقاطٌ أولًا حتى تُعاد الهجرة بلا «policy already exists».
+drop policy if exists public_booking_settings_members on public.public_booking_settings;
 create policy public_booking_settings_members
   on public.public_booking_settings
   for all to authenticated

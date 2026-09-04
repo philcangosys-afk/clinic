@@ -38,7 +38,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'in-acc@test.local')
     returning id into v_acc;
   insert into organizations (name, organization_type, created_by, default_vat_rate)
-    values ('منشأة اختبار التكاملات', 'clinic', v_owner, 15) returning id into v_org;
+    values ('منشأة اختبار التكاملات', 'medical_center', v_owner, 15) returning id into v_org;
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
   insert into organization_memberships (organization_id, user_id, role_key, is_active)
@@ -255,7 +255,7 @@ begin
     insert into auth.users (id, email) values (gen_random_uuid(), 'in-other@test.local')
       returning id into v_stranger;
     insert into organizations (name, organization_type, created_by)
-      values ('منشأة أخرى', 'clinic', v_stranger) returning id into v_org2;
+      values ('منشأة أخرى', 'medical_center', v_stranger) returning id into v_org2;
     perform set_config('request.jwt.claim.sub', v_stranger::text, true);
     begin
       perform app_requeue_integration_message('einvoice', v_doc, 'محاولة من الخارج');

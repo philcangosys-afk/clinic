@@ -42,7 +42,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'nt-nurse@test.local')
     returning id into v_nurse;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة اختبار التنبيهات', 'clinic', v_owner) returning id into v_org;
+    values ('منشأة اختبار التنبيهات', 'medical_center', v_owner) returning id into v_org;
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
   insert into organization_memberships (organization_id, user_id, role_key, is_active)
@@ -293,7 +293,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'nt-other@test.local')
     returning id into v_owner2;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة أخرى', 'clinic', v_owner2) returning id into v_org2;
+    values ('منشأة أخرى', 'medical_center', v_owner2) returning id into v_org2;
   perform set_config('request.jwt.claim.sub', v_owner2::text, true);
   if exists (select 1 from v_my_notifications where organization_id = v_org) then
     raise exception 'فشل: تسرّبت تنبيهات منشأة إلى عضو منشأة أخرى';

@@ -50,7 +50,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'doc-doctor@test.local')
     returning id into v_doctor_u;
   insert into organizations (name, organization_type, created_by, default_vat_rate)
-    values ('منشأة اختبار المستندات', 'clinic', v_owner, 15) returning id into v_org;
+    values ('منشأة اختبار المستندات', 'medical_center', v_owner, 15) returning id into v_org;
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
   insert into organization_memberships (organization_id, user_id, role_key, is_active)
@@ -478,7 +478,7 @@ begin
     insert into auth.users (id, email) values (gen_random_uuid(), 'doc-other@test.local')
       returning id into v_owner2;
     insert into organizations (name, organization_type, created_by)
-      values ('منشأة أخرى', 'clinic', v_owner2) returning id into v_org2;
+      values ('منشأة أخرى', 'medical_center', v_owner2) returning id into v_org2;
     perform set_config('request.jwt.claim.sub', v_owner2::text, true);
     begin
       perform app_register_patient_document(v_patient, 'org/docs/x.pdf', 'x.pdf');

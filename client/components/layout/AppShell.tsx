@@ -7,12 +7,15 @@ import {
   Search,
   Settings2,
   Globe2,
+  UserRound,
   ExternalLink,
   type LucideIcon,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { useLiveBadgeCounts, formatBadgeNumber } from "@/hooks/use-live-badges";
+import { demoRoleAllowsModule, demoRoleLabel } from "@/lib/demo-role";
+import { useDemoRole } from "@/contexts/DemoRoleContext";
 import {
   filterAccessibleModules,
   groupModules,
@@ -47,15 +50,21 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const location = useLocation();
   const liveBadges = useLiveBadgeCounts(organization?.id, session?.user.id);
 
+  const { role } = useDemoRole();
+
   const groups = useMemo(() => {
-    const accessible = filterAccessibleModules(moduleRegistry, canAccess);
+    // الصفة تُخفي ما لا يخصّها من القائمة. هذا ترشيح عرضٍ لا حماية: المنع
+    // الحقيقي في RLS وفي فحوص الدوالّ، وهو قائم بصرف النظر عن هذا السطر.
+    const accessible = filterAccessibleModules(moduleRegistry, canAccess).filter((item) =>
+      demoRoleAllowsModule(role, item.id),
+    );
     const withLiveBadges: ModuleRegistryItem[] = accessible.map((item) => {
       const live = liveBadges.data?.[item.id];
       if (live === null || live === undefined) return item;
       return { ...item, badge: formatBadgeNumber(live) };
     });
     return groupModules(withLiveBadges);
-  }, [canAccess, liveBadges.data]);
+  }, [canAccess, liveBadges.data, role]);
 
   const settingsAccessible = canAccess(settingsModule.featureKey, settingsModule.requiredPermission);
 
@@ -244,10 +253,18 @@ export default function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
   const { organization, membership, signOut } = useOrganizationAccess();
+  const { role, name, clear } = useDemoRole();
 
   const handleSignOut = async () => {
     await signOut();
     navigate("/onboarding", { replace: true });
+  };
+
+  // «تسجيل الخروج» في وضع المعاينة يعني العودة لاختيار الصفة، لا إنهاء
+  // الجلسة: الجلسة واحدة، والصفة هي ما يتبدّل.
+  const handleExitRole = () => {
+    clear();
+    navigate("/", { replace: true });
   };
 
   return (
@@ -280,6 +297,23 @@ export default function AppShell() {
           </div>
           <div className="flex-1 sm:hidden" />
 
+          {role && (
+            <div className="flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-1.5">
+              <UserRound className="h-4 w-4 shrink-0 text-primary" />
+              <span className="hidden text-sm font-semibold sm:inline">{demoRoleLabel(role)}</span>
+              {name && <span className="hidden text-xs text-muted-foreground sm:inline">· {name}</span>}
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 gap-1 px-2 text-xs"
+                onClick={handleExitRole}
+              >
+                <LogOut className="h-3.5 w-3.5" />
+                خروج
+              </Button>
+            </div>
+          )}
+
           <NotificationBell />
 
           <Link to="/operations-settings">
@@ -311,6 +345,12 @@ export default function AppShell() {
                 إعدادات التشغيل
               </DropdownMenuItem>
               <DropdownMenuSeparator />
+              {role && (
+                <DropdownMenuItem onSelect={handleExitRole}>
+                  <UserRound className="h-4 w-4" />
+                  تبديل الصفة
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onSelect={handleSignOut} className="text-destructive focus:text-destructive">
                 <LogOut className="h-4 w-4" />
                 تسجيل الخروج

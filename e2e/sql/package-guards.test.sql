@@ -53,7 +53,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'pkg-owner@test.local')
     returning id into v_owner;
   insert into organizations (name, organization_type, created_by, default_vat_rate)
-    values ('منشأة اختبار الباقات', 'clinic', v_owner, 15) returning id into v_org;
+    values ('منشأة اختبار الباقات', 'medical_center', v_owner, 15) returning id into v_org;
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
   insert into branches (organization_id, name) values (v_org, 'الفرع الرئيسي')

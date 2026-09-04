@@ -39,7 +39,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'us-doc@test.local')
     returning id into v_doc;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة اختبار المستخدمين', 'clinic', v_owner) returning id into v_org;
+    values ('منشأة اختبار المستخدمين', 'medical_center', v_owner) returning id into v_org;
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
   insert into branches (organization_id, name) values (v_org, 'الفرع الرئيسي')
@@ -269,7 +269,7 @@ begin
     insert into auth.users (id, email) values (gen_random_uuid(), 'us-stranger@test.local')
       returning id into v_stranger;
     insert into organizations (name, organization_type, created_by)
-      values ('منشأة أخرى', 'clinic', v_stranger) returning id into v_org2;
+      values ('منشأة أخرى', 'medical_center', v_stranger) returning id into v_org2;
     perform set_config('request.jwt.claim.sub', v_stranger::text, true);
     begin
       perform app_set_member_permission(v_org, v_doc, 'billing.void', true);

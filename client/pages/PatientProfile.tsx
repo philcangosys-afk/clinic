@@ -29,6 +29,7 @@ import {
 } from "@/components/patients/PatientContextTabs";
 import WalletTab from "@/components/patients/WalletTab";
 import DocumentsTab from "@/components/patients/DocumentsTab";
+import RadiologyImagesTab from "@/components/patients/RadiologyImagesTab";
 import { useToast } from "@/hooks/use-toast";
 
 function usePatient(id: string | undefined) {
@@ -218,12 +219,16 @@ export default function PatientProfile() {
             <TabsList className="flex h-auto flex-wrap justify-start gap-1">
               <TabsTrigger value="appointments">المواعيد</TabsTrigger>
               <TabsTrigger value="documents">المستندات</TabsTrigger>
+              <TabsTrigger value="radiology-images">صور الأشعة</TabsTrigger>
             </TabsList>
             <TabsContent value="appointments" className="mt-4">
               <AppointmentsTab patientId={patient.data.id} />
             </TabsContent>
             <TabsContent value="documents" className="mt-4">
               <DocumentsTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="radiology-images" className="mt-4">
+              <RadiologyImagesTab patientId={patient.data.id} />
             </TabsContent>
           </Tabs>
         </TabsContent>

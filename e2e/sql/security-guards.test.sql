@@ -38,7 +38,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'sec-owner@test.local')
     returning id into v_owner;
   insert into organizations (name, organization_type, created_by, default_vat_rate)
-    values ('منشأة اختبار الأمان', 'clinic', v_owner, 15) returning id into v_org;
+    values ('منشأة اختبار الأمان', 'medical_center', v_owner, 15) returning id into v_org;
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
   insert into branches (organization_id, name) values (v_org, 'الفرع الرئيسي')
@@ -60,12 +60,19 @@ begin
   -- ═════════════════════════════════════════════════════════════════════════
   -- 1) لا دالّة SECURITY DEFINER مفتوحة أمام anon
   -- ═════════════════════════════════════════════════════════════════════════
-  select count(*) into v_int
+  -- استثناء واحد مقصود: موقع الحجز العام (0128–0135). الزائر يحجز بلا حساب،
+  -- فلا بدّ من ثلاث دوالّ يستدعيها `anon`. هذه قائمة مغلقة: أي دالّة رابعة
+  -- تُفتح أمام `anon` تُسقط هذا الفحص فورًا. ما تفعله الثلاث محصور بحارس
+  -- الأهلية في 0130 وبكتالوج معلن في 0129.
+  select count(*), string_agg(p.proname, ', ') into v_int, v_txt
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.prosecdef
-     and has_function_privilege('anon', p.oid, 'execute');
+     and has_function_privilege('anon', p.oid, 'execute')
+     and p.proname not in ('app_public_booking_catalog',
+                           'app_public_doctor_slots',
+                           'app_public_create_booking');
   if v_int > 0 then
-    raise exception 'فشل: % دالّة SECURITY DEFINER قابلة للاستدعاء من anon — تتخطّى RLS بلا مستخدم', v_int;
+    raise exception 'فشل: % دالّة SECURITY DEFINER قابلة للاستدعاء من anon خارج قائمة الحجز العام (%) — تتخطّى RLS بلا مستخدم', v_int, v_txt;
   end if;
   raise notice '✅ ١) لا دالّة تتخطّى RLS مفتوحة أمام زائر غير مسجَّل';
 

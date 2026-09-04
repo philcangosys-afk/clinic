@@ -121,7 +121,7 @@ describe("organization module access", () => {
   });
 
   it("enables every medical and administrative module for the medical center", () => {
-    expect(MEDICAL_CENTER_ADDED_FEATURES).toHaveLength(18);
+    expect(MEDICAL_CENTER_ADDED_FEATURES).toHaveLength(19);
     const configuration = resolveOrganizationAccessConfiguration({
       authenticated: false,
       legacyMode: true,
@@ -129,7 +129,7 @@ describe("organization module access", () => {
       enabledFeatures: [],
       permissions: [],
     });
-    expect(getOrganizationPlanDefaultFeatures("medical_center")).toHaveLength(41);
+    expect(getOrganizationPlanDefaultFeatures("medical_center")).toHaveLength(42);
     expect(canAccessFeature({ ...configuration, featureKey: "laboratory", permissionKey: "laboratory.view" })).toBe(true);
     expect(canAccessFeature({ ...configuration, featureKey: "pharmacy", permissionKey: "pharmacy.view" })).toBe(true);
     expect(canAccessFeature({ ...configuration, featureKey: "accounting", permissionKey: "accounting.view" })).toBe(true);

@@ -33,7 +33,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'e2e@test.local')
     returning id into v_user;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة اختبار E2E', 'clinic', v_user) returning id into v_org;
+    values ('منشأة اختبار E2E', 'medical_center', v_user) returning id into v_org;
 
   -- الدوال تفحص العضوية (`app_is_member`) منذ 0082، فبدون هوية يعمل الملف
   -- بحساب مجهول فترفضه كل دالة. `true` يجعل الضبط محليًا للمعاملة.

@@ -7,7 +7,12 @@ begin
     and to_regprocedure('public.app_generate_einvoice(uuid)') is not null
     and to_regprocedure('public.app_create_claim_from_visit(uuid,uuid,text)') is not null
     and to_regclass('public.v_report_revenue') is not null
-    and to_regprocedure('public.app_log_record_access(uuid,text,text,text,uuid)') is not null
+    -- توقيعان مقبولان: الخماسي (المرحلة 15) والسداسي بعد أن أضافت 0125
+    -- وسيطًا سادسًا وأسقطت الخماسي. تثبيت الخماسي وحده كان يجعل إعادة تشغيل
+    -- هذا الملف تفشل بعد 0125 برسالة «كائن رئيسي غير موجود» — والكائن موجود
+    -- بتوقيع أحدث. التحقّق يسأل عن الدالّة لا عن شكل توقيعها.
+    and (to_regprocedure('public.app_log_record_access(uuid,text,text,text,uuid)') is not null
+      or to_regprocedure('public.app_log_record_access(uuid,text,text,text,uuid,text)') is not null)
     and to_regprocedure('public.app_sell_package(uuid,uuid,uuid,uuid,uuid,text)') is not null
     and to_regprocedure('public.app_create_purchase_order(uuid,uuid,date,text)') is not null
     and to_regprocedure('public.app_start_stock_count(uuid,text,text,uuid[],text)') is not null

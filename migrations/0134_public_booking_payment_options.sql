@@ -2,7 +2,9 @@ begin;
 
 drop function if exists public.app_public_create_booking(text, text, text, text, text, uuid, uuid, uuid, timestamptz, text, boolean, text);
 
-create function public.app_public_create_booking(
+-- `create` وحدها تفشل عند الإعادة: السطر أعلاه يُسقط التوقيع **القديم** فقط،
+-- أمّا التوقيع الجديد فيبقى قائمًا من التشغيلة السابقة.
+create or replace function public.app_public_create_booking(
   p_slug text,
   p_name text,
   p_mobile text,

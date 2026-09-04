@@ -338,7 +338,7 @@ begin
     insert into auth.users (id, email) values (gen_random_uuid(), 'cr-other@test.local')
       returning id into v_owner2;
     insert into organizations (name, organization_type, created_by)
-      values ('منشأة أخرى', 'clinic', v_owner2) returning id into v_org2;
+      values ('منشأة أخرى', 'medical_center', v_owner2) returning id into v_org2;
     perform set_config('request.jwt.claim.sub', v_owner2::text, true);
     begin
       perform app_escalate_critical_results(v_org, 30);

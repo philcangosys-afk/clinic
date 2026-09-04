@@ -38,7 +38,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'vst-doctor@test.local')
     returning id into v_doctor_user;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة اختبار الزيارات', 'clinic', v_owner) returning id into v_org;
+    values ('منشأة اختبار الزيارات', 'medical_center', v_owner) returning id into v_org;
 
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 

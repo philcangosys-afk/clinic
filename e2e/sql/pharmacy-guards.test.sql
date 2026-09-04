@@ -50,7 +50,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'ph-recep@test.local')
     returning id into v_recep;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة اختبار الصيدلية', 'clinic', v_owner) returning id into v_org;
+    values ('منشأة اختبار الصيدلية', 'medical_center', v_owner) returning id into v_org;
 
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
@@ -572,7 +572,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'ph2-recep@test.local')
     returning id into v_recep;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة صلاحيات الصيدلية', 'clinic', v_owner) returning id into v_org;
+    values ('منشأة صلاحيات الصيدلية', 'medical_center', v_owner) returning id into v_org;
 
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
   insert into organization_memberships (organization_id, user_id, role_key, is_active)

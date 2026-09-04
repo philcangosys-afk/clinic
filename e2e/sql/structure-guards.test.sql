@@ -43,9 +43,9 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'struct-recep@test.local')
     returning id into v_recep;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة اختبار الهيكل', 'clinic', v_owner) returning id into v_org;
+    values ('منشأة اختبار الهيكل', 'medical_center', v_owner) returning id into v_org;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة أخرى', 'clinic', v_owner) returning id into v_org2;
+    values ('منشأة أخرى', 'medical_center', v_owner) returning id into v_org2;
 
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 

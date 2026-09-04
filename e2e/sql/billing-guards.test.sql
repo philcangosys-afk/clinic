@@ -50,7 +50,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'bl-acc@test.local')
     returning id into v_acc;
   insert into organizations (name, organization_type, created_by, default_vat_rate)
-    values ('منشأة اختبار الفوترة', 'clinic', v_owner, 15) returning id into v_org;
+    values ('منشأة اختبار الفوترة', 'medical_center', v_owner, 15) returning id into v_org;
 
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
   insert into organization_memberships (organization_id, user_id, role_key, is_active)
@@ -466,7 +466,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'bl2-recep@test.local')
     returning id into v_recep;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة صلاحيات الفوترة', 'clinic', v_owner) returning id into v_org;
+    values ('منشأة صلاحيات الفوترة', 'medical_center', v_owner) returning id into v_org;
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
   insert into organization_memberships (organization_id, user_id, role_key, is_active)
     values (v_org, v_recep, 'receptionist', true);

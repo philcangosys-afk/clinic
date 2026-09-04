@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import ReceptionBoard from "@/components/reception/ReceptionBoard";
+import DoctorRequests from "@/components/reception/DoctorRequests";
 import {
   CalendarClock,
   CheckCircle2,
@@ -249,6 +250,10 @@ export default function Reception() {
           </Button>}
         </div>
       </div>
+
+      {/* ما يرسله الأطباء يظهر فوق الطابور: طلبٌ ينتظر لا يجوز أن يُدفن
+          تحت قوائم الانتظار حتى يسأل عنه الطبيب. */}
+      <DoctorRequests />
 
       {mode === "board" && (
         <ReceptionBoard

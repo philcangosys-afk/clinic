@@ -36,7 +36,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'po-patient@test.local')
     returning id into v_pu;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة اختبار السياسات', 'clinic', v_owner) returning id into v_org;
+    values ('منشأة اختبار السياسات', 'medical_center', v_owner) returning id into v_org;
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
   insert into branches (organization_id, name) values (v_org, 'الفرع الرئيسي')
@@ -70,7 +70,7 @@ begin
     insert into auth.users (id, email) values (gen_random_uuid(), 'po-other@test.local')
       returning id into v_stranger;
     insert into organizations (name, organization_type, created_by)
-      values ('منشأة أخرى', 'clinic', v_stranger) returning id into v_org2;
+      values ('منشأة أخرى', 'medical_center', v_stranger) returning id into v_org2;
     perform set_config('request.jwt.claim.sub', v_stranger::text, true);
     begin
       perform app_save_org_policies(v_org, jsonb_build_object('critical_ack_minutes', 120));

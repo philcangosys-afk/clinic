@@ -50,6 +50,7 @@ export const CLINIC_DEFAULT_FEATURES: FeatureKey[] = [
 export const MEDICAL_CENTER_ADDED_FEATURES: FeatureKey[] = [
   "laboratory",
   "radiology",
+  "radiology_console",
   "pharmacy",
   "dispensing",
   "insurance_claims",
@@ -74,6 +75,7 @@ export function getOrganizationPlanDefaultFeatures(_type: HealthcareOrganization
 
 const allFeatureKeys: FeatureKey[] = [
   "core_dashboard",
+  "radiology_console",
   "reception",
   "appointments",
   "patients",

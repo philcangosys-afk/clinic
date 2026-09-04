@@ -27,6 +27,7 @@ const Reports = lazy(() => import("./pages/Reports"));
 const OperationsSettings = lazy(() => import("./pages/OperationsSettings"));
 const Laboratory = lazy(() => import("./pages/Laboratory"));
 const Radiology = lazy(() => import("./pages/Radiology"));
+const RadiologyConsole = lazy(() => import("./pages/RadiologyConsole"));
 const Pharmacy = lazy(() => import("./pages/Pharmacy"));
 const Packages = lazy(() => import("./pages/Packages"));
 const Accounting = lazy(() => import("./pages/Accounting"));
@@ -75,6 +76,7 @@ const Integrations = lazy(() => import("./pages/Integrations"));
 const Analytics = lazy(() => import("./pages/Analytics"));
 const LaunchReadiness = lazy(() => import("./pages/LaunchReadiness"));
 import { OrganizationAccessProvider } from "./contexts/OrganizationAccessContext";
+import { DemoRoleProvider } from "./contexts/DemoRoleContext";
 import AppShell from "./components/layout/AppShell";
 import RouteGuard from "./components/layout/RouteGuard";
 import { moduleRegistry, settingsModule } from "./lib/module-registry";
@@ -104,6 +106,7 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   "operations-settings": OperationsSettings,
   laboratory: Laboratory,
   radiology: Radiology,
+  "radiology-console": RadiologyConsole,
   // الصيدلية/الوصفات/الصرف موديول واحد متصل فعليًا (نفس المخطط 0015) — الثلاثة
   // في القائمة الجانبية يفتحون نفس الشاشة بثلاث تبويبات (صرف/وصفات/كتالوج)
   pharmacy: Pharmacy,
@@ -167,6 +170,7 @@ const App = () => (
       <Sonner />
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <OrganizationAccessProvider>
+          <DemoRoleProvider>
           <Suspense
             fallback={
               <main dir="rtl" className="grid min-h-screen place-items-center bg-background text-foreground">
@@ -203,6 +207,7 @@ const App = () => (
             <Route path="*" element={<NotFound />} />
           </Routes>
           </Suspense>
+          </DemoRoleProvider>
         </OrganizationAccessProvider>
       </BrowserRouter>
     </TooltipProvider>

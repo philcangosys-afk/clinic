@@ -58,7 +58,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'catalog-e2e@test.local')
     returning id into v_user;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة اختبار الكتالوج', 'clinic', v_user) returning id into v_org;
+    values ('منشأة اختبار الكتالوج', 'medical_center', v_user) returning id into v_org;
 
   -- الدوال تفحص `auth.uid()` — بدون هذا يعمل الملف بهوية فارغة فتُرفض كل
   -- عملية تحتاج صلاحية. `true` تجعل الضبط محليًا للمعاملة فينتهي مع rollback.

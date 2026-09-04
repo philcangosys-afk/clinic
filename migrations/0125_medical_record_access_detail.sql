@@ -5,7 +5,9 @@ alter table public.medical_record_access_log
 
 drop function if exists public.app_log_record_access(uuid, text, text, text, uuid);
 
-create function public.app_log_record_access(
+-- `create` وحدها تفشل عند إعادة التشغيل بـ«function already exists»؛
+-- `create or replace` تجعل الهجرة قابلة للإعادة بلا أثر.
+create or replace function public.app_log_record_access(
   p_patient_id uuid,
   p_access_type text default 'view',
   p_context text default null,

@@ -29,7 +29,7 @@ begin
   insert into auth.users (id, email) values (gen_random_uuid(), 'lo-owner@test.local')
     returning id into v_owner;
   insert into organizations (name, organization_type, created_by)
-    values ('منشأة اختبار اللغة', 'clinic', v_owner) returning id into v_org;
+    values ('منشأة اختبار اللغة', 'medical_center', v_owner) returning id into v_org;
   perform set_config('request.jwt.claim.sub', v_owner::text, true);
 
   -- ═════════════════════════════════════════════════════════════════════════
@@ -210,7 +210,7 @@ begin
     insert into auth.users (id, email) values (gen_random_uuid(), 'lo-other@test.local')
       returning id into v_stranger;
     insert into organizations (name, organization_type, created_by)
-      values ('منشأة أخرى', 'clinic', v_stranger) returning id into v_org2;
+      values ('منشأة أخرى', 'medical_center', v_stranger) returning id into v_org2;
     perform set_config('request.jwt.claim.sub', v_stranger::text, true);
     begin
       perform app_save_locale_settings(v_org, jsonb_build_object('country_code', 'KW'));
