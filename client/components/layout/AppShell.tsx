@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
+import SectionGuideButton from "./SectionGuideButton";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { useLiveBadgeCounts, formatBadgeNumber } from "@/hooks/use-live-badges";
 import { demoRoleAllowsModule, demoRoleLabel } from "@/lib/demo-role";
@@ -363,6 +364,10 @@ export default function AppShell() {
           <Outlet />
         </main>
       </div>
+
+      {/* زرّ «شرح القسم» — مرّة واحدة هنا فيظهر في كل الشاشات، ويقرأ نصّه من
+          المسار الحالي. لو وُضع في كل صفحة على حدة لنُسي في الصفحات الجديدة. */}
+      <SectionGuideButton />
     </div>
   );
 }
