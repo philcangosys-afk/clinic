@@ -20,6 +20,7 @@ import { usePermissions } from "@/lib/permissions";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LookupSelect from "@/components/shared/LookupSelect";
 import SessionsTab from "@/components/patients/SessionsTab";
+import SessionsPanel from "@/components/medical/SessionsPanel";
 import VitalsTab from "@/components/patients/VitalsTab";
 import CbahiTab from "@/components/patients/CbahiTab";
 import {
@@ -30,6 +31,7 @@ import {
 import WalletTab from "@/components/patients/WalletTab";
 import DocumentsTab from "@/components/patients/DocumentsTab";
 import RadiologyImagesTab from "@/components/patients/RadiologyImagesTab";
+import Odontogram from "@/components/medical/Odontogram";
 import { useToast } from "@/hooks/use-toast";
 
 function usePatient(id: string | undefined) {
@@ -186,7 +188,12 @@ export default function PatientProfile() {
             <TabsContent value="prescriptions" className="mt-4">
               <PatientPrescriptionsTab patientId={patient.data.id} />
             </TabsContent>
-            <TabsContent value="sessions" className="mt-4">
+            <TabsContent value="sessions" className="mt-4 flex flex-col gap-4">
+              {/* لوحان لا واحد: `SessionsPanel` هو الجانب السريري (الجهاز
+                  والمنطقة والإعدادات والأعراض وصور قبل/بعد)، و`SessionsTab`
+                  هو الجانب التعاقدي (جلسات اتفاقية العلاج وكمّها المتفَق
+                  عليه). دمجُهما في لوح واحد يخلط قرار الطبيب بحساب المال. */}
+              <SessionsPanel patientId={patient.data.id} />
               <SessionsTab patientId={patient.data.id} />
             </TabsContent>
             <TabsContent value="cbahi" className="mt-4">
@@ -220,6 +227,7 @@ export default function PatientProfile() {
               <TabsTrigger value="appointments">المواعيد</TabsTrigger>
               <TabsTrigger value="documents">المستندات</TabsTrigger>
               <TabsTrigger value="radiology-images">صور الأشعة</TabsTrigger>
+              <TabsTrigger value="odontogram">مخطّط الأسنان</TabsTrigger>
             </TabsList>
             <TabsContent value="appointments" className="mt-4">
               <AppointmentsTab patientId={patient.data.id} />
@@ -229,6 +237,9 @@ export default function PatientProfile() {
             </TabsContent>
             <TabsContent value="radiology-images" className="mt-4">
               <RadiologyImagesTab patientId={patient.data.id} />
+            </TabsContent>
+            <TabsContent value="odontogram" className="mt-4">
+              <Odontogram patientId={patient.data.id} />
             </TabsContent>
           </Tabs>
         </TabsContent>
