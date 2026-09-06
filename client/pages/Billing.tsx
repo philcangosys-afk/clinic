@@ -5,6 +5,7 @@ import { useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
+import { formatAmount, formatDate, formatDateTime, formatTime, useLocaleSettings } from "@/lib/locale";
 import { useInsuranceSettings } from "@/lib/insurance-settings";
 import type { SalesInvoiceStatus, SalesInvoiceWithPatient } from "@/lib/database.types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -154,7 +155,7 @@ async function printInvoice(
      <p>
        ${invoice.invoice_type === "return" ? "فاتورة مرتجع" : "فاتورة مبيعات"} رقم
        <strong>${invoice.invoice_number}</strong><br />
-       التاريخ: ${new Date(invoice.created_at).toLocaleString("ar-SA")}<br />
+       التاريخ: ${formatDateTime(invoice.created_at)}<br />
        العميل: ${esc(invoice.patient?.name_ar ?? invoice.external_customer_name ?? "—")}
        ${invoice.patient?.file_number ? ` · ملف ${invoice.patient.file_number}` : ""}
        ${invoice.doctor?.name_ar ? `<br />الطبيب: ${esc(invoice.doctor.name_ar)}` : ""}
@@ -225,10 +226,18 @@ function usePrintSettings(organizationId: string | undefined) {
   });
 }
 
+/**
+ * سياق فتح نافذة الفاتورة.
+ *
+ * يأتي من موعد (`?appointmentId=`) أو من ملف مريض مباشرةً
+ * (`?patientId=` من زرّ «إصدار فاتورة» في الملف) — ولذلك `id` و`doctor_id`
+ * يقبلان الفراغ: فاتورة مفتوحة من الملف بلا موعد ولا زيارة، فلا تُربط بموعد
+ * غير موجود ولا يُفترض لها طبيب.
+ */
 type BillingAppointmentContext = {
-  id: string;
+  id: string | null;
   patient_id: string;
-  doctor_id: string;
+  doctor_id: string | null;
   clinic_id: string | null;
   patient: { id: string; name_ar: string; insurance_company_name: string | null; insurance_policy_number: string | null; insurance_policy_category: string | null; insurance_membership_number: string | null } | { id: string; name_ar: string; insurance_company_name: string | null; insurance_policy_number: string | null; insurance_policy_category: string | null; insurance_membership_number: string | null }[] | null;
 };
@@ -236,7 +245,12 @@ type BillingAppointmentContext = {
 export default function Billing() {
   const { organization, membership, legacyMode } = useOrganizationAccess();
   const [searchParams] = useSearchParams();
+  // تقويم المنشأة يُحترَم هنا كما في باقي الشاشات: كان الجدول يطبع بالتقويم
+  // الذي يختاره المتصفّح للعربية (هجريًّا في كروم) بلا نظرٍ إلى الإعداد.
+  const { calendarDisplay } = useLocaleSettings();
   const appointmentId = searchParams.get("appointmentId");
+  /** فتح الفاتورة من ملف المريض مباشرةً — بلا موعد. */
+  const directPatientId = searchParams.get("patientId");
   const memberNames = useMemberNames(organization?.id);
   const printSettings = usePrintSettings(organization?.id);
   const [statusFilter, setStatusFilter] = useState("all");
@@ -266,9 +280,55 @@ export default function Billing() {
     },
   });
 
+  /**
+   * المريض المفتوح من ملفه — يُقرأ بنفس أعمدة التأمين التي يقرؤها مسار الموعد
+   * فتُملأ حقول التأمين في النافذة كما تُملأ هناك.
+   */
+  const directPatient = useQuery({
+    queryKey: ["billing-direct-patient", organization?.id, directPatientId],
+    enabled: Boolean(organization?.id && directPatientId && !appointmentId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patients")
+        .select(
+          "id, name_ar, treating_doctor_id, insurance_company_name, insurance_policy_number, insurance_policy_category, insurance_membership_number",
+        )
+        .eq("id", directPatientId)
+        .eq("organization_id", organization?.id)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return null;
+      const row = data as {
+        id: string;
+        name_ar: string;
+        treating_doctor_id: string | null;
+        insurance_company_name: string | null;
+        insurance_policy_number: string | null;
+        insurance_policy_category: string | null;
+        insurance_membership_number: string | null;
+      };
+      return {
+        id: null,
+        patient_id: row.id,
+        doctor_id: row.treating_doctor_id,
+        clinic_id: null,
+        patient: {
+          id: row.id,
+          name_ar: row.name_ar,
+          insurance_company_name: row.insurance_company_name,
+          insurance_policy_number: row.insurance_policy_number,
+          insurance_policy_category: row.insurance_policy_category,
+          insurance_membership_number: row.insurance_membership_number,
+        },
+      } satisfies BillingAppointmentContext;
+    },
+  });
+
+  const invoiceContext = appointment.data ?? directPatient.data ?? null;
+
   useEffect(() => {
-    if (appointment.data && canManageBilling) setCreateOpen(true);
-  }, [appointment.data, canManageBilling]);
+    if (invoiceContext && canManageBilling) setCreateOpen(true);
+  }, [invoiceContext, canManageBilling]);
 
   const convertToInvoice = useMutation({
     mutationFn: async (invoiceId: string) => {
@@ -398,7 +458,7 @@ export default function Billing() {
         <div>
           <h1 className="text-2xl font-bold">الفوترة والمدفوعات</h1>
           <p className="text-sm text-muted-foreground">
-            إجمالي {quotesOnly ? "عروض الأسعار" : "الفواتير"}: {totals.net.toLocaleString("ar-SA")} ر.س · متبقي: {totals.remaining.toLocaleString("ar-SA")} ر.س
+            إجمالي {quotesOnly ? "عروض الأسعار" : "الفواتير"}: {formatAmount(totals.net)} ر.س · متبقي: {formatAmount(totals.remaining)} ر.س
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -458,6 +518,9 @@ export default function Billing() {
 
       {!quotesOnly && !showShifts && !showTax && <InvoiceKpiBar organizationId={organization?.id} />}
       {!quotesOnly && !showShifts && !showTax && <ReceivablesBar organizationId={organization?.id} />}
+      {!quotesOnly && !showShifts && !showTax && canManageBilling && (
+        <UnbilledDispensedPanel organizationId={organization?.id} />
+      )}
 
       {showShifts && <CashShiftsPanel organizationId={organization?.id} />}
       {showTax && (
@@ -484,25 +547,34 @@ export default function Billing() {
           {!invoices.isLoading && (
             <Table>
               <TableHeader>
+                {/**
+                  * الجدول كان ثمانية عشر عمودًا في شاشة واحدة، فتُسحق الأعمدة
+                  * ويلتفّ اسم المريض على ثلاثة أسطر ويتقطّع الصف — وهو ما جعل
+                  * شاشة الفواتير تبدو «غير منسّقة ومقطّعة».
+                  *
+                  * المعالجة: عنوان لا يلتفّ (`whitespace-nowrap`)، وأعمدة
+                  * الأرقام مصطفّة إلى اليسار بأرقام لاتينية ثابتة العرض،
+                  * والأعمدة التفصيلية (الجنسية، الموظف، الإعفاء، دون ضريبة)
+                  * تظهر على الشاشات العريضة وحدها بدل أن تسحق العمود المهم.
+                  */}
                 <TableRow>
-                  <TableHead>#الفاتورة</TableHead>
-                  <TableHead>النوع</TableHead>
-                  <TableHead>العميل</TableHead>
-                  <TableHead>#الملف</TableHead>
-                  <TableHead>الطبيب</TableHead>
-                  <TableHead>التاريخ</TableHead>
-                  <TableHead>الوقت</TableHead>
-                  <TableHead>الجنسية</TableHead>
-                  <TableHead>الموظف</TableHead>
-                  <TableHead>دون ضريبة</TableHead>
-                  <TableHead>الخصم</TableHead>
-                  <TableHead>الإعفاء</TableHead>
-                  <TableHead>الضريبة</TableHead>
-                  <TableHead>الصافي</TableHead>
-                  <TableHead>المدفوع</TableHead>
-                  <TableHead>المتبقي</TableHead>
-                  <TableHead>الحالة</TableHead>
-                  <TableHead />
+                  <TableHead className="whitespace-nowrap">#الفاتورة</TableHead>
+                  <TableHead className="whitespace-nowrap">النوع</TableHead>
+                  <TableHead className="min-w-[10rem]">العميل</TableHead>
+                  <TableHead className="whitespace-nowrap">#الملف</TableHead>
+                  <TableHead className="hidden whitespace-nowrap lg:table-cell">الطبيب</TableHead>
+                  <TableHead className="whitespace-nowrap">التاريخ</TableHead>
+                  <TableHead className="hidden whitespace-nowrap xl:table-cell">الجنسية</TableHead>
+                  <TableHead className="hidden whitespace-nowrap xl:table-cell">الموظف</TableHead>
+                  <TableHead className="hidden whitespace-nowrap text-end lg:table-cell">دون ضريبة</TableHead>
+                  <TableHead className="whitespace-nowrap text-end">الخصم</TableHead>
+                  <TableHead className="hidden whitespace-nowrap text-end xl:table-cell">الإعفاء</TableHead>
+                  <TableHead className="whitespace-nowrap text-end">الضريبة</TableHead>
+                  <TableHead className="whitespace-nowrap text-end">الصافي</TableHead>
+                  <TableHead className="whitespace-nowrap text-end">المدفوع</TableHead>
+                  <TableHead className="whitespace-nowrap text-end">المتبقي</TableHead>
+                  <TableHead className="whitespace-nowrap">الحالة</TableHead>
+                  <TableHead className="whitespace-nowrap">إجراءات</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -528,57 +600,62 @@ export default function Billing() {
                         )}
                       </div>
                     </TableCell>
-                    <TableCell>{invoice.patient?.name_ar ?? invoice.external_customer_name ?? "—"}</TableCell>
-                    <TableCell className="font-mono text-xs">
+                    <TableCell className="min-w-[10rem] font-medium">
+                      {invoice.patient?.name_ar ?? invoice.external_customer_name ?? "—"}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums text-xs">
                       {invoice.patient?.file_number ?? "—"}
                     </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
+                    <TableCell className="hidden text-sm text-muted-foreground lg:table-cell">
                       {invoice.doctor?.name_ar ?? "—"}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {new Date(invoice.created_at).toLocaleDateString("ar-SA")}
+                    <TableCell className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
+                      {formatDate(invoice.created_at, calendarDisplay)}
+                      <span className="block">{formatTime(invoice.created_at)}</span>
                     </TableCell>
-                    <TableCell className="text-xs tabular-nums text-muted-foreground">
-                      {new Date(invoice.created_at).toLocaleTimeString("ar-SA", {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground xl:table-cell">
                       {invoice.nationality?.name_ar ?? "—"}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="hidden whitespace-nowrap text-xs text-muted-foreground xl:table-cell">
                       {invoice.created_by ? memberNames.data?.get(invoice.created_by) ?? "—" : "—"}
                     </TableCell>
-                    <TableCell className="tabular-nums">
-                      {Number(invoice.subtotal_amount ?? 0).toLocaleString("ar-SA")}
+                    <TableCell className="hidden whitespace-nowrap text-end tabular-nums lg:table-cell">
+                      {formatAmount(invoice.subtotal_amount ?? 0)}
                     </TableCell>
-                    <TableCell className="tabular-nums text-amber-700">
-                      {Number(invoice.discount_amount ?? 0).toLocaleString("ar-SA")}
+                    <TableCell className="whitespace-nowrap text-end tabular-nums text-amber-700">
+                      {formatAmount(invoice.discount_amount ?? 0)}
                     </TableCell>
-                    <TableCell className="tabular-nums text-muted-foreground">
-                      {Number(invoice.exemption_amount ?? 0).toLocaleString("ar-SA")}
+                    <TableCell className="hidden whitespace-nowrap text-end tabular-nums text-muted-foreground xl:table-cell">
+                      {formatAmount(invoice.exemption_amount ?? 0)}
                     </TableCell>
-                    <TableCell className="tabular-nums">
-                      {Number(invoice.vat_amount ?? 0).toLocaleString("ar-SA")}
+                    <TableCell className="whitespace-nowrap text-end tabular-nums">
+                      {formatAmount(invoice.vat_amount ?? 0)}
                     </TableCell>
-                    <TableCell className="font-medium tabular-nums">
-                      {Number(invoice.net_amount).toLocaleString("ar-SA")}
+                    <TableCell className="whitespace-nowrap text-end font-semibold tabular-nums">
+                      {formatAmount(invoice.net_amount)}
                     </TableCell>
-                    <TableCell className="tabular-nums text-emerald-700">
-                      {Number(invoice.paid_amount ?? 0).toLocaleString("ar-SA")}
+                    <TableCell className="whitespace-nowrap text-end tabular-nums text-emerald-700">
+                      {formatAmount(invoice.paid_amount ?? 0)}
                     </TableCell>
-                    <TableCell className={Number(invoice.remaining_amount) > 0 ? "text-rose-600" : ""}>
-                      {Number(invoice.remaining_amount).toLocaleString("ar-SA")}
+                    <TableCell
+                      className={`whitespace-nowrap text-end tabular-nums ${
+                        Number(invoice.remaining_amount) > 0 ? "font-semibold text-rose-600" : "text-muted-foreground"
+                      }`}
+                    >
+                      {formatAmount(invoice.remaining_amount)}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="whitespace-nowrap">
                       {invoice.is_temporary ? (
                         <Badge className="bg-indigo-100 text-indigo-700">عرض سعر</Badge>
                       ) : (
                         <Badge className={STATUS_BADGE[invoice.status]}>{STATUS_LABELS[invoice.status]}</Badge>
                       )}
                     </TableCell>
-                    <TableCell className="flex items-center gap-2">
+                    {/* الإجراءات في صندوق يلتفّ داخل الخلية لا خلية تُمدّد
+                        الصف: `flex` على `td` كان يُخرج الأزرار عن شبكة الجدول
+                        فتصطفّ في عمود واحد طويل ويرتفع الصف بلا داعٍ. */}
+                    <TableCell>
+                      <div className="flex max-w-[16rem] flex-wrap items-center gap-1">
                       <Button
                         size="sm"
                         variant="ghost"
@@ -634,16 +711,26 @@ export default function Billing() {
                           </Button>
                         )}
                       {/* المسوّدة: خصم ثم إصدار. الصادرة: إلغاء بسبب. */}
-                      {invoice.status === "draft" && can("billing.discount") && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          title="خصم"
-                          onClick={() => setDiscountTarget(invoice)}
-                        >
-                          خصم
-                        </Button>
-                      )}
+                      {/*
+                        الإشعار الدائن/المدين مسوّدة كذلك، وكان زرّ الخصم يظهر عليه:
+                        فتُخصَم قيمة إشعارٍ صادرٍ لتصحيح فاتورة بلا مقابل في بنوده،
+                        ويصبح إجماليه مخالفًا لمجموع سطوره. الاستثناء هنا نفس
+                        استثناء زرّ «إشعار دائن» أدناه.
+                      */}
+                      {invoice.status === "draft" &&
+                        !["credit_note", "debit_note"].includes(
+                          (invoice as any).document_type ?? "",
+                        ) &&
+                        can("billing.discount") && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            title="خصم"
+                            onClick={() => setDiscountTarget(invoice)}
+                          >
+                            خصم
+                          </Button>
+                        )}
                       {invoice.status === "draft" && can("billing.issue") && (
                         <Button
                           size="sm"
@@ -692,12 +779,13 @@ export default function Billing() {
                             إلغاء
                           </Button>
                         )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
                 {(invoices.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={18} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={17} className="py-8 text-center text-sm text-muted-foreground">
                       لا توجد فواتير مطابقة.
                     </TableCell>
                   </TableRow>
@@ -713,7 +801,7 @@ export default function Billing() {
           <DialogHeader>
             <DialogTitle>خصم على الفاتورة #{discountTarget?.invoice_number}</DialogTitle>
             <DialogDescription>
-              الإجمالي قبل الخصم {Number(discountTarget?.subtotal_amount ?? 0).toLocaleString("ar-SA")} ر.س.
+              الإجمالي قبل الخصم {formatAmount(discountTarget?.subtotal_amount ?? 0)} ر.س.
               الخصم يُمنح على المسوّدة قبل الإصدار، ويُسجَّل بسببه ومانحه.
             </DialogDescription>
           </DialogHeader>
@@ -750,7 +838,7 @@ export default function Billing() {
         organizationId={organization?.id}
         vatRate={organization?.default_vat_rate ?? 15}
         isQuote={quotesOnly}
-        appointment={appointment.data ?? null}
+        appointment={invoiceContext}
       />
       <RecordPaymentDialog invoice={paymentTarget} onOpenChange={() => setPaymentTarget(null)} organizationId={organization?.id} />
       <ReturnInvoiceDialog
@@ -792,7 +880,8 @@ function ReturnInvoiceDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { session } = useOrganizationAccess();
+  // `created_by` لم تعد تُكتب من هنا: الدالّة تضعها من `auth.uid()` داخل
+  // المعاملة، فلا يمكن للمتصفح أن ينسب المرتجع إلى مستخدم آخر.
   const [qtyByLine, setQtyByLine] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
 
@@ -803,7 +892,7 @@ function ReturnInvoiceDialog({
       const { data, error } = await supabase
         .from("sales_invoice_items")
         .select(
-          "id, item_id, description, price, qty, discount_percent, discount_amount, vat_rate, vat_amount, net_amount, doctor_id",
+          "id, item_id, description, price, qty, discount_percent, discount_amount, vat_rate, vat_amount, exemption_amount, vat_category, net_amount, doctor_id",
         )
         .eq("invoice_id", invoice!.id)
         .order("created_at");
@@ -818,6 +907,8 @@ function ReturnInvoiceDialog({
         discount_amount: number;
         vat_rate: number;
         vat_amount: number;
+        exemption_amount: number;
+        vat_category: string;
         net_amount: number;
         doctor_id: string | null;
       }[];
@@ -934,48 +1025,88 @@ function ReturnInvoiceDialog({
       if (!invoice || !organizationId) throw new Error("لا توجد فاتورة مصدر");
       if (selected.length === 0) throw new Error("حدّد كمية مرتجعة لبند واحد على الأقل");
 
-      const { data: created, error } = await supabase
-        .from("sales_invoices")
-        .insert({
-          organization_id: organizationId,
-          invoice_type: "return",
-          original_invoice_id: invoice.id,
-          patient_id: invoice.patient?.id ?? null,
-          external_customer_name: invoice.patient ? null : invoice.external_customer_name,
-          subtotal_amount: round2(totals.subtotal),
-          discount_amount: round2(totals.discount),
-          vat_amount: round2(totals.vat),
-          net_amount: round2(totals.net),
-          // المرتجع يُنشأ مسدَّدًا: المبلغ رُدّ للمريض عند الإرجاع. تركه
-          // "غير مدفوع" كان سيُظهره كذمّة مدينة على المريض — عكس الحقيقة.
-          paid_amount: round2(totals.net),
-          status: "paid",
-          note: note.trim() || `مرتجع للفاتورة #${invoice.invoice_number}`,
-          created_by: session?.user.id ?? null,
-        })
-        .select("id")
-        .single();
+      /**
+       * المرتجع يمرّ بـ`app_create_sales_invoice` لا بإدراجَين مباشرَين.
+       *
+       * **لماذا كان الإدراجان خطأً قاتلًا**: `insert` على `sales_invoices` ثم
+       * `insert` على `sales_invoice_items` **ليسا معاملة واحدة**. فشل الثاني
+       * (انقطاع شبكة، رفض RLS) كان يترك **رأس مرتجع بكامل المبالغ وبلا أي
+       * بند** — وقد أطلق المحفِّز `trg_post_sales_invoice_to_gl` قيد يومية
+       * يخصم من الإيراد مبلغًا لا بنود تحته. ولأن الرأس كان يُدرَج بـ
+       * `issued_at = NULL` لم يُطلَق `trg_stamp_invoice_on_issue`، فبقي
+       * المرتجع بلا رقم مستند نظاميّ ولا لقطة بائع/مشتر، ولم يظهر في قائمة
+       * «فواتير صادرة بلا مستند إلكتروني» (تشترط `issued_at is not null`) فلا
+       * مستند زاتكا له أبدًا. والدالّة تفعل كل ذلك في معاملة واحدة: تُدرج
+       * الرأس والبنود، وتُعيد حساب كل المبالغ من البنود المُدرَجة فعلًا، ثم
+       * تضع `issued_at`/`issued_by` فيُختَم الرقم واللقطات — والتدقيق يُسجَّل
+       * بمحفِّز `trg_audit_sales_invoices` على الرأس المُدرَج.
+       *
+       * وفكّ الارتباط يجري في القاعدة أيضًا: `trg_pvs_status_on_return_invoice`
+       * يُعيد خدمات زيارة الفاتورة الأصلية إلى `refunded`، والدالّة **لا**
+       * تختم طلبات المختبر/الأشعة/الوصفات على المرتجع (`p_invoice_type = 'sale'`
+       * وحدها تختم) فلا يُربط طلب بمرتجع بدل فاتورته الأصلية.
+       *
+       * `visit_service_id` لا يُمرَّر مع بنود المرتجع: `uq_invoice_item_visit_service`
+       * فريد على مستوى الجدول كلّه، فتمريره كان سيرفض المرتجع بتضارب مفتاح.
+       */
+      const { data: newInvoiceId, error } = await supabase.rpc("app_create_sales_invoice", {
+        p_organization_id: organizationId,
+        p_items: selected.map((line) => {
+          /**
+           * تُمرَّر **نسبة** الخصم لا مبلغه: الدالّة تحسب خصم السطر من
+           * `discount_percent` وتتجاهل أي مبلغ يرسله العميل. وتمرير
+           * `discount_percent` المخزَّن كما هو كان خطأً متى كان الخصم مبلغًا
+           * مقطوعًا على السطر (أو موزَّعًا من خصم الرأس) لا نسبةً — فيُردّ
+           * للمريض غير ما دفعه. النسبة الفعلية من سطر الأصل تُنتج في القاعدة
+           * نفس الخصم بنسبة الكمية المرتجعة.
+           */
+          const originalBase = Number(line.price) * Number(line.qty);
+          const effectiveDiscountPercent =
+            originalBase > 0
+              ? Math.min(
+                  Math.max((Number(line.discount_amount ?? 0) / originalBase) * 100, 0),
+                  100,
+                )
+              : 0;
+          return {
+            item_id: line.item_id,
+            description: line.description,
+            qty: line.returnQty,
+            price: line.price,
+            discount_percent: effectiveDiscountPercent,
+            // إعفاء السطر يُنقل من الأصل لا من علم الصنف الحالي: الصنف قد
+            // عُلِّم معفى (أو أُزيل إعفاؤه) بعد البيع، فالاعتماد على كتالوج
+            // اليوم كان سيُرجع ضريبة لم تُحصَّل أو يُسقط ضريبة حُصِّلت.
+            is_vat_exempt:
+              line.vat_category === "exempt" ||
+              line.vat_category === "zero_rated" ||
+              Number(line.exemption_amount ?? 0) > 0,
+            doctor_id: line.doctor_id,
+          };
+        }),
+        p_patient_id: invoice.patient?.id ?? null,
+        p_external_customer_name: invoice.patient ? null : invoice.external_customer_name,
+        p_invoice_type: "return",
+        p_original_invoice_id: invoice.id,
+        // المرتجع يُنشأ مسدَّدًا: المبلغ رُدّ للمريض عند الإرجاع. تركه
+        // "غير مدفوع" كان سيُظهره كذمّة مدينة على المريض — عكس الحقيقة.
+        // والدالّة تحصر المدفوع في صافي المرتجع الذي حسبته هي، فلا يمكن
+        // للمتصفح أن يُسجّل ردًّا أكبر من قيمة البنود.
+        p_paid_amount: round2(totals.net),
+        p_note: note.trim() || `مرتجع للفاتورة #${invoice.invoice_number}`,
+      });
       if (error) throw error;
-
-      const payload = selected.map((line) => ({
-        invoice_id: (created as { id: string }).id,
-        item_id: line.item_id,
-        description: line.description,
-        price: line.price,
-        qty: line.returnQty,
-        discount_percent: line.discount_percent,
-        discount_amount: round2(line.returnDiscount),
-        vat_rate: line.vat_rate,
-        vat_amount: round2(line.returnVat),
-        net_amount: round2(line.returnNet),
-        doctor_id: line.doctor_id,
-      }));
-      const { error: linesError } = await supabase.from("sales_invoice_items").insert(payload);
-      if (linesError) throw linesError;
+      if (!newInvoiceId) throw new Error("لم يُنشأ المرتجع — أعد المحاولة");
+      return newInvoiceId as string;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
       queryClient.invalidateQueries({ queryKey: ["prior-returns"] });
+      // المرتجع يغيّر الإيراد والذمم: بلا تبطيلهما تبقى المؤشرات وأعلى الذمم
+      // على أرقام ما قبل الإرجاع فيُطالَب المريض بما رُدّ إليه.
+      queryClient.invalidateQueries({ queryKey: ["invoice-kpis"] });
+      queryClient.invalidateQueries({ queryKey: ["patient-balances"] });
+      queryClient.invalidateQueries({ queryKey: ["invoice-register-overdue"] });
       toast({ title: "تم إنشاء فاتورة المرتجع" });
       setQtyByLine({});
       setNote("");
@@ -1003,8 +1134,14 @@ function ReturnInvoiceDialog({
         {!busy && (
           <div className="flex flex-col gap-3">
             <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-              حدّد الكمية المرتجعة من كل بند. المبالغ تُحتسب بنسبة الكمية من الأصل، فيُردّ للمريض
-              ما دفعه فعلًا بعد الخصم لا سعر القائمة.
+              حدّد الكمية المرتجعة من كل بند. المبالغ المعروضة هنا **معاينة قبل الحفظ** تُحتسب
+              بنسبة الكمية من الأصل؛ والمبالغ المحفوظة تُحسب في القاعدة من البنود المُدرَجة ونسبة
+              الضريبة المخزَّنة، فيُردّ للمريض ما دفعه فعلًا بعد الخصم لا سعر القائمة.
+            </p>
+            <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              المرتجع مستند محاسبي فقط. النقد المُعاد للمريض يُسجَّل سندَ صرفٍ من زرّ «استرداد» في
+              نافذة تحصيل الفاتورة الأصلية — بدونه يُغلق الصندوق بعجزٍ بقيمة ما رُدّ، لأن المتوقَّع
+              يُحسب من سندات الصرف لا من فواتير المرتجع.
             </p>
 
             <Table>
@@ -2031,7 +2168,7 @@ function NewInvoiceDialog({
                       <Plus className="h-3.5 w-3.5" />
                       <span className="truncate">{service.item_name}</span>
                       <Badge variant="secondary">
-                        {service.qty} × {Number(service.unit_price).toLocaleString("ar-SA")}
+                        {service.qty} × {formatAmount(service.unit_price)}
                       </Badge>
                     </Button>
                   );
@@ -2069,7 +2206,7 @@ function NewInvoiceDialog({
                       <span className="truncate">
                         {ORDER_TYPE_LABELS[group.type]}: {group.rows.map((row) => row.source_name).join("، ")}
                       </span>
-                      <Badge variant="secondary">{total.toLocaleString("ar-SA")}</Badge>
+                      <Badge variant="secondary">{formatAmount(total)}</Badge>
                       {billable < group.rows.length && (
                         <Badge variant="destructive">{group.rows.length - billable} بلا صنف</Badge>
                       )}
@@ -2431,8 +2568,8 @@ function RecordPaymentDialog({
           <DialogTitle>{refundMode ? "استرداد" : "تسجيل دفعة"}</DialogTitle>
           <DialogDescription>
             فاتورة #{invoice?.invoice_number} — الإجمالي{" "}
-            {Number(invoice?.net_amount ?? 0).toLocaleString("ar-SA")} · المحصَّل{" "}
-            {paid.toLocaleString("ar-SA")} · المتبقّي {remaining.toLocaleString("ar-SA")} ر.س
+            {formatAmount(invoice?.net_amount ?? 0)} · المحصَّل{" "}
+            {formatAmount(paid)} · المتبقّي {formatAmount(remaining)} ر.س
           </DialogDescription>
         </DialogHeader>
 
@@ -2519,7 +2656,7 @@ function RecordPaymentDialog({
               {needsDrawer && shift.data && (
                 <p className="text-xs text-emerald-700">
                   مناوبة #{shift.data.shift_number} مفتوحة برصيد افتتاحي{" "}
-                  {Number(shift.data.opening_balance).toLocaleString("ar-SA")} ر.س
+                  {formatAmount(shift.data.opening_balance)} ر.س
                 </p>
               )}
             </div>
@@ -2570,10 +2707,10 @@ function RecordPaymentDialog({
                     <div>
                       <span className={isRefund ? "text-rose-700" : "text-emerald-700"}>
                         {isRefund ? "استرداد" : "قبض"} #{v.voucher_number} —{" "}
-                        {Number(a.amount).toLocaleString("ar-SA")} ر.س
+                        {formatAmount(a.amount)} ر.س
                       </span>
                       <span className="block text-xs text-muted-foreground">
-                        {v.voucher_date}
+                        {formatDate(v.voucher_date)}
                         {v.method?.name_ar ? ` · ${v.method.name_ar}` : ""}
                         {v.is_void ? ` · ملغى: ${v.void_reason ?? ""}` : ""}
                       </span>
@@ -2820,27 +2957,27 @@ function CashShiftsPanel({ organizationId }: { organizationId: string | undefine
                   <TableCell>
                     #{s.shift_number}
                     <span className="block text-xs text-muted-foreground">
-                      {new Date(s.opened_at).toLocaleString("ar-SA")}
+                      {formatDateTime(s.opened_at)}
                     </span>
                   </TableCell>
-                  <TableCell>{Number(s.opening_balance).toLocaleString("ar-SA")}</TableCell>
+                  <TableCell>{formatAmount(s.opening_balance)}</TableCell>
                   <TableCell>
-                    {Number(s.total_receipts).toLocaleString("ar-SA")}
+                    {formatAmount(s.total_receipts)}
                     <span className="block text-xs text-muted-foreground">
                       {s.voucher_count} سند
                     </span>
                   </TableCell>
                   <TableCell>
                     {s.expected_balance != null
-                      ? `${Number(s.expected_balance).toLocaleString("ar-SA")} / ${Number(
+                      ? `${formatAmount(s.expected_balance)} / ${formatAmount(
                           s.counted_balance ?? 0,
-                        ).toLocaleString("ar-SA")}`
+                        )}`
                       : "—"}
                   </TableCell>
                   <TableCell>
                     {s.variance_amount != null ? (
                       <Badge variant={Number(s.variance_amount) === 0 ? "success" : "destructive"}>
-                        {Number(s.variance_amount).toLocaleString("ar-SA")}
+                        {formatAmount(s.variance_amount)}
                       </Badge>
                     ) : (
                       "—"
@@ -2907,7 +3044,7 @@ function CashShiftsPanel({ organizationId }: { organizationId: string | undefine
             <div className="rounded-md bg-muted p-3 text-sm">
               الرصيد المتوقّع:{" "}
               <span className="font-semibold">
-                {expected.data != null ? expected.data.toLocaleString("ar-SA") : "…"} ر.س
+                {expected.data != null ? formatAmount(expected.data) : "…"} ر.س
               </span>
             </div>
             <div className="flex flex-col gap-1.5">
@@ -2926,7 +3063,7 @@ function CashShiftsPanel({ organizationId }: { organizationId: string | undefine
                     liveVariance < 0 ? "text-destructive" : "text-amber-700"
                   }`}
                 >
-                  فرق: {liveVariance.toLocaleString("ar-SA")} ر.س
+                  فرق: {formatAmount(liveVariance)} ر.س
                   {liveVariance < 0 ? " (عجز)" : " (زيادة)"}
                 </p>
                 <div className="flex flex-col gap-1.5">
@@ -3072,22 +3209,39 @@ function InvoiceKpiBar({ organizationId }: { organizationId: string | undefined 
 // الفواتير لا على الخمسين المعروضة.
 // ---------------------------------------------------------------------------
 function ReceivablesBar({ organizationId }: { organizationId: string | undefined }) {
+  /**
+   * المتأخرات تُقرأ من `v_report_outstanding` لا من `v_invoice_register`.
+   *
+   * `v_invoice_register.is_overdue` تُحسب من الحالة والتاريخ **بلا استثناء
+   * `is_temporary`**، وعرض السعر يُحفَظ بحالة `unpaid` — فكان عرض سعر لمريض
+   * مستفسر يظهر بعد ثلاثين يومًا في «فواتير تجاوزت ٣٠ يومًا بلا سداد» ويُطالَب
+   * به. والمنظور لا يُخرج `is_temporary` أصلًا فلا يمكن ترشيحه من الواجهة،
+   * بينما `v_report_outstanding` تستثني المؤقّت في القاعدة نفسها
+   * (`coalesce(is_temporary,false) = false`) مع نفس شرطَي الحالة والمتبقّي.
+   */
   const overdue = useQuery({
     queryKey: ["invoice-register-overdue", organizationId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("v_invoice_register")
-        .select("id, invoice_number, patient_name, net_amount, remaining_amount, age_days, is_overdue")
+        .from("v_report_outstanding")
+        .select("invoice_id, invoice_number, patient_name, net_amount, remaining_amount, days_outstanding")
         .eq("organization_id", organizationId)
-        .eq("is_overdue", true)
-        .order("age_days", { ascending: false })
+        .gt("days_outstanding", 30)
+        .order("days_outstanding", { ascending: false })
         .limit(200);
       if (error) throw error;
       return (data ?? []) as any[];
     },
   });
 
+  /**
+   * تنبيه: `v_patient_balance.balance_due` يجمع الحالات `unpaid`/`partial`
+   * **بلا استثناء `is_temporary`**، فعرض السعر يظهر ذمّةً على المريض. المنظور
+   * مجموعٌ في القاعدة ولا يُخرج `is_temporary`، فلا يمكن ترشيحه من الواجهة ولا
+   * إعادة جمعه هنا (المبلغ الذي تحسبه القاعدة لا يُعاد حسابه في المتصفّح) —
+   * الإصلاح في تعريف المنظور نفسه.
+   */
   const debtors = useQuery({
     queryKey: ["patient-balances", organizationId],
     enabled: Boolean(organizationId),
@@ -3119,15 +3273,15 @@ function ReceivablesBar({ organizationId }: { organizationId: string | undefined
         <CardHeader className="pb-2">
           <CardDescription>فواتير تجاوزت ٣٠ يومًا بلا سداد</CardDescription>
           <CardTitle className="text-xl">
-            {(overdue.data ?? []).length} فاتورة · {overdueTotal.toLocaleString("ar-SA")} ر.س
+            {(overdue.data ?? []).length} فاتورة · {formatAmount(overdueTotal)} ر.س
           </CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           <div className="flex flex-col gap-1 text-xs text-muted-foreground">
             {(overdue.data ?? []).slice(0, 3).map((r) => (
-              <span key={r.id}>
+              <span key={r.invoice_id}>
                 #{r.invoice_number} — {r.patient_name} —{" "}
-                {Number(r.remaining_amount).toLocaleString("ar-SA")} ر.س ({r.age_days} يومًا)
+                {formatAmount(r.remaining_amount)} ر.س ({r.days_outstanding} يومًا)
               </span>
             ))}
           </div>
@@ -3136,7 +3290,7 @@ function ReceivablesBar({ organizationId }: { organizationId: string | undefined
       <Card>
         <CardHeader className="pb-2">
           <CardDescription>أعلى الذمم على المرضى</CardDescription>
-          <CardTitle className="text-xl">{debtorsTotal.toLocaleString("ar-SA")} ر.س</CardTitle>
+          <CardTitle className="text-xl">{formatAmount(debtorsTotal)} ر.س</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
           <div className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -3144,12 +3298,230 @@ function ReceivablesBar({ organizationId }: { organizationId: string | undefined
               <span key={r.patient_id}>
                 {r.patient_name}
                 {r.file_number ? ` (${r.file_number})` : ""} —{" "}
-                {Number(r.balance_due).toLocaleString("ar-SA")} ر.س · {r.open_invoices} فاتورة
+                {formatAmount(r.balance_due)} ر.س · {r.open_invoices} فاتورة
               </span>
             ))}
           </div>
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// أدوية مصروفة غير مفوترة
+//
+// **الخلل الذي يعالجه هذا القسم**: الصيدليّ يُصدر وصفة من شاشة الصيدلية ثم
+// يصرفها، فينقص المخزون ويخرج الدواء إلى المريض — ولا يظهر في الفوترة إطلاقًا.
+// السبب أن وصفة الصيدلية تُنشأ **بلا زيارة**، وكلا مسارَي الفوترة كان يشترط
+// الزيارة: `v_visit_orders_unbilled` تنتهي بـ`visit_id is not null`، و
+// `app_create_invoice_from_visit` تجمع المصروف من وصفات زيارة واحدة. فكان
+// الدواء المصروف لمريض جاء إلى الصيدلية مباشرةً إيرادًا نُفِّذ ولا يُحصَّل، ولا
+// حلقة له إلا زرّ «تمت الفوترة» في شاشة الصيدلية — وهو علم منطقي لا فاتورة.
+//
+// المنظور `v_unbilled_dispensed_prescriptions` (0145) هو المصدر: صفٌّ لكل صنف
+// **صُرف ولم يُفوتَر** بالكمّية **المصروفة** لا الموصوفة، وبسعر الدفعة الفعليّ
+// (`dispensing_items.unit_price`) لا بسعر الصنف — ولو كانت الوصفة بلا زيارة.
+// ---------------------------------------------------------------------------
+type UnbilledDispensedRow = {
+  prescription_id: string;
+  patient_id: string;
+  patient_name: string | null;
+  file_number: string | null;
+  visit_id: string | null;
+  doctor_id: string | null;
+  doctor_name: string | null;
+  dispensed_at: string | null;
+  prescription_item_id: string | null;
+  item_id: string | null;
+  item_name: string | null;
+  qty: number;
+  unit_price: number;
+  is_vat_exempt: boolean;
+};
+
+function UnbilledDispensedPanel({ organizationId }: { organizationId: string | undefined }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  const rows = useQuery({
+    queryKey: ["billing-unbilled-dispensed", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_unbilled_dispensed_prescriptions")
+        .select(
+          "prescription_id, patient_id, patient_name, file_number, visit_id, doctor_id, doctor_name, dispensed_at, prescription_item_id, item_id, item_name, qty, unit_price, is_vat_exempt",
+        )
+        .eq("organization_id", organizationId)
+        .order("dispensed_at", { ascending: false });
+      if (error) throw error;
+      return (data ?? []) as UnbilledDispensedRow[];
+    },
+  });
+
+  /**
+   * التجميع **بالمريض** لا بالوصفة: المريض الذي صُرفت له ثلاث وصفات في يوم
+   * واحد يُفوتَر مرة واحدة، فلا يستلم ثلاث فواتير ولا يُحصَّل ثلاث مرات.
+   */
+  const groups = useMemo(() => {
+    const map = new Map<
+      string,
+      {
+        patientId: string;
+        patientName: string;
+        fileNumber: string | null;
+        rows: UnbilledDispensedRow[];
+      }
+    >();
+    for (const row of rows.data ?? []) {
+      if (!map.has(row.patient_id)) {
+        map.set(row.patient_id, {
+          patientId: row.patient_id,
+          patientName: row.patient_name ?? "—",
+          fileNumber: row.file_number,
+          rows: [],
+        });
+      }
+      map.get(row.patient_id)!.rows.push(row);
+    }
+    return Array.from(map.values());
+  }, [rows.data]);
+
+  const createInvoice = useMutation({
+    mutationFn: async (group: { patientId: string; rows: UnbilledDispensedRow[] }) => {
+      if (!organizationId) throw new Error("لا توجد منشأة نشطة");
+      if (group.rows.length === 0) throw new Error("لا بنود مصروفة لهذا المريض");
+
+      const prescriptionIds = Array.from(new Set(group.rows.map((row) => row.prescription_id)));
+      const doctorIds = Array.from(
+        new Set(group.rows.map((row) => row.doctor_id).filter((id): id is string => Boolean(id))),
+      );
+      /**
+       * الزيارة تُمرَّر فقط إن كانت **واحدة لكل الوصفات المُجمَّعة**: حارس
+       * الدالّة يرفض وصفة زيارتها تخالف `p_visit_id` (وأي وصفة صيدلية مباشرة
+       * زيارتها `NULL`)، فتمرير زيارة إحدى الوصفات كان سيُلغي المعاملة كلها
+       * برسالة «الوصفات لا تخصّ هذه الزيارة».
+       */
+      const visitIds = Array.from(new Set(group.rows.map((row) => row.visit_id)));
+      const singleVisitId = visitIds.length === 1 && visitIds[0] ? visitIds[0] : null;
+
+      /**
+       * الإنشاء عبر `app_create_sales_invoice` في نداء واحد: الدالّة تُدرج
+       * الرأس والبنود، وتحسب الخصم والضريبة والصافي في القاعدة، وتختم
+       * `prescriptions.is_billed` **داخل نفس المعاملة** بحارس تزامن
+       * (`is_billed = false`) — فإن فوترها محاسب آخر بين لحظة العرض ولحظة
+       * الحفظ أُلغيت المعاملة كلها بدل أن يُفوتَر الدواء مرتين.
+       */
+      const { data: newInvoiceId, error } = await supabase.rpc("app_create_sales_invoice", {
+        p_organization_id: organizationId,
+        p_items: group.rows.map((row) => ({
+          item_id: row.item_id,
+          description: row.item_name,
+          // الكمية المصروفة والسعر يأتيان من المنظور كما هما — لا تسعير في
+          // الواجهة: سعر الدفعة الفعليّ هو ما خرج من المخزون.
+          qty: Number(row.qty) || 0,
+          price: Number(row.unit_price) || 0,
+          is_vat_exempt: Boolean(row.is_vat_exempt),
+          doctor_id: row.doctor_id,
+        })),
+        p_patient_id: group.patientId,
+        p_visit_id: singleVisitId,
+        p_doctor_id: doctorIds.length === 1 ? doctorIds[0] : null,
+        p_invoice_type: "sale",
+        p_note: `فوترة أدوية مصروفة — ${prescriptionIds.length} وصفة`,
+        p_prescription_ids: prescriptionIds,
+      });
+      if (error) throw error;
+      if (!newInvoiceId) throw new Error("لم تُنشأ الفاتورة — أعد المحاولة");
+      return newInvoiceId as string;
+    },
+    onSuccess: () => {
+      // الوصفة خُتمت `is_billed = true` فخرجت من المنظور: بلا هذا التبطيل تبقى
+      // معروضة هنا فيحاول المستخدم فوترتها ثانيةً وترفضه القاعدة.
+      queryClient.invalidateQueries({ queryKey: ["billing-unbilled-dispensed"] });
+      queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+      queryClient.invalidateQueries({ queryKey: ["invoice-kpis"] });
+      queryClient.invalidateQueries({ queryKey: ["patient-balances"] });
+      // حالة الفوترة معروضة للصيدليّ في شاشة الصيدلية — تُحدَّث معها.
+      queryClient.invalidateQueries({ queryKey: ["prescriptions-list"] });
+      queryClient.invalidateQueries({ queryKey: ["pharmacy-queue"] });
+      toast({ title: "صدرت فاتورة الأدوية المصروفة" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر إصدار فاتورة الأدوية",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  if (rows.isLoading) return <Skeleton className="h-24 w-full" />;
+  if (rows.isError)
+    return (
+      <Card className="border-destructive/40">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">أدوية مصروفة غير مفوترة</CardTitle>
+          <CardDescription className="text-destructive">
+            تعذّر تحميل القائمة:{" "}
+            {rows.error instanceof Error ? rows.error.message : "حدث خطأ غير متوقع"}
+          </CardDescription>
+        </CardHeader>
+      </Card>
+    );
+  if (groups.length === 0) return null;
+
+  return (
+    <Card className="border-amber-300">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-base">أدوية مصروفة غير مفوترة</CardTitle>
+        <CardDescription>
+          دواء خرج من المخزون ولم تُصدَر له فاتورة — بالكمّية المصروفة وبسعر دفعتها، مجمَّعًا
+          بالمريض. الضريبة والصافي تُحسبان في القاعدة عند الإصدار.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>المريض</TableHead>
+              <TableHead>#الملف</TableHead>
+              <TableHead>الأدوية المصروفة</TableHead>
+              <TableHead>الوصفات</TableHead>
+              <TableHead>قيمة المصروف قبل الضريبة</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {groups.map((group) => {
+              const prescriptionCount = new Set(group.rows.map((row) => row.prescription_id)).size;
+              const gross = group.rows.reduce(
+                (sum, row) => sum + (Number(row.qty) || 0) * (Number(row.unit_price) || 0),
+                0,
+              );
+              const busy = createInvoice.isPending && createInvoice.variables?.patientId === group.patientId;
+              return (
+                <TableRow key={group.patientId}>
+                  <TableCell className="font-medium">{group.patientName}</TableCell>
+                  <TableCell className="font-mono text-xs">{group.fileNumber ?? "—"}</TableCell>
+                  <TableCell className="text-xs text-muted-foreground">
+                    {group.rows
+                      .map((row) => `${row.item_name ?? "دواء"} × ${Number(row.qty) || 0}`)
+                      .join("، ")}
+                  </TableCell>
+                  <TableCell className="tabular-nums text-sm">{prescriptionCount}</TableCell>
+                  <TableCell className="tabular-nums text-sm">{gross.toFixed(2)}</TableCell>
+                  <TableCell className="text-left">
+                    <Button size="sm" disabled={createInvoice.isPending} onClick={() => createInvoice.mutate(group)}>
+                      {busy ? "جارٍ الإصدار..." : "إصدار فاتورة"}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+              );
+            })}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }

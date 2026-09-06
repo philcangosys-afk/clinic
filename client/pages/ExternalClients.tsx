@@ -160,16 +160,33 @@ function BulkSmsDialog({
   recipients: ExternalClientRow[];
 }) {
   const { session } = useOrganizationAccess();
+  const queryClient = useQueryClient();
   const { toast } = useToast();
   const [message, setMessage] = useState("");
 
-  const withMobile = recipients.filter((r) => r.mobile_1);
+  /**
+   * العميل المعطَّل يُستثنى من الإرسال.
+   *
+   * كان التعطيل لا يعني شيئًا عمليًّا سوى لون الصفّ: «تحديد الكل» يشمله فتُدرَج
+   * له رسالة كغيره. والتعطيل في هذه الشاشة هو بديل الحذف (لا حذف نهائي
+   * للبيانات)، فلا معنى له إن بقي يستقبل.
+   */
+  const eligible = recipients.filter((r) => !r.is_disabled);
+  const withMobile = eligible.filter((r) => r.mobile_1);
+  const disabledCount = recipients.length - eligible.length;
+  const noMobileCount = eligible.length - withMobile.length;
+  // المستثنون يُذكَر سببهم: عدد بلا سبب يجعل الفرق يبدو خطأً في النظام.
+  const excludedReasons = [
+    disabledCount > 0 ? `${disabledCount} معطَّل` : null,
+    noMobileCount > 0 ? `${noMobileCount} بلا رقم جوال 1` : null,
+  ].filter(Boolean);
+  const excludedNote = excludedReasons.length > 0 ? ` (مستثنى: ${excludedReasons.join("، ")})` : "";
 
   const send = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
       if (!message.trim()) throw new Error("اكتب نص الرسالة");
-      if (withMobile.length === 0) throw new Error("لا يوجد عملاء محدَّدون برقم جوال");
+      if (withMobile.length === 0) throw new Error("لا يوجد عملاء محدَّدون نشطون برقم جوال");
       const { error } = await supabase.from("message_log").insert(
         withMobile.map((client) => ({
           organization_id: organizationId,
@@ -183,7 +200,14 @@ function BulkSmsDialog({
       if (error) throw error;
     },
     onSuccess: () => {
-      toast({ title: `تم وضع ${withMobile.length} رسالة في قائمة الإرسال` });
+      // سجل الرسائل كان لا يُحدَّث من هنا (بخلاف شاشة الإرسال للمرضى)، فلا تظهر
+      // الرسائل الجديدة في «سجل الرسائل» في نفس الجلسة فيشكّ المستخدم في وقوع
+      // الإرسال. والنصّ يقول الحقيقة: تُسجَّل ولا تُرسَل — لا مزوّد رسائل مُهيَّأ.
+      queryClient.invalidateQueries({ queryKey: ["message-log"] });
+      toast({
+        title: `سُجّلت ${withMobile.length} رسالة في الطابور`,
+        description: "لن تصل أجهزة العملاء حتى تُفعَّل قناة الرسائل النصّية.",
+      });
       setMessage("");
       onOpenChange(false);
     },
@@ -195,9 +219,11 @@ function BulkSmsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>إرسال رسالة نصية جماعية</DialogTitle>
+          <DialogTitle>تسجيل رسالة نصية جماعية</DialogTitle>
           <DialogDescription>
-            سترسَل إلى {withMobile.length} من {recipients.length} عميلًا محدَّدًا (من لا يملك رقم جوال 1 يُستثنى تلقائيًا)
+            ستُسجَّل لـ {withMobile.length} من {recipients.length} عميلًا محدَّدًا
+            {excludedNote}. قناة الرسائل النصّية غير مفعّلة في النظام، فما يُسجَّل هنا لا يصل
+            أجهزة العملاء بعد.
           </DialogDescription>
         </DialogHeader>
 
@@ -209,7 +235,7 @@ function BulkSmsDialog({
         <DialogFooter>
           <Button disabled={send.isPending || withMobile.length === 0} onClick={() => send.mutate()}>
             <MessageSquareShare className="h-4 w-4" />
-            {send.isPending ? "جارٍ الإرسال..." : "إرسال"}
+            {send.isPending ? "جارٍ التسجيل..." : "تسجيل في الطابور"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -245,7 +271,8 @@ export default function ExternalClients() {
       toast({ variant: "destructive", title: "تعذر التحديث", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
   });
 
-  const allIds = (clients.data ?? []).map((c) => c.id);
+  // «تحديد الكل» يحدّد النشطين وحدهم: تحديد المعطَّلين كان يُدرِج لهم رسائل.
+  const allIds = (clients.data ?? []).filter((c) => !c.is_disabled).map((c) => c.id);
   const allSelected = allIds.length > 0 && allIds.every((id) => selectedIds.includes(id));
   const selectedClients = (clients.data ?? []).filter((c) => selectedIds.includes(c.id));
 
@@ -263,7 +290,7 @@ export default function ExternalClients() {
           <h1 className="flex items-center gap-2 text-2xl font-bold">
             <Contact2 className="h-6 w-6" /> العملاء الخارجيون
           </h1>
-          <p className="text-sm text-muted-foreground">جهات تواصل ليست مرضى (شركات أو جهات تواصل) — مع إمكانية إرسال رسالة نصية جماعية</p>
+          <p className="text-sm text-muted-foreground">جهات تواصل ليست مرضى (شركات أو جهات تواصل) — مع تسجيل رسالة نصية جماعية في الطابور (قناة الرسائل غير مفعّلة بعد)</p>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -272,7 +299,7 @@ export default function ExternalClients() {
             onClick={() => setBulkSmsOpen(true)}
           >
             <MessageSquareShare className="h-4 w-4" />
-            إرسال جماعي ({selectedIds.length})
+            رسالة جماعية ({selectedIds.length})
           </Button>
           <Button
             onClick={() => {

@@ -284,33 +284,53 @@ function BranchDialog({
         is_main: form.is_main,
       };
 
-      // الفرع الرئيسي واحد لا أكثر: تعيين فرع رئيسيًا ينزع الصفة عن غيره في
-      // نفس الخطوة، وإلا ظهر فرعان رئيسيان ولا يُعرف أيهما يُطبع في الترويسة.
-      if (form.is_main) {
-        const { error: clearError } = await supabase
-          .from("branches")
-          .update({ is_main: false })
-          .eq("organization_id", organizationId)
-          .eq("is_main", true);
-        if (clearError) throw clearError;
-      }
-
+      /**
+       * الحفظ أولًا، ثم نزع صفة «رئيسي» عن غيره.
+       *
+       * كان الترتيب معكوسًا: تُنزع الصفة عن الفرع الرئيسي القديم في خطوة
+       * مستقلّة، ثم يفشل الإدراج (رمز مكرَّر أو رفض RLS) — فتبقى المنشأة **بلا
+       * فرع رئيسي** بلا أن يطلب المستخدم ذلك، وتفقد ترويسة المستندات مرجعها.
+       * لا معاملة تجمع الخطوتين في العميل، فقلب الترتيب يجعل أسوأ الحالات
+       * «فرعان رئيسيان» (ظاهر ويُصلَح بضغطة) لا «بلا فرع رئيسي» (صامت).
+       * الإصلاح الجذري دالّة `app_save_branch` في القاعدة على نمط
+       * `app_save_clinic` — غير موجودة بعد.
+       */
+      let savedId = editing?.id ?? null;
       if (editing) {
         const { data, error } = await supabase
           .from("branches")
           .update(payload)
           .eq("id", editing.id)
           .select("id");
-        if (error) throw error;
+        if (error) {
+          if (String(error.message).includes("duplicate") || String(error.message).includes("unique"))
+            throw new Error("رمز الفرع مستخدم في فرع آخر");
+          throw error;
+        }
         if (!data || data.length === 0) throw new Error("لم يُحفظ التعديل — راجع صلاحيتك");
       } else {
-        const { error } = await supabase.from("branches").insert(payload);
+        const { data, error } = await supabase.from("branches").insert(payload).select("id").single();
         if (error) {
           // القيد الفريد (منشأة، رمز)
           if (String(error.message).includes("duplicate") || String(error.message).includes("unique"))
             throw new Error("رمز الفرع مستخدم في فرع آخر");
           throw error;
         }
+        savedId = (data as { id: string }).id;
+      }
+
+      // الفرع الرئيسي واحد لا أكثر: تُنزع الصفة عن البقية بعد نجاح الحفظ.
+      if (form.is_main && savedId) {
+        const { error: clearError } = await supabase
+          .from("branches")
+          .update({ is_main: false })
+          .eq("organization_id", organizationId)
+          .eq("is_main", true)
+          .neq("id", savedId);
+        if (clearError)
+          throw new Error(
+            `حُفظ الفرع، لكن تعذّر نزع صفة «رئيسي» عن الفرع السابق: ${clearError.message} — راجع قائمة الفروع.`,
+          );
       }
     },
     onSuccess: () => {

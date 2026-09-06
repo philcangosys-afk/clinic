@@ -101,9 +101,24 @@ function HealthPanel() {
     onSuccess: (count) => {
       queryClient.invalidateQueries({ queryKey: ["integration-health", organization?.id] });
       queryClient.invalidateQueries({ queryKey: ["notification-summary", organization?.id] });
+      /**
+       * «أُرسل تنبيه» تُقال عن العالق وحده.
+       *
+       * الدالّة تُعيد رقمًا واحدًا هو (عالق + متوقّف نهائيًّا) لكنها تستدعي
+       * `app_notify_event` داخل `if v_stuck > 0` فقط. فكانت الواجهة تدّعي إرسال
+       * تنبيه عن رسائل متوقّفة نهائيًّا لا تنبيه لها — فيظنّ المستخدم أنه أبلغ
+       * من يتابع التكاملات وهو لم يُبلَّغ. المتوقّف نهائيًّا معروف من المنظور،
+       * فيُشتقّ منه العالق حتى تُصلَح الدالّة فتُعيد الرقمين.
+       */
+      const dead = (health.data ?? []).reduce((sum, r) => sum + Number(r.dead_count ?? 0), 0);
+      const stuck = Math.max(0, Number(count ?? 0) - dead);
       toast({
         title: count ? `${count} رسالة تحتاج انتباهًا` : "لا رسائل عالقة",
-        description: count ? "أُرسل تنبيه لمن يتابع التكاملات" : undefined,
+        description: !count
+          ? undefined
+          : stuck > 0
+            ? `منها ${stuck} عالقة — أُرسل عنها تنبيه لمن يتابع التكاملات`
+            : "كلّها متوقّفة نهائيًّا ولا يُرسَل عنها تنبيه — راجع تبويب «رسائل متوقّفة»",
       });
     },
     onError: (error: unknown) =>

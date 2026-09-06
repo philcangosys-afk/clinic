@@ -364,8 +364,12 @@ function EntriesPanel() {
     },
   });
 
+  // مفتاح مميَّز عن مفتاح تبويب «القيود اليومية»: كان الاثنان
+  // `["journal-entries", orgId]` بدالّتَي جلب مختلفتين، وهذه الوحيدة التي
+  // تجلب البنود — فبيانات تلك تُعرض لحظيًّا هنا فيُحسب مجموع كل قيد صفرًا
+  // وتظهر شارة مصدر خاطئة.
   const entries = useQuery({
-    queryKey: ["journal-entries", organization?.id],
+    queryKey: ["journal-entries-with-lines", organization?.id],
     enabled: Boolean(organization?.id),
     queryFn: async () => {
       const { data, error } = await supabase
@@ -380,8 +384,12 @@ function EntriesPanel() {
   });
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["journal-entries", organization?.id] });
+    queryClient.invalidateQueries({ queryKey: ["journal-entries-with-lines", organization?.id] });
+    // تبويب «القيود اليومية» يقرأ نفس الجدول بمفتاحه الخاصّ، فيُبطَّل معه
+    queryClient.invalidateQueries({ queryKey: ["journal-entries-basic", organization?.id] });
     queryClient.invalidateQueries({ queryKey: ["fiscal-period-status", organization?.id] });
+    queryClient.invalidateQueries({ queryKey: ["account-balances", organization?.id] });
+    queryClient.invalidateQueries({ queryKey: ["trial-balance", organization?.id] });
   };
   const fail = (title: string) => (error: unknown) =>
     toast({

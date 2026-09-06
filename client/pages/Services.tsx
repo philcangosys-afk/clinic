@@ -138,19 +138,33 @@ const ITEM_IMPORT_COLUMNS: CsvColumn[] = [
   {
     key: "item_type",
     header: "النوع",
+    /**
+     * الدواء **مرفوض** في هذا الاستيراد.
+     *
+     * الاستيراد يُدرج في `items` مباشرةً ولا يمرّ بـ`app_save_drug`، ولا محفِّز
+     * يُنشئ صفّ `drug_details`. و`app_dispense_prescription` تقرأ الخاصيّتين
+     * بـ`coalesce(d.is_controlled_substance, false)` و
+     * `coalesce(d.requires_prescription, true)` — فغياب الصف يعني «غير خاضع
+     * للرقابة»: دواء مخدِّر يُستورَد بهذا الطريق يُصرف بلا فحص صلاحية
+     * `pharmacy.dispense_controlled` وبلا تسجيله صرفًا رقابيًّا في التدقيق.
+     * ويظهر كذلك في قائمة اختيار الدواء بلا شكل ولا تركيز.
+     */
     parse: (raw) => {
       const map: Record<string, string> = {
         خدمة: "service",
         منتج: "product",
-        دواء: "drug",
         "خدمة مختبر": "lab_service",
         service: "service",
         product: "product",
-        drug: "drug",
         lab_service: "lab_service",
       };
-      const value = map[raw.trim()];
-      if (!value) throw new Error("النوع يجب أن يكون: خدمة / منتج / دواء / خدمة مختبر");
+      const term = raw.trim();
+      if (term === "دواء" || term.toLowerCase() === "drug")
+        throw new Error(
+          "الأدوية لا تُستورد من هذه الشاشة: أضفها من شاشة الصيدلية حتى تُسجَّل تفاصيلها الدوائية (الشكل والتركيز والتصنيف الرقابي واشتراط الوصفة)",
+        );
+      const value = map[term];
+      if (!value) throw new Error("النوع يجب أن يكون: خدمة / منتج / خدمة مختبر");
       return value;
     },
   },
@@ -204,7 +218,7 @@ const ITEM_IMPORT_COLUMNS: CsvColumn[] = [
 ];
 
 export default function Services() {
-  const { organization } = useOrganizationAccess();
+  const { organization, membership, legacyMode } = useOrganizationAccess();
   const { can } = usePermissions();
   const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState("");
@@ -218,6 +232,39 @@ export default function Services() {
   });
   const [archiveFor, setArchiveFor] = useState<any | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+
+  /**
+   * إعادة ترقيم أكواد الخدمات بأرقام من رقمَين أو ثلاثة.
+   *
+   * الاستقبال يبحث عن الخدمة بكودها عند الفوترة، وكود مثل
+   * `SRV-CONSULT-0001` لا يُحفَظ ولا يُكتب بسرعة. الدالّة في القاعدة تُرقّم
+   * الخدمات غير المؤرشفة التي لا كود قصير لها، وتحفظ الكود القديم فلا يُفقد
+   * مرجع خارجيّ، ولا تمسّ المنتجات والأدوية (لها باركود ومرجع مورّد).
+   */
+  const renumber = useMutation({
+    mutationFn: async () => {
+      if (!organization?.id) throw new Error("لا توجد منشأة نشطة");
+      const { data, error } = await supabase.rpc("app_renumber_service_codes", {
+        p_organization_id: organization.id,
+      });
+      if (error) throw error;
+      return Number(data ?? 0);
+    },
+    onSuccess: (count) => {
+      queryClient.invalidateQueries({ queryKey: ["items-catalog"] });
+      toast({
+        title: count > 0 ? `أُعطيت ${count} خدمة كودًا قصيرًا` : "كل الخدمات لها أكواد قصيرة أصلًا",
+      });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر إعادة الترقيم",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
 
   const items = useItems(
     organization?.id,
@@ -249,6 +296,26 @@ export default function Services() {
           </Button>
           {canManage && (
             <>
+              {/* الترقيم الجماعيّ لمسؤول المنشأة وحده — والقاعدة تفرض ذلك
+                  أيضًا، فالزرّ لا يُظهر ما تَرفضه الدالّة. */}
+              {(legacyMode ||
+                ["owner", "organization_admin"].includes(membership?.role_key ?? "")) && (
+                <Button
+                  variant="outline"
+                  disabled={renumber.isPending}
+                  title="إعطاء كل خدمة كودًا من رقمين أو ثلاثة ليسهل حفظه"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "سيُعاد ترقيم أكواد الخدمات بأرقام قصيرة، ويُحفظ الكود القديم للرجوع إليه. المنتجات والأدوية لا تتغيّر. متابعة؟",
+                      )
+                    )
+                      renumber.mutate();
+                  }}
+                >
+                  {renumber.isPending ? "جارٍ الترقيم..." : "أكواد قصيرة للخدمات"}
+                </Button>
+              )}
               <Button variant="outline" onClick={() => setImportOpen(true)}>
                 <Upload className="h-4 w-4" />
                 استيراد
@@ -277,6 +344,8 @@ export default function Services() {
                 value={categoryId}
                 onChange={setCategoryId}
                 placeholder="كل الفئات"
+                allowClear
+                clearLabel="كل الفئات"
               />
             </div>
             <Select value={typeFilter} onValueChange={setTypeFilter}>
@@ -452,7 +521,7 @@ export default function Services() {
         open={importOpen}
         onOpenChange={setImportOpen}
         table="items"
-        title="استيراد أصناف وخدمات من ملف CSV"
+        title="استيراد خدمات ومنتجات من ملف CSV — الأدوية من شاشة الصيدلية"
         invalidateKey="items-catalog"
         fixedValues={{ organization_id: organization?.id }}
         columns={ITEM_IMPORT_COLUMNS}

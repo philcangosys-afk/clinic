@@ -163,9 +163,15 @@ const GROUP_MODES = [
 
 function MovementsTab() {
   const { organization } = useOrganizationAccess();
+  const { can } = usePermissions();
   const movements = useInventoryMovements(organization?.id);
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [groupMode, setGroupMode] = useState("none");
+  // التسوية صلاحية منفصلة عن إدارة المخزون: `inventory.manage` تكفي للاستلام
+  // والصرف، والتسوية تغيّر الرصيد بلا مستند مقابل فلها `inventory.adjust`.
+  // كان الزرّ معروضًا للجميع بينما زرّ «تسوية» على الدفعة في التبويب المجاور
+  // محجوبٌ بالصلاحية نفسها — تناقضٌ يجعل الحاجز بلا معنى.
+  const canAdjust = can("inventory.adjust");
 
   const grouped = (() => {
     if (groupMode === "none") return null;
@@ -223,10 +229,12 @@ function MovementsTab() {
               ))}
             </SelectContent>
           </Select>
-          <Button size="sm" variant="outline" onClick={() => setAdjustOpen(true)}>
-            <Plus className="h-4 w-4" />
-            تسوية مخزون يدوية
-          </Button>
+          {canAdjust && (
+            <Button size="sm" variant="outline" onClick={() => setAdjustOpen(true)}>
+              <Plus className="h-4 w-4" />
+              تسوية مخزون يدوية
+            </Button>
+          )}
         </div>
       </CardHeader>
       <CardContent>
@@ -339,61 +347,104 @@ function AdjustmentDialog({
   const [item, setItem] = useState<{ id: string; name_ar: string } | null>(null);
   const [qty, setQty] = useState("1");
   const [note, setNote] = useState("");
+  const [unitCostInput, setUnitCostInput] = useState("");
+
+  /**
+   * متوسط التكلفة الحالي للصنف في هذا المستودع — يُقرأ قبل الحفظ لا بعده، حتى
+   * يرى المستخدم بأي تكلفة ستدخل بضاعته. عودته فارغًا تعني «لا رصيد سابق»،
+   * وكانت التسوية حينها تُدخل الدفعة بتكلفة صفر بلا أي تنبيه: فتنخفض قيمة
+   * المخزون والمتوسط المرجَّح، ويظهر «الربح المتوقع» أكبر ممّا هو.
+   */
+  const onHandCost = useQuery({
+    queryKey: ["adjust-avg-cost", organizationId, warehouseId, item?.id],
+    enabled: Boolean(organizationId && warehouseId && item?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_inventory_on_hand")
+        .select("weighted_avg_cost")
+        .eq("organization_id", organizationId)
+        .eq("warehouse_id", warehouseId)
+        .eq("item_id", item!.id)
+        .maybeSingle();
+      if (error) throw error;
+      return Number(data?.weighted_avg_cost ?? 0);
+    },
+  });
+  const knownAvgCost = Number(onHandCost.data ?? 0);
+  const needsManualCost = direction === "adjustment_in" && !(knownAvgCost > 0);
 
   /**
    * **إصلاح الخلل نفسه الموجود في المناقلات**: التسوية كانت تُدرج حركة بلا
    * `lot_id`، والمُحفِّز يتجاهلها — فتظهر في السجل ولا تغيّر الرصيد إطلاقًا.
    * جردٌ فعليّ ينقص قطعتين تالفتين كان يُسجَّل ولا يُنقص شيئًا.
    *
-   * التسوية بالنقص تُصرف من الدفعات FIFO. التسوية بالزيادة تُنشئ دفعة جديدة
-   * بتكلفة متوسط تكلفة الصنف الحالية في هذا المستودع — والصفر عند عدم وجود
-   * رصيد سابق، مع تنبيه للمستخدم لأن إدخال بضاعة بتكلفة صفر يشوّه تقييم
-   * المخزون.
+   * والنقص الآن يمرّ بـ `app_adjust_stock` لكل دفعة مخصَّصة بدل الكتابة
+   * المباشرة في `inventory_movements`: **لماذا؟** لأن سياسة RLS على جدول
+   * الحركات تفحص `inventory.manage` وحدها، فمن يملكها ولا يملك
+   * `inventory.adjust` كان ينقص الرصيد بلا حقّ، وبلا سببٍ مسجَّل، ودون أن
+   * يُفحَص المحجوز لوصفات لم تُصرَف بعد. الدالّة تفحص الثلاثة وتكتب قيد تدقيق.
+   *
+   * التسوية بالزيادة تُنشئ دفعة جديدة، ولا دفعة قائمة تُمرَّر إلى الدالّة —
+   * فبقيت كتابةً من العميل، بتكلفة يُلزَم المستخدم بها إن لم يكن للصنف رصيد
+   * سابق يُشتقّ منه المتوسط.
    */
   const createAdjustment = useMutation({
     mutationFn: async () => {
       if (!organizationId || !warehouseId || !item) throw new Error("بيانات غير مكتملة");
       const quantity = Number(qty);
       if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("الكمية يجب أن تكون أكبر من صفر");
+      // السبب إلزامي في الواجهة كما هو إلزامي داخل `app_adjust_stock`: تسويةٌ
+      // بلا سبب مسجَّل تجعل فرق الجرد غير قابل للمراجعة لاحقًا.
+      if (!note.trim()) throw new Error("اكتب سبب التسوية");
 
       if (direction === "adjustment_out") {
         const lots = await fetchSourceLots(organizationId, warehouseId, item.id);
         const allocations = allocateFifo(lots, quantity, item.name_ar);
-        await writeOutboundMovements({
-          organizationId,
-          warehouseId,
-          itemId: item.id,
-          movementType: "adjustment_out",
-          allocations,
-          note: note.trim() || null,
-        });
+        // التخصيص على عدّة دفعات = عدّة استدعاءات، وكلّ استدعاء معاملةٌ وحده.
+        // فلو رفضت القاعدة دفعةً وسطى (كمية محجوزة مثلًا) وجب أن تقول الرسالة
+        // ما نُقص فعلًا بدل «تعذرت التسوية» التي تُفهَم أنه لم يُنقص شيء.
+        let doneQty = 0;
+        for (const allocation of allocations) {
+          const { error } = await supabase.rpc("app_adjust_stock", {
+            p_lot_id: allocation.lotId,
+            p_qty: -allocation.qty,
+            p_reason: note.trim(),
+          });
+          if (error) {
+            if (doneQty > 0)
+              throw new Error(
+                `${error.message} — نُقص ${doneQty} من ${quantity} قبل التوقّف؛ راجع الرصيد قبل إعادة المحاولة`,
+              );
+            throw error;
+          }
+          doneQty += allocation.qty;
+        }
         return;
       }
 
-      const { data: onHand } = await supabase
-        .from("v_inventory_on_hand")
-        .select("weighted_avg_cost")
-        .eq("warehouse_id", warehouseId)
-        .eq("item_id", item.id)
-        .maybeSingle();
-      const unitCost = Number(onHand?.weighted_avg_cost ?? 0);
+      const unitCost = knownAvgCost > 0 ? knownAvgCost : Number(unitCostInput);
+      if (!Number.isFinite(unitCost) || unitCost <= 0)
+        throw new Error("لا رصيد سابق لهذا الصنف في المستودع — اكتب تكلفة الوحدة");
       await writeInboundLotsAndMovements({
         organizationId,
         warehouseId,
         itemId: item.id,
         movementType: "adjustment_in",
         allocations: [{ lotId: "", qty: quantity, unitCost, expiryDate: null }],
-        note: note.trim() || null,
+        note: note.trim(),
       });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["inventory-movements", organizationId] });
       queryClient.invalidateQueries({ queryKey: ["inventory-lots"] });
       queryClient.invalidateQueries({ queryKey: ["inventory-on-hand"] });
+      queryClient.invalidateQueries({ queryKey: ["stock-alerts", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["adjust-avg-cost", organizationId] });
       toast({ title: "تم تسجيل التسوية وتحديث الرصيد" });
       setItem(null);
       setQty("1");
       setNote("");
+      setUnitCostInput("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -457,13 +508,44 @@ function AdjustmentDialog({
               <Input type="number" min={0} value={qty} onChange={(e) => setQty(e.target.value)} />
             </div>
           </div>
+          {direction === "adjustment_in" && item && warehouseId && !onHandCost.isLoading && (
+            needsManualCost ? (
+              <div className="flex flex-col gap-1.5 rounded-md border border-amber-300 bg-amber-50 p-2">
+                <p className="text-xs text-amber-800">
+                  لا رصيد سابق لهذا الصنف في المستودع، فلا متوسط تكلفة يُشتقّ منه. إدخال البضاعة
+                  بتكلفة صفر يخفض قيمة المخزون ويُظهر الربح المتوقع أكبر ممّا هو — اكتب تكلفة الوحدة.
+                </p>
+                <Label>تكلفة الوحدة *</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={unitCostInput}
+                  onChange={(e) => setUnitCostInput(e.target.value)}
+                />
+              </div>
+            ) : (
+              <p className="rounded-md bg-muted p-2 text-xs text-muted-foreground">
+                تكلفة الوحدة ستكون متوسط تكلفة الصنف الحالي في هذا المستودع: {knownAvgCost.toFixed(2)}
+              </p>
+            )
+          )}
           <div className="flex flex-col gap-1.5">
-            <Label>سبب التسوية</Label>
+            <Label>سبب التسوية *</Label>
             <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="مثال: جرد فعلي، تلف، تصحيح خطأ إدخال" />
           </div>
         </div>
         <DialogFooter>
-          <Button disabled={!warehouseId || !item || createAdjustment.isPending} onClick={() => createAdjustment.mutate()}>
+          <Button
+            disabled={
+              !warehouseId ||
+              !item ||
+              !note.trim() ||
+              (needsManualCost && !(Number(unitCostInput) > 0)) ||
+              createAdjustment.isPending
+            }
+            onClick={() => createAdjustment.mutate()}
+          >
             {createAdjustment.isPending ? "جارٍ الحفظ..." : "حفظ التسوية"}
           </Button>
         </DialogFooter>
@@ -911,31 +993,70 @@ function useMemberNames(organizationId: string | undefined) {
 }
 
 function TransfersTab() {
-  const { organization, session } = useOrganizationAccess();
+  const { organization } = useOrganizationAccess();
   const transfers = useStockTransfers(organization?.id);
   const memberNames = useMemberNames(organization?.id);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { can } = usePermissions();
   const [createOpen, setCreateOpen] = useState(false);
 
-  const updateStatus = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: "approved" | "rejected" }) => {
-      // approved_by يُسجَّل للرفض أيضًا: من رفض الطلب سؤال رقابي مثل من اعتمده.
-      const { data: affectedRows, error } = await supabase
-        .from("stock_transfers")
-        .update({ status, approved_by: session?.user.id ?? null })
-        .eq("id", id)
-        .select("id");
+  const invalidateTransfers = () => {
+    queryClient.invalidateQueries({ queryKey: ["stock-transfers", organization?.id] });
+    // تبويب «المخزون المتقدم» يقرأ نفس المستندات من v_transfer_pipeline بمفتاح
+    // آخر: بلا إبطاله يظهر المستند فيه بحالته القديمة وأزرارها القديمة.
+    queryClient.invalidateQueries({ queryKey: ["transfer-pipeline", organization?.id] });
+  };
+
+  /**
+   * الاعتماد والرفض عبر دالّتَي القاعدة لا بكتابةٍ مباشرة على الجدول.
+   *
+   * **لماذا كان خطأً**: سياسة RLS على `stock_transfers` هي `app_is_member` لكل
+   * العمليات — أي أن الكتابة المباشرة تجعل **أي عضو** في المنشأة معتمِدًا،
+   * وتسمح لطالب المناقلة باعتماد طلبه بنفسه، وتُمرِّر رفضًا بلا سبب مكتوب.
+   * `app_approve_stock_transfer`/`app_reject_stock_transfer` تفحصان صلاحية
+   * `inventory.transfer_approve`، وتمنعان الطالب من اعتماد طلبه، وتُلزمان
+   * الرفض بسبب — وكلّها كانت مُتخطّاة. وكان المُتحوّل بلا `onError` أصلًا،
+   * فرفض RLS أو القيد يمرّ صامتًا بلا نجاح ولا خطأ.
+   */
+  const approveTransfer = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase.rpc("app_approve_stock_transfer", {
+        p_transfer_id: id,
+        p_note: null,
+      });
       if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["stock-transfers", organization?.id] });
-      toast({ title: "تم تحديث حالة المناقلة" });
+      invalidateTransfers();
+      toast({ title: "اعتُمدت المناقلة" });
     },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الاعتماد",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  const rejectTransfer = useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const { error } = await supabase.rpc("app_reject_stock_transfer", {
+        p_transfer_id: id,
+        p_reason: reason,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidateTransfers();
+      toast({ title: "رُفضت المناقلة" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الرفض",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   /**
@@ -1103,16 +1224,33 @@ function TransfersTab() {
                     <span>{new Date(t.created_at).toLocaleString("ar-SA")}</span>
                   </div>
                   <div className="mt-2 flex gap-2">
-                    {(t.status === "requested" || t.status === "draft") && (
-                      <>
-                        <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: t.id, status: "approved" })}>
-                          اعتماد
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => updateStatus.mutate({ id: t.id, status: "rejected" })}>
-                          رفض
-                        </Button>
-                      </>
-                    )}
+                    {(t.status === "requested" || t.status === "draft") &&
+                      can("inventory.transfer_approve") && (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={approveTransfer.isPending}
+                            onClick={() => approveTransfer.mutate(t.id)}
+                          >
+                            اعتماد
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={rejectTransfer.isPending}
+                            onClick={() => {
+                              // الدالّة ترفض السبب الفارغ، فالسؤال هنا يوفّر على
+                              // المستخدم رسالة خطأ من القاعدة بدل نموذج ناقص.
+                              const reason = window.prompt("سبب رفض المناقلة؟") ?? "";
+                              if (!reason.trim()) return;
+                              rejectTransfer.mutate({ id: t.id, reason: reason.trim() });
+                            }}
+                          >
+                            رفض
+                          </Button>
+                        </>
+                      )}
                     {(t.status === "approved" || t.status === "shipped") && (
                       <Button
                         size="sm"

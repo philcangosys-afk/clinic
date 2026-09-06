@@ -41,25 +41,70 @@ function SingleSend() {
   const [patient, setPatient] = useState<PatientTarget | null>(null);
   const [text, setText] = useState("");
 
+  /**
+   * حجب المريض يُفحَص **قبل** الإرسال لا بعده.
+   *
+   * مُحفِّز `trg_enforce_messaging_block` في القاعدة لا يرفع خطأً بل يحوّل الصفّ
+   * إلى `cancelled` بسبب «محظور من استقبال الرسائل» (بقرار موثَّق: كي لا يُفشل
+   * مريضٌ محظور تشغيل التذكيرات كلّه). فالعميل كان يرى `error = null` ويعلن
+   * النجاح، والموظّف يغادر واثقًا أنه أبلغ من لن يُبلَّغ. نفس الدالّة التي
+   * يستعملها المُحفِّز تُستدعى هنا: `block_sms` في الملفّ والحجب في «الجهات
+   * المحجوبة» كلاهما داخلها.
+   */
+  const blocked = useQuery({
+    queryKey: ["contact-block", organization?.id, patient?.id],
+    enabled: Boolean(organization?.id) && Boolean(patient?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_check_contact_block", {
+        p_organization_id: organization!.id,
+        p_patient_id: patient!.id,
+        p_mobile_number: patient!.mobile_number,
+        p_action: "messaging",
+      });
+      if (error) throw error;
+      return Boolean(data);
+    },
+  });
+  const isBlocked = blocked.data === true;
+
   const send = useMutation({
     mutationFn: async () => {
       if (!organization?.id) throw new Error("لا توجد مؤسسة نشطة");
       if (!patient) throw new Error("اختر المريض أولًا");
       if (!patient.mobile_number) throw new Error("هذا المريض لا يملك رقم جوال مسجَّل");
       if (!text.trim()) throw new Error("اكتب نص الرسالة");
-      const { error } = await supabase.from("message_log").insert({
-        organization_id: organization.id,
-        patient_id: patient.id,
-        external_recipient: patient.mobile_number,
-        channel: "sms" as const,
-        message_text: text.trim(),
-        status: "queued" as const,
-        created_by: session?.user.id ?? null,
-      });
+      if (isBlocked)
+        throw new Error("هذا المريض محجوب عن استقبال الرسائل — ارفع الحجب من ملفّه أو من «الجهات المحجوبة» أولًا");
+      // إعادة الصفّ المُدرَج ضرورية: حالته قد تكون `cancelled` بقرار المُحفِّز
+      // ولو نجح الإدراج.
+      const { data, error } = await supabase
+        .from("message_log")
+        .insert({
+          organization_id: organization.id,
+          patient_id: patient.id,
+          external_recipient: patient.mobile_number,
+          channel: "sms" as const,
+          message_text: text.trim(),
+          status: "queued" as const,
+          created_by: session?.user.id ?? null,
+        })
+        .select("status, last_error")
+        .single();
       if (error) throw error;
+      return data as { status: string; last_error: string | null };
     },
-    onSuccess: () => {
+    onSuccess: (row) => {
       queryClient.invalidateQueries({ queryKey: ["message-log"] });
+      const name = patient?.name_ar ?? "المريض";
+      if (row?.status === "cancelled") {
+        toast({
+          variant: "destructive",
+          title: `أُلغيت الرسالة: ${name}`,
+          description: row.last_error ?? "محظور من استقبال الرسائل",
+        });
+        setPatient(null);
+        return;
+      }
       // القول الصادق: الرسالة سُجّلت، ولم تُرسَل. قناة الرسائل النصّية غير
       // مفعّلة في هذا النظام بقرار مالكه، فالطابور لا يُصرَف. رسالة نجاح توحي
       // بوصولها إلى جوّال المريض تجعل الموظّف يظنّ أنه أبلغ من لم يُبلَّغ.
@@ -115,6 +160,21 @@ function SingleSend() {
           {patient && !patient.mobile_number && (
             <p className="text-xs text-destructive">لا يوجد رقم جوال مسجَّل لهذا المريض</p>
           )}
+          {isBlocked && (
+            <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <span>
+                هذا المريض محجوب عن استقبال الرسائل (حجب في ملفّه أو في «الجهات المحجوبة») —
+                أي رسالة تُسجَّل له تُلغى فورًا في القاعدة. ارفع الحجب أولًا إن أردت مراسلته.
+              </span>
+            </div>
+          )}
+          {blocked.isError && (
+            <p className="text-xs text-destructive">
+              تعذّر التحقّق من حجب المريض:{" "}
+              {blocked.error instanceof Error ? blocked.error.message : "خطأ غير متوقع"}
+            </p>
+          )}
         </div>
 
         <div className="flex flex-col gap-1.5">
@@ -126,7 +186,7 @@ function SingleSend() {
         <div>
           <Button
             onClick={() => send.mutate()}
-            disabled={send.isPending || !patient?.mobile_number || !text.trim()}
+            disabled={send.isPending || !patient?.mobile_number || !text.trim() || isBlocked}
           >
             <Send className="h-4 w-4" />
             {send.isPending ? "جارٍ الإرسال..." : "إرسال"}
@@ -196,15 +256,24 @@ function BulkSend() {
         status: "queued" as const,
         created_by: session?.user.id ?? null,
       }));
-      const { error } = await supabase.from("message_log").insert(payload);
+      // تصفية `block_sms` في الاستعلام لا تكفي: الحجب في «الجهات المحجوبة»
+      // (برقم الجوال أو بالمريض) يُلغي الصفّ في القاعدة بلا خطأ. فتُقرأ حالات
+      // الصفوف المُدرَجة ويُذكَر عدد ما أُلغي بدل الإعلان عن نجاح الجميع.
+      const { data, error } = await supabase.from("message_log").insert(payload).select("status");
       if (error) throw error;
-      return payload.length;
+      const rows = (data ?? []) as { status: string }[];
+      const cancelled = rows.filter((row) => row.status === "cancelled").length;
+      return { queued: rows.length - cancelled, cancelled };
     },
-    onSuccess: (count) => {
+    onSuccess: ({ queued, cancelled }) => {
       queryClient.invalidateQueries({ queryKey: ["message-log"] });
       toast({
-        title: `سُجّلت ${count} رسالة في الطابور`,
-        description: "لن تصل أجهزة المرضى حتى تُفعَّل قناة الرسائل النصّية.",
+        variant: cancelled > 0 ? "destructive" : undefined,
+        title: `سُجّلت ${queued} رسالة في الطابور`,
+        description:
+          (cancelled > 0
+            ? `و${cancelled} مستلمًا محجوبًا أُلغيت رسائلهم في القاعدة. `
+            : "") + "لن تصل أجهزة المرضى حتى تُفعَّل قناة الرسائل النصّية.",
       });
       setText("");
     },
@@ -284,7 +353,9 @@ function BulkSend() {
         )}
 
         <div className="rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground">
-          المرضى المحجوبون عن الرسائل ومن ليس لديهم رقم جوال مستبعدون تلقائيًا.
+          المحجوبون في ملفّهم (حجب الرسائل) ومن ليس لديهم رقم جوال مستبعدون من الفلترة. أما
+          المحجوبون في «الجهات المحجوبة» فتُلغى رسائلهم في القاعدة، ويُذكَر عددهم في رسالة
+          النتيجة بعد التسجيل.
         </div>
 
         <div className="flex flex-col gap-1.5">

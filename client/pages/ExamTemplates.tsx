@@ -1,6 +1,18 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Copy, FileStack, GripVertical, Layers, Plus, Trash2 } from "lucide-react";
+import {
+  Copy,
+  FileStack,
+  GripVertical,
+  Info,
+  Layers,
+  Lock,
+  Pencil,
+  Plus,
+  ShieldBan,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { usePermissions } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
@@ -25,6 +37,11 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import LookupSelect from "@/components/shared/LookupSelect";
+import {
+  normalizeExamFields,
+  type ExamTemplateSchema,
+  type NormalizedExamField,
+} from "@/lib/exam-template-fields";
 
 /**
  * مصمّم نماذج الفحص السريري — المرحلة الخامسة.
@@ -60,9 +77,27 @@ const FIELD_TYPES: Record<string, string> = {
 /** الأنواع التي تحتاج قائمة خيارات. */
 const NEEDS_OPTIONS = new Set(["select", "multi_select", "radio"]);
 
+/**
+ * أنواع القسم — قيد `exam_template_sections_type_check` في القاعدة.
+ *
+ * القسم غير المجموعة (نصّ/نصّ طويل/تشخيص) يُخرجه `app_rebuild_exam_schema` بلا
+ * حقول: هو حقلٌ واحد بنفسه في نموذج الزيارة، لا وعاءٌ لحقول.
+ */
+const SECTION_TYPES: Record<string, string> = {
+  group: "مجموعة حقول",
+  text: "نصّ قصير",
+  textarea: "نصّ طويل",
+  diagnosis: "تشخيص",
+};
+
+const SYSTEM_TEMPLATE_NOTE =
+  "القالب النظاميّ مشترك بين كل المنشآت — لا يُعدَّل ولا يُحمَل عليه قسم. انسخه لتخصيصه: تُنشأ نسخة مملوكة لمنشأتك بأقسامها وحقولها من تعريفه، وتُعدَّل كما تشاء.";
+
 export default function ExamTemplates() {
   const { organization } = useOrganizationAccess();
   const { can } = usePermissions();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const organizationId = organization?.id;
   const canManage = can("exam_templates.manage");
   const [selected, setSelected] = useState<string | null>(null);
@@ -76,9 +111,15 @@ export default function ExamTemplates() {
       const { data, error } = await supabase
         .from("v_exam_templates")
         .select(
-          "id, name_ar, name_en, specialty_code, specialty_value_id, specialty_name, clinic_id, clinic_name, canvas_type, version, parent_template_id, effective_from, is_disabled, section_count, field_count, usage_count",
+          "id, organization_id, name_ar, name_en, specialty_code, specialty_value_id, specialty_name, clinic_id, clinic_name, canvas_type, version, parent_template_id, effective_from, is_disabled, section_count, field_count, usage_count",
         )
-        .eq("organization_id", organizationId)
+        // القوالب النظامية (بلا منشأة) مشتركة بين كل المنشآت، وكل القوالب
+        // المزروعة منها. المرشّح `.eq("organization_id", …)` كان يخفيها كلها
+        // فتبدو الشاشة فارغة («لا نماذج») بينما الأطباء يعبّئونها يوميًّا،
+        // ولا سبيل إلى تخصيص أيّ منها. تُعرض الآن للقراءة مع زرّ النسخ.
+        .or(`organization_id.eq.${organizationId},organization_id.is.null`)
+        // قوالب المنشأة أولًا ثم النظامية — الأقرب إلى المستخدم أعلى القائمة.
+        .order("organization_id", { ascending: false, nullsFirst: false })
         .order("name_ar")
         .order("version", { ascending: false });
       if (error) throw error;
@@ -90,6 +131,93 @@ export default function ExamTemplates() {
     () => (templates.data ?? []).filter((row) => showDisabled || !row.is_disabled),
     [templates.data, showDisabled],
   );
+
+  /**
+   * تخصيص قالب نظاميّ = **نسخة مملوكة للمنشأة**، لا تعديل في موضعه.
+   *
+   * سياسات التحديث على `clinic_exam_templates` تشترط إدارة منشأة القالب، وجدولا
+   * `exam_template_sections`/`exam_template_fields` محميّان بعضوية المنشأة —
+   * فالقالب النظاميّ (بلا منشأة) لا يُعدَّل ولا يمكن أن يكون له أقسام أصلًا.
+   * `app_clone_exam_template` تُنشئ النسخة وتبني أقسامها وحقولها من تعريفه في
+   * نفس المعاملة، فيُفتح تبويب البناء على شيء غير فارغ.
+   */
+  const customize = useMutation({
+    mutationFn: async (templateId: string) => {
+      if (!organizationId) throw new Error("لا توجد منشأة نشطة");
+      const { data, error } = await supabase.rpc("app_clone_exam_template", {
+        p_template_id: templateId,
+        p_organization_id: organizationId,
+        p_name: null,
+      });
+      if (error) throw error;
+      const newId = (data ?? null) as string | null;
+      if (!newId) throw new Error("لم تُنشأ النسخة — أعد المحاولة");
+      return newId;
+    },
+    onSuccess: (newId) => {
+      queryClient.invalidateQueries({ queryKey: ["exam-templates"] });
+      toast({
+        title: "أُنشئت نسخة المنشأة",
+        description:
+          "النسخة مفعَّلة لمنشأتك وتُقدَّم على القالب النظاميّ في الزيارات الجديدة — عدّلها هنا، فالنظاميّ مشترك بين كل المنشآت ولا يُعدَّل.",
+      });
+      // يُفتح تبويب البناء على النسخة مباشرةً: النسخة هي ما يُعدَّل.
+      setSelected(newId);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذّر نسخ القالب",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  /**
+   * تفعيل/تعطيل القالب.
+   *
+   * `is_disabled` كان يُقرأ في ست مواضع ولا يُكتب في المشروع كله: النسخة
+   * الجديدة تُنشأ معطَّلة، فتبقى معطَّلة إلى الأبد ولا يراها أيّ طبيب، ولا
+   * سبيل إلى إيقاف قالب خاطئ. ونموذج الزيارة يرشّح `is_disabled = false`
+   * فالتعطيل هو المفتاح الحقيقي لوصول القالب إلى الطبيب.
+   */
+  const toggleDisabled = useMutation({
+    mutationFn: async (row: { id: string; is_disabled: boolean }) => {
+      const next = !row.is_disabled;
+      const { data, error } = await supabase
+        .from("clinic_exam_templates")
+        .update({ is_disabled: next })
+        .eq("id", row.id)
+        .select("id");
+      if (error) throw error;
+      // القالب النظاميّ (وأي قالب لا تملكه المنشأة) لا تمرّره سياسة التحديث:
+      // `update` بلا صفوف ليس نجاحًا — بدون هذا الفحص تظهر رسالة نجاح كاذبة.
+      if (!data || data.length === 0) throw new Error("لم يُحدَّث شيء — تحقّق من صلاحيتك");
+      return next;
+    },
+    onSuccess: (nowDisabled) => {
+      queryClient.invalidateQueries({ queryKey: ["exam-templates"] });
+      // نموذج الزيارة يقرأ القالب بمفتاحه الخاص — بلا إبطاله يبقى الطبيب على
+      // القالب القديم حتى يُحدِّث الصفحة.
+      queryClient.invalidateQueries({ queryKey: ["exam-template"] });
+      toast({
+        title: nowDisabled ? "عُطِّل القالب" : "فُعِّل القالب",
+        description: nowDisabled
+          ? "لن يظهر للطبيب في الزيارات الجديدة، والزيارات القديمة تبقى بنسختها."
+          : "صار قالب هذا التخصص في الزيارات الجديدة.",
+      });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذّر تغيير الحالة",
+        description:
+          error instanceof Error && error.message.includes("uq_exam_template_active_specialty")
+            ? "يوجد قالب مفعَّل آخر لنفس التخصص — عطّله أولًا ثم فعّل هذا"
+            : error instanceof Error
+              ? error.message
+              : "خطأ غير متوقع",
+      }),
+  });
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 p-4 sm:p-6">
@@ -115,6 +243,10 @@ export default function ExamTemplates() {
             عرض النسخ المعطَّلة والقديمة
           </label>
           <CardDescription>{visible.length} نموذج</CardDescription>
+          <p className="flex items-start gap-2 rounded-md border border-sky-200 bg-sky-50 p-3 text-xs text-sky-900">
+            <Info className="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{SYSTEM_TEMPLATE_NOTE}</span>
+          </p>
         </CardHeader>
         <CardContent>
           {templates.isLoading && <Skeleton className="h-32 w-full" />}
@@ -139,12 +271,21 @@ export default function ExamTemplates() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {visible.map((row) => (
+                {visible.map((row) => {
+                  // القالب بلا منشأة = نظاميّ: للقراءة فقط، ويُخصَّص بالنسخ.
+                  const isSystem = !row.organization_id;
+                  return (
                   <TableRow key={row.id} className={row.is_disabled ? "text-muted-foreground" : ""}>
                     <TableCell className="font-medium">
-                      <span className="flex items-center gap-2">
+                      <span className="flex flex-wrap items-center gap-2">
                         <FileStack className="h-4 w-4 text-muted-foreground" />
                         {row.name_ar}
+                        {isSystem && (
+                          <Badge variant="outline" title={SYSTEM_TEMPLATE_NOTE}>
+                            <Lock className="me-1 h-3 w-3" />
+                            نظاميّ
+                          </Badge>
+                        )}
                       </span>
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
@@ -156,8 +297,17 @@ export default function ExamTemplates() {
                     <TableCell>
                       <Badge variant="outline">v{row.version}</Badge>
                     </TableCell>
-                    <TableCell>{row.section_count}</TableCell>
-                    <TableCell>{row.field_count}</TableCell>
+                    {/* عدّادا الأقسام والحقول يُحسبان من جداول البناء، وهي فارغة
+                        دائمًا للقالب النظاميّ — فـ«٠ أقسام» كذبٌ يوهم أنه لم
+                        يُبنَ. تُعرض شرطة، والتعريف يُرى بزرّ «عرض». */}
+                    <TableCell>
+                      {isSystem ? (
+                        <span title="تعريف القالب النظاميّ محفوظ فيه لا في جداول البناء">—</span>
+                      ) : (
+                        row.section_count
+                      )}
+                    </TableCell>
+                    <TableCell>{isSystem ? <span>—</span> : row.field_count}</TableCell>
                     <TableCell>
                       {row.usage_count > 0 ? (
                         <Badge variant="secondary" title="عدد الزيارات التي استعملت هذا النموذج">
@@ -173,13 +323,53 @@ export default function ExamTemplates() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-end">
-                      <Button size="sm" variant="ghost" onClick={() => setSelected(row.id)}>
-                        <Layers className="h-4 w-4" />
-                        البناء
-                      </Button>
+                      <div className="flex flex-wrap items-center justify-end gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => setSelected(row.id)}>
+                          {isSystem ? <Lock className="h-4 w-4" /> : <Layers className="h-4 w-4" />}
+                          {isSystem ? "عرض" : "البناء"}
+                        </Button>
+                        {canManage && isSystem && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            title={SYSTEM_TEMPLATE_NOTE}
+                            disabled={customize.isPending}
+                            onClick={() => customize.mutate(row.id)}
+                          >
+                            <Copy className="h-4 w-4" />
+                            انسخ لتخصيصه
+                          </Button>
+                        )}
+                        {canManage && !isSystem && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            disabled={toggleDisabled.isPending}
+                            onClick={() => {
+                              if (
+                                !row.is_disabled &&
+                                !window.confirm(
+                                  `تعطيل «${row.name_ar}»؟ لن يظهر للطبيب في الزيارات الجديدة (الزيارات المحفوظة تبقى بنسختها).`,
+                                )
+                              ) {
+                                return;
+                              }
+                              toggleDisabled.mutate({ id: row.id, is_disabled: row.is_disabled });
+                            }}
+                          >
+                            {row.is_disabled ? (
+                              <ShieldCheck className="h-4 w-4" />
+                            ) : (
+                              <ShieldBan className="h-4 w-4" />
+                            )}
+                            {row.is_disabled ? "تفعيل" : "تعطيل"}
+                          </Button>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
-                ))}
+                  );
+                })}
                 {visible.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={9} className="py-8 text-center text-sm text-muted-foreground">
@@ -202,6 +392,9 @@ export default function ExamTemplates() {
         templateId={selected}
         organizationId={organizationId}
         canManage={canManage}
+        customizing={customize.isPending}
+        onCustomize={(id) => customize.mutate(id)}
+        onRevealDisabled={() => setShowDisabled(true)}
         onClose={() => setSelected(null)}
       />
     </div>
@@ -237,6 +430,30 @@ function NewTemplateDialog({
     },
   });
 
+  /**
+   * رمز التخصص يُستخرج من التخصص المختار (`lookup_values.extra->>'specialty_code'`).
+   *
+   * كان الرمز حقلًا نصيًّا موصوفًا بـ«للتوافق مع القوالب القديمة» فيُترك فارغًا
+   * كما يوحي عنوانه — والرمز هو ما يبحث به نموذج الزيارة وما يفرض عليه
+   * `uq_exam_template_active_specialty` قالبًا مفعَّلًا واحدًا لكل تخصص. فكان
+   * النموذج يظهر «مفعَّلًا» في الجدول ولا يصل الطبيب أبدًا، وكان قالبان
+   * مفعَّلان لنفس التخصص ممكنين (الرمز فارغ فلا يُقيَّد).
+   */
+  const specialtyCode = useQuery({
+    queryKey: ["tpl-specialty-code", form.specialty_value_id],
+    enabled: open && Boolean(form.specialty_value_id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("lookup_values")
+        .select("extra")
+        .eq("id", form.specialty_value_id)
+        .maybeSingle();
+      if (error) throw error;
+      return ((data?.extra as { specialty_code?: string } | null)?.specialty_code ?? "") as string;
+    },
+  });
+  const derivedCode = specialtyCode.data ?? "";
+
   const set = (field: string, value: any) => setForm((prev: any) => ({ ...prev, [field]: value }));
 
   const create = useMutation({
@@ -247,7 +464,9 @@ function NewTemplateDialog({
         organization_id: organizationId,
         name_ar: String(form.name_ar).trim(),
         name_en: String(form.name_en ?? "").trim() || null,
-        specialty_code: String(form.specialty_code ?? "").trim() || null,
+        // الرمز المكتوب يدويًّا أولًا، ثم المستخرج من التخصص — فلا يُخزَّن قالب
+        // بتخصص ورمزٍ فارغ لا يطابقه نموذج الزيارة.
+        specialty_code: String(form.specialty_code ?? "").trim() || derivedCode || null,
         specialty_value_id: form.specialty_value_id || null,
         clinic_id: form.clinic_id || null,
         canvas_type: form.canvas_type ?? "none",
@@ -303,13 +522,18 @@ function NewTemplateDialog({
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label>رمز التخصص (للتوافق مع القوالب القديمة)</Label>
+            <Label>رمز التخصص</Label>
             <Input
               value={form.specialty_code ?? ""}
               dir="ltr"
-              placeholder="general, dental, occupational_health…"
+              placeholder={derivedCode || "general, dental, occupational_health…"}
               onChange={(e) => set("specialty_code", e.target.value)}
             />
+            <p className="text-xs text-muted-foreground">
+              {derivedCode
+                ? `يُستخرج تلقائيًا من التخصص المختار (${derivedCode}) إن تركته فارغًا — وبه يطابق نموذج الزيارة القالب.`
+                : "بهذا الرمز يطابق نموذج الزيارة القالب — إن تركته فارغًا ولا رمز للتخصص المختار فلن يصل القالب الطبيب إلا بمطابقة التخصص."}
+            </p>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>العيادة</Label>
@@ -358,16 +582,64 @@ function NewTemplateDialog({
   );
 }
 
+type StoredSection = { key: string; label_ar: string; type: string; fields: NormalizedExamField[] };
+
+/**
+ * عرض التعريف المخزَّن في `clinic_exam_templates.schema_definition` للقراءة.
+ *
+ * القالب النظاميّ (وكل قالب مزروع قديم) لا صفوف له في جداول البناء، فكان
+ * التبويبان يقولان «لا حقول» و«النموذج فارغ» عن قالبٍ يعبّئه الأطباء يوميًّا —
+ * ومن هذا الوهم جاءت الكارثة: المدير يضيف قسمًا واحدًا فيستبدل النموذج كلّه.
+ * الحقول تُطبَّع بنفس دالّة نموذج الزيارة، فالنصّ والكائن يُقرآن معًا.
+ */
+function StoredSchemaView({ sections }: { sections: StoredSection[] }) {
+  return (
+    <div className="flex flex-col gap-3">
+      {sections.map((section) => (
+        <div key={section.key} className="rounded-md border">
+          <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-2">
+            <span className="font-medium">{section.label_ar}</span>
+            <span className="font-mono text-xs text-muted-foreground">{section.key}</span>
+            <Badge variant="outline">{SECTION_TYPES[section.type] ?? section.type}</Badge>
+          </div>
+          {section.fields.length > 0 ? (
+            <div className="flex flex-wrap gap-2 px-3 py-2 text-sm">
+              {section.fields.map((field) => (
+                <span key={field.key} className="flex items-center gap-1 rounded-md border px-2 py-1">
+                  {field.label_ar}
+                  {field.unit && <span className="text-xs text-muted-foreground">({field.unit})</span>}
+                  <Badge variant="outline">{FIELD_TYPES[field.type] ?? field.type}</Badge>
+                  {field.required && <Badge variant="destructive">إلزامي</Badge>}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <p className="px-3 py-2 text-sm text-muted-foreground">
+              {section.type === "group" ? "لا حقول في هذا القسم." : "قسمٌ بحقل واحد بنفسه."}
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 function TemplateBuilderDialog({
   templateId,
   organizationId,
   canManage,
+  customizing,
+  onCustomize,
+  onRevealDisabled,
   onClose,
 }: {
   templateId: string | null;
   organizationId: string | undefined;
   canManage: boolean;
+  customizing: boolean;
+  onCustomize: (templateId: string) => void;
+  onRevealDisabled: () => void;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -378,15 +650,15 @@ function TemplateBuilderDialog({
     queryKey: ["exam-template-detail", templateId],
     enabled: Boolean(templateId),
     queryFn: async () => {
-      const [tpl, sections, fields, options] = await Promise.all([
+      const [tpl, sections, fields, options, stored] = await Promise.all([
         supabase
           .from("v_exam_templates")
-          .select("id, name_ar, version, usage_count, is_disabled, canvas_type")
+          .select("id, organization_id, name_ar, version, usage_count, is_disabled, canvas_type")
           .eq("id", templateId)
           .maybeSingle(),
         supabase
           .from("exam_template_sections")
-          .select("id, key, name_ar, sort_order")
+          .select("id, key, name_ar, sort_order, section_type")
           .eq("template_id", templateId)
           .order("sort_order"),
         supabase
@@ -400,16 +672,27 @@ function TemplateBuilderDialog({
           .from("exam_field_options")
           .select("id, field_id, value, label_ar, sort_order")
           .eq("organization_id", organizationId),
+        // التعريف المخزَّن في القالب نفسه — وهو ما يقرؤه نموذج الزيارة فعلًا.
+        // بدونه كان تبويب البناء يقول «لا نماذج/لا حقول» والمعاينة «النموذج
+        // فارغ» عن قالبٍ يعبّئ فيه الأطباء عشرين حقلًا يوميًّا، فيُفترض أنه لم
+        // يُبنَ بعد.
+        supabase
+          .from("clinic_exam_templates")
+          .select("schema_definition")
+          .eq("id", templateId)
+          .maybeSingle(),
       ]);
       if (tpl.error) throw tpl.error;
       if (sections.error) throw sections.error;
       if (fields.error) throw fields.error;
       if (options.error) throw options.error;
+      if (stored.error) throw stored.error;
       return {
         template: tpl.data as any,
         sections: (sections.data ?? []) as any[],
         fields: (fields.data ?? []) as any[],
         options: (options.data ?? []) as any[],
+        schema: ((stored.data as any)?.schema_definition ?? null) as ExamTemplateSchema | null,
       };
     },
   });
@@ -428,8 +711,30 @@ function TemplateBuilderDialog({
 
   const usage = Number(detail.data?.template?.usage_count ?? 0);
   const locked = usage > 0;
+  /**
+   * القالب النظاميّ (بلا منشأة) لا يُبنى عليه: سياسات جدولي الأقسام والحقول
+   * تشترط عضوية منشأة، فكل إضافة عليه تُرفَض أو تُكتب في غير موضعها. يُعرض
+   * للقراءة فحسب، والتخصيص بنسخته.
+   */
+  const isSystem = Boolean(detail.data?.template) && !detail.data?.template?.organization_id;
+  const editable = canManage && Boolean(detail.data?.template) && !isSystem;
 
-  const [sectionForm, setSectionForm] = useState<any>({});
+  /** التعريف المخزَّن في القالب — ما يراه الطبيب فعلًا، حتى لو خلت جداول البناء. */
+  const storedSections = useMemo<StoredSection[]>(
+    () =>
+      (detail.data?.schema?.sections ?? []).map((section) => ({
+        key: section.key,
+        label_ar: section.label_ar,
+        type: section.type,
+        fields: normalizeExamFields(section.fields),
+      })),
+    [detail.data],
+  );
+  /** لا صفوف في جداول البناء — القالب معرَّف بالطريقة القديمة (أو فارغ فعلًا). */
+  const builderEmpty = (detail.data?.sections ?? []).length === 0;
+  const legacyDefinition = builderEmpty && storedSections.length > 0;
+
+  const [sectionForm, setSectionForm] = useState<any>({ section_type: "group" });
   const addSection = useMutation({
     mutationFn: async () => {
       if (!String(sectionForm.name_ar ?? "").trim()) throw new Error("اسم القسم مطلوب");
@@ -439,15 +744,49 @@ function TemplateBuilderDialog({
         template_id: templateId,
         key: String(sectionForm.key).trim(),
         name_ar: String(sectionForm.name_ar).trim(),
+        // نوع القسم يُصرَّح به: القسم النصّي أو التشخيصي حقلٌ بنفسه، والمجموعة
+        // وعاءٌ لحقول — وكان كل قسم يُنشأ «مجموعة» فيتحوّل النصّ إلى وعاء فارغ.
+        section_type: sectionForm.section_type ?? "group",
         sort_order: Number(sectionForm.sort_order) || (detail.data?.sections.length ?? 0) + 1,
       });
       if (error) throw error;
     },
     onSuccess: () => {
-      setSectionForm({});
+      setSectionForm({ section_type: "group" });
       invalidate();
     },
     onError: (error) => fail(error, "تعذّرت إضافة القسم"),
+  });
+
+  /**
+   * تعديل القسم في موضعه.
+   *
+   * كانت الشاشة تعرض تنبيهًا يقول «يمكنك تعديل العناوين والوحدات» ولا تحتوي
+   * تعديلًا واحدًا — فتصحيح خطأ إملائي يعني حذف القسم وإعادة إنشائه، وحذف
+   * القسم يحذف حقوله معه.
+   */
+  const [editingSection, setEditingSection] = useState<any>(null);
+  const updateSection = useMutation({
+    mutationFn: async (input: any) => {
+      if (!String(input.name_ar ?? "").trim()) throw new Error("اسم القسم مطلوب");
+      const { data, error } = await supabase
+        .from("exam_template_sections")
+        .update({
+          name_ar: String(input.name_ar).trim(),
+          section_type: input.section_type ?? "group",
+          sort_order: Number(input.sort_order) || 0,
+        })
+        .eq("id", input.id)
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error("لم يُحدَّث شيء — تحقّق من صلاحيتك");
+    },
+    onSuccess: () => {
+      setEditingSection(null);
+      invalidate();
+      toast({ title: "حُدِّث القسم" });
+    },
+    onError: (error) => fail(error, "تعذّر تعديل القسم"),
   });
 
   const removeSection = useMutation({
@@ -460,7 +799,10 @@ function TemplateBuilderDialog({
       if (error) throw error;
       if (!data || data.length === 0) throw new Error("لم يُحذف شيء — تحقّق من صلاحيتك");
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setEditingSection(null);
+      invalidate();
+    },
     onError: (error) => fail(error, "تعذّر الحذف"),
   });
 
@@ -497,6 +839,40 @@ function TemplateBuilderDialog({
     onError: (error) => fail(error, "تعذّرت إضافة الحقل"),
   });
 
+  /**
+   * تعديل الحقل في موضعه — العنوان والنوع والوحدة والإلزام.
+   *
+   * المفتاح لا يُعدَّل من هنا: به تُقرأ إجابات الزيارات المحفوظة
+   * (`visit_exam_data`)، وتغييره يجعل ما حُفظ سابقًا بلا عنوان. والقاعدة تحرس
+   * الباقي بمُشغِّل `trg_guard_used_template_field` الذي يمنع تغيير النوع في
+   * قالب مستعمَل — ورسالته تظهر كما هي في `onError`.
+   */
+  const [editingField, setEditingField] = useState<any>(null);
+  const updateField = useMutation({
+    mutationFn: async (input: any) => {
+      if (!String(input.label_ar ?? "").trim()) throw new Error("عنوان الحقل مطلوب");
+      const { data, error } = await supabase
+        .from("exam_template_fields")
+        .update({
+          label_ar: String(input.label_ar).trim(),
+          field_type: input.field_type,
+          unit: String(input.unit ?? "").trim() || null,
+          is_required: Boolean(input.is_required),
+          sort_order: Number(input.sort_order) || 0,
+        })
+        .eq("id", input.id)
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error("لم يُحدَّث شيء — تحقّق من صلاحيتك");
+    },
+    onSuccess: () => {
+      setEditingField(null);
+      invalidate();
+      toast({ title: "حُدِّث الحقل" });
+    },
+    onError: (error) => fail(error, "تعذّر تعديل الحقل"),
+  });
+
   const removeField = useMutation({
     mutationFn: async (id: string) => {
       const { data, error } = await supabase
@@ -507,7 +883,10 @@ function TemplateBuilderDialog({
       if (error) throw error;
       if (!data || data.length === 0) throw new Error("لم يُحذف شيء — تحقّق من صلاحيتك");
     },
-    onSuccess: invalidate,
+    onSuccess: () => {
+      setEditingField(null);
+      invalidate();
+    },
     onError: (error) => fail(error, "تعذّر الحذف"),
   });
 
@@ -544,8 +923,11 @@ function TemplateBuilderDialog({
       queryClient.invalidateQueries({ queryKey: ["exam-templates"] });
       toast({
         title: "أُنشئت نسخة جديدة",
-        description: "النسخة معطَّلة حتى تراجعها وتفعّلها.",
+        description: "النسخة معطَّلة — راجعها ثم اضغط «تفعيل» في صفّها بالجدول ليصل الطبيب إليها.",
       });
+      // النسخة تُنشأ معطَّلة، والجدول يخفي المعطَّل — فبدون كشفه تختفي النسخة
+      // التي طُلبت للتوّ ولا يجد المستخدم ما يفعّله.
+      onRevealDisabled();
       onClose();
     },
     onError: (error) => fail(error, "تعذّر إنشاء النسخة"),
@@ -587,12 +969,34 @@ function TemplateBuilderDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {locked && (
+        {isSystem && (
+          <div className="rounded-md border border-sky-300 bg-sky-50 p-3 text-sm text-sky-900">
+            <p className="mb-2 flex items-start gap-2">
+              <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                هذا <strong>قالب نظاميّ</strong> — {SYSTEM_TEMPLATE_NOTE}
+              </span>
+            </p>
+            {canManage && templateId && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={customizing}
+                onClick={() => onCustomize(templateId)}
+              >
+                <Copy className="h-3.5 w-3.5" />
+                انسخ لتخصيصه
+              </Button>
+            )}
+          </div>
+        )}
+
+        {locked && !isSystem && (
           <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
-            هذا النموذج مستعمَل في <strong>{usage}</strong> زيارة. يمكنك تعديل العناوين والوحدات،
-            لكن <strong>تغيير مفتاح حقل أو نوعه مرفوض</strong> — فهما ما يُقرأ بهما ما حُفظ سابقًا.
-            للتغيير الجوهري أنشئ نسخة جديدة.
-            {canManage && (
+            هذا النموذج مستعمَل في <strong>{usage}</strong> زيارة. يمكنك تعديل العناوين والوحدات
+            والإلزام والترتيب، لكن <strong>تغيير مفتاح حقل أو نوعه مرفوض</strong> — فهما ما يُقرأ
+            بهما ما حُفظ سابقًا (والقاعدة ترفضه). للتغيير الجوهري أنشئ نسخة جديدة.
+            {editable && (
               <Button
                 size="sm"
                 variant="outline"
@@ -616,8 +1020,27 @@ function TemplateBuilderDialog({
           <TabsContent value="build" className="flex flex-col gap-5 pt-3">
             {detail.isLoading && <Skeleton className="h-40 w-full" />}
 
+            {/* التعريف القديم المخزَّن في القالب — يُعرض قبل أي بناء */}
+            {legacyDefinition && (
+              <div className="flex flex-col gap-3">
+                {!isSystem && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                    تعريف هذا القالب محفوظ <strong>بالطريقة القديمة</strong> — في القالب نفسه لا في
+                    جداول البناء. <strong>إضافة قسم تستبدل التعريف الظاهر أدناه</strong> بالأقسام
+                    التي تبنيها فقط، فأعد بناء أقسامه كلها في جلسة واحدة قبل أن يستعمله الطبيب.
+                  </div>
+                )}
+                <div>
+                  <p className="mb-2 text-xs text-muted-foreground">
+                    التعريف المستعمَل الآن في نموذج الزيارة (للقراءة):
+                  </p>
+                  <StoredSchemaView sections={storedSections} />
+                </div>
+              </div>
+            )}
+
             {/* الأقسام */}
-            {canManage && (
+            {editable && (
               <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
                 <div className="w-36">
                   <div className="flex flex-col gap-1.5">
@@ -638,6 +1061,26 @@ function TemplateBuilderDialog({
                     />
                   </div>
                 </div>
+                <div className="w-40">
+                  <div className="flex flex-col gap-1.5">
+                    <Label>نوع القسم</Label>
+                    <Select
+                      value={sectionForm.section_type ?? "group"}
+                      onValueChange={(value) => setSectionForm({ ...sectionForm, section_type: value })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.entries(SECTION_TYPES).map(([value, label]) => (
+                          <SelectItem key={value} value={value}>
+                            {label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
                 <Button disabled={addSection.isPending} onClick={() => addSection.mutate()}>
                   <Plus className="h-4 w-4" />
                   قسم
@@ -647,53 +1090,262 @@ function TemplateBuilderDialog({
 
             {(detail.data?.sections ?? []).map((section) => (
               <div key={section.id} className="rounded-md border">
-                <div className="flex items-center gap-2 border-b bg-muted/40 px-3 py-2">
-                  <GripVertical className="h-4 w-4 text-muted-foreground" />
-                  <span className="font-medium">{section.name_ar}</span>
-                  <span className="font-mono text-xs text-muted-foreground">{section.key}</span>
-                  {canManage && (
+                {editingSection?.id === section.id ? (
+                  <div className="flex flex-wrap items-end gap-2 border-b bg-muted/40 px-3 py-2">
+                    <div className="min-w-40 flex-1">
+                      <div className="flex flex-col gap-1.5">
+                        <Label>اسم القسم</Label>
+                        <Input
+                          value={editingSection.name_ar ?? ""}
+                          onChange={(e) =>
+                            setEditingSection({ ...editingSection, name_ar: e.target.value })
+                          }
+                        />
+                      </div>
+                    </div>
+                    <div className="w-40">
+                      <div className="flex flex-col gap-1.5">
+                        <Label>النوع</Label>
+                        <Select
+                          value={editingSection.section_type ?? "group"}
+                          onValueChange={(value) =>
+                            setEditingSection({ ...editingSection, section_type: value })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {Object.entries(SECTION_TYPES).map(([value, label]) => (
+                              <SelectItem key={value} value={value}>
+                                {label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+                    <div className="w-24">
+                      <div className="flex flex-col gap-1.5">
+                        <Label>الترتيب</Label>
+                        <Input
+                          type="number"
+                          dir="ltr"
+                          value={editingSection.sort_order ?? 0}
+                          onChange={(e) =>
+                            setEditingSection({ ...editingSection, sort_order: e.target.value })
+                          }
+                        />
+                      </div>
+                    </div>
                     <Button
                       size="sm"
-                      variant="ghost"
-                      className="ms-auto"
-                      onClick={() => removeSection.mutate(section.id)}
+                      disabled={updateSection.isPending}
+                      onClick={() => updateSection.mutate(editingSection)}
                     >
-                      <Trash2 className="h-4 w-4" />
+                      حفظ
                     </Button>
-                  )}
-                </div>
-                <div className="flex flex-col divide-y">
-                  {(fieldsBySection.get(section.id) ?? []).map((field) => (
-                    <div key={field.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
-                      <span className="font-medium">{field.label_ar}</span>
-                      <span className="font-mono text-xs text-muted-foreground">{field.key}</span>
-                      <Badge variant="outline">{FIELD_TYPES[field.field_type] ?? field.field_type}</Badge>
-                      {field.unit && <Badge variant="secondary">{field.unit}</Badge>}
-                      {field.is_required && <Badge variant="destructive">إلزامي</Badge>}
-                      {field.visible_when_field_id && (
-                        <Badge variant="outline">
-                          يظهر إذا: {fieldLabel(field.visible_when_field_id)} ={" "}
-                          {field.visible_when_value}
-                        </Badge>
-                      )}
-                      {NEEDS_OPTIONS.has(field.field_type) && (
-                        <span className="text-xs text-muted-foreground">
-                          {(optionsByField.get(field.id) ?? []).map((o) => o.label_ar).join("، ") ||
-                            "بلا خيارات"}
-                        </span>
-                      )}
-                      {canManage && (
+                    <Button size="sm" variant="ghost" onClick={() => setEditingSection(null)}>
+                      إلغاء
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex flex-wrap items-center gap-2 border-b bg-muted/40 px-3 py-2">
+                    <GripVertical className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">{section.name_ar}</span>
+                    <span className="font-mono text-xs text-muted-foreground">{section.key}</span>
+                    <Badge variant="outline">
+                      {SECTION_TYPES[section.section_type] ?? section.section_type}
+                    </Badge>
+                    {section.section_type !== "group" && (
+                      <span className="text-xs text-muted-foreground">
+                        قسم بحقل واحد — حقوله لا تُعرض في نموذج الزيارة
+                      </span>
+                    )}
+                    {editable && (
+                      <span className="ms-auto flex items-center gap-1">
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="ms-auto"
-                          onClick={() => removeField.mutate(field.id)}
+                          onClick={() =>
+                            setEditingSection({
+                              id: section.id,
+                              name_ar: section.name_ar,
+                              section_type: section.section_type ?? "group",
+                              sort_order: section.sort_order ?? 0,
+                            })
+                          }
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={removeSection.isPending}
+                          onClick={() => {
+                            // حذف القسم يحذف حقوله معه (قيد متسلسل) — والتأكيد
+                            // هو الفارق بين تنظيم القالب وإفراغه بضغطة.
+                            if (
+                              !window.confirm(
+                                `حذف القسم «${section.name_ar}» وكل حقوله من هذا القالب؟ الزيارات المحفوظة تبقى بنسختها.`,
+                              )
+                            ) {
+                              return;
+                            }
+                            removeSection.mutate(section.id);
+                          }}
                         >
                           <Trash2 className="h-4 w-4" />
                         </Button>
-                      )}
-                    </div>
-                  ))}
+                      </span>
+                    )}
+                  </div>
+                )}
+                <div className="flex flex-col divide-y">
+                  {(fieldsBySection.get(section.id) ?? []).map((field) =>
+                    editingField?.id === field.id ? (
+                      <div key={field.id} className="flex flex-wrap items-end gap-2 px-3 py-3">
+                        <div className="min-w-40 flex-1">
+                          <div className="flex flex-col gap-1.5">
+                            <Label>العنوان</Label>
+                            <Input
+                              value={editingField.label_ar ?? ""}
+                              onChange={(e) =>
+                                setEditingField({ ...editingField, label_ar: e.target.value })
+                              }
+                            />
+                          </div>
+                        </div>
+                        <div className="w-40">
+                          <div className="flex flex-col gap-1.5">
+                            <Label>النوع</Label>
+                            <Select
+                              value={editingField.field_type ?? "text"}
+                              onValueChange={(value) =>
+                                setEditingField({ ...editingField, field_type: value })
+                              }
+                            >
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {Object.entries(FIELD_TYPES).map(([value, label]) => (
+                                  <SelectItem key={value} value={value}>
+                                    {label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        </div>
+                        <div className="w-24">
+                          <div className="flex flex-col gap-1.5">
+                            <Label>الوحدة</Label>
+                            <Input
+                              value={editingField.unit ?? ""}
+                              onChange={(e) => setEditingField({ ...editingField, unit: e.target.value })}
+                            />
+                          </div>
+                        </div>
+                        <div className="w-20">
+                          <div className="flex flex-col gap-1.5">
+                            <Label>الترتيب</Label>
+                            <Input
+                              type="number"
+                              dir="ltr"
+                              value={editingField.sort_order ?? 0}
+                              onChange={(e) =>
+                                setEditingField({ ...editingField, sort_order: e.target.value })
+                              }
+                            />
+                          </div>
+                        </div>
+                        <label className="flex items-center gap-2 pb-2 text-sm">
+                          <Switch
+                            checked={Boolean(editingField.is_required)}
+                            onCheckedChange={(value) =>
+                              setEditingField({ ...editingField, is_required: value })
+                            }
+                          />
+                          إلزامي
+                        </label>
+                        <Button
+                          size="sm"
+                          disabled={updateField.isPending}
+                          onClick={() => updateField.mutate(editingField)}
+                        >
+                          حفظ
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setEditingField(null)}>
+                          إلغاء
+                        </Button>
+                        <p className="w-full text-xs text-muted-foreground">
+                          المفتاح <span className="font-mono">{field.key}</span> لا يُعدَّل — به تُقرأ
+                          إجابات الزيارات المحفوظة.
+                        </p>
+                      </div>
+                    ) : (
+                      <div key={field.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                        <span className="font-medium">{field.label_ar}</span>
+                        <span className="font-mono text-xs text-muted-foreground">{field.key}</span>
+                        <Badge variant="outline">
+                          {FIELD_TYPES[field.field_type] ?? field.field_type}
+                        </Badge>
+                        {field.unit && <Badge variant="secondary">{field.unit}</Badge>}
+                        {field.is_required && <Badge variant="destructive">إلزامي</Badge>}
+                        {!field.is_active && <Badge variant="secondary">معطَّل</Badge>}
+                        {field.visible_when_field_id && (
+                          <Badge variant="outline">
+                            يظهر إذا: {fieldLabel(field.visible_when_field_id)} ={" "}
+                            {field.visible_when_value}
+                          </Badge>
+                        )}
+                        {NEEDS_OPTIONS.has(field.field_type) && (
+                          <span className="text-xs text-muted-foreground">
+                            {(optionsByField.get(field.id) ?? []).map((o) => o.label_ar).join("، ") ||
+                              "بلا خيارات"}
+                          </span>
+                        )}
+                        {editable && (
+                          <span className="ms-auto flex items-center gap-1">
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() =>
+                                setEditingField({
+                                  id: field.id,
+                                  label_ar: field.label_ar,
+                                  field_type: field.field_type,
+                                  unit: field.unit ?? "",
+                                  is_required: Boolean(field.is_required),
+                                  sort_order: field.sort_order ?? 0,
+                                })
+                              }
+                            >
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={removeField.isPending}
+                              onClick={() => {
+                                if (
+                                  !window.confirm(
+                                    `حذف الحقل «${field.label_ar}» من هذا القالب؟ الزيارات المحفوظة تبقى بنسختها.`,
+                                  )
+                                ) {
+                                  return;
+                                }
+                                removeField.mutate(field.id);
+                              }}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </Button>
+                          </span>
+                        )}
+                      </div>
+                    ),
+                  )}
                   {(fieldsBySection.get(section.id) ?? []).length === 0 && (
                     <p className="px-3 py-3 text-sm text-muted-foreground">لا حقول في هذا القسم.</p>
                   )}
@@ -701,8 +1353,11 @@ function TemplateBuilderDialog({
               </div>
             ))}
 
-            {/* إضافة حقل */}
-            {canManage && (detail.data?.sections ?? []).length > 0 && (
+            {/* إضافة حقل — لا تُعرض إن لم يكن ثمّة قسم مجموعة يحمل الحقول */}
+            {editable &&
+              (detail.data?.sections ?? []).some(
+                (section) => (section.section_type ?? "group") === "group",
+              ) && (
               <div className="flex flex-col gap-3 rounded-md border p-3">
                 <Label>إضافة حقل</Label>
                 <div className="flex flex-wrap items-end gap-2">
@@ -717,11 +1372,16 @@ function TemplateBuilderDialog({
                           <SelectValue placeholder="اختر" />
                         </SelectTrigger>
                         <SelectContent>
-                          {(detail.data?.sections ?? []).map((section) => (
-                            <SelectItem key={section.id} value={section.id}>
-                              {section.name_ar}
-                            </SelectItem>
-                          ))}
+                          {/* أقسام المجموعة فقط: القسم النصّي/التشخيصي حقلٌ
+                              بنفسه، و`app_rebuild_exam_schema` لا يُخرج حقوله —
+                              فحقلٌ يُضاف إليه عملٌ لا يظهر للطبيب أبدًا. */}
+                          {(detail.data?.sections ?? [])
+                            .filter((section) => (section.section_type ?? "group") === "group")
+                            .map((section) => (
+                              <SelectItem key={section.id} value={section.id}>
+                                {section.name_ar}
+                              </SelectItem>
+                            ))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -803,11 +1463,16 @@ function TemplateBuilderDialog({
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value={NONE}>يظهر دائمًا</SelectItem>
-                          {(detail.data?.fields ?? []).map((field) => (
-                            <SelectItem key={field.id} value={field.id}>
-                              {field.label_ar}
-                            </SelectItem>
-                          ))}
+                          {/* الحقل المعطَّل (`is_active = false`) لا يُخرجه
+                              `app_rebuild_exam_schema` — فشرطُ ظهورٍ معلَّق عليه
+                              شرطٌ لا يتحقّق أبدًا، وعرضه كأنه نشط خدعة. */}
+                          {(detail.data?.fields ?? [])
+                            .filter((f) => f.is_active)
+                            .map((field) => (
+                              <SelectItem key={field.id} value={field.id}>
+                                {field.label_ar}
+                              </SelectItem>
+                            ))}
                         </SelectContent>
                       </Select>
                     </div>
@@ -834,8 +1499,10 @@ function TemplateBuilderDialog({
             )}
 
             {/* خيارات حقول القوائم */}
-            {canManage &&
-              (detail.data?.fields ?? []).some((f) => NEEDS_OPTIONS.has(f.field_type)) && (
+            {editable &&
+              (detail.data?.fields ?? []).some(
+                (f) => f.is_active && NEEDS_OPTIONS.has(f.field_type),
+              ) && (
                 <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
                   <div className="w-52">
                     <div className="flex flex-col gap-1.5">
@@ -849,7 +1516,7 @@ function TemplateBuilderDialog({
                         </SelectTrigger>
                         <SelectContent>
                           {(detail.data?.fields ?? [])
-                            .filter((f) => NEEDS_OPTIONS.has(f.field_type))
+                            .filter((f) => f.is_active && NEEDS_OPTIONS.has(f.field_type))
                             .map((field) => (
                               <SelectItem key={field.id} value={field.id}>
                                 {field.label_ar}
@@ -940,7 +1607,10 @@ function TemplateBuilderDialog({
                   </CardContent>
                 </Card>
               ))}
-              {(detail.data?.sections ?? []).length === 0 && (
+              {/* «النموذج فارغ» كانت تُقال عن قالبٍ معرَّف بالطريقة القديمة —
+                  وهي الرسالة التي أوهمت المدير أنه لم يُبنَ بعد. */}
+              {builderEmpty && legacyDefinition && <StoredSchemaView sections={storedSections} />}
+              {builderEmpty && !legacyDefinition && (
                 <p className="py-8 text-center text-sm text-muted-foreground">
                   النموذج فارغ — أضف قسمًا وحقولًا من تبويب البناء.
                 </p>
@@ -950,7 +1620,9 @@ function TemplateBuilderDialog({
         </Tabs>
 
         <DialogFooter>
-          {canManage && !locked && (
+          {/* «نسخة جديدة» تخصّ قوالب المنشأة — القالب النظاميّ يُنسخ بزرّ
+              «انسخ لتخصيصه» أعلاه (وهو نسخٌ إلى المنشأة لا إصدار جديد). */}
+          {editable && !locked && (
             <Button variant="outline" disabled={clone.isPending} onClick={() => clone.mutate()}>
               <Copy className="h-4 w-4" />
               نسخة جديدة

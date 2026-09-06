@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { CLAIM_STATUS_LABELS, CLAIM_STATUS_TONE } from "@/components/insurance/claim-status";
 
 /**
  * مساحة عمل المطالبات — المرحلة ١٣.
@@ -34,37 +35,8 @@ import { useToast } from "@/hooks/use-toast";
  *     الفرق بين المطالَب به والمحصَّل.
  *   • **طابور نفيس.** الرسائل والمحاولات والاستجابات — مفصولة عن منطق النظام.
  */
-const CLAIM_STATUS_LABELS: Record<string, string> = {
-  draft: "مسودة",
-  validation_failed: "ناقصة البيانات",
-  ready: "جاهزة للإرسال",
-  submitted: "مُقدَّمة",
-  acknowledged: "مستلَمة",
-  in_review: "قيد المراجعة",
-  approved: "معتمَدة",
-  partially_approved: "معتمَدة جزئيًا",
-  rejected: "مرفوضة",
-  resubmitted: "أُعيد تقديمها",
-  settled: "مسوّاة",
-  paid: "مدفوعة",
-  cancelled: "ملغاة",
-};
-
-const CLAIM_TONE: Record<string, "default" | "secondary" | "success" | "destructive" | "warning"> = {
-  draft: "secondary",
-  validation_failed: "destructive",
-  ready: "default",
-  submitted: "default",
-  acknowledged: "default",
-  in_review: "default",
-  approved: "success",
-  partially_approved: "warning",
-  rejected: "destructive",
-  resubmitted: "secondary",
-  settled: "success",
-  paid: "success",
-  cancelled: "secondary",
-};
+// الترجمات والنبرات في `claim-status.ts`: كانت معرَّفة هنا وفي
+// `pages/Insurance.tsx` معًا، والنسخة الأخرى ناقصة خمسَ حالات.
 
 export default function ClaimsWorkspace() {
   const { organization } = useOrganizationAccess();
@@ -110,6 +82,42 @@ export default function ClaimsWorkspace() {
     },
   });
 
+  /**
+   * تجهيز المطالبة للإرسال — الحالة `ready`.
+   *
+   * قسم «مطالبات جاهزة للإرسال» في طابور نفيس يُرشِّح `status = 'ready'`، ولم
+   * يكن في النظام كلّه شيء يكتب هذه الحالة: `app_create_claim_from_visit`
+   * تُنشئ `draft` أو `validation_failed`، والمحفِّز التلقائي يُنشئ `draft`،
+   * وزرّ «إرسال» ينتقل من `draft` إلى `submitted` مباشرة. فكان الطابور فارغًا
+   * دائمًا وزرّ «إدراج في الطابور» لا يُضغط ولا مرّة. الانتقال `draft → ready`
+   * مسموح في `app_claim_status_allowed`، والدالّة هي التي تفحص الصلاحية
+   * وتسجّل الأثر.
+   */
+  const prepare = useMutation({
+    mutationFn: async (formId: string) => {
+      const { error } = await supabase.rpc("app_set_claim_form_status", {
+        p_form_id: formId,
+        p_status: "ready",
+        p_reason: null,
+        p_amount: null,
+        p_code: null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["claim-settlement"] });
+      queryClient.invalidateQueries({ queryKey: ["claims-ready-to-queue"] });
+      queryClient.invalidateQueries({ queryKey: ["insurance-claim-forms"] });
+      toast({ title: "جُهّزت المطالبة للإرسال", description: "أدرجها في طابور نفيس" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التجهيز",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
   const totals = (receivables.data ?? []).reduce(
     (a, r) => {
       a.claimed += Number(r.total_claimed ?? 0);
@@ -146,6 +154,9 @@ export default function ClaimsWorkspace() {
               <SelectContent>
                 <SelectItem value="attention">تحتاج عملًا</SelectItem>
                 <SelectItem value="unsettled">معتمَدة ولم تُحصَّل</SelectItem>
+                {/* المسوّدة تحتاج تجهيزًا قبل الإرسال، فلها مُرشِّح ظاهر */}
+                <SelectItem value="draft">مسوّدة</SelectItem>
+                <SelectItem value="ready">جاهزة للإرسال</SelectItem>
                 <SelectItem value="submitted">مُقدَّمة</SelectItem>
                 <SelectItem value="all">الكل</SelectItem>
               </SelectContent>
@@ -212,7 +223,7 @@ export default function ClaimsWorkspace() {
                           : "—"}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={CLAIM_TONE[c.status] ?? "secondary"}>
+                      <Badge variant={CLAIM_STATUS_TONE[c.status] ?? "secondary"}>
                         {CLAIM_STATUS_LABELS[c.status] ?? c.status}
                       </Badge>
                       {c.has_validation_errors && (
@@ -220,9 +231,21 @@ export default function ClaimsWorkspace() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <Button size="sm" variant="ghost" onClick={() => setOpenClaim(c)}>
-                        البنود
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        {c.status === "draft" && can("insurance.claims") && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={prepare.isPending}
+                            onClick={() => prepare.mutate(c.claim_form_id)}
+                          >
+                            تجهيز للإرسال
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" onClick={() => setOpenClaim(c)}>
+                          البنود
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

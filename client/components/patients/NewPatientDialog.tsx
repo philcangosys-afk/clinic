@@ -1,7 +1,10 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { TriangleAlert } from "lucide-react";
+import { birthDateFromAge, nameWordCount, transliterateArabicName } from "@/lib/arabic-name";
+import { useDirtyDialogClose } from "@/hooks/use-unsaved-guard";
+import RequiredLabel, { requiredInputClass } from "@/components/shared/RequiredLabel";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import {
@@ -31,7 +34,15 @@ const emptyForm = {
   name_en: "",
   mobile_number: "",
   gender: "" as "" | "male" | "female",
-  birth_date: "",
+  /**
+   * العمر بالسنوات والأشهر بدل تاريخ الميلاد.
+   *
+   * الاستقبال يسأل «كم عمرك؟» ويُجاب برقم، ولا يُطلب من المريض تاريخ ميلاده
+   * إلا في الوثائق. وتاريخ الميلاد يبقى هو المخزَّن في القاعدة (كل حساب طبي
+   * وتقرير مبنيّ عليه) مشتقًّا من العمر ومَوسومًا أنه تقديريّ.
+   */
+  age_years: "",
+  age_months: "",
   id_number: "",
   passport_number: "",
   nationality_value_id: "",
@@ -41,7 +52,7 @@ const emptyForm = {
   source_value_id: "",
   educational_qualification_value_id: "",
   work_entity_value_id: "",
-  city: "",
+  city_value_id: "",
   address: "",
   emergency_number: "",
   email_1: "",
@@ -99,8 +110,94 @@ export default function NewPatientDialog({
     { patient_id: string; name_ar: string; file_number: string | null; mobile_number: string | null; match_reason: string; match_score: number }[]
   >([]);
 
+  /**
+   * الملف القائم بنفس رقم الهوية — يمنع الحفظ ولا يُنبِّه فقط.
+   *
+   * التكرار في رقم الهوية ليس «قد يكون نفس الشخص»: هو **هو** نفس الشخص،
+   * وملفّان له يشطران تاريخه الطبي والمالي فلا يرى الطبيب إلا نصفه. القاعدة
+   * ترفضه بمُحفِّز، وهذا الفحص يُظهر الملف القائم أثناء الكتابة ليُفتح بدل
+   * أن يُكتب الملف كله ثم يُرفض عند الحفظ.
+   */
+  const [existingIdFile, setExistingIdFile] = useState<
+    { patient_id: string; name_ar: string; file_number: number } | null
+  >(null);
+
+  /**
+   * هل كُتب الاسم الإنجليزي بيد الموظف؟ إن كُتب فلا يُلمَس.
+   *
+   * الترجمة اقتراح لا قرار: الكتابة فوق ما صحّحه الموظف بيده أسوأ من عدم
+   * الاقتراح أصلًا، لأنها تُبطل تصحيحه بلا أن يلاحظ.
+   */
+  const nameEnTouched = useRef(false);
+
   const set = <K extends keyof typeof emptyForm>(key: K, value: typeof emptyForm[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
+
+  /** الاسم العربي يُقترح مقابله الإنجليزي ما لم يكتبه الموظف بنفسه. */
+  const setNameAr = (value: string) =>
+    setForm((prev) => ({
+      ...prev,
+      name_ar: value,
+      name_en: nameEnTouched.current ? prev.name_en : transliterateArabicName(value),
+    }));
+
+  const missing = {
+    name_ar: !form.name_ar.trim(),
+    // المولود الجديد لا هوية له بعد — طلبها منه يمنع تسجيله أصلًا
+    id_number: !form.is_newborn && !form.id_number.trim(),
+    mobile_number: !form.mobile_number.trim(),
+    age: !form.age_years.trim() && !form.age_months.trim(),
+    nationality_value_id: !form.nationality_value_id,
+  };
+  const missingCount = Object.values(missing).filter(Boolean).length;
+  const nameIsShort = !missing.name_ar && nameWordCount(form.name_ar) < 4;
+
+  /**
+   * أيّ حقل مكتوب يعني «عمل غير محفوظ» — فالإغلاق يُسأل عنه.
+   *
+   * `is_newborn` مستثنى: قيمته `false` في النموذج الفارغ، ومقارنته المباشرة
+   * تجعل النموذج «متغيَّرًا» بمجرّد فتحه لو تغيّر افتراضه لاحقًا.
+   */
+  const isDirty = (Object.keys(emptyForm) as (keyof typeof emptyForm)[]).some((key) =>
+    key === "is_newborn" || key === "default_discount_percent"
+      ? form[key] !== emptyForm[key]
+      : String(form[key] ?? "").trim() !== "",
+  );
+  const guardedOpenChange = useDirtyDialogClose(isDirty, onOpenChange);
+
+  /**
+   * فحص رقم الهوية بعد توقّف الكتابة لا مع كل حرف: استعلام لكل ضغطة مفتاح
+   * هدرٌ، ورسالة تظهر وتختفي أثناء الكتابة لا تُقرأ.
+   */
+  useEffect(() => {
+    const idNumber = form.id_number.trim();
+    if (!organization?.id || idNumber.length < 5) {
+      setExistingIdFile(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        const { data, error } = await supabase.rpc("app_patient_by_id_number", {
+          p_organization_id: organization.id,
+          p_id_number: idNumber,
+          p_exclude_patient_id: null,
+        });
+        if (cancelled) return;
+        // فشل الفحص لا يعطّل الاستقبال — المُحفِّز في القاعدة يبقى المانع الأخير
+        if (error) {
+          setExistingIdFile(null);
+          return;
+        }
+        const row = (data ?? []).find((item: { is_merged: boolean }) => !item.is_merged);
+        setExistingIdFile(row ?? null);
+      })();
+    }, 500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [form.id_number, organization?.id]);
 
   /**
    * فحص قائمة الجهات المحجوبة (لقطة 42، المستوى الأول) بمطابقة الجوال أو
@@ -130,24 +227,80 @@ export default function NewPatientDialog({
     const safeName = name.replace(/[,()]/g, " ").trim();
     if (safeName) conditions.push(`full_name.ilike.%${safeName}%`);
 
+    /**
+     * القراءة من العرض `v_blocked_contacts` بشرط `is_in_effect` لا من الجدول
+     * مباشرةً: الاستعلام القديم كان يطابق **أي** سجل حظر بلا `is_active` ولا
+     * `starts_at` ولا `ends_at`، فحظرٌ رُفع قبل سنة أو انقضت مدّته كان يُطلق
+     * لافتة حمراء توقف الحفظ — تحذير عن حالة لم تعد قائمة، وتكراره يُعلّم
+     * الموظف تخطّي كل تحذيرات الحجب. و`block_type` يُقيَّد بما يمنع فتح
+     * الملف والحجز: حظر الرسائل وحده لا يمنع علاج المريض.
+     */
     const { data, error } = await supabase
-      .from("blocked_external_contacts")
+      .from("v_blocked_contacts")
       .select("full_name, reason")
       .eq("organization_id", organization.id)
+      .eq("is_in_effect", true)
+      .in("block_type", ["booking", "all"])
       .or(conditions.join(","))
       .limit(1);
     // فشل الفحص لا يعطّل تسجيل المريض — الاستقبال لا يتوقف بسبب استعلام تحذيري
     if (error) return null;
     const match = data?.[0];
-    if (!match) return null;
-    return match.reason?.trim()
-      ? `${match.full_name ?? "هذه الجهة"} محجوبة: ${match.reason}`
-      : `${match.full_name ?? "هذه الجهة"} مدرجة ضمن الجهات المحجوبة`;
+    if (match)
+      return match.reason?.trim()
+        ? `${match.full_name ?? "هذه الجهة"} محجوبة: ${match.reason}`
+        : `${match.full_name ?? "هذه الجهة"} مدرجة ضمن الجهات المحجوبة`;
+
+    /**
+     * المطابقة أعلاه حرفية بـ`eq`، بينما القاعدة تطابق الجوال بعد تطبيعه
+     * (`app_normalize_mobile`) — فحظر «0501234567» لا يُطابق «+966501234567»
+     * ويمرّ بلا تحذير ثم يُوقفه المُحفِّز عند أول حجز. `app_check_contact_block`
+     * هي نفس الدالّة التي يفرضها مُحفِّز الحجز، فسؤالها يُطابق ما سيحدث فعلًا.
+     */
+    if (mobile) {
+      const { data: isBlocked, error: rpcError } = await supabase.rpc("app_check_contact_block", {
+        p_organization_id: organization.id,
+        p_patient_id: null,
+        p_mobile_number: mobile,
+        p_action: "booking",
+      });
+      if (!rpcError && isBlocked === true)
+        return "رقم الجوال مدرج ضمن الجهات المحجوبة السارية";
+    }
+    return null;
   };
 
   const createPatient = useMutation({
     mutationFn: async () => {
       if (!organization?.id) throw new Error("لا توجد منشأة نشطة");
+
+      /**
+       * الحقول الأساسية تُفرض قبل أي استعلام: ملفٌ بلا هوية ولا جنسية يُرفَض
+       * لاحقًا في الفاتورة والمطالبة التأمينية، وتصحيحه بعد أسابيع أصعب من
+       * إكماله الآن.
+       */
+      if (missingCount > 0) {
+        throw new Error("أكمل الحقول الأساسية المعلَّمة بالأحمر: الاسم الرباعي والهوية والجوال والعمر والجنسية");
+      }
+
+      // الهوية المكرَّرة تمنع الحفظ — لا تُنبِّه فقط
+      const idNumber = form.id_number.trim();
+      if (idNumber) {
+        const { data: existing, error: idError } = await supabase.rpc("app_patient_by_id_number", {
+          p_organization_id: organization.id,
+          p_id_number: idNumber,
+          p_exclude_patient_id: null,
+        });
+        if (idError) throw idError;
+        const live = (existing ?? []).find((row: { is_merged: boolean }) => !row.is_merged) as
+          | { name_ar: string; file_number: number }
+          | undefined;
+        if (live) {
+          throw new Error(
+            `رقم الهوية ${idNumber} مسجَّل في الملف رقم ${live.file_number} (${live.name_ar}). افتح الملف القائم بدل فتح ملف ثانٍ.`,
+          );
+        }
+      }
 
       // أول محاولة حفظ لمطابقة محجوبة تُظهر التحذير وتتوقف؛ الضغط ثانيةً
       // يُكمل الحفظ بعد أن يكون الموظف قد رأى السبب.
@@ -162,7 +315,7 @@ export default function NewPatientDialog({
           p_passport_number: null,
           p_mobile_number: form.mobile_number.trim() || null,
           p_name_ar: form.name_ar.trim() || null,
-          p_birth_date: form.birth_date || null,
+          p_birth_date: birthDateFromAge(form.age_years, form.age_months),
         });
         const found = (dupes ?? []) as typeof duplicates;
         setDuplicates(found);
@@ -183,7 +336,10 @@ export default function NewPatientDialog({
           name_en: form.name_en.trim() || null,
           mobile_number: form.mobile_number.trim() || null,
           gender: form.gender || null,
-          birth_date: form.birth_date || null,
+          birth_date: birthDateFromAge(form.age_years, form.age_months),
+          // التاريخ مشتقّ من عمرٍ مُدخَل: يُوسَم تقديريًا فلا يُقرأ يومه وشهره
+          // كأنهما مأخوذان من هوية
+          birth_date_is_estimated: Boolean(birthDateFromAge(form.age_years, form.age_months)),
           id_number: form.id_number.trim() || null,
           passport_number: form.passport_number.trim() || null,
           nationality_value_id: form.nationality_value_id || null,
@@ -193,7 +349,8 @@ export default function NewPatientDialog({
           source_value_id: form.source_value_id || null,
           educational_qualification_value_id: form.educational_qualification_value_id || null,
           work_entity_value_id: form.work_entity_value_id || null,
-          address: [form.city, form.address].filter(Boolean).join(" - ") || null,
+          city_value_id: form.city_value_id || null,
+          address: form.address.trim() || null,
           emergency_number: form.emergency_number.trim() || null,
           email_1: form.email_1.trim() || null,
           blood_type: form.blood_type || null,
@@ -219,6 +376,9 @@ export default function NewPatientDialog({
       setForm(emptyForm);
       setBlockWarning(null);
       setWarningAcknowledged(false);
+      setExistingIdFile(null);
+      nameEnTouched.current = false;
+      // الإغلاق بعد الحفظ لا يمرّ بحارس «غير محفوظ»: النموذج أُفرغ فعلًا
       onOpenChange(false);
       navigate(`/patients/${id}`);
     },
@@ -231,22 +391,60 @@ export default function NewPatientDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+    <Dialog open={open} onOpenChange={guardedOpenChange}>
+      <DialogContent
+        className="max-w-2xl"
+        /**
+         * النقرة خارج النافذة وزرّ Escape كانا يمحوان كل ما كُتب بلا سؤال —
+         * وهي أشيع طريقة يفقد بها الاستقبال ملفًا كاملًا. الاعتراض هنا يسأل
+         * قبل الإغلاق، ولا يسأل إن كانت النافذة فارغة.
+         */
+        onPointerDownOutside={(event) => {
+          if (isDirty) event.preventDefault();
+        }}
+        onEscapeKeyDown={(event) => {
+          if (isDirty && !window.confirm("ستفقد ما كتبته في هذه النافذة. هل تريد الإغلاق؟"))
+            event.preventDefault();
+        }}
+      >
         <DialogHeader>
           <DialogTitle>فتح ملف مريض جديد</DialogTitle>
-          <DialogDescription>يمكن استكمال باقي الحقول من ملف المريض لاحقًا.</DialogDescription>
+          <DialogDescription>
+            الحقول المعلَّمة بالأحمر أساسية ولا يُحفظ الملف بدونها. يمكن استكمال الباقي من ملف المريض لاحقًا.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <Field label="الاسم بالعربية *">
-            <Input value={form.name_ar} onChange={(e) => set("name_ar", e.target.value)} autoFocus />
+          <Field labelNode={<RequiredLabel missing={missing.name_ar}>الاسم الرباعي بالعربية</RequiredLabel>}>
+            <Input
+              value={form.name_ar}
+              onChange={(e) => setNameAr(e.target.value)}
+              className={requiredInputClass(missing.name_ar)}
+              autoFocus
+            />
+            {nameIsShort && (
+              <span className="text-xs text-amber-700">
+                الاسم أقلّ من أربعة مقاطع — يُفضَّل الاسم الرباعي كما في الهوية.
+              </span>
+            )}
           </Field>
-          <Field label="الاسم بالإنجليزية">
-            <Input value={form.name_en} onChange={(e) => set("name_en", e.target.value)} />
+          <Field label="الاسم بالإنجليزية (يُقترح من العربي)">
+            <Input
+              value={form.name_en}
+              dir="ltr"
+              onChange={(e) => {
+                nameEnTouched.current = true;
+                set("name_en", e.target.value);
+              }}
+            />
           </Field>
-          <Field label="رقم الجوال">
-            <Input value={form.mobile_number} onChange={(e) => set("mobile_number", e.target.value)} inputMode="tel" />
+          <Field labelNode={<RequiredLabel missing={missing.mobile_number}>رقم الجوال</RequiredLabel>}>
+            <Input
+              value={form.mobile_number}
+              onChange={(e) => set("mobile_number", e.target.value)}
+              className={requiredInputClass(missing.mobile_number)}
+              inputMode="tel"
+            />
           </Field>
           <Field label="الجنس">
             <Select value={form.gender} onValueChange={(value) => set("gender", value as "male" | "female")}>
@@ -259,20 +457,70 @@ export default function NewPatientDialog({
               </SelectContent>
             </Select>
           </Field>
-          <Field label="تاريخ الميلاد">
-            <Input type="date" value={form.birth_date} onChange={(e) => set("birth_date", e.target.value)} />
+          <Field labelNode={<RequiredLabel missing={missing.age}>العمر</RequiredLabel>}>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                min={0}
+                max={130}
+                inputMode="numeric"
+                placeholder="سنة"
+                value={form.age_years}
+                onChange={(e) => set("age_years", e.target.value)}
+                className={requiredInputClass(missing.age)}
+              />
+              <span className="text-xs text-muted-foreground">سنة</span>
+              <Input
+                type="number"
+                min={0}
+                max={11}
+                inputMode="numeric"
+                placeholder="شهر"
+                value={form.age_months}
+                onChange={(e) => set("age_months", e.target.value)}
+              />
+              <span className="text-xs text-muted-foreground">شهر</span>
+            </div>
+            {/* الأشهر للرضّع: عمر «٠ سنة» بلا أشهر لا يميّز مولود أسبوع من طفل
+                أحد عشر شهرًا، والجرعات الدوائية تفرّق بينهما. */}
+            <span className="text-xs text-muted-foreground">
+              يُحسب تاريخ الميلاد من العمر ويُوسَم تقديريًا؛ عدّله من الملف إن توفّرت الهوية.
+            </span>
           </Field>
-          <Field label="رقم الهوية/الإقامة">
-            <Input value={form.id_number} onChange={(e) => set("id_number", e.target.value)} />
+          <Field
+            labelNode={<RequiredLabel missing={missing.id_number}>رقم الهوية/الإقامة</RequiredLabel>}
+          >
+            <Input
+              value={form.id_number}
+              onChange={(e) => set("id_number", e.target.value)}
+              className={requiredInputClass(missing.id_number)}
+              dir="ltr"
+            />
+            {existingIdFile && (
+              <button
+                type="button"
+                onClick={() => {
+                  onOpenChange(false);
+                  navigate(`/patients/${existingIdFile.patient_id}`);
+                }}
+                className="rounded-md border border-rose-300 bg-rose-50 px-2 py-1 text-start text-xs text-rose-800 hover:bg-rose-100"
+              >
+                هذا الرقم مسجَّل في الملف رقم {existingIdFile.file_number} ({existingIdFile.name_ar}) — افتح الملف
+                القائم ←
+              </button>
+            )}
           </Field>
           <Field label="رقم الجواز">
             <Input value={form.passport_number} onChange={(e) => set("passport_number", e.target.value)} />
           </Field>
-          <Field label="الجنسية">
+          <Field
+            labelNode={<RequiredLabel missing={missing.nationality_value_id}>الجنسية</RequiredLabel>}
+          >
             <LookupSelect
               categoryKey="nationalities"
               value={form.nationality_value_id}
               onChange={(v) => set("nationality_value_id", v)}
+              triggerClassName={requiredInputClass(missing.nationality_value_id)}
             />
           </Field>
           <Field label="المهنة">
@@ -341,8 +589,17 @@ export default function NewPatientDialog({
               onChange={(v) => set("work_entity_value_id", v)}
             />
           </Field>
+          {/**
+            * المدينة قائمة لا نصّ: الحقل النصّي القديم كان يُدمَج في `address`
+            * ولا يكتب `city_value_id`، فمرشّح المدينة في شاشة المرضى — الذي
+            * يقارن `city_value_id` وحده — لا يجد أيًّا من هؤلاء المرضى أبدًا.
+            */}
           <Field label="المدينة">
-            <Input value={form.city} onChange={(e) => set("city", e.target.value)} />
+            <LookupSelect
+              categoryKey="cities"
+              value={form.city_value_id}
+              onChange={(v) => set("city_value_id", v)}
+            />
           </Field>
           <Field label="العنوان التفصيلي">
             <Input value={form.address} onChange={(e) => set("address", e.target.value)} />
@@ -451,20 +708,39 @@ export default function NewPatientDialog({
         )}
 
 
-        <DialogFooter>
-          <Button disabled={!form.name_ar.trim() || createPatient.isPending} onClick={() => createPatient.mutate()}>
+        <DialogFooter className="items-center gap-2">
+          <Button
+            disabled={missingCount > 0 || Boolean(existingIdFile) || createPatient.isPending}
+            onClick={() => createPatient.mutate()}
+          >
             {createPatient.isPending ? "جارٍ الحفظ..." : "حفظ وفتح الملف"}
           </Button>
+          {missingCount > 0 && (
+            <span className="text-xs text-rose-700">
+              بقي {missingCount} من الحقول الأساسية
+            </span>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-function Field({ label, children, full }: { label: string; children: ReactNode; full?: boolean }) {
+function Field({
+  label,
+  labelNode,
+  children,
+  full,
+}: {
+  label?: string;
+  /** تسمية جاهزة (مثل تسمية الحقل الأساسيّ بالأحمر) بدل نصّ عاديّ. */
+  labelNode?: ReactNode;
+  children: ReactNode;
+  full?: boolean;
+}) {
   return (
     <div className={`flex flex-col gap-1.5 ${full ? "sm:col-span-2" : ""}`}>
-      <Label>{label}</Label>
+      {labelNode ?? <Label>{label}</Label>}
       {children}
     </div>
   );

@@ -16,7 +16,17 @@ import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "@/hooks/use-toast";
 
 const TYPE_META: Record<string, { label: string; icon: typeof Inbox }> = {
@@ -34,13 +44,22 @@ const TYPE_META: Record<string, { label: string; icon: typeof Inbox }> = {
  * لم يُنشأ جدول ثالث يجمعهما — العرض `v_reception_requests` يجمعهما وقت
  * القراءة، فيبقى لكل طلب جدوله وشاشته الأصلية.
  *
- * **موعد المتابعة يُنهى من شاشة المواعيد لا من هنا**: إنهاؤه يعني حجز موعد
- * فعليّ بطبيب ووقت، وزرٌّ هنا يقول «تمّ» بلا حجز يكذب على الطبيب.
+ * **موعد المتابعة لا يُقفَل هنا بـ«تمّ»**: إقفاله يعني حجز موعد فعليّ بطبيب
+ * ووقت، وزرٌّ يقول «تمّ» بلا حجز يكذب على الطبيب. لذلك مخرجان فقط:
+ * «احجز الموعد» يمرّر معرّف الطلب إلى نافذة الحجز فتُغلقه القاعدة مع إنشاء
+ * الموعد في عملية واحدة، و«تجاهل» يرفضه بسبب مكتوب يظهر للطبيب وللمريض في
+ * بوابته. أما `app_resolve_staff_request` فتعمل على `staff_requests` وحدها
+ * فلا تصلح لصفوف المتابعة القادمة من `appointment_requests`.
+ *
+ * وترك الطلب بلا مخرج كان يُخلّف طلبات منتهية فعلًا معلّقة في عدّاد
+ * الاستقبال الأحمر، أو يدفع لحجز موعد ثانٍ للمريض لأن الطلب يبدو غير منجَز.
  */
 export default function DoctorRequests() {
   const { organization } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [rejectTarget, setRejectTarget] = useState<{ id: string; patientName: string } | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
 
   const requests = useQuery({
     queryKey: ["reception-requests", organization?.id],
@@ -75,6 +94,29 @@ export default function DoctorRequests() {
     onError: (err: any) =>
       toast({
         title: "تعذّر الإغلاق",
+        description: err?.message ?? "خطأ غير معروف",
+        variant: "destructive",
+      }),
+    onSettled: () => setBusyId(null),
+  });
+
+  const rejectFollowUp = useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      setBusyId(id);
+      const { error } = await supabase.rpc("app_reject_appointment_request", {
+        p_request_id: id,
+        p_reason: reason,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["reception-requests"] });
+      toast({ title: "تم إغلاق طلب المتابعة" });
+      setRejectTarget(null);
+    },
+    onError: (err: any) =>
+      toast({
+        title: "تعذّر إغلاق الطلب",
         description: err?.message ?? "خطأ غير معروف",
         variant: "destructive",
       }),
@@ -155,12 +197,30 @@ export default function DoctorRequests() {
 
               <div className="flex shrink-0 items-center gap-2">
                 {isFollowUp ? (
-                  <Link to="/appointments">
-                    <Button size="sm" variant="outline">
-                      <CalendarClock className="h-4 w-4" />
-                      احجز الموعد
+                  <>
+                    {/* معرّف الطلب في الرابط: نافذة الحجز تستدعي
+                        `app_approve_appointment_request` فيُنشأ الموعد ويُغلق
+                        الطلب معًا، بلا خطوة يدوية ثانية تُنسى. */}
+                    <Link to={`/appointments?requestId=${r.id}`}>
+                      <Button size="sm" variant="outline">
+                        <CalendarClock className="h-4 w-4" />
+                        احجز الموعد
+                      </Button>
+                    </Link>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={busyId === r.id}
+                      title="إغلاق الطلب بسبب مكتوب — بلا حجز"
+                      onClick={() => {
+                        setRejectReason("");
+                        setRejectTarget({ id: r.id, patientName: r.patient_name ?? "مريض" });
+                      }}
+                    >
+                      {busyId === r.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <X className="h-4 w-4" />}
+                      تجاهل
                     </Button>
-                  </Link>
+                  </>
                 ) : (
                   <>
                     <Button
@@ -190,6 +250,42 @@ export default function DoctorRequests() {
           );
         })}
       </CardContent>
+
+      <Dialog
+        open={Boolean(rejectTarget)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setRejectTarget(null);
+            setRejectReason("");
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>إغلاق طلب المتابعة بلا حجز</DialogTitle>
+            <DialogDescription>
+              {rejectTarget?.patientName} — السبب إلزامي وتفرضه القاعدة، ويظهر للطبيب صاحب الطلب
+              وللمريض في بوابته. الإغلاق لا يُنشئ موعدًا ولا يُبلِّغ المريض برسالة نصية.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label>سبب الإغلاق *</Label>
+            <Textarea value={rejectReason} onChange={(event) => setRejectReason(event.target.value)} rows={2} />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              disabled={!rejectReason.trim() || rejectFollowUp.isPending}
+              onClick={() => {
+                if (!rejectTarget) return;
+                rejectFollowUp.mutate({ id: rejectTarget.id, reason: rejectReason.trim() });
+              }}
+            >
+              {rejectFollowUp.isPending ? "جارٍ الإغلاق..." : "تأكيد الإغلاق"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

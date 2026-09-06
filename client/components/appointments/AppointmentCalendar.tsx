@@ -167,6 +167,8 @@ export default function AppointmentCalendar({
   selectedDay,
   doctors,
   clinics,
+  search,
+  statusFilter,
   onCreateAt,
   onOpenAppointment,
 }: {
@@ -174,6 +176,16 @@ export default function AppointmentCalendar({
   selectedDay: string;
   doctors: { id: string; name_ar: string }[];
   clinics: { id: string; name: string }[];
+  /**
+   * البحث ومرشّح الحالة من شاشة المواعيد.
+   *
+   * كانا يُستهلكان في قائمة «بطاقات الأطباء» وحدها، والتقويم هو العرض
+   * الافتراضي — فكان الموظف يكتب اسم المريض في حقل البحث ولا يتغيّر شيء على
+   * الشاشة، فيستنتج أن التصفية معطّلة في النظام. مرشِّحٌ معروضٌ بلا أثر أسوأ
+   * من غياب المرشِّح.
+   */
+  search?: string;
+  statusFilter?: string;
   onCreateAt: (start: Date, doctorId: string | null, clinicId: string | null) => void;
   onOpenAppointment: (appointmentId: string) => void;
 }) {
@@ -247,15 +259,19 @@ export default function AppointmentCalendar({
     },
   });
 
-  const visible = useMemo(
-    () =>
-      (appointments.data ?? []).filter(
-        (row) =>
-          (doctorFilter === "all" || row.doctor_id === doctorFilter) &&
-          (clinicFilter === "all" || row.clinic_id === clinicFilter),
-      ),
-    [appointments.data, doctorFilter, clinicFilter],
-  );
+  const visible = useMemo(() => {
+    const needle = (search ?? "").trim();
+    return (appointments.data ?? []).filter(
+      (row) =>
+        (doctorFilter === "all" || row.doctor_id === doctorFilter) &&
+        (clinicFilter === "all" || row.clinic_id === clinicFilter) &&
+        (!statusFilter || statusFilter === "all" || row.status === statusFilter) &&
+        (!needle ||
+          Boolean(row.patient?.name_ar?.includes(needle)) ||
+          String(row.patient?.file_number ?? "").includes(needle) ||
+          Boolean(row.patient?.mobile_number?.includes(needle))),
+    );
+  }, [appointments.data, doctorFilter, clinicFilter, search, statusFilter]);
 
   const columns = useMemo(() => {
     if (view !== "day") return [];
@@ -303,6 +319,11 @@ export default function AppointmentCalendar({
             <CalendarDays className="h-4 w-4 text-muted-foreground" />
             {headerLabel}
           </span>
+          {/* تقويم فارغ بسبب التصفية يبدو كتقويم بلا مواعيد: الشارة تفرّق
+              بين الحالتين حتى لا يظنّ الموظف أن مواعيد اليوم اختفت. */}
+          {(Boolean((search ?? "").trim()) || (Boolean(statusFilter) && statusFilter !== "all")) && (
+            <Badge variant="outline">تصفية نشطة · {visible.length}</Badge>
+          )}
         </div>
 
         <div className="flex flex-wrap items-center gap-2">

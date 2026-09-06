@@ -131,18 +131,82 @@ function useRadiologyExams(organizationId: string | undefined) {
   });
 }
 
+/**
+ * الطلبات المفتوحة = ما يُرشّحه المنظور + **الطلبات المعتمدة بانتظار التسليم**.
+ *
+ * `v_radiology_unreported_orders` يتوقّف عند `reporting`، فالطلب الذي اعتُمد
+ * تقريره يسقط من الجدول فورًا — بينما `verified → delivered` انتقالٌ باقٍ في
+ * القاعدة، ولا شاشة أخرى في التطبيق تفتح طلب أشعة. فمن أغلق النافذة قبل
+ * التسليم لم يجد للطلب طريقًا، وبقي «تقرير معتمد» ولم يُكتب له
+ * `delivered_at`/`delivered_by` أبدًا. نضمّ المعتمدة صريحًا حتى يبقى زرّ
+ * «تسليم» في متناول المستخدم.
+ */
 function useRadiologyOrders(organizationId: string | undefined) {
   return useQuery({
     queryKey: ["radiology-orders", organizationId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("v_radiology_unreported_orders")
-        .select("*")
-        .eq("organization_id", organizationId)
-        .order("ordered_at", { ascending: false });
-      if (error) throw error;
-      return (data ?? []) as RadiologyUnreportedOrderView[];
+      const [pending, verified] = await Promise.all([
+        supabase
+          .from("v_radiology_unreported_orders")
+          .select("*")
+          .eq("organization_id", organizationId)
+          .order("ordered_at", { ascending: false }),
+        supabase
+          .from("radiology_orders")
+          .select(
+            "id, organization_id, patient_id, ordering_doctor_id, status, priority, ordered_at, patient:patients(name_ar), doctor:doctors(name_ar)",
+          )
+          .eq("organization_id", organizationId)
+          .eq("status", "verified")
+          .order("ordered_at", { ascending: false }),
+      ]);
+      if (pending.error) throw pending.error;
+      if (verified.error) throw verified.error;
+
+      const embedded = (value: unknown) =>
+        (Array.isArray(value) ? value[0] : value) as { name_ar?: string } | null | undefined;
+
+      const rows = [
+        ...((pending.data ?? []) as any[]),
+        ...((verified.data ?? []) as any[]).map((row) => ({
+          radiology_order_id: row.id,
+          organization_id: row.organization_id,
+          patient_id: row.patient_id,
+          patient_name: embedded(row.patient)?.name_ar ?? "—",
+          ordering_doctor_id: row.ordering_doctor_id,
+          doctor_name: embedded(row.doctor)?.name_ar ?? null,
+          status: row.status,
+          priority: row.priority,
+          ordered_at: row.ordered_at,
+        })),
+      ];
+
+      // عدّادا «عدد الفحوصات» و«موجودات عاجلة» يُحسبان من البنود هنا: المنظور
+      // لا يحمل عمودين بهذين الاسمين، فكانت الخانتان تظهران فارغتين دائمًا.
+      const ids = rows.map((row) => row.radiology_order_id).filter(Boolean);
+      if (ids.length > 0) {
+        const { data: items, error: itemsError } = await supabase
+          .from("radiology_order_items")
+          .select("radiology_order_id, is_urgent_finding")
+          .in("radiology_order_id", ids);
+        if (itemsError) throw itemsError;
+        const tally = new Map<string, { exams: number; urgent: number }>();
+        for (const item of (items ?? []) as any[]) {
+          const entry = tally.get(item.radiology_order_id) ?? { exams: 0, urgent: 0 };
+          entry.exams += 1;
+          if (item.is_urgent_finding) entry.urgent += 1;
+          tally.set(item.radiology_order_id, entry);
+        }
+        for (const row of rows) {
+          const entry = tally.get(row.radiology_order_id) ?? { exams: 0, urgent: 0 };
+          (row as any).exams_count = entry.exams;
+          (row as any).urgent_findings_count = entry.urgent;
+        }
+      }
+
+      rows.sort((a, b) => String(b.ordered_at ?? "").localeCompare(String(a.ordered_at ?? "")));
+      return rows as unknown as RadiologyUnreportedOrderView[];
     },
   });
 }
@@ -176,8 +240,12 @@ export default function Radiology() {
         <TabsContent value="orders" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle>الطلبات غير المُقرَّرة</CardTitle>
-              <CardDescription>تختفي من هذه القائمة تلقائيًا بعد توثيق التقرير (reported)</CardDescription>
+              <CardTitle>الطلبات المفتوحة</CardTitle>
+              {/* النصّ كان يذكر حالة `reported` وقد رُحِّلت إلى `reporting` منذ
+                  0084، فيبحث المستخدم عن اسمٍ لا يجده في أزرار الحالة. */}
+              <CardDescription>
+                تختفي من هذه القائمة تلقائيًا بعد اعتماد التقرير وتسليمه (تسليم)
+              </CardDescription>
             </CardHeader>
             <CardContent>
               {orders.isLoading && (
@@ -233,7 +301,16 @@ export default function Radiology() {
                         </TableCell>
                       </TableRow>
                     ))}
-                    {(orders.data ?? []).length === 0 && (
+                    {/* الفشل يُعرض فشلًا لا «لا توجد طلبات»: الطابور الفارغ
+                        الكاذب يجعل القسم يمضي وطلباتٌ في انتظاره. */}
+                    {orders.isError && (
+                      <TableRow>
+                        <TableCell colSpan={7} className="py-8 text-center text-sm text-destructive">
+                          تعذّر تحميل الطلبات: {(orders.error as any)?.message ?? "خطأ غير معروف"}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {!orders.isError && (orders.data ?? []).length === 0 && (
                       <TableRow>
                         <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
                           لا توجد طلبات تصوير معلّقة حاليًا.
@@ -511,6 +588,7 @@ function NewRadiologyOrderDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { branch } = useOrganizationAccess();
   const exams = useRadiologyExams(organizationId);
   const doctors = useDoctorsList();
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
@@ -519,30 +597,42 @@ function NewRadiologyOrderDialog({
   const [selectedExamIds, setSelectedExamIds] = useState<string[]>([]);
   const [clinicalIndication, setClinicalIndication] = useState("");
 
-  const selectedExams = (exams.data ?? []).filter((exam) => selectedExamIds.includes(exam.id));
+  /**
+   * الكتالوج يعرض الفحص المعطَّل (لتفعيله لاحقًا)، أمّا الطلب فلا.
+   *
+   * فحصٌ عُطِّل — جهاز خارج الخدمة — لا يُصوَّر، وطلبه يصل قسم الأشعة فحصًا لا
+   * يستطيع أحد إنجازه فيبقى الطلب في الطابور بلا نهاية.
+   * و`app_create_radiology_order` ترفضه أصلًا (`coalesce(is_active, true)`).
+   */
+  const selectableExams = (exams.data ?? []).filter((exam) => exam.is_active);
+
+  const selectedExams = selectableExams.filter((exam) => selectedExamIds.includes(exam.id));
   const preparationNotes = selectedExams.map((exam) => exam.preparation_instructions).filter(Boolean) as string[];
 
   const createOrder = useMutation({
+    /**
+     * الإنشاء عبر `app_create_radiology_order` لا بإدخالين متتاليين.
+     *
+     * الإدخالان (`radiology_orders` ثم `radiology_order_items`) ليسا في معاملة
+     * واحدة: لو فشل الثاني بقي طلبٌ بلا بند، والمحفّز الذي ينقل الطلب إلى
+     * «الصور جاهزة» يعمل على البنود فلا يجد ما يعمل عليه — طلبٌ لا يُنجَز
+     * أبدًا. والدالّة كذلك تفرض صلاحية `rad.order`، وتتحقّق من انتماء المريض
+     * والطبيب للمنشأة، وتُطلق إخطار القسم (`/radiology-console`) الذي كان
+     * الطلب المُنشأ من هذه الشاشة لا يُطلقه فلا يعلم به أحد.
+     */
     mutationFn: async () => {
       if (!organizationId || !patient) throw new Error("اختر المريض أولًا");
       if (selectedExamIds.length === 0) throw new Error("اختر فحصًا واحدًا على الأقل");
-      const { data: order, error: orderError } = await supabase
-        .from("radiology_orders")
-        .insert({
-          organization_id: organizationId,
-          patient_id: patient.id,
-          ordering_doctor_id: doctorId || null,
-          priority,
-          clinical_indication: clinicalIndication.trim() || null,
-        })
-        .select("id")
-        .single();
-      if (orderError) throw orderError;
-
-      const { error: itemsError } = await supabase
-        .from("radiology_order_items")
-        .insert(selectedExamIds.map((examId) => ({ radiology_order_id: order.id, radiology_exam_id: examId })));
-      if (itemsError) throw itemsError;
+      const { error } = await supabase.rpc("app_create_radiology_order", {
+        p_organization_id: organizationId,
+        p_patient_id: patient.id,
+        p_doctor_id: doctorId || null,
+        p_exam_ids: selectedExamIds,
+        p_priority: priority,
+        p_clinical_indication: clinicalIndication.trim() || null,
+        p_branch_id: branch?.id ?? null,
+      });
+      if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["radiology-orders", organizationId] });
@@ -619,7 +709,7 @@ function NewRadiologyOrderDialog({
           <div className="flex flex-col gap-1.5">
             <Label>الفحوصات المطلوبة *</Label>
             <div className="flex max-h-48 flex-col gap-1 overflow-y-auto rounded-md border p-2">
-              {(exams.data ?? []).map((exam) => (
+              {selectableExams.map((exam) => (
                 <label key={exam.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted">
                   <input
                     type="checkbox"
@@ -633,9 +723,11 @@ function NewRadiologyOrderDialog({
                   {exam.name_ar}
                 </label>
               ))}
-              {(exams.data ?? []).length === 0 && (
+              {selectableExams.length === 0 && (
                 <p className="px-2 py-3 text-center text-sm text-muted-foreground">
-                  لا توجد فحوصات في الكتالوج بعد — أضفها من تبويب "كتالوج فحوصات الأشعة".
+                  {(exams.data ?? []).length === 0
+                    ? 'لا توجد فحوصات في الكتالوج بعد — أضفها من تبويب "كتالوج فحوصات الأشعة".'
+                    : "كل فحوص الكتالوج معطَّلة — فعّل الفحص من تبويب «كتالوج فحوصات الأشعة» قبل طلبه."}
                 </p>
               )}
             </div>
@@ -716,6 +808,15 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
       queryClient.invalidateQueries({ queryKey: ["radiology-order-details", orderId] });
       queryClient.invalidateQueries({ queryKey: ["radiology-orders"] });
     },
+    // حارس القاعدة على البند (`trg_guard_radiology_item_performed`) يرفض ختم
+    // التنفيذ بلا صلاحية `rad.perform` وبلا نفي الحمل — وبلا هذا المعالج كان
+    // رفضُه صامتًا: لا شيء يتغيّر على الشاشة ولا رسالة تشرح لماذا.
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر تسجيل التنفيذ",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   const saveReport = useMutation({
@@ -751,6 +852,12 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["radiology-order-details", orderId] }),
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر تعديل علامة الموجودة العاجلة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   /**
@@ -815,8 +922,16 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
   });
 
   const orderStatus = (details.data?.order as RadiologyOrderRow | undefined)?.status;
-  const allHaveFindings = (details.data?.items ?? []).every(
-    (item) => typeof item.findings === "string" && item.findings.trim() !== "",
+  /**
+   * شرط «اعتماد التقرير» هو **الانطباع** لا الموجودات.
+   *
+   * `app_set_radiology_order_status` عند `verified` تعدّ البنود التي
+   * `impression is null or btrim(impression) = ''` وترفض إن وُجد واحد. الشرط
+   * هنا كان يفحص `findings` وحده، فيُفتح الزرّ ثم يفشل الاعتماد برسالة تتكلّم
+   * عن الانطباع بينما التلميح يطلب الموجودات — والطبيب قد كتبها.
+   */
+  const allHaveImpression = (details.data?.items ?? []).every(
+    (item) => typeof item.impression === "string" && item.impression.trim() !== "",
   );
 
   return (
@@ -929,11 +1044,11 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
               variant={step.needsReason ? "outline" : "default"}
               disabled={
                 advanceStatus.isPending ||
-                (step.value === "verified" && !allHaveFindings)
+                (step.value === "verified" && !allHaveImpression)
               }
               title={
-                step.value === "verified" && !allHaveFindings
-                  ? "اكتب الموجودات والانطباع لكل فحص أولًا"
+                step.value === "verified" && !allHaveImpression
+                  ? "اكتب «الانطباع التشخيصي» لكل فحص واحفظ التقرير أولًا"
                   : undefined
               }
               onClick={() => {

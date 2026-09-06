@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Newspaper, Monitor, Plus, Trash2, Pencil, GripVertical, CalendarClock, AlertTriangle } from "lucide-react";
+import { Newspaper, Monitor, Plus, Trash2, Pencil, ChevronUp, ChevronDown, CalendarClock, AlertTriangle } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -49,7 +49,19 @@ type ScreenRow = {
   is_active: boolean;
 };
 
-const todayIso = () => new Date().toISOString().slice(0, 10);
+/**
+ * تاريخ اليوم **بتوقيت المتصفح**.
+ *
+ * `toISOString()` يحوّل إلى UTC أولًا: في الرياض (UTC+3) بين منتصف الليل
+ * والثالثة فجرًا يُعيد تاريخ الأمس، فرسالة تبدأ اليوم تُعرض حالتها «خارج
+ * الفترة» ورسالة انتهت أمس تظهر «معروضة الآن».
+ */
+const todayIso = () => {
+  const now = new Date();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${now.getFullYear()}-${month}-${day}`;
+};
 
 /**
  * لافتة خطأ صريحة بدل قائمة فارغة كاذبة.
@@ -240,6 +252,45 @@ function TickersTab({ organizationId }: { organizationId: string | undefined }) 
       }),
   });
 
+  /**
+   * تغيير ترتيب الرسائل.
+   *
+   * كان في العمود الأول **أيقونة سحب بلا وظيفة**: لا `draggable`، ولا سهمَي
+   * ترتيب، ولا حقل ترتيب في حوار التعديل. أي أن ترتيب ما يمرّ على شاشات
+   * الانتظار كان يُحدَّد لحظة الإنشاء ولا يمكن تغييره أبدًا، بينما الشكل يَعِد
+   * بأنه قابل للسحب. الأيقونة استُبدلت بسهمين يعملان.
+   *
+   * ولماذا ترقيم متسلسل للقائمة كلها لا تبديل قيمتين: الصفوف القديمة قد
+   * تتساوى في `sort_order` (كلها 0 مثلًا)، فتبديل قيمتين متساويتين لا يغيّر
+   * شيئًا — ويظنّ المستخدم أن الزرّ لا يعمل.
+   */
+  const reorder = useMutation({
+    mutationFn: async ({ index, direction }: { index: number; direction: -1 | 1 }) => {
+      const target = index + direction;
+      const current = tickers.data ?? [];
+      if (target < 0 || target >= current.length) return;
+      const next = [...current];
+      [next[index], next[target]] = [next[target], next[index]];
+      for (let position = 0; position < next.length; position += 1) {
+        if (next[position].sort_order === position) continue;
+        const { data, error } = await supabase
+          .from("waiting_room_tickers")
+          .update({ sort_order: position })
+          .eq("id", next[position].id)
+          .select("id");
+        if (error) throw error;
+        if (!data || data.length === 0) throw new Error("لم يُحفظ الترتيب — راجع صلاحيتك");
+      }
+    },
+    onSuccess: invalidate,
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر تغيير الترتيب",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
   const remove = useMutation({
     mutationFn: async (id: string) => {
       const { data, error } = await supabase
@@ -280,7 +331,7 @@ function TickersTab({ organizationId }: { organizationId: string | undefined }) 
             نصوص الشريط الأخباري
           </CardTitle>
           <CardDescription>
-            الرسائل التي تمرّ على شريط شاشات غرف الانتظار، بالترتيب المعروض
+            الرسائل التي تمرّ على شريط شاشات غرف الانتظار، بالترتيب المعروض — بسهمَي الترتيب
           </CardDescription>
         </div>
         {organizationId && (
@@ -303,7 +354,7 @@ function TickersTab({ organizationId }: { organizationId: string | undefined }) 
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-10" />
+                <TableHead className="w-20">الترتيب</TableHead>
                 <TableHead>النص</TableHead>
                 <TableHead className="w-44">الفترة</TableHead>
                 <TableHead className="w-28">الحالة</TableHead>
@@ -311,10 +362,31 @@ function TickersTab({ organizationId }: { organizationId: string | undefined }) 
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => (
+              {rows.map((row, index) => (
                 <TableRow key={row.id}>
-                  <TableCell className="text-muted-foreground">
-                    <GripVertical className="h-3.5 w-3.5" />
+                  <TableCell>
+                    <div className="flex gap-0.5">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 w-7 p-0"
+                        title="أعلى"
+                        disabled={index === 0 || reorder.isPending}
+                        onClick={() => reorder.mutate({ index, direction: -1 })}
+                      >
+                        <ChevronUp className="h-3.5 w-3.5" />
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 w-7 p-0"
+                        title="أسفل"
+                        disabled={index === rows.length - 1 || reorder.isPending}
+                        onClick={() => reorder.mutate({ index, direction: 1 })}
+                      >
+                        <ChevronDown className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
                   </TableCell>
                   <TableCell className="max-w-md text-sm">{row.body}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">

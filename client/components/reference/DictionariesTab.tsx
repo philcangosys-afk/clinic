@@ -99,7 +99,16 @@ export default function DictionariesTab({ readOnly }: { readOnly: boolean }) {
   // النظامي لا يُعدَّل من التطبيق، والمقيَّد لا تُغيَّر مفاتيحه.
   const isSystem = Boolean(selected?.is_system);
   const isConstrained = CONSTRAINED.has(selected?.key ?? "");
-  const canEdit = !readOnly && !isSystem;
+  /**
+   * `Boolean(categoryId)` شرطٌ لازم لا زينة.
+   *
+   * بلا تحديد قاموس تكون `selected` غير معرَّفة فتصير `isSystem` كاذبة، فيُقرأ
+   * الغياب إذنًا بالتحرير: يظهر زرّا «استيراد» و«قيمة جديدة» قبل اختيار قاموس،
+   * ويمرّر مُشغّل الحفظ `category_id: ""` إلى عمود `uuid not null` فيفشل برسالة
+   * قاعدة بيانات إنجليزية. أي أن الزرّين كانا يظهران في اللحظة الوحيدة التي
+   * يتعذّر فيها عملهما، ويختفيان حين يصبح العمل ممكنًا.
+   */
+  const canEdit = !readOnly && Boolean(categoryId) && !isSystem;
 
   const save = useMutation({
     mutationFn: async (row: any) => {
@@ -257,10 +266,18 @@ export default function DictionariesTab({ readOnly }: { readOnly: boolean }) {
             <CardDescription className="flex flex-wrap items-center gap-2 pt-2">
               <span className="font-mono text-xs">{selected.key}</span>
               {isSystem && (
-                <Badge variant="secondary" className="gap-1">
-                  <Lock className="h-3 w-3" />
-                  قاموس نظامي — يُقرأ ولا يُعدَّل
-                </Badge>
+                <>
+                  <Badge variant="secondary" className="gap-1">
+                    <Lock className="h-3 w-3" />
+                    قاموس نظامي — يُقرأ ولا يُعدَّل
+                  </Badge>
+                  {/* سبب اختفاء «قيمة جديدة» و«استيراد» مكتوب صريحًا: بلا هذا
+                      السطر يبدو غيابهما عطلًا في الشاشة. */}
+                  <span className="text-xs">
+                    لذلك لا يظهر زرّا «قيمة جديدة» و«استيراد» — أنشئ قائمة خاصة بمنشأتك من
+                    إعدادات التشغيل.
+                  </span>
+                </>
               )}
               {isConstrained && (
                 <Badge variant="outline">
@@ -321,7 +338,16 @@ export default function DictionariesTab({ readOnly }: { readOnly: boolean }) {
                     </TableCell>
                   </TableRow>
                 ))}
-                {filtered.length === 0 && (
+                {/* الفشل يُعرض فشلًا لا «لا قيم مطابقة»: القاموس الفارغ الكاذب
+                    يدفع المدير إلى إعادة إدخال قيمٍ موجودة. */}
+                {values.isError && (
+                  <TableRow>
+                    <TableCell colSpan={6} className="py-8 text-center text-sm text-destructive">
+                      تعذّر تحميل القيم: {(values.error as any)?.message ?? "خطأ غير معروف"}
+                    </TableCell>
+                  </TableRow>
+                )}
+                {!values.isError && filtered.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
                       لا قيم مطابقة.

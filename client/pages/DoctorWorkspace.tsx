@@ -30,7 +30,7 @@ import {
  * به خلال المهلة يُصعَّد.
  */
 export default function DoctorWorkspace() {
-  const { doctorId } = useDemoRole();
+  const { doctorId, resolving, error } = useSessionDoctorId();
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
       <div>
@@ -39,6 +39,13 @@ export default function DoctorWorkspace() {
           القيم الحرجة أولًا، ثم ما وصلك من الأشعة والمختبر، وطلباتك، ويومك
         </p>
       </div>
+
+      {/* تعذّر قراءة ملفّ الطبيب لا يُبتلع: بدونه لا يُرسل طلب ولا يُرشّح صندوق. */}
+      {error && (
+        <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
+          تعذّر تحديد ملفّ الطبيب المرتبط بحسابك: {error.message}
+        </p>
+      )}
 
       <Tabs defaultValue="critical">
         <TabsList>
@@ -49,13 +56,58 @@ export default function DoctorWorkspace() {
           <TabsTrigger value="open">زيارات لم تُغلق</TabsTrigger>
         </TabsList>
         <TabsContent value="critical" className="mt-4"><CriticalPanel /></TabsContent>
-        <TabsContent value="inbox" className="mt-4"><DoctorInbox doctorId={doctorId} /></TabsContent>
-        <TabsContent value="request" className="mt-4"><DoctorRequestPanel doctorId={doctorId} /></TabsContent>
+        <TabsContent value="inbox" className="mt-4">
+          <DoctorInbox doctorId={doctorId} resolvingDoctor={resolving} />
+        </TabsContent>
+        <TabsContent value="request" className="mt-4">
+          <DoctorRequestPanel doctorId={doctorId} resolvingDoctor={resolving} />
+        </TabsContent>
         <TabsContent value="today" className="mt-4"><TodayPanel /></TabsContent>
         <TabsContent value="open" className="mt-4"><OpenVisitsPanel /></TabsContent>
       </Tabs>
     </div>
   );
+}
+
+/**
+ * هويّة الطبيب من **الجلسة** لا من صفة المعاينة.
+ *
+ * `useDemoRole().doctorId` كان المصدر الوحيد هنا، وهو يُعيد `null` لكل موظّف
+ * له دور حقيقي غير إداري — شاشة اختيار الصفة تُعرض للمالك/المدير فحسب. فكان
+ * الطبيب الحقيقي يُرسل طلباته بلا طبيب طالب، ويرى في «وصلني» مرضى الأطباء
+ * كلهم. الرابط الصحيح هو `doctors.user_id`، وهو نفس ما يرشّح به تبويبا
+ * «يومي» و«زيارات لم تُغلق» في هذه الشاشة (عبر `doctor_user_id`).
+ *
+ * وصفة المعاينة تبقى مخرجًا للمدير الذي يعاين بعيون طبيب، لا بديلًا عن
+ * الجلسة.
+ */
+function useSessionDoctorId() {
+  const { organization, session } = useOrganizationAccess();
+  const { doctorId: previewDoctorId } = useDemoRole();
+  const userId = session?.user.id;
+
+  const linked = useQuery({
+    queryKey: ["session-doctor-id", organization?.id, userId],
+    enabled: Boolean(organization?.id && userId),
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id")
+        .eq("organization_id", organization!.id)
+        .eq("user_id", userId!)
+        .eq("is_enabled", true)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as { id: string } | null)?.id ?? null;
+    },
+  });
+
+  return {
+    doctorId: linked.data ?? previewDoctorId ?? null,
+    resolving: linked.isLoading,
+    error: linked.error as Error | null,
+  };
 }
 
 /* ══════════════════════════════════════════════════════════════════════════

@@ -86,7 +86,10 @@ function RequestsPanel() {
       const { data, error } = await supabase
         .from("doctors").select("id, name_ar")
         .eq("organization_id", organization!.id)
-        // القائمة تعرض النشطين القابلين للحجز فقط
+        // القائمة تعرض النشطين القابلين للحجز فقط. `disabled_from_booking`
+        // وحده لا يكفي: طبيبٌ تُرك تفعيله (`is_enabled = false`) لأنه ترك
+        // العيادة كان يظهر هنا، فيُحجز له موعد أو يُرفض الحفظ من القاعدة.
+        .eq("is_enabled", true)
         .eq("disabled_from_booking", false)
         .order("name_ar");
       if (error) throw error;
@@ -375,6 +378,9 @@ function AccountsPanel() {
       const { data, error } = await supabase
         .from("patients").select("id, name_ar, file_number")
         .eq("organization_id", organization!.id)
+        // الملف المدموج ملف ميّت: ربط حساب بوابة به يُري المريض ملفًا فارغًا،
+        // و`app_link_patient_portal_account` لا تفحص `merged_into_id`.
+        .is("merged_into_id", null)
         .ilike("name_ar", `%${search.trim()}%`)
         .limit(20);
       if (error) throw error;

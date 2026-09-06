@@ -133,6 +133,8 @@ export interface PatientRow {
   name_ar: string;
   name_en: string | null;
   birth_date: string | null;
+  /** تاريخ الميلاد مشتقّ من عمرٍ أدخله الاستقبال لا من وثيقة هوية (0146). */
+  birth_date_is_estimated: boolean;
   gender: "male" | "female" | null;
   nationality_value_id: UUID | null;
   profession_value_id: UUID | null;
@@ -279,6 +281,8 @@ export interface ItemRow {
   category_value_id: UUID | null;
   item_type: "service" | "product" | "drug" | "lab_service";
   code: string;
+  /** الكود قبل الترقيم القصير — يبقى قابلًا للبحث (0146). */
+  legacy_code: string | null;
   barcode: string | null;
   name_ar: string;
   name_en: string | null;

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Download, Printer, RefreshCcw, Table2 } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { AlertTriangle, Download, Printer, RefreshCcw, Table2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { printHtml } from "@/lib/document-merge";
@@ -454,7 +454,17 @@ function formatValue(value: any, type: ColumnType | undefined, locale: string) {
 
 export default function ReportCenter() {
   const { organization } = useOrganizationAccess();
-  const { can } = usePermissions();
+  const { can, isLoading: permissionsLoading } = usePermissions();
+  const queryClient = useQueryClient();
+  /**
+   * `can()` تُعيد `false` أثناء تحميل الصلاحيات وعند فشل استعلامها (اتجاه
+   * مقصود للأزرار). بناء رسالة «لا تملك صلاحية» عليه يعني أن كل من يفتح
+   * الشاشة يرى نفيًا قاطعًا لجزء من الثانية، ويراه **دائمًا** إن فشل استعلام
+   * الصلاحيات — فيراجع مدير المنشأة في مشكلة شبكة. حالة الاستعلام تُقرأ من
+   * ذاكرة react-query للتمييز بين «يُحمَّل» و«فشل» و«لا يملك».
+   */
+  const permissionsFailed =
+    queryClient.getQueryState(["my-permissions", organization?.id])?.status === "error";
   const { toast } = useToast();
 
   const visibleReports = useMemo(
@@ -569,15 +579,53 @@ export default function ReportCenter() {
   });
 
   const data = rows.data ?? [];
+  const capped = data.length >= ROW_LIMIT;
 
-  // قيم الحالة تُشتقّ من الصفوف نفسها: لا قائمة ثابتة تتقادم مع الهجرات
+  /**
+   * قيم الحالة تُقرأ باستعلام **مستقلّ لا يعرف مرشّح الحالة**.
+   *
+   * كانت تُشتقّ من صفوف الجدول نفسها، والجدول مُرشَّح بالحالة: فبعد اختيار
+   * «مرفوضة» تنهار القائمة إلى قيمة واحدة ولا يمكن العودة إلى غيرها إلا
+   * بتصفير المرشّح، وتختفي القائمة كلّها إن كانت الفترة بلا نتائج — فيبدو أن
+   * التقرير لا يملك مرشّح حالة أصلًا.
+   */
+  const statusValues = useQuery({
+    queryKey: [
+      "report-center-statuses", report?.key, organization?.id,
+      from, to, branch, doctor, clinic, company,
+    ],
+    enabled: Boolean(organization?.id && report?.filters.includes("status")),
+    queryFn: async () => {
+      const col = report!.statusColumn ?? "status";
+      let query = supabase
+        .from(report!.view)
+        .select(col)
+        .eq("organization_id", organization!.id)
+        .gte("report_date", from)
+        .lte("report_date", to)
+        .limit(ROW_LIMIT);
+
+      if (branch !== "all") query = query.eq("branch_id", branch);
+      if (doctor !== "all" && report!.filters.includes("doctor")) query = query.eq("doctor_id", doctor);
+      if (clinic !== "all" && report!.filters.includes("clinic")) query = query.eq("clinic_id", clinic);
+      if (company !== "all" && report!.filters.includes("company")) {
+        query = query.eq("insurance_company_id", company);
+      }
+      const { data: statusRows, error } = await query;
+      if (error) throw error;
+      return Array.from(
+        new Set((statusRows ?? []).map((r: any) => r[col]).filter((v) => v !== null && v !== undefined)),
+      ).map(String);
+    },
+  });
+
   const statusOptions = useMemo(() => {
-    if (!report?.filters.includes("status")) return [];
-    const col = report.statusColumn ?? "status";
-    return Array.from(
-      new Set(data.map((r) => r[col]).filter((v) => v !== null && v !== undefined)),
-    ).sort();
-  }, [data, report]);
+    const values = [...(statusValues.data ?? [])];
+    // الحالة المختارة تبقى معروضة دائمًا: بلا ذلك تفقد القائمة قيمتها الحالية
+    // إن لم تظهر في عيّنة القيم (مثلًا لأن الفترة تغيّرت).
+    if (status !== "all" && !values.includes(status)) values.push(status);
+    return values.sort();
+  }, [statusValues.data, status]);
 
   const totals = useMemo(() => {
     const out: Record<string, number> = {};
@@ -587,6 +635,15 @@ export default function ReportCenter() {
     }
     return out;
   }, [data, report]);
+
+  /**
+   * نصّ تحذير بلوغ الحدّ — **واحدٌ للشاشة والملفّ والورقة المطبوعة**.
+   *
+   * التحذير كان على الشاشة وحدها، فيُصدَّر الملفّ أو تُطبَع الورقة بسطر إجمالي
+   * هو مجموع أول 2000 صف بلا أي إشارة، ثم يُرسَل إلى محاسب أو مالك لا يرى
+   * الشاشة. من يرى الرقم يجب أن يرى قيده معه.
+   */
+  const capNotice = `تحذير: بلغ التقرير حدّه الأقصى (${ROW_LIMIT} صف). الصفوف وسطر الإجمالي أدناه لأول ${ROW_LIMIT} صف من الفترة لا لكل الفترة — ضيّق نطاق التاريخ ليكون الإجمالي كاملًا.`;
 
   const exportCsv = () => {
     if (!report || data.length === 0) return;
@@ -606,6 +663,17 @@ export default function ReportCenter() {
           .join(","),
       );
     }
+    // سطر الإجمالي في الملفّ موسومٌ بما يُجمَع فعلًا، والتحذير بعده
+    lines.push(
+      report.columns
+        .map((c, index) => {
+          if (c.total) return `"${String(totals[c.key] ?? 0)}"`;
+          if (index === 0) return `"${capped ? `الإجمالي — أول ${ROW_LIMIT} صف فقط` : "الإجمالي"}"`;
+          return '""';
+        })
+        .join(","),
+    );
+    if (capped) lines.push(`"${capNotice.replace(/"/g, '""')}"`);
     // BOM ليقرأ Excel العربية بترميز صحيح
     const blob = new Blob(["﻿" + lines.join("\n")], {
       type: "text/csv;charset=utf-8;",
@@ -616,7 +684,10 @@ export default function ReportCenter() {
     anchor.download = `${report.key}-${from}-${to}.csv`;
     anchor.click();
     URL.revokeObjectURL(url);
-    toast({ title: "صُدّر التقرير", description: `${data.length} صفًّا` });
+    toast({
+      title: "صُدّر التقرير",
+      description: capped ? `${data.length} صفًّا — بلغ الحدّ الأقصى، والتحذير مكتوب في الملفّ` : `${data.length} صفًّا`,
+    });
   };
 
   const printReport = () => {
@@ -635,10 +706,12 @@ export default function ReportCenter() {
       )
       .join("");
     const footer = report.columns
-      .map((c) =>
+      .map((c, index) =>
         c.total
           ? `<td><b>${esc(formatValue(totals[c.key], c.type, locale))}</b></td>`
-          : "<td></td>",
+          : index === 0
+            ? `<td><b>${esc(capped ? `الإجمالي — أول ${ROW_LIMIT} صف فقط` : "الإجمالي")}</b></td>`
+            : "<td></td>",
       )
       .join("");
     printHtml(
@@ -647,6 +720,7 @@ export default function ReportCenter() {
        <p style="margin:0 0 12px;font-size:12px;color:#555">
          ${esc(organization?.name ?? "")} · من ${esc(from)} إلى ${esc(to)} · ${data.length} صفًّا
        </p>
+       ${capped ? `<p style="margin:0 0 12px;padding:6px 8px;border:1px solid #b45309;font-size:12px;color:#7c2d12">${esc(capNotice)}</p>` : ""}
        <table style="width:100%;border-collapse:collapse;font-size:11px" border="1">
          <thead><tr>${head}</tr></thead>
          <tbody>${body}</tbody>
@@ -656,6 +730,29 @@ export default function ReportCenter() {
     );
   };
 
+  // أثناء تحميل الصلاحيات لا يُقال شيء قاطع — لا «يملك» ولا «لا يملك»
+  if (permissionsLoading) {
+    return (
+      <Card>
+        <CardContent className="py-10">
+          <Skeleton className="h-24 w-full" />
+        </CardContent>
+      </Card>
+    );
+  }
+  if (permissionsFailed) {
+    return (
+      <Card className="border-amber-300">
+        <CardContent className="flex items-start gap-2 bg-amber-50 py-4 text-sm text-amber-900">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            تعذّر التحقّق من صلاحياتك — هذه ليست رسالة نفي صلاحية. أعد تحميل الصفحة، وإن تكرّر فراجع
+            مدير المنشأة.
+          </span>
+        </CardContent>
+      </Card>
+    );
+  }
   if (visibleReports.length === 0) {
     return (
       <Card>
@@ -824,11 +921,9 @@ export default function ReportCenter() {
                 {useArabicNumerals ? "١٢٣" : "123"}
               </Button>
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className={capped ? "text-xs font-medium text-amber-700" : "text-xs text-muted-foreground"}>
               {data.length} صفًّا
-              {data.length >= ROW_LIMIT
-                ? ` — بلغ الحدّ الأقصى (${ROW_LIMIT})، ضيّق نطاق التاريخ`
-                : ""}
+              {capped ? ` — بلغ الحدّ الأقصى (${ROW_LIMIT})؛ سطر الإجمالي أدناه مجموع هذه الصفوف فقط، والتحذير يُصدَّر مع الملفّ والورقة المطبوعة` : ""}
             </p>
           </div>
         </CardContent>
@@ -889,9 +984,15 @@ export default function ReportCenter() {
               {data.length > 0 && (
                 <TableFooter>
                   <TableRow>
-                    {report?.columns.map((c) => (
+                    {report?.columns.map((c, index) => (
                       <TableCell key={c.key} className="whitespace-nowrap font-mono text-xs">
-                        {c.total ? formatValue(totals[c.key], c.type, locale) : ""}
+                        {c.total
+                          ? formatValue(totals[c.key], c.type, locale)
+                          : index === 0
+                            ? capped
+                              ? `الإجمالي — أول ${ROW_LIMIT} صف`
+                              : "الإجمالي"
+                            : ""}
                       </TableCell>
                     ))}
                   </TableRow>

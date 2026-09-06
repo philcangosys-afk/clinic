@@ -229,6 +229,13 @@ function ResourceDialog({
     setForm({ ...draft });
     setReady(key);
   }
+  /**
+   * تصفير `ready` عند الإغلاق ضروريّ: مفتاح المورد الجديد سلسلة فارغة، فبعد
+   * الحفظ يبقى `ready === ""`، وفي الفتح الثاني يتساوى المفتاحان فلا يُنسَخ
+   * `EMPTY` ويظهر النموذج مملوءًا ببيانات المورد السابق — فيُحفظ مورد مكرَّر
+   * بنفس الاسم والكود إن لم يلاحظ الموظّف.
+   */
+  if (!draft && ready !== null) setReady(null);
 
   const branches = useQuery({
     queryKey: ["resource-branches", organizationId],

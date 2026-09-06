@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -186,9 +186,12 @@ function RecordSession({
   lastSession?: any;
   onSaved: () => void;
 }) {
+  const { session } = useOrganizationAccess();
+  const userId = session?.user.id;
   const [itemId, setItemId] = useState(lastSession?.item_id ?? "");
   const [areaId, setAreaId] = useState(lastSession?.body_area_value_id ?? "");
   const [deviceId, setDeviceId] = useState(lastSession?.device_resource_id ?? "");
+  const [doctorId, setDoctorId] = useState("");
   const [params, setParams] = useState<Record<string, string>>(
     lastSession?.parameters && typeof lastSession.parameters === "object"
       ? { ...lastSession.parameters }
@@ -200,6 +203,14 @@ function RecordSession({
   const [override, setOverride] = useState("");
   const [needsOverride, setNeedsOverride] = useState(false);
 
+  /**
+   * قوائم الاختيار تعرض النشط غير المؤرشف وحده.
+   *
+   * كانت الثلاثة بلا ترشيح — بخلاف `ItemPicker` و`LookupSelect` و`Assets` —
+   * فتظهر خدمات أُخرجت من الكتالوج (وأسعارها قديمة)، ومناطق جسم معطَّلة،
+   * وأجهزة موقوفة عن العمل كأنها صالحة. اختيارٌ من قائمةٍ كهذه يُسجِّل جلسة
+   * على صنفٍ أو جهازٍ لا يُستعمل اليوم.
+   */
   const services = useQuery({
     queryKey: ["session-services", organizationId],
     enabled: Boolean(organizationId),
@@ -208,6 +219,8 @@ function RecordSession({
         .from("items")
         .select("id, name_ar, default_sessions_count, session_interval_days, min_interval_days")
         .eq("organization_id", organizationId!)
+        .eq("is_disabled", false)
+        .eq("is_archived", false)
         .not("default_sessions_count", "is", null)
         .order("name_ar")
         .limit(100);
@@ -223,6 +236,7 @@ function RecordSession({
         .from("lookup_values")
         .select("id, name_ar, lookup_categories!inner(key)")
         .eq("lookup_categories.key", "body_parts")
+        .eq("is_disabled", false)
         .order("sort_order");
       if (error) throw error;
       return (data ?? []) as any[];
@@ -238,11 +252,45 @@ function RecordSession({
         .select("id, name_ar")
         .eq("organization_id", organizationId!)
         .eq("resource_type", "device")
+        .eq("is_active", true)
         .order("name_ar");
       if (error) throw error;
       return (data ?? []) as any[];
     },
   });
+
+  /**
+   * منتقي الطبيب — الجلسة كانت تُسجَّل بلا **من نفّذها**.
+   *
+   * النموذج لم يحتوِ منتقيًا أصلًا والنداء يمرّر `p_doctor_id: null` ثابتًا،
+   * والدالّة تُدرج ما وصلها ولا تستنبطه — فيبقى `performed_by = auth.uid()`
+   * وحده، ولا يُعرف في الجلسة التالية من ضبط الإعدادات ولا يمكن تقرير
+   * «جلسات لكل طبيب». والمبدئي هو الطبيب المرتبط بالجلسة الحالية إن وُجد.
+   */
+  const doctors = useQuery({
+    queryKey: ["session-doctors", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar, user_id")
+        .eq("organization_id", organizationId!)
+        .eq("is_enabled", true)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string; user_id: string | null }[];
+    },
+  });
+
+  // التعبئة المبدئية مرّة واحدة فقط: من أفرغ المنتقي بنفسه لا يُعاد ملؤه فوقه.
+  const doctorPrefilled = useRef(false);
+  useEffect(() => {
+    if (doctorPrefilled.current || !userId) return;
+    const mine = (doctors.data ?? []).find((d) => d.user_id === userId);
+    if (!mine) return;
+    doctorPrefilled.current = true;
+    setDoctorId(mine.id);
+  }, [doctors.data, userId]);
 
   const service = (services.data ?? []).find((s) => s.id === itemId);
 
@@ -252,7 +300,7 @@ function RecordSession({
         p_organization_id: organizationId,
         p_patient_id: patientId,
         p_item_id: itemId,
-        p_doctor_id: null,
+        p_doctor_id: doctorId || null,
         p_body_area_value_id: areaId || null,
         p_device_resource_id: deviceId || null,
         p_parameters: params,
@@ -284,11 +332,20 @@ function RecordSession({
     },
   });
 
+  /**
+   * إلغاء آخر عَرَض يعود إلى «بلا أعراض» لا إلى الفراغ.
+   *
+   * كان `next.filter(…) || []` بلا أثر (المصفوفة دائمًا صادقة)، فمن اختار
+   * عرضًا ثم ألغاه تُحفظ جلسته بمصفوفة فارغة — سجلٌّ لا يُميّز «فُحِص فلم
+   * يوجد شيء» من «لم يُسأل». والنفي الصريح هو ما يُقرأ في الجلسة التالية.
+   */
   const toggleEvent = (k: string) =>
     setEvents((prev) => {
       if (k === "none") return ["none"];
       const next = prev.filter((x) => x !== "none");
-      return next.includes(k) ? next.filter((x) => x !== k) || [] : [...next, k];
+      if (!next.includes(k)) return [...next, k];
+      const without = next.filter((x) => x !== k);
+      return without.length === 0 ? ["none"] : without;
     });
 
   const setParam = (k: string, v: string) =>
@@ -331,7 +388,7 @@ function RecordSession({
         </div>
       )}
 
-      <div className="grid gap-3 sm:grid-cols-3">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="ss-item">الخدمة</Label>
           <select
@@ -374,6 +431,24 @@ function RecordSession({
             {(areas.data ?? []).map((a) => (
               <option key={a.id} value={a.id}>
                 {a.name_ar}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="ss-doctor">الطبيب المنفِّذ</Label>
+          <select
+            id="ss-doctor"
+            dir="rtl"
+            value={doctorId}
+            onChange={(e) => setDoctorId(e.target.value)}
+            className="h-10 rounded-md border bg-background px-3 text-sm"
+          >
+            <option value="">— اختر —</option>
+            {(doctors.data ?? []).map((d) => (
+              <option key={d.id} value={d.id}>
+                د. {d.name_ar}
               </option>
             ))}
           </select>
@@ -582,6 +657,11 @@ function SessionRow({ session, organizationId }: { session: any; organizationId?
         </span>
       </div>
 
+      {/* `v_session_history` يُخرج `doctor_name` وكان فارغًا دائمًا لأن الجلسة
+          تُسجَّل بلا طبيب — يُعرض الآن ليُعرف من نفّذ. */}
+      {session.doctor_name && (
+        <span className="text-xs text-muted-foreground">الطبيب: د. {session.doctor_name}</span>
+      )}
       {session.device_name && (
         <span className="text-xs text-muted-foreground">الجهاز: {session.device_name}</span>
       )}

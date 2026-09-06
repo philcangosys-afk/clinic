@@ -112,6 +112,10 @@ function JobPostingsTab({ organizationId }: { organizationId: string | undefined
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["job-postings", organizationId] }),
+    // بلا `onError` تُرفَع رسالة الرفض (صلاحية أو RLS) ولا تجد من يعرضها:
+    // `QueryClient` في App.tsx بلا معالج أخطاء افتراضيّ، فتفشل العملية صامتة
+    // ويظنّ المستخدم الشاشة معلَّقة فيعيد المحاولة.
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
 
   return (
@@ -289,18 +293,30 @@ function CandidatesTab({ organizationId }: { organizationId: string | undefined 
               </div>
               <div>
                 <Label>الوظيفة المتقدَّم لها (اختياري)</Label>
+                {/*
+                  القائمة تعرض المفتوح وحده: الجدول أعلاه يحتاج كلّ الوظائف
+                  (للمتابعة والإغلاق) أمّا الاختيار فلا: ربط مرشّح بوظيفة مغلقة
+                  أو معلَّقة يُضخّم «مسار التوظيف» بأرقام على وظيفة انتهت.
+                */}
                 <Select value={jobPostingId} onValueChange={setJobPostingId}>
                   <SelectTrigger>
                     <SelectValue placeholder="اختر وظيفة" />
                   </SelectTrigger>
                   <SelectContent>
-                    {(postings.data ?? []).map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.title_ar}
-                      </SelectItem>
-                    ))}
+                    {(postings.data ?? [])
+                      .filter((p) => p.status === "open")
+                      .map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.title_ar}
+                        </SelectItem>
+                      ))}
                   </SelectContent>
                 </Select>
+                {(postings.data ?? []).filter((p) => p.status === "open").length === 0 && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    لا وظائف مفتوحة — افتح وظيفة في تبويب «الوظائف الشاغرة» أو اترك الحقل فارغًا.
+                  </p>
+                )}
               </div>
             </div>
             <DialogFooter>
@@ -440,6 +456,8 @@ function CandidateInterviewsDialog({
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: invalidate,
+    // بلا `onError` تفشل «نتيجة المقابلة» صامتة: الرسالة تُرفَع ولا تُعرَض.
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
 
   return (

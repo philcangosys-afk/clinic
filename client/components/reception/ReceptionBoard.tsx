@@ -11,6 +11,7 @@ import {
   Printer,
   Undo2,
   UserCheck,
+  UserX,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { usePermissions } from "@/lib/permissions";
@@ -107,20 +108,37 @@ export default function ReceptionBoard({
   organizationName,
   doctors,
   clinics,
+  doctorFilter,
+  highlightAppointmentId,
 }: {
   organizationId: string | undefined;
   organizationName: string;
   doctors: { id: string; name_ar: string }[];
   clinics: { id: string; name: string }[];
+  /**
+   * مرشّح الطبيب يأتي من الشاشة ولا يُملَك هنا.
+   *
+   * كان للوحة مرشِّحها المستقلّ، فتظهر في الشاشة قائمتان بنفس العنوان «كل
+   * الأطباء»: العليا (مرشّح الصفحة) بلا أثر على اللوحة، والسفلى هي العاملة —
+   * فيختار الموظف طبيبًا من العليا ويبقى الطابور كما هو فيحسب التصفية معطّلة.
+   */
+  doctorFilter: string;
+  /** صفّ الموعد القادم من `?appointmentId=` يُبرَز حتى يُعثَر عليه بلا بحث. */
+  highlightAppointmentId?: string | null;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { can } = usePermissions();
-  const [doctorFilter, setDoctorFilter] = useState("all");
   const [transferTarget, setTransferTarget] = useState<QueueRow | null>(null);
   const [priorityTarget, setPriorityTarget] = useState<QueueRow | null>(null);
   const [undoTarget, setUndoTarget] = useState<QueueRow | null>(null);
+  /**
+   * عدم الحضور كان غائبًا عن اللوحة كليًا مع أن `app_reception_transition`
+   * تدعمه: مريضٌ مؤكَّد لم يحضر لا يمكن إغلاق موعده إلا بالتبديل إلى عرض
+   * «بطاقات» — فيبقى في الطابور بقية اليوم ويشوّه عدّاد الانتظار.
+   */
+  const [noShowTarget, setNoShowTarget] = useState<QueueRow | null>(null);
 
   const queue = useQuery({
     queryKey: ["reception-board", organizationId],
@@ -200,19 +218,11 @@ export default function ReceptionBoard({
             </Badge>
           )}
         </div>
-        <Select value={doctorFilter} onValueChange={setDoctorFilter}>
-          <SelectTrigger className="h-8 w-44">
-            <SelectValue placeholder="كل الأطباء" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">كل الأطباء</SelectItem>
-            {doctors.map((doctor) => (
-              <SelectItem key={doctor.id} value={doctor.id}>
-                {doctor.name_ar}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {doctorFilter !== "all" && (
+          <span className="text-xs text-muted-foreground">
+            مصفّى على: {doctors.find((doctor) => doctor.id === doctorFilter)?.name_ar ?? "طبيب"}
+          </span>
+        )}
       </div>
 
       {queue.isLoading && <Skeleton className="h-72 w-full" />}
@@ -237,7 +247,10 @@ export default function ReceptionBoard({
             </TableHeader>
             <TableBody>
               {rows.map((row) => (
-                <TableRow key={row.appointment_id}>
+                <TableRow
+                  key={row.appointment_id}
+                  className={row.appointment_id === highlightAppointmentId ? "ring-2 ring-inset ring-primary" : undefined}
+                >
                   <TableCell className="text-center font-bold tabular-nums">
                     {row.queue_number ?? "—"}
                   </TableCell>
@@ -382,6 +395,16 @@ export default function ReceptionBoard({
                           <CheckCircle2 className="h-3.5 w-3.5" /> إنهاء
                         </Button>
                       )}
+                      {["confirmed", "arrived"].includes(row.status) && can("reception.check_in") && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive"
+                          onClick={() => setNoShowTarget(row)}
+                        >
+                          <UserX className="h-3.5 w-3.5" /> لم يحضر
+                        </Button>
+                      )}
                       {can("reception.transfer") && (
                         <Button size="sm" variant="ghost" onClick={() => setTransferTarget(row)}>
                           <ArrowLeftRight className="h-3.5 w-3.5" /> نقل
@@ -425,6 +448,15 @@ export default function ReceptionBoard({
         onClose={() => setTransferTarget(null)}
       />
       <PriorityDialog row={priorityTarget} onClose={() => setPriorityTarget(null)} />
+      <NoShowDialog
+        row={noShowTarget}
+        onClose={() => setNoShowTarget(null)}
+        onConfirm={(reason) => {
+          if (!noShowTarget) return;
+          transition.mutate({ id: noShowTarget.appointment_id, action: "no_show", reason });
+          setNoShowTarget(null);
+        }}
+      />
       <UndoDialog
         row={undoTarget}
         onClose={() => setUndoTarget(null)}
@@ -612,6 +644,49 @@ function PriorityDialog({ row, onClose }: { row: QueueRow | null; onClose: () =>
         <DialogFooter>
           <Button disabled={save.isPending || !reason.trim()} onClick={() => save.mutate()}>
             حفظ
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function NoShowDialog({
+  row,
+  onClose,
+  onConfirm,
+}: {
+  row: QueueRow | null;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  return (
+    <Dialog open={Boolean(row)} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>تسجيل عدم الحضور</DialogTitle>
+          <DialogDescription>
+            {row?.patient_name} — موعد {row ? new Date(row.scheduled_start).toLocaleString("ar-SA") : ""}.
+            <br />
+            السبب إلزامي وتفرضه القاعدة: «لم يحضر» بلا سبب يمنع أي متابعة لاحقة للمريض،
+            ولا يفرّق بين من لم يُتصل به ومن اعتذر.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label>سبب عدم الحضور *</Label>
+          <Textarea value={reason} onChange={(event) => setReason(event.target.value)} rows={2} />
+        </div>
+        <DialogFooter>
+          <Button
+            variant="destructive"
+            disabled={!reason.trim()}
+            onClick={() => {
+              onConfirm(reason.trim());
+              setReason("");
+            }}
+          >
+            تأكيد عدم الحضور
           </Button>
         </DialogFooter>
       </DialogContent>

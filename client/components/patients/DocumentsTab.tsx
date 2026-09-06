@@ -469,6 +469,13 @@ function SignDialog({
   const [relation, setRelation] = useState("");
   const [method, setMethod] = useState("on_screen");
   const [blank, setBlank] = useState(true);
+  /**
+   * صورة النسخة الموقَّعة على ورق. `app_sign_document` ترفض التوقيع بلا مسار
+   * صورة في **كلتا** الوسيلتين (`on_screen` و`paper_scan`)، فوسيلة «نسخة
+   * ممسوحة ضوئيًّا» بلا حقل رفع كانت بابًا مسدودًا: كل حفظ يُرفض برسالة
+   * «صورة التوقيع مطلوبة لهذه الوسيلة»، ولا سبيل لتسجيل موافقة ورقية.
+   */
+  const [scanFile, setScanFile] = useState<File | null>(null);
 
   const signatures = useQuery({
     queryKey: ["document-signatures", doc?.id],
@@ -492,6 +499,13 @@ function SignDialog({
         if (!blob) throw new Error("ارسم التوقيع أولًا");
         path = safePath(organization.id, patientId, "signature.png");
         const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, blob);
+        if (upErr) throw upErr;
+      } else if (method === "paper_scan") {
+        if (!scanFile) throw new Error("اختر صورة النسخة الموقَّعة");
+        if (scanFile.size > MAX_FILE_MB * 1024 * 1024)
+          throw new Error(`حجم الملف يتجاوز ${MAX_FILE_MB} ميجابايت`);
+        path = safePath(organization.id, patientId, scanFile.name);
+        const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, scanFile);
         if (upErr) throw upErr;
       }
       const { error } = await supabase.rpc("app_sign_document", {
@@ -595,10 +609,19 @@ function SignDialog({
 
           {method === "on_screen" && <SignaturePad onChange={setBlank} />}
           {method === "paper_scan" && (
-            <p className="text-xs text-muted-foreground">
-              ارفع النسخة الممسوحة كمستند أوّلًا، ثم وقّع عليها بوسيلة «نسخة
-              ممسوحة» — النظام يطلب أثرًا محفوظًا لكل توقيع.
-            </p>
+            <div className="flex flex-col gap-1.5">
+              <Label>صورة النسخة الموقَّعة *</Label>
+              <Input
+                type="file"
+                accept="image/*,application/pdf"
+                onChange={(e) => setScanFile(e.target.files?.[0] ?? null)}
+              />
+              <p className="text-xs text-muted-foreground">
+                {scanFile
+                  ? `${scanFile.name} — ${(scanFile.size / 1024 / 1024).toFixed(2)} م.ب`
+                  : `النظام يطلب أثرًا محفوظًا لكل توقيع — الحد الأقصى ${MAX_FILE_MB} ميجابايت`}
+              </p>
+            </div>
           )}
         </div>
 
@@ -608,6 +631,7 @@ function SignDialog({
             disabled={
               !name.trim() || sign.isPending ||
               (method === "on_screen" && blank) ||
+              (method === "paper_scan" && !scanFile) ||
               (role === "guardian" && !relation.trim())
             }
             onClick={() => sign.mutate()}
@@ -844,8 +868,17 @@ export default function DocumentsTab({ patientId }: { patientId: string }) {
       {generateOpen && (
         <GenerateDialog open={generateOpen} onOpenChange={setGenerateOpen} patientId={patientId} />
       )}
-      <SignDialog document={signing} onOpenChange={(o) => !o && setSigning(null)}
-                  patientId={patientId} />
+      {/**
+        * نافذة التوقيع تُركَّب عند الفتح فقط. بقاؤها مركَّبة كان يُبقي حالتها
+        * (اسم الموقِّع وصفته و`blank`) بين المستندات، بينما لوحة التوقيع داخل
+        * `DialogContent` تُفكَّك وتُعاد بيضاء عند كل إغلاق — فمستندٌ ثانٍ
+        * يُوقَّع بضغطة واحدة بصورة بيضاء وباسم موقِّع المستند السابق، في سجلٍّ
+        * لا يُعدَّل ولا يُحذف.
+        */}
+      {signing && (
+        <SignDialog document={signing} onOpenChange={(o) => !o && setSigning(null)}
+                    patientId={patientId} />
+      )}
       <ArchiveDialog document={archiving} onOpenChange={(o) => !o && setArchiving(null)}
                      patientId={patientId} />
     </div>

@@ -54,6 +54,65 @@ function useDoctorsList() {
   });
 }
 
+/** قيمة «بلا فاتورة» في قائمة الفواتير — Radix لا يقبل `value=""` كعنصر. */
+const NO_INVOICE = "none";
+
+/**
+ * فواتير التأمين القابلة للربط بمطالبة يدوية.
+ *
+ * المُرشِّحات ليست تجميلًا: `is_insurance_invoice` لأن الفاتورة النقدية لا حصّة
+ * تأمين فيها، و`is_temporary = false` لأن عرض السعر ليس مستحقًّا على أحد، و
+ * `status <> 'void'` لأن الملغاة لا يُطالَب بها. وتُستثنى الفواتير التي لها
+ * نموذج مطالبة أصلًا (يُنشئه المحفِّز `app_auto_create_insurance_claim_form`
+ * تلقائيًّا لكشفيات التأمين) حتى لا تُطالَب الشركة بنفس الفاتورة مرتين.
+ */
+function usePatientInsuranceInvoices(
+  organizationId: string | undefined,
+  patientId: string | undefined,
+) {
+  return useQuery({
+    queryKey: ["claim-linkable-invoices", organizationId, patientId],
+    enabled: Boolean(organizationId && patientId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sales_invoices")
+        .select("id, invoice_number, net_amount, insurance_share_amount, issued_at")
+        .eq("organization_id", organizationId)
+        .eq("patient_id", patientId)
+        .eq("is_insurance_invoice", true)
+        .eq("is_temporary", false)
+        .neq("status", "void")
+        .order("issued_at", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      const invoices = (data ?? []) as {
+        id: string;
+        invoice_number: number;
+        net_amount: number;
+        insurance_share_amount: number | null;
+        issued_at: string | null;
+      }[];
+      if (invoices.length === 0) return invoices;
+
+      const { data: claimed, error: claimedError } = await supabase
+        .from("insurance_claim_forms")
+        .select("sales_invoice_id")
+        .eq("organization_id", organizationId)
+        .in(
+          "sales_invoice_id",
+          invoices.map((invoice) => invoice.id),
+        );
+      if (claimedError) throw claimedError;
+      const taken = new Set(
+        (claimed ?? [])
+          .map((row) => (row as { sales_invoice_id: string | null }).sales_invoice_id)
+          .filter((id): id is string => Boolean(id)),
+      );
+      return invoices.filter((invoice) => !taken.has(invoice.id));
+    },
+  });
+}
+
 function usePatientMemberships(patientId: string | undefined) {
   return useQuery({
     queryKey: ["patient-memberships", patientId],
@@ -115,9 +174,37 @@ export default function NewClaimFormDialog({
   const insuranceSettings = useInsuranceSettings(organizationId);
   const [lines, setLines] = useState<ClaimLine[]>([]);
   const memberships = usePatientMemberships(patient?.id);
+  /**
+   * الفاتورة المرتبطة والمبلغ المُطالَب.
+   *
+   * **الخلل الذي يعالجه هذا الحقل**: الإدراج كان يكتب `form_data` و`status`
+   * فقط ولا يكتب `insurance_claim_forms.claimed_amount` (والعمود `NULL`able
+   * بلا قيمة افتراضية ولا محفِّز يملؤه). فتظهر المطالبة في «سجل المطالبات» وفي
+   * «معالجة المطالبات والتحصيل» بمبلغ مُطالَب صفر، ولا تدخل مُرشِّح «معتمَدة ولم
+   * تُحصَّل»، ولا تقبلها نافذة «تسجيل تسوية» (تشترط `unsettled_amount > 0`)،
+   * واعتمادها يكتب معتمَدًا فارغًا (`app_set_claim_form_status` يضع
+   * `approved_amount = coalesce(p_amount, claimed_amount)`). أي أن المال
+   * المطلوب من شركة التأمين لا يطالب به أحد ولا يظهر في «لم يُحصَّل بعد».
+   */
+  const [invoiceId, setInvoiceId] = useState(NO_INVOICE);
+  const [manualClaimedAmount, setManualClaimedAmount] = useState("");
+  const linkableInvoices = usePatientInsuranceInvoices(organizationId, patient?.id);
+  const linkedInvoice = (linkableInvoices.data ?? []).find((invoice) => invoice.id === invoiceId);
+  /**
+   * المبلغ المُطالَب حين تُختار فاتورة = `sales_invoices.insurance_share_amount`
+   * **كما حسبته القاعدة** (0052: الصافي ناقص حصّة المريض، مع سقف الوثيقة) —
+   * لا يُعاد حسابه هنا ولا يُجمع من البنود. سبب ذلك أن الشركة لا تستحقّ كامل
+   * صافي الفاتورة: نسبة التحمّل على المريض. والمطالبة بالكامل تُرفض أو تُخصَم.
+   */
+  const invoiceClaimedAmount = linkedInvoice ? Number(linkedInvoice.insurance_share_amount ?? 0) : 0;
+  /** مجموع بنود المطالبة — يُستعمل لتعبئة المبلغ اليدوي لا لحسابه ضمنًا. */
+  const linesTotal = lines.reduce((sum, line) => sum + (Number(line.amount) || 0), 0);
 
   useEffect(() => {
     setMembershipId("");
+    // الفاتورة تخصّ مريضًا بعينه: إبقاء الاختيار بعد تغيير المريض كان سيربط
+    // مطالبة مريض بفاتورة مريض آخر.
+    setInvoiceId(NO_INVOICE);
   }, [patient?.id]);
 
   /**
@@ -264,6 +351,27 @@ export default function NewClaimFormDialog({
           ? insuranceSettings.data?.default_dcaf_template
           : insuranceSettings.data?.default_ucaf_template;
       if (templateVersion) formData["__template"] = templateVersion;
+
+      /**
+       * المبلغ المُطالَب يُحسم **قبل** أي كتابة، ولا يُحفَظ فارغًا في أي حالة:
+       * من حصّة التأمين في الفاتورة المرتبطة إن اختيرت فاتورة، ومن إدخال
+       * المستخدم إن لم تُختَر. مطالبة بصفر مطالبةٌ لا تُحصَّل أبدًا.
+       */
+      let claimedAmount: number;
+      if (invoiceId !== NO_INVOICE) {
+        if (!linkedInvoice)
+          throw new Error("الفاتورة المختارة لم تُحمَّل — أعد اختيارها أو حدِّث الصفحة");
+        claimedAmount = Number(linkedInvoice.insurance_share_amount ?? 0);
+        if (!Number.isFinite(claimedAmount) || claimedAmount <= 0)
+          throw new Error(
+            "الفاتورة المختارة بلا حصّة تأمين — اختر فاتورة عليها حصّة شركة، أو أزل الربط وأدخل المبلغ يدويًّا",
+          );
+      } else {
+        claimedAmount = Number(manualClaimedAmount);
+        if (!Number.isFinite(claimedAmount) || claimedAmount <= 0)
+          throw new Error("أدخل المبلغ المُطالَب من شركة التأمين — لا تُحفَظ مطالبة بمبلغ صفر");
+      }
+
       const { data: form, error: formError } = await supabase
         .from("insurance_claim_forms")
         .insert({
@@ -272,6 +380,8 @@ export default function NewClaimFormDialog({
           patient_id: patient.id,
           doctor_id: doctorId || null,
           membership_id: membershipId || null,
+          sales_invoice_id: invoiceId === NO_INVOICE ? null : invoiceId,
+          claimed_amount: claimedAmount,
           form_data: formData,
           status: "draft",
         })
@@ -281,14 +391,20 @@ export default function NewClaimFormDialog({
 
       const validLines = lines.filter((line) => line.description.trim());
       if (validLines.length > 0) {
+        // `claimed_amount` على البند إلى جانب `amount`: شاشة بنود المطالبة
+        // ومنظورا التسوية يقرآن `ci.claimed_amount` لا `ci.amount`، فكان البند
+        // يظهر بمبلغ فارغ حتى وإن كان الرأس صحيحًا — كما يفعل مسار الزيارة
+        // `app_create_claim_from_visit` (يكتب العمودين معًا).
         const { error: linesError } = await supabase.from("insurance_claim_form_items").insert(
           validLines.map((line) => ({
+            organization_id: organizationId,
             form_id: form.id,
             item_id: line.itemId || null,
             service_code: line.serviceCode.trim() || null,
             description: line.description.trim(),
             qty: Number(line.qty) || 1,
             amount: Number(line.amount) || 0,
+            claimed_amount: Number(line.amount) || 0,
           })),
         );
         if (linesError) throw linesError;
@@ -300,6 +416,8 @@ export default function NewClaimFormDialog({
       setPatient(null);
       setDoctorId("");
       setMembershipId("");
+      setInvoiceId(NO_INVOICE);
+      setManualClaimedAmount("");
       // المفتاح يجب أن يبدأ بـ`free-`: منطق إعادة البناء (سطر 130) يميّز
       // الخانات الحرة بهذه البادئة، ومفتاح "1" كان يجعل السطر يبدو خانة
       // معرَّفة قديمة فيُسقَط. والأسوأ أن مصفوفة التعريفات لا تتغيّر مرجعيًا
@@ -391,6 +509,71 @@ export default function NewClaimFormDialog({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div className="flex flex-col gap-1.5 rounded-lg border p-3">
+            <Label>الفاتورة المرتبطة</Label>
+            <Select value={invoiceId} onValueChange={setInvoiceId} disabled={!patient}>
+              <SelectTrigger>
+                <SelectValue placeholder={patient ? "بلا فاتورة" : "اختر مريضًا أولًا"} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_INVOICE}>بلا فاتورة — مطالبة مستقلة</SelectItem>
+                {(linkableInvoices.data ?? []).map((invoice) => (
+                  <SelectItem key={invoice.id} value={invoice.id}>
+                    #{invoice.invoice_number} — حصّة الشركة{" "}
+                    {Number(invoice.insurance_share_amount ?? 0).toLocaleString("ar-SA")} ر.س (صافي{" "}
+                    {Number(invoice.net_amount ?? 0).toLocaleString("ar-SA")})
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {linkableInvoices.isError && (
+              <p className="text-xs text-destructive">
+                تعذّر تحميل فواتير التأمين:{" "}
+                {linkableInvoices.error instanceof Error
+                  ? linkableInvoices.error.message
+                  : "حدث خطأ غير متوقع"}
+              </p>
+            )}
+
+            <Label className="mt-2">المبلغ المُطالَب من الشركة *</Label>
+            {invoiceId !== NO_INVOICE ? (
+              <>
+                <Input value={invoiceClaimedAmount.toFixed(2)} readOnly dir="ltr" />
+                <p className="text-xs text-muted-foreground">
+                  من حصّة التأمين في الفاتورة كما حسبتها القاعدة (الصافي ناقص تحمّل المريض، مع سقف
+                  الوثيقة) — لا يُعاد حسابه هنا. قد يخالف مجموع البنود لأن البنود بمبالغها الكاملة
+                  وهذا ما تستحقّه الشركة وحدها.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    dir="ltr"
+                    value={manualClaimedAmount}
+                    onChange={(e) => setManualClaimedAmount(e.target.value)}
+                    placeholder="0.00"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={linesTotal <= 0}
+                    onClick={() => setManualClaimedAmount(String(linesTotal))}
+                  >
+                    = مجموع البنود
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  إلزاميّ. المطالبة التي تُحفَظ بصفر لا تظهر في «معتمَدة ولم تُحصَّل» ولا تقبل تسوية،
+                  فلا يُطالَب بمالها أحد. مجموع البنود الآن {linesTotal.toFixed(2)} ر.س.
+                </p>
+              </>
+            )}
           </div>
 
           <div className="rounded-lg border p-3">
@@ -486,7 +669,7 @@ export default function NewClaimFormDialog({
                     />
                     <Input
                       type="number"
-                      placeholder="المبلغ"
+                      placeholder="مبلغ البند"
                       value={line.amount}
                       onChange={(e) => updateLine(line.key, { amount: e.target.value })}
                       className="col-span-3"

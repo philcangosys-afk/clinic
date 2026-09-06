@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, CheckCircle2 } from "lucide-react";
+import { AlertTriangle, Banknote, CheckCircle2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -37,37 +37,56 @@ function nextMonthStart(month: string) {
   return new Date(Date.UTC(year, monthIndex, 1)).toISOString().slice(0, 10);
 }
 
-function currentMonthStart() {
-  const date = new Date();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  return `${date.getFullYear()}-${month}-01`;
+function money(value: unknown) {
+  return Number(value ?? 0).toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function useEmployeesWithPayroll(organizationId: string | undefined) {
+/** بند مسيّر معتمَد قابل للصرف — كما يعرضه منظور `v_payroll_items_payable`. */
+type PayableItem = {
+  item_id: string;
+  payroll_run_id: string;
+  period_month: string;
+  run_status: string;
+  employee_id: string;
+  employee_name: string | null;
+  job_number: string | null;
+  gross_salary: number | null;
+  deductions_total: number | null;
+  net_salary: number | null;
+  is_paid: boolean;
+  paid_at: string | null;
+};
+
+/**
+ * بنود الصرف الفرديّ تُقرأ من **المسيّرات المعتمدة** لا من جدول الموظفين.
+ *
+ * الخطأ الذي كان: الشاشة كانت تقرأ `employees.total_salary` (الإجمالي قبل أي
+ * استقطاع) وتعرض زرّ صرف لكل موظّف نشط، وتحكم على «صُرف هذا الشهر» بوجود سند
+ * صرف من نوع `salary` في الشهر. فكان الصرف الفرديّ:
+ *   1) يدفع الإجمالي بلا استقطاعات (غياب، تأخير، أقساط سلف، جزاءات)،
+ *   2) لا يشترط اعتماد مسيّر أصلًا — يُصرف راتبٌ لم يُحتسب،
+ *   3) والسند الملغى يُعيد الموظّف «غير مصروف» فيُصرف الشهر نفسه مرّتين.
+ *
+ * المنظور يُظهر بنود المسيّرات المعتمدة وحدها، بالصافي المحسوب، وبعمود
+ * `is_paid` المشتقّ من سند الصرف المختوم على البند نفسه — فلا يكذب على
+ * المستخدم ولا يسمح بصرفٍ ثانٍ.
+ */
+function usePayablePayrollItems(organizationId: string | undefined) {
   return useQuery({
-    queryKey: ["employees-payroll", organizationId],
+    queryKey: ["payroll-payable-items", organizationId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data: employees, error: employeesError } = await supabase
-        .from("employees")
-        .select("id, file_number, name_ar, basic_salary, housing_allowance, transportation_allowance, other_allowances, total_salary")
-        // المرشّح كان مفقودًا: سياسة app_is_member تسمح بكل منشأة ينتمي إليها
-        // المستخدم، فكان كشف الرواتب يخلط موظفي منشأتين لمن يعمل في اثنتين.
+      const { data, error } = await supabase
+        .from("v_payroll_items_payable")
+        .select(
+          "item_id, payroll_run_id, period_month, run_status, employee_id, employee_name, job_number, gross_salary, deductions_total, net_salary, is_paid, paid_at",
+        )
         .eq("organization_id", organizationId)
-        .eq("status", "active")
-        .order("file_number");
-      if (employeesError) throw employeesError;
-
-      const { data: vouchers, error: vouchersError } = await supabase
-        .from("financial_vouchers")
-        .select("employee_ref_id, amount, voucher_date")
-        .eq("organization_id", organizationId)
-        .eq("voucher_type", "salary")
-        .gte("voucher_date", currentMonthStart());
-      if (vouchersError) throw vouchersError;
-
-      const paidThisMonth = new Set((vouchers ?? []).map((voucher) => voucher.employee_ref_id));
-      return (employees ?? []).map((employee) => ({ ...employee, paidThisMonth: paidThisMonth.has(employee.id) }));
+        .order("period_month", { ascending: false })
+        .order("employee_name")
+        .limit(500);
+      if (error) throw error;
+      return (data as PayableItem[]) ?? [];
     },
   });
 }
@@ -80,7 +99,8 @@ function useSalaryHistory(organizationId: string | undefined, month: string) {
       const start = `${month}-01`;
       const { data, error } = await supabase
         .from("financial_vouchers")
-        .select("id, voucher_number, voucher_date, amount, employee_name, description")
+        // `is_void` يُقرأ ليُعرَض: السجلّ يحفظ السند الملغى ولا يُظهره كسندٍ سارٍ
+        .select("id, voucher_number, voucher_date, amount, employee_name, description, is_void, void_reason")
         .eq("organization_id", organizationId)
         .eq("voucher_type", "salary")
         .gte("voucher_date", start)
@@ -97,8 +117,8 @@ function useSalaryHistory(organizationId: string | undefined, month: string) {
 
 export default function Payroll() {
   const { organization } = useOrganizationAccess();
-  const [payTarget, setPayTarget] = useState<{ id: string; name_ar: string; total_salary: number } | null>(null);
-  const employees = useEmployeesWithPayroll(organization?.id);
+  const [payTarget, setPayTarget] = useState<PayableItem | null>(null);
+  const items = usePayablePayrollItems(organization?.id);
   const [historyMonth, setHistoryMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const history = useSalaryHistory(organization?.id, historyMonth);
 
@@ -123,71 +143,86 @@ export default function Payroll() {
 
       <Card>
         <CardHeader>
-          <CardTitle>الموظفون النشطون</CardTitle>
-          <CardDescription>صرف الراتب يُنشئ سند صرف (salary) مرتبطًا بالموظف تلقائيًا</CardDescription>
+          <CardTitle>بنود المسيّرات المعتمدة</CardTitle>
+          <CardDescription>
+            الصرف الفرديّ يكون على بندٍ في مسيّر معتمَد وبمبلغ <strong>الصافي</strong> المحسوب فيه —
+            لا مبلغ يُكتب باليد. البند المصروف يُختم بسنده فلا يُصرف مرّتين.
+          </CardDescription>
         </CardHeader>
         <CardContent>
-          {employees.isLoading && (
+          {items.isLoading && (
             <div className="flex flex-col gap-2">
               {Array.from({ length: 4 }).map((_, index) => (
                 <Skeleton key={index} className="h-12 w-full" />
               ))}
             </div>
           )}
-          {!employees.isLoading && (
+          {items.isError && (
+            <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                تعذّر قراءة بنود المسيّرات:{" "}
+                {items.error instanceof Error ? items.error.message : "خطأ غير متوقع"}
+              </span>
+            </div>
+          )}
+          {!items.isLoading && !items.isError && (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>#الملف</TableHead>
+                  <TableHead>الشهر</TableHead>
+                  <TableHead>#الوظيفي</TableHead>
                   <TableHead>الموظف</TableHead>
-                  <TableHead>إجمالي الراتب</TableHead>
-                  <TableHead>حالة هذا الشهر</TableHead>
+                  <TableHead>الإجمالي</TableHead>
+                  <TableHead>الاستقطاعات</TableHead>
+                  <TableHead>الصافي المستحقّ</TableHead>
+                  <TableHead>الحالة</TableHead>
                   <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(employees.data ?? []).map((employee) => (
-                  <TableRow key={employee.id}>
-                    <TableCell className="font-mono text-xs">#{employee.file_number}</TableCell>
-                    <TableCell className="font-medium">{employee.name_ar}</TableCell>
-                    <TableCell>
-                      <p>{Number(employee.total_salary).toLocaleString("ar-SA")} ر.س</p>
-                      <p className="text-xs text-muted-foreground">
-                        أساسي {Number(employee.basic_salary).toLocaleString("ar-SA")} + سكن{" "}
-                        {Number(employee.housing_allowance).toLocaleString("ar-SA")} + نقل{" "}
-                        {Number(employee.transportation_allowance).toLocaleString("ar-SA")} + أخرى{" "}
-                        {Number(employee.other_allowances).toLocaleString("ar-SA")}
-                      </p>
+                {(items.data ?? []).map((item) => (
+                  <TableRow key={item.item_id}>
+                    <TableCell className="font-mono text-xs">{String(item.period_month).slice(0, 7)}</TableCell>
+                    <TableCell className="font-mono text-xs">{item.job_number ?? "—"}</TableCell>
+                    <TableCell className="font-medium">{item.employee_name ?? "—"}</TableCell>
+                    <TableCell className="tabular-nums">{money(item.gross_salary)} ر.س</TableCell>
+                    <TableCell className="tabular-nums text-muted-foreground">
+                      {Number(item.deductions_total ?? 0) > 0 ? `− ${money(item.deductions_total)}` : "—"}
                     </TableCell>
+                    <TableCell className="tabular-nums font-semibold">{money(item.net_salary)} ر.س</TableCell>
                     <TableCell>
-                      {employee.paidThisMonth ? (
+                      {item.is_paid ? (
                         <Badge variant="success">
                           <CheckCircle2 className="h-3 w-3" />
-                          صُرف
+                          مصروف
+                          {item.paid_at && (
+                            <span className="ms-1 font-normal">
+                              {new Date(item.paid_at).toLocaleDateString("ar-SA")}
+                            </span>
+                          )}
                         </Badge>
                       ) : (
                         <Badge variant="secondary">لم يُصرف بعد</Badge>
                       )}
                     </TableCell>
                     <TableCell>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={employee.paidThisMonth}
-                        onClick={() =>
-                          setPayTarget({ id: employee.id, name_ar: employee.name_ar, total_salary: Number(employee.total_salary) })
-                        }
-                      >
-                        <Banknote className="h-3.5 w-3.5" />
-                        صرف الراتب
-                      </Button>
+                      {/* البند المصروف لا زرّ له أصلًا — والقاعدة ترفض الصرف الثاني حتى لو
+                          فُتحت الشاشة على بيانات قديمة. */}
+                      {!item.is_paid && (
+                        <Button size="sm" variant="outline" onClick={() => setPayTarget(item)}>
+                          <Banknote className="h-3.5 w-3.5" />
+                          صرف الصافي
+                        </Button>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}
-                {(employees.data ?? []).length === 0 && (
+                {(items.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
-                      لا يوجد موظفون نشطون.
+                    <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                      لا توجد بنود قابلة للصرف — احتسب مسيّر الشهر و<strong>اعتمده</strong> من تبويب
+                      «المسيّرات والقسائم»، ثم اصرف بنوده من هنا.
                     </TableCell>
                   </TableRow>
                 )}
@@ -201,7 +236,10 @@ export default function Payroll() {
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
             <CardTitle className="text-base">سجل صرف الرواتب</CardTitle>
-            <CardDescription>كل سندات صرف الراتب المسجّلة خلال الشهر المحدد</CardDescription>
+            <CardDescription>
+              كل سندات صرف الراتب المسجّلة خلال الشهر المحدد — الملغى يبقى في السجلّ
+              بشارة «ملغى» ولا يُحسب صرفًا
+            </CardDescription>
           </div>
           <Input type="month" value={historyMonth} onChange={(e) => setHistoryMonth(e.target.value)} className="w-40" />
         </CardHeader>
@@ -219,13 +257,20 @@ export default function Payroll() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(history.data ?? []).map((voucher) => (
-                  <TableRow key={voucher.id}>
+                {(history.data ?? []).map((voucher: any) => (
+                  <TableRow key={voucher.id} className={voucher.is_void ? "opacity-60" : undefined}>
                     <TableCell className="font-mono text-xs">#{voucher.voucher_number}</TableCell>
                     <TableCell className="text-xs">{voucher.voucher_date}</TableCell>
                     <TableCell className="font-medium">{voucher.employee_name ?? "—"}</TableCell>
-                    <TableCell>{Number(voucher.amount).toLocaleString("ar-SA")} ر.س</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{voucher.description ?? "—"}</TableCell>
+                    <TableCell className={voucher.is_void ? "line-through" : undefined}>
+                      {Number(voucher.amount).toLocaleString("ar-SA")} ر.س
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {voucher.is_void && (
+                        <Badge variant="destructive" className="me-1 text-[10px]">ملغى</Badge>
+                      )}
+                      {voucher.void_reason ?? voucher.description ?? "—"}
+                    </TableCell>
                   </TableRow>
                 ))}
                 {(history.data ?? []).length === 0 && (
@@ -241,49 +286,62 @@ export default function Payroll() {
         </CardContent>
       </Card>
 
-      <PaySalaryDialog target={payTarget} onOpenChange={() => setPayTarget(null)} organizationId={organization?.id} />
+      {/* المفتاح يُعيد بناء النافذة لكل بند: لا تبقى ملاحظةُ بندٍ سابق في الحقل. */}
+      {payTarget && (
+        <PayPayrollItemDialog
+          key={payTarget.item_id}
+          item={payTarget}
+          onOpenChange={() => setPayTarget(null)}
+        />
+      )}
         </TabsContent>
       </Tabs>
     </div>
   );
 }
 
-function PaySalaryDialog({
-  target,
+/**
+ * نافذة صرف بند مسيّر معتمَد.
+ *
+ * **لا مدخل للمبلغ**: المبلغ هو `net_salary` المحسوب في المسيّر، والدالّة
+ * `app_pay_payroll_item` هي التي تقرأه من القاعدة وتكتب السند وتختم البند —
+ * فلا يمكن للواجهة أن تُمرّر مبلغًا مخالفًا للمستحقّ. الحقل الوحيد هو بيان
+ * السند (اختياري).
+ *
+ * الصرف عملية متعددة الخطوات (فحص الاعتماد + فحص عدم الصرف المسبق + سند صرف +
+ * ختم البند + تدقيق) فلا تُكتب من الواجهة صفًّا صفًّا كما كانت: الإدراج المباشر
+ * في `financial_vouchers` كان يترك البند غير مختوم، فيُصرف مرّة أخرى.
+ */
+function PayPayrollItemDialog({
+  item,
   onOpenChange,
-  organizationId,
 }: {
-  target: { id: string; name_ar: string; total_salary: number } | null;
+  item: PayableItem;
   onOpenChange: () => void;
-  organizationId: string | undefined;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
 
-  // مزامنة قيمة الحقل مع الموظف المحدد حديثًا — الراتب الإجمالي كقيمة مبدئية قابلة للتعديل
-  useEffect(() => {
-    if (target) setAmount(String(target.total_salary));
-  }, [target?.id]);
-
-  const paySalary = useMutation({
+  const payItem = useMutation({
     mutationFn: async () => {
-      if (!organizationId || !target) throw new Error("بيانات غير مكتملة");
-      const { error } = await supabase.from("financial_vouchers").insert({
-        organization_id: organizationId,
-        voucher_type: "salary",
-        amount: Number(amount) || target.total_salary,
-        employee_ref_id: target.id,
-        employee_name: target.name_ar,
-        description: `راتب شهر ${currentMonthLabel()} — ${target.name_ar}`,
+      const { data, error } = await supabase.rpc("app_pay_payroll_item", {
+        p_item_id: item.item_id,
+        p_note: note.trim() || null,
       });
       if (error) throw error;
+      return data as string;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["employees-payroll"] });
+      queryClient.invalidateQueries({ queryKey: ["payroll-payable-items"] });
       queryClient.invalidateQueries({ queryKey: ["payroll-history"] });
-      toast({ title: "تم صرف الراتب" });
-      setAmount("");
+      // كشف المسيّرات وقسائمه يقرآن نفس البنود بمفاتيح أخرى.
+      queryClient.invalidateQueries({ queryKey: ["payroll-runs"] });
+      queryClient.invalidateQueries({ queryKey: ["payroll-register"] });
+      toast({
+        title: "تم صرف الراتب بالصافي",
+        description: `${item.employee_name ?? ""} — ${money(item.net_salary)} ر.س (شهر ${String(item.period_month).slice(0, 7)})`,
+      });
       onOpenChange();
     },
     onError: (error: unknown) =>
@@ -295,19 +353,46 @@ function PaySalaryDialog({
   });
 
   return (
-    <Dialog open={Boolean(target)} onOpenChange={(next) => !next && onOpenChange()}>
+    <Dialog open onOpenChange={(next) => !next && onOpenChange()}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>صرف راتب — {target?.name_ar}</DialogTitle>
-          <DialogDescription>يمكن تعديل المبلغ عن الإجمالي المحسوب إن وُجدت استقطاعات أو مكافآت</DialogDescription>
+          <DialogTitle>صرف راتب — {item.employee_name ?? "—"}</DialogTitle>
+          <DialogDescription>
+            بند مسيّر شهر {String(item.period_month).slice(0, 7)} — المبلغ المصروف هو الصافي المحسوب
+            في المسيّر المعتمَد، ولا يُعدَّل من هنا.
+          </DialogDescription>
         </DialogHeader>
-        <div className="flex flex-col gap-1.5">
-          <Label>المبلغ</Label>
-          <Input type="number" value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5 rounded-md border p-3 text-sm">
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">إجمالي الراتب</span>
+              <span className="tabular-nums">{money(item.gross_salary)} ر.س</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground">الاستقطاعات</span>
+              <span className="tabular-nums text-destructive">− {money(item.deductions_total)} ر.س</span>
+            </div>
+            <div className="flex items-center justify-between border-t pt-1.5 font-semibold">
+              <span>الصافي المستحقّ</span>
+              <span className="tabular-nums">{money(item.net_salary)} ر.س</span>
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>بيان السند (اختياري)</Label>
+            <Input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="يُترك فارغًا فيكتب النظام البيان تلقائيًا"
+              autoFocus
+            />
+          </div>
         </div>
         <DialogFooter>
-          <Button disabled={!amount || paySalary.isPending} onClick={() => paySalary.mutate()}>
-            {paySalary.isPending ? "جارٍ الصرف..." : "تأكيد الصرف"}
+          <Button variant="outline" onClick={onOpenChange}>
+            إلغاء
+          </Button>
+          <Button disabled={payItem.isPending} onClick={() => payItem.mutate()}>
+            {payItem.isPending ? "جارٍ الصرف..." : `تأكيد صرف ${money(item.net_salary)} ر.س`}
           </Button>
         </DialogFooter>
       </DialogContent>

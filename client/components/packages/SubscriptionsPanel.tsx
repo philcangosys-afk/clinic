@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import PatientPicker from "@/components/shared/PatientPicker";
 
 /**
  * إدارة اشتراكات المرضى — التجميد والاستئناف والإلغاء والاسترداد والتجديد
@@ -45,6 +46,30 @@ export default function SubscriptionsPanel() {
   const [cancelling, setCancelling] = useState<any | null>(null);
   const [cancelReason, setCancelReason] = useState("");
   const [withRefund, setWithRefund] = useState(true);
+  /**
+   * نوافذ بدل `window.prompt`.
+   *
+   * النقل كان يطلب **معرّف المريض (UUID)** كتابةً: لا موظّف استقبال يعرفه ولا
+   * شيء في الواجهة يعرضه، فكان الزرّ موجودًا وغير قابل للاستخدام — والباقات
+   * القابلة للنقل لا تُنقل. والسببان (التجميد وعكس الاستخدام) يُسجَّلان في سجل
+   * التدقيق فلا يصحّ إدخالهما بمُطالبة متصفّح لا تُحقّق ولا تُنمَّط ولا يمكن
+   * إلغاؤها بوضوح. الحالة تُصفَّر عند كل فتح حتى لا يُنقل مريضٌ اختير لصفٍّ آخر.
+   */
+  const [transferring, setTransferring] = useState<any | null>(null);
+  const [transferTo, setTransferTo] = useState<{ id: string; name_ar: string } | null>(null);
+  const [transferReason, setTransferReason] = useState("");
+  const [freezing, setFreezing] = useState<any | null>(null);
+  const [freezeReason, setFreezeReason] = useState("");
+
+  const openTransfer = (row: any) => {
+    setTransferTo(null);
+    setTransferReason("");
+    setTransferring(row);
+  };
+  const openFreeze = (row: any) => {
+    setFreezeReason("");
+    setFreezing(row);
+  };
 
   const rows = useQuery({
     queryKey: ["patient-subscriptions", organization?.id, status],
@@ -92,6 +117,8 @@ export default function SubscriptionsPanel() {
     },
     onSuccess: () => {
       invalidate();
+      setFreezing(null);
+      setFreezeReason("");
       toast({
         title: "جُمّد الاشتراك",
         description: "أيّام التجميد تُضاف إلى الصلاحية عند الاستئناف",
@@ -150,6 +177,9 @@ export default function SubscriptionsPanel() {
     },
     onSuccess: () => {
       invalidate();
+      setTransferring(null);
+      setTransferTo(null);
+      setTransferReason("");
       toast({ title: "نُقل الاشتراك" });
     },
     onError: fail("تعذر النقل"),
@@ -310,14 +340,7 @@ export default function SubscriptionsPanel() {
                             size="sm"
                             variant="ghost"
                             disabled={freeze.isPending}
-                            onClick={() => {
-                              const reason = window.prompt("سبب التجميد؟") ?? "";
-                              if (!reason.trim()) return;
-                              freeze.mutate({
-                                id: r.patient_package_id,
-                                reason: reason.trim(),
-                              });
-                            }}
+                            onClick={() => openFreeze(r)}
                           >
                             <PauseCircle className="h-3.5 w-3.5" />
                             تجميد
@@ -352,17 +375,7 @@ export default function SubscriptionsPanel() {
                               size="sm"
                               variant="ghost"
                               disabled={transfer.isPending}
-                              onClick={() => {
-                                const toId = window.prompt("معرّف المريض المنقول إليه؟") ?? "";
-                                if (!toId.trim()) return;
-                                const reason = window.prompt("سبب النقل؟") ?? "";
-                                if (!reason.trim()) return;
-                                transfer.mutate({
-                                  id: r.patient_package_id,
-                                  toPatientId: toId.trim(),
-                                  reason: reason.trim(),
-                                });
-                              }}
+                              onClick={() => openTransfer(r)}
                             >
                               <ArrowLeftRight className="h-3.5 w-3.5" />
                               نقل
@@ -400,6 +413,90 @@ export default function SubscriptionsPanel() {
       </Card>
 
       <UsageLogPanel />
+
+      <Dialog open={Boolean(freezing)} onOpenChange={(o) => !o && setFreezing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>تجميد اشتراك {freezing?.patient_name}</DialogTitle>
+            <DialogDescription>
+              أيّام التجميد تُضاف إلى صلاحية الاشتراك عند الاستئناف، والسبب يُسجَّل في سجل التدقيق.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-1.5">
+            <Label>سبب التجميد *</Label>
+            <Input
+              value={freezeReason}
+              onChange={(e) => setFreezeReason(e.target.value)}
+              placeholder="مثال: سفر المريض شهرًا"
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setFreezing(null)}>
+              إلغاء
+            </Button>
+            <Button
+              disabled={!freezeReason.trim() || freeze.isPending}
+              onClick={() =>
+                freeze.mutate({ id: freezing.patient_package_id, reason: freezeReason.trim() })
+              }
+            >
+              {freeze.isPending ? "جارٍ التنفيذ..." : "تأكيد التجميد"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(transferring)} onOpenChange={(o) => !o && setTransferring(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>نقل اشتراك {transferring?.patient_name}</DialogTitle>
+            <DialogDescription>
+              القاعدة تفحص قابلية الباقة للنقل وأهلية المنقول إليه (العمر والجنس والفرع) — فالنقل ليس
+              بابًا لتجاوز شروط الباقة.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>المريض المنقول إليه *</Label>
+              {transferTo ? (
+                <div className="flex items-center justify-between rounded-md border px-3 py-2">
+                  <span className="font-medium">{transferTo.name_ar}</span>
+                  <Button size="sm" variant="ghost" onClick={() => setTransferTo(null)}>
+                    تغيير
+                  </Button>
+                </div>
+              ) : (
+                <PatientPicker onSelect={(p) => setTransferTo({ id: p.id, name_ar: p.name_ar })} />
+              )}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>سبب النقل *</Label>
+              <Input
+                value={transferReason}
+                onChange={(e) => setTransferReason(e.target.value)}
+                placeholder="يُسجَّل في سجل التدقيق"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTransferring(null)}>
+              إلغاء
+            </Button>
+            <Button
+              disabled={!transferTo || !transferReason.trim() || transfer.isPending}
+              onClick={() =>
+                transfer.mutate({
+                  id: transferring.patient_package_id,
+                  toPatientId: transferTo!.id,
+                  reason: transferReason.trim(),
+                })
+              }
+            >
+              {transfer.isPending ? "جارٍ النقل..." : "تأكيد النقل"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={Boolean(cancelling)} onOpenChange={(o) => !o && setCancelling(null)}>
         <DialogContent>
@@ -466,6 +563,10 @@ function UsageLogPanel() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { can } = usePermissions();
+  // سبب العكس يُسجَّل في سجل التدقيق، فيُدخل في نافذة تُحقّق الإدخال وتُظهر
+  // خطأ القاعدة — لا في `window.prompt` بلا تحقّق ولا تنميط.
+  const [reversing, setReversing] = useState<any | null>(null);
+  const [reverseReason, setReverseReason] = useState("");
 
   const log = useQuery({
     queryKey: ["package-usage-log", organization?.id],
@@ -494,6 +595,8 @@ function UsageLogPanel() {
       queryClient.invalidateQueries({ queryKey: ["package-usage-log", organization?.id] });
       queryClient.invalidateQueries({ queryKey: ["patient-subscriptions", organization?.id] });
       queryClient.invalidateQueries({ queryKey: ["patient-package-balances", organization?.id] });
+      setReversing(null);
+      setReverseReason("");
       toast({ title: "عُكس الاستخدام", description: "رُدّ الرصيد وبقي أثر الخصم والردّ" });
     },
     onError: (error: unknown) =>
@@ -556,9 +659,8 @@ function UsageLogPanel() {
                         variant="ghost"
                         disabled={reverse.isPending}
                         onClick={() => {
-                          const reason = window.prompt("سبب عكس الاستخدام؟") ?? "";
-                          if (!reason.trim()) return;
-                          reverse.mutate({ id: u.usage_id, reason: reason.trim() });
+                          setReverseReason("");
+                          setReversing(u);
                         }}
                       >
                         عكس
@@ -577,6 +679,37 @@ function UsageLogPanel() {
             </TableBody>
           </Table>
         )}
+
+        <Dialog open={Boolean(reversing)} onOpenChange={(o) => !o && setReversing(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>عكس استخدام {reversing?.item_name}</DialogTitle>
+              <DialogDescription>
+                العكس يردّ الرصيد ويُبقي سطر الخصم شاهدًا — الخصم والردّ يظهران معًا. والسبب يُسجَّل في
+                سجل التدقيق.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="flex flex-col gap-1.5">
+              <Label>سبب العكس *</Label>
+              <Input
+                value={reverseReason}
+                onChange={(e) => setReverseReason(e.target.value)}
+                placeholder="مثال: أُلغيت الخدمة بعد تسجيلها"
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setReversing(null)}>
+                إلغاء
+              </Button>
+              <Button
+                disabled={!reverseReason.trim() || reverse.isPending}
+                onClick={() => reverse.mutate({ id: reversing.usage_id, reason: reverseReason.trim() })}
+              >
+                {reverse.isPending ? "جارٍ التنفيذ..." : "تأكيد العكس"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );

@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UserCog, ShieldCheck, Info } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
-import { moduleRegistry, settingsModule } from "@/lib/module-registry";
 import { isOrganizationAdmin } from "@/lib/organization-access";
 import type { OrganizationRole } from "@shared/api";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -147,16 +146,78 @@ const SOURCE_LABEL: Record<string, string> = {
   none: "غير ممنوحة",
 };
 
-/** كل صلاحيات العرض المتاحة، مشتقّة من سجل الموديولات نفسه. */
-function useAvailablePermissions() {
-  return useMemo(() => {
-    const seen = new Map<string, string>();
-    [...moduleRegistry, settingsModule].forEach((item) => {
-      if (!seen.has(item.requiredPermission)) seen.set(item.requiredPermission, item.label);
-    });
-    return [...seen].map(([key, label]) => ({ key, label }));
-  }, []);
+/**
+ * الصلاحيات المتاحة تُقرأ من كتالوج القاعدة لا من سجل الموديولات.
+ *
+ * كانت القائمة تُشتقّ من `requiredPermission` في `module-registry.ts`، وهي
+ * بصيغة `<الميزة>.view` — فنتج عن ذلك خطآن: مفاتيح لا وجود لها في
+ * `permission_catalog` فترفضها `app_set_member_permission` برسالة «صلاحية غير
+ * معروفة»، وغياب كل الصلاحيات التنفيذية (منح `integrations.manage` أو
+ * `privacy.retention` أو `users.permissions` لم يكن ممكنًا من أي شاشة).
+ * الكتالوج هو المرجع الوحيد لما يمكن منحه أو منعه، فمنه تُبنى النافذة.
+ */
+type CatalogRow = {
+  permission_key: string;
+  name_ar: string;
+  module_key: string;
+  description_ar: string | null;
+  display_order: number | null;
+};
+
+function usePermissionCatalog() {
+  return useQuery({
+    queryKey: ["permission-catalog"],
+    // الكتالوج ثابت لا يتغيّر بتغيّر المستخدم المعروض، فيُجلب مرة ويُعاد استعماله.
+    staleTime: 10 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("permission_catalog")
+        .select("permission_key, name_ar, module_key, description_ar, display_order")
+        .order("module_key")
+        .order("display_order");
+      if (error) throw error;
+      return (data ?? []) as CatalogRow[];
+    },
+  });
 }
+
+/** عناوين عربية لنطاقات الكتالوج (`module_key`) — المفتاح الخام يُعرض إن استُجدّ نطاق. */
+const MODULE_LABELS: Record<string, string> = {
+  screens: "فتح الشاشات",
+  users: "المستخدمون والصلاحيات",
+  security: "الخصوصية وسجل التدقيق",
+  settings: "الإعدادات والسياسات",
+  structure: "الفروع والأقسام",
+  patients: "ملفات المرضى",
+  reception: "الاستقبال والانتظار",
+  appointments: "المواعيد",
+  visits: "الزيارات",
+  vitals: "العلامات الحيوية",
+  doctor_workspace: "مساحة عمل الطبيب",
+  doctors: "الأطباء",
+  exam_templates: "قوالب الفحص",
+  laboratory: "المختبر",
+  radiology: "الأشعة والتصوير",
+  radiology_console: "محطة الأشعة",
+  pharmacy: "الصيدلية وصرف الأدوية",
+  inventory: "المخزون",
+  purchasing: "المشتريات والموردون",
+  catalog: "الأصناف والخدمات",
+  billing: "الفوترة والمدفوعات",
+  cashier: "الصندوق",
+  accounting: "المحاسبة",
+  insurance: "التأمين والمطالبات",
+  documents: "المستندات",
+  hr: "الموارد البشرية",
+  quality: "الجودة والحوادث",
+  assets: "الأصول والصيانة",
+  messaging: "الرسائل",
+  notifications: "التنبيهات",
+  integrations: "التكاملات",
+  portal: "بوابة المريض",
+  reports: "التقارير",
+  analytics: "التحليلات",
+};
 
 function PermissionsDialog({
   member,
@@ -171,13 +232,40 @@ function PermissionsDialog({
   const { toast } = useToast();
   const permissions = usePermissions(organizationId, member?.user_id);
   const effective = useEffectivePermissions(organizationId, member?.user_id);
-  const available = useAvailablePermissions();
+  const catalog = usePermissionCatalog();
+  const [term, setTerm] = useState("");
+  const [openModules, setOpenModules] = useState<Set<string>>(new Set());
   const effectiveMap = new Map(
     (effective.data ?? []).map((row: any) => [row.permission_key, row]),
   );
 
   const isAdmin = member ? isOrganizationAdmin(member.role_key) : false;
   const overrides = new Map((permissions.data ?? []).map((row) => [row.permission_key, row.granted]));
+
+  const groups = useMemo(() => {
+    const query = term.trim().toLowerCase();
+    const matches = (row: CatalogRow) =>
+      !query ||
+      row.name_ar.toLowerCase().includes(query) ||
+      row.permission_key.toLowerCase().includes(query) ||
+      (MODULE_LABELS[row.module_key] ?? row.module_key).toLowerCase().includes(query);
+
+    const byModule = new Map<string, CatalogRow[]>();
+    (catalog.data ?? []).filter(matches).forEach((row) => {
+      const list = byModule.get(row.module_key);
+      if (list) list.push(row);
+      else byModule.set(row.module_key, [row]);
+    });
+    return [...byModule]
+      .map(([key, rows]) => ({ key, label: MODULE_LABELS[key] ?? key, rows }))
+      // «فتح الشاشات» أولًا لأنه أكثر ما يُمنح، والبقية بترتيب أسمائها العربية.
+      .sort((a, b) =>
+        a.key === "screens" ? -1 : b.key === "screens" ? 1 : a.label.localeCompare(b.label, "ar"),
+      );
+  }, [catalog.data, term]);
+
+  // البحث يفتح المجموعات المطابقة: طيُّها مع بحثٍ نشط يُظهر عناوين بلا نتائج.
+  const searching = term.trim().length > 0;
 
   const setPermission = useMutation({
     mutationFn: async ({ key, granted }: { key: string; granted: boolean | null }) => {
@@ -219,11 +307,12 @@ function PermissionsDialog({
 
   return (
     <Dialog open={Boolean(member)} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[85vh] max-w-lg overflow-y-auto">
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>صلاحيات: {member?.display_name}</DialogTitle>
           <DialogDescription>
-            الصفة تمنح صلاحيات افتراضية — هنا تضيف استثناءات فوقها لهذا المستخدم وحده
+            كل صلاحيات النظام كما هي مسجَّلة في القاعدة، مجموعة بنطاقها. الصفة تمنح صلاحيات
+            افتراضية — وهنا تضيف استثناءات فوقها لهذا المستخدم وحده.
           </DialogDescription>
         </DialogHeader>
 
@@ -236,59 +325,123 @@ function PermissionsDialog({
           </div>
         )}
 
-        {permissions.isLoading && <Skeleton className="h-40 w-full" />}
-        {!permissions.isLoading && (
-          <div className="flex flex-col gap-1">
-            {available.map((permission) => {
-              const override = overrides.get(permission.key);
-              const state = override === undefined ? "default" : override ? "granted" : "denied";
+        <Input
+          value={term}
+          onChange={(event) => setTerm(event.target.value)}
+          placeholder="ابحث في الصلاحيات بالاسم أو المفتاح أو النطاق..."
+        />
+
+        {catalog.isError && (
+          <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
+            تعذّر قراءة كتالوج الصلاحيات:{" "}
+            {catalog.error instanceof Error ? catalog.error.message : "خطأ غير متوقع"}
+          </div>
+        )}
+
+        {(permissions.isLoading || catalog.isLoading) && <Skeleton className="h-40 w-full" />}
+        {!permissions.isLoading && !catalog.isLoading && (
+          <div className="flex flex-col gap-2">
+            {groups.map((group) => {
+              const expanded = searching || openModules.has(group.key);
+              // عدد الاستثناءات المضبوطة داخل النطاق يظهر على العنوان المطويّ،
+              // وإلا لبقيت الاستثناءات مخفيّة داخل مجموعة مطويّة بلا أي أثر ظاهر.
+              const overrideCount = group.rows.filter((row) => overrides.has(row.permission_key)).length;
               return (
-                <div
-                  key={permission.key}
-                  className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2"
-                >
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-medium">{permission.label}</p>
-                    <p className="truncate font-mono text-[10px] text-muted-foreground">
-                      {permission.key}
-                    </p>
-                    {effectiveMap.get(permission.key) && (
-                      <p className="text-[10px]">
-                        <span className={
-                          (effectiveMap.get(permission.key) as any).is_allowed
-                            ? "text-emerald-600" : "text-muted-foreground"}>
-                          {(effectiveMap.get(permission.key) as any).is_allowed
-                            ? "الوضع الفعلي: مسموح" : "الوضع الفعلي: ممنوع"}
-                        </span>
-                        <span className="text-muted-foreground">
-                          {" · "}
-                          {SOURCE_LABEL[(effectiveMap.get(permission.key) as any).source]
-                            ?? (effectiveMap.get(permission.key) as any).source}
-                        </span>
-                      </p>
-                    )}
-                  </div>
-                  <Select
-                    value={state}
-                    onValueChange={(value) =>
-                      setPermission.mutate({
-                        key: permission.key,
-                        granted: value === "default" ? null : value === "granted",
+                <div key={group.key} className="rounded-lg border">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setOpenModules((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(group.key)) next.delete(group.key);
+                        else next.add(group.key);
+                        return next;
                       })
                     }
+                    className="flex w-full items-center justify-between gap-2 px-3 py-2 text-start"
                   >
-                    <SelectTrigger className="w-36 shrink-0">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="default">حسب الصفة</SelectItem>
-                      <SelectItem value="granted">مسموح</SelectItem>
-                      <SelectItem value="denied">ممنوع</SelectItem>
-                    </SelectContent>
-                  </Select>
+                    <span className="text-sm font-semibold">{group.label}</span>
+                    <span className="flex items-center gap-2">
+                      {overrideCount > 0 && (
+                        <Badge variant="secondary" className="text-[10px]">
+                          {overrideCount} استثناء
+                        </Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground">{group.rows.length}</span>
+                    </span>
+                  </button>
+                  {expanded && (
+                    <div className="flex flex-col gap-1 border-t p-2">
+                      {group.rows.map((permission) => {
+                        const override = overrides.get(permission.permission_key);
+                        const state = override === undefined ? "default" : override ? "granted" : "denied";
+                        const effectiveRow = effectiveMap.get(permission.permission_key) as any;
+                        return (
+                          <div
+                            key={permission.permission_key}
+                            className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2"
+                          >
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-medium">{permission.name_ar}</p>
+                              <p className="truncate font-mono text-[10px] text-muted-foreground">
+                                {permission.permission_key}
+                              </p>
+                              {permission.description_ar && (
+                                <p className="truncate text-[10px] text-muted-foreground">
+                                  {permission.description_ar}
+                                </p>
+                              )}
+                              {effectiveRow && (
+                                <p className="text-[10px]">
+                                  <span
+                                    className={
+                                      effectiveRow.is_allowed
+                                        ? "text-emerald-600"
+                                        : "text-muted-foreground"
+                                    }
+                                  >
+                                    {effectiveRow.is_allowed
+                                      ? "الوضع الفعلي: مسموح"
+                                      : "الوضع الفعلي: ممنوع"}
+                                  </span>
+                                  <span className="text-muted-foreground">
+                                    {" · "}
+                                    {SOURCE_LABEL[effectiveRow.source] ?? effectiveRow.source}
+                                  </span>
+                                </p>
+                              )}
+                            </div>
+                            <Select
+                              value={state}
+                              onValueChange={(value) =>
+                                setPermission.mutate({
+                                  key: permission.permission_key,
+                                  granted: value === "default" ? null : value === "granted",
+                                })
+                              }
+                            >
+                              <SelectTrigger className="w-36 shrink-0">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="default">حسب الصفة</SelectItem>
+                                <SelectItem value="granted">مسموح</SelectItem>
+                                <SelectItem value="denied">ممنوع</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               );
             })}
+            {groups.length === 0 && (
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                لا صلاحية مطابقة لبحثك.
+              </p>
+            )}
           </div>
         )}
 

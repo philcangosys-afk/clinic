@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock, LogIn, LogOut, UserCheck } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { usePermissions } from "@/lib/permissions";
 import type { AttendanceStatus, TodayAttendanceView } from "@/lib/database.types";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -21,12 +22,21 @@ const STATUS_LABELS: Record<AttendanceStatus, string> = {
   on_leave: "في إجازة",
   holiday: "عطلة",
 };
-const STATUS_BADGE: Record<AttendanceStatus, "success" | "default" | "destructive" | "secondary" | "outline"> = {
+/**
+ * شارة لكل حالة، ولا شارتين متطابقتين.
+ *
+ * كانت «في إجازة» و«عطلة» بشارة `secondary` الرمادية نفسها، وهي قريبة بصريًّا
+ * من «لم يسجّل» — فيوم إجازةٍ معتمدة (يكتبه اعتماد الإجازة في سجلّ الحضور) كان
+ * يُقرأ في الشاشة كأنه يومٌ لم يُسجَّل فيه شيء، فيعيد المستخدم تحديده «غائبًا».
+ * «في إجازة» صارت شارة بارزة مستقلّة، و«متأخر» أخذت العنبريّ المطابق لبطاقة
+ * الملخّص أعلى الشاشة.
+ */
+const STATUS_BADGE: Record<AttendanceStatus, "success" | "default" | "destructive" | "secondary" | "outline" | "warning"> = {
   pending: "outline",
   present: "success",
-  late: "default",
+  late: "warning",
   absent: "destructive",
-  on_leave: "secondary",
+  on_leave: "default",
   holiday: "secondary",
 };
 
@@ -78,6 +88,7 @@ export default function Attendance() {
   const today = useTodayAttendance(organization?.id);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { can } = usePermissions();
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
   const history = useMonthHistory(organization?.id, month);
 
@@ -186,12 +197,50 @@ export default function Attendance() {
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
 
+  const setOvertime = useMutation({
+    /**
+     * مدخل دقائق العمل الإضافيّ.
+     *
+     * `overtime_minutes` لم يكن يُكتب من أي موضع في الواجهة ولا يحسبه أي
+     * مُحفِّز، فبطاقة «عمل إضافيّ بانتظار الاعتماد» في شاشة الرواتب تشترط
+     * `overtime_minutes > 0` فلا تُطابق شيئًا أبدًا: يظلّ بند الإضافيّ في
+     * القسيمة صفرًا ولا يجد المستخدم مكانًا يُدخل فيه الدقائق. الإدخال هنا على
+     * صفّ الحضور القائم لأن الإضافيّ صفةُ يومٍ مسجَّل — ولا يُنشئ صفًّا (الصفّ
+     * الجديد بلا توقيت حضور يصير «غائبًا» بالمُحفِّز).
+     */
+    mutationFn: async ({ id, minutes }: { id: string; minutes: number }) => {
+      if (!Number.isFinite(minutes) || minutes < 0) throw new Error("دقائق العمل الإضافيّ رقم غير سالب");
+      const { data: affectedRows, error } = await supabase
+        .from("attendance_records")
+        .update({ overtime_minutes: Math.round(minutes) })
+        .eq("id", id)
+        // المعتمَد لا يُعدَّل من هنا: تعديله بعد الاعتماد يغيّر مستحقًّا أُقرّ.
+        .is("overtime_approved_by", null)
+        .select("id");
+      if (error) throw error;
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — الإضافيّ معتمَد أو راجع صلاحيتك");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["attendance-history", organization?.id] });
+      queryClient.invalidateQueries({ queryKey: ["today-attendance", organization?.id] });
+      // بطاقة الاعتماد في شاشة الرواتب تقرأ نفس الجدول بمفتاح آخر.
+      queryClient.invalidateQueries({ queryKey: ["pending-overtime"] });
+      queryClient.invalidateQueries({ queryKey: ["attendance-summary"] });
+      toast({ title: "سُجّلت دقائق العمل الإضافيّ", description: "لا تُحتسب في الراتب قبل اعتمادها" });
+    },
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
+  });
+
   const summary = useMemo(() => {
     const rows = today.data ?? [];
     return {
       present: rows.filter((r) => r.status === "present").length,
       late: rows.filter((r) => r.status === "late").length,
       absent: rows.filter((r) => r.status === "absent").length,
+      // «في إجازة» لم تكن معدودة في الملخّص أصلًا، فكان مجموع البطاقات أقلّ من
+      // عدد الموظفين بلا تفسير ظاهر — ومن في إجازة معتمدة يبدو غائبًا عن الكشف.
+      onLeave: rows.filter((r) => r.status === "on_leave").length,
       pending: rows.filter((r) => r.status === "pending").length,
     };
   }, [today.data]);
@@ -202,10 +251,13 @@ export default function Attendance() {
         <h1 className="flex items-center gap-2 text-2xl font-bold">
           <Clock className="h-6 w-6" /> الحضور والانصراف
         </h1>
-        <p className="text-sm text-muted-foreground">تسجيل حضور اليوم لكل الموظفين — الحالة والتأخير تُحسب تلقائيًا من قاعدة البيانات مقارنةً بالمناوبة المُسندة</p>
+        <p className="text-sm text-muted-foreground">
+          تسجيل حضور اليوم لكل الموظفين — الحالة والتأخير تُحسب تلقائيًا من قاعدة البيانات مقارنةً
+          بالمناوبة المُسندة، وأيام الإجازات المعتمدة تظهر هنا «في إجازة» من تلقاء نفسها
+        </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <Card>
           <CardContent className="py-4 text-center">
             <p className="text-2xl font-bold text-emerald-600">{summary.present}</p>
@@ -222,6 +274,12 @@ export default function Attendance() {
           <CardContent className="py-4 text-center">
             <p className="text-2xl font-bold text-red-600">{summary.absent}</p>
             <p className="text-xs text-muted-foreground">غائب</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="py-4 text-center">
+            <p className="text-2xl font-bold text-primary">{summary.onLeave}</p>
+            <p className="text-xs text-muted-foreground">في إجازة</p>
           </CardContent>
         </Card>
         <Card>
@@ -301,7 +359,13 @@ export default function Attendance() {
                             <LogOut className="ms-1 h-3.5 w-3.5" /> انصراف
                           </Button>
                         )}
-                        {!row.check_in_at && (
+                        {/*
+                          يوم الإجازة المعتمدة لا يُعاد تحديد حالته من هنا: صفّه كتبه اعتماد
+                          الإجازة، وتحديده «غائبًا» بـ`upsert` كان يمحو أثر إجازةٍ معتمدة
+                          فيُخصَم من راتب موظّفٍ في إجازة نظامية. تُلغى الإجازة من شاشة
+                          الإجازات لا من هنا.
+                        */}
+                        {!row.check_in_at && row.status !== "on_leave" && (
                           <Select onValueChange={(v) => markStatus.mutate({ employeeId: row.employee_id, status: v as AttendanceStatus })}>
                             <SelectTrigger className="h-8 w-28 text-xs">
                               <SelectValue placeholder="تحديد حالة" />
@@ -312,6 +376,11 @@ export default function Attendance() {
                               <SelectItem value="holiday">عطلة</SelectItem>
                             </SelectContent>
                           </Select>
+                        )}
+                        {row.status === "on_leave" && (
+                          <span className="text-[11px] text-muted-foreground">
+                            إجازة معتمدة — تُلغى من شاشة الإجازات
+                          </span>
                         )}
                       </div>
                     </TableCell>
@@ -334,7 +403,10 @@ export default function Attendance() {
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
             <CardTitle className="text-base">سجل الحضور الشهري</CardTitle>
-            <CardDescription>كل السجلات المحفوظة خلال الشهر المحدد</CardDescription>
+            <CardDescription>
+              كل السجلات المحفوظة خلال الشهر المحدد — دقائق العمل الإضافيّ تُدخَل هنا على يوم
+              مسجَّل، ولا تُحتسب في الراتب قبل اعتمادها في «الرواتب ← الحضور والإضافيّ»
+            </CardDescription>
           </div>
           <Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="w-40" />
         </CardHeader>
@@ -349,6 +421,7 @@ export default function Attendance() {
                 <TableHead>الحالة</TableHead>
                 <TableHead>التأخير</TableHead>
                 <TableHead>الانصراف المبكر</TableHead>
+                <TableHead>إضافيّ (د)</TableHead>
                 <TableHead>ملاحظة</TableHead>
               </TableRow>
             </TableHeader>
@@ -364,12 +437,36 @@ export default function Attendance() {
                   </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{r.late_minutes > 0 ? `${r.late_minutes} د` : "—"}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{r.early_leave_minutes > 0 ? `${r.early_leave_minutes} د` : "—"}</TableCell>
+                  <TableCell className="text-xs">
+                    {r.overtime_approved_by ? (
+                      <span className="flex items-center gap-1 text-muted-foreground">
+                        {r.overtime_minutes}
+                        <Badge variant="success" className="text-[10px]">معتمَد</Badge>
+                      </span>
+                    ) : can("hr.attendance") ? (
+                      <Input
+                        key={`${r.id}-${r.overtime_minutes}`}
+                        type="number"
+                        min={0}
+                        defaultValue={String(r.overtime_minutes ?? 0)}
+                        className="h-8 w-20 text-xs"
+                        onBlur={(e) => {
+                          const next = Number(e.target.value);
+                          if (next !== Number(r.overtime_minutes ?? 0)) {
+                            setOvertime.mutate({ id: r.id, minutes: next });
+                          }
+                        }}
+                      />
+                    ) : (
+                      <span className="text-muted-foreground">{r.overtime_minutes ?? 0}</span>
+                    )}
+                  </TableCell>
                   <TableCell className="text-xs text-muted-foreground">{r.note ?? "—"}</TableCell>
                 </TableRow>
               ))}
               {(history.data ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={9} className="py-6 text-center text-sm text-muted-foreground">
                     لا توجد سجلات لهذا الشهر.
                   </TableCell>
                 </TableRow>

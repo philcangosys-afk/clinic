@@ -58,7 +58,14 @@ const KINDS: { key: RequestKind; label: string; icon: typeof Activity; hint: str
  * `radiology_orders`، وموعد المتابعة في `appointment_requests` — ولا يُنشئ
  * «صندوق رسائل» موازيًا لما هو قائم.
  */
-export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | null }) {
+export default function DoctorRequestPanel({
+  doctorId,
+  resolvingDoctor = false,
+}: {
+  doctorId?: string | null;
+  /** ما زال تحديد الطبيب جاريًا — لا يُعلن التعذّر قبل انتهائه. */
+  resolvingDoctor?: boolean;
+}) {
   const { organization, branch } = useOrganizationAccess();
   const queryClient = useQueryClient();
 
@@ -129,6 +136,15 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
 
   const canSend = useMemo(() => {
     if (!organization?.id || !patientId) return false;
+    /**
+     * بلا طبيبٍ طالب لا يُرسَل طلب.
+     *
+     * العمود `ordering_doctor_id` يقبل `NULL` والدوالّ تفحص الطبيب فقط إن
+     * وُجد — فكان الطلب يُسجَّل بلا صاحب: لا يعرف المختصّ من يسأل، ولا تعود
+     * النتيجة إلى طالبها. والرسالة أعلى النموذج تَعِد بأن «كل طلب يُسجَّل
+     * باسمك»، فالمنع هنا أصدق من إرسالٍ مجهول.
+     */
+    if (!doctorId) return false;
     if (kind === "radiology") return examIds.length > 0;
     if (kind === "lab") return testIds.length > 0;
     if (kind === "vitals") return vitalsKind === "general" || vitalsPicked.length > 0;
@@ -136,7 +152,7 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
     if (kind === "collect_payment") return Number(amount) > 0;
     if (kind === "note") return body.trim().length > 0;
     return true;
-  }, [organization?.id, patientId, kind, examIds, testIds, followDate, amount, body,
+  }, [organization?.id, patientId, doctorId, kind, examIds, testIds, followDate, amount, body,
       vitalsKind, vitalsPicked.length]);
 
   const reset = () => {
@@ -154,11 +170,12 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
   const send = useMutation({
     mutationFn: async () => {
       const org = organization!.id;
+      if (!doctorId) throw new Error("لم يُتعرَّف على الطبيب الطالب — لا يُسجَّل الطلب بلا طبيب");
       if (kind === "radiology") {
         const { error } = await supabase.rpc("app_create_radiology_order", {
           p_organization_id: org,
           p_patient_id: patientId,
-          p_doctor_id: doctorId ?? null,
+          p_doctor_id: doctorId,
           p_exam_ids: examIds,
           p_priority: priority,
           p_clinical_indication: indication.trim() || null,
@@ -175,10 +192,16 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
         const { error } = await supabase.rpc("app_create_lab_order", {
           p_organization_id: org,
           p_patient_id: patientId,
-          p_doctor_id: doctorId ?? null,
+          p_doctor_id: doctorId,
           p_test_ids: testIds,
           p_priority: priority,
           p_notes: instructions.trim() || null,
+          // الفرع كان يُغفَل هنا وحده: `lab_orders.branch_id` يقبل `NULL` ولا
+          // مُشغِّل يستنبطه، فطلب التحليل ينتهي بلا انتماء لفرع — لا في تقارير
+          // الفرع ولا في إخطاراته — بينما طلب الأشعة من النموذج نفسه يُربَط.
+          p_visit_id: null,
+          p_branch_id: branch?.id ?? null,
+          p_clinic_id: null,
         });
         if (error) throw error;
         return;
@@ -187,7 +210,7 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
         const { error } = await supabase.rpc("app_request_vital_signs", {
           p_organization_id: org,
           p_patient_id: patientId,
-          p_doctor_id: doctorId ?? null,
+          p_doctor_id: doctorId,
           p_request_kind: vitalsKind,
           p_measures: vitalsKind === "custom" ? vitalsPicked : null,
           p_priority: priority === "routine" ? "routine" : "urgent",
@@ -202,7 +225,7 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
         const { error } = await supabase.rpc("app_doctor_request_followup", {
           p_organization_id: org,
           p_patient_id: patientId,
-          p_doctor_id: doctorId ?? null,
+          p_doctor_id: doctorId,
           p_preferred_date: followDate,
           p_reason: body.trim() || null,
           p_preferred_period: period,
@@ -216,7 +239,7 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
         p_organization_id: org,
         p_request_type: kind,
         p_patient_id: patientId,
-        p_doctor_id: doctorId ?? null,
+        p_doctor_id: doctorId,
         p_body: body.trim() || null,
         p_amount: kind === "collect_payment" ? Number(amount) : null,
         p_priority: priority === "stat" ? "urgent" : priority === "urgent" ? "urgent" : "routine",
@@ -254,6 +277,12 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        {!doctorId && !resolvingDoctor && (
+          <p className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs">
+            لم يُتعرَّف على طبيبٍ مرتبطٍ بحسابك، والطلب لا يُسجَّل بلا طبيب طالب —
+            يُربَط الحساب بملفّ الطبيب من شاشة «الأطباء».
+          </p>
+        )}
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
           {KINDS.map((k) => {
             const Icon = k.icon;
@@ -564,21 +593,36 @@ export default function DoctorRequestPanel({ doctorId }: { doctorId?: string | n
 }
 
 /** صندوق الطبيب: ما وصله فعلًا — صورٌ موجودة وقياساتٌ مسجَّلة، لا حالات مُعلنة. */
-export function DoctorInbox({ doctorId }: { doctorId?: string | null }) {
+export function DoctorInbox({
+  doctorId,
+  resolvingDoctor = false,
+}: {
+  doctorId?: string | null;
+  resolvingDoctor?: boolean;
+}) {
   const { organization } = useOrganizationAccess();
+
+  /**
+   * الصندوق شخصيّ: بلا طبيبٍ محدَّد لا يُستعلم.
+   *
+   * الترشيح كان شرطيًّا (`if (doctorId) …`) فيسقط كليًّا حين تتعذّر معرفة
+   * الطبيب — فيرى الطبيب نتائج ومؤشّرات **مرضى كل الأطباء** ويظنّها مرضاه.
+   * سقوط المرشِّح في شاشة سريرية اطّلاعٌ على ملفّات لا علاقة له بها، لا مجرد
+   * قائمة أطول.
+   */
+  const scoped = Boolean(organization?.id && doctorId);
 
   const vitals = useQuery({
     queryKey: ["doctor-vitals-inbox", organization?.id, doctorId],
-    enabled: Boolean(organization?.id),
+    enabled: scoped,
     queryFn: async () => {
-      let q = supabase
+      const { data, error } = await supabase
         .from("v_doctor_vitals_inbox")
         .select("*")
         .eq("organization_id", organization!.id)
+        .eq("doctor_id", doctorId!)
         .order("recorded_at", { ascending: false })
         .limit(30);
-      if (doctorId) q = q.eq("doctor_id", doctorId);
-      const { data, error } = await q;
       if (error) throw error;
       return (data ?? []) as any[];
     },
@@ -586,16 +630,15 @@ export function DoctorInbox({ doctorId }: { doctorId?: string | null }) {
 
   const inbox = useQuery({
     queryKey: ["doctor-inbox", organization?.id, doctorId],
-    enabled: Boolean(organization?.id),
+    enabled: scoped,
     queryFn: async () => {
-      let q = supabase
+      const { data, error } = await supabase
         .from("v_doctor_inbox")
         .select("*")
         .eq("organization_id", organization!.id)
+        .eq("doctor_id", doctorId!)
         .order("last_image_at", { ascending: false })
         .limit(50);
-      if (doctorId) q = q.eq("doctor_id", doctorId);
-      const { data, error } = await q;
       if (error) throw error;
       return (data ?? []) as any[];
     },
@@ -604,7 +647,34 @@ export function DoctorInbox({ doctorId }: { doctorId?: string | null }) {
   const rows = inbox.data ?? [];
   const vitalRows = vitals.data ?? [];
 
-  if (inbox.isLoading) return <Skeleton className="h-48 w-full" />;
+  if (!scoped) {
+    if (resolvingDoctor) return <Skeleton className="h-48 w-full" />;
+    return (
+      <Card>
+        <CardContent className="grid place-items-center gap-2 py-10 text-center">
+          <BellRing className="h-9 w-9 text-muted-foreground" />
+          <span className="font-medium">لم يُتعرَّف على طبيبٍ مرتبطٍ بحسابك</span>
+          <span className="text-sm text-muted-foreground">
+            هذا الصندوق يعرض ما وصل مرضاك وحدهم — يُربَط الحساب بملفّ الطبيب من
+            شاشة «الأطباء».
+          </span>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  if (inbox.isLoading || vitals.isLoading) return <Skeleton className="h-48 w-full" />;
+
+  if (inbox.isError || vitals.isError) {
+    const failure = (inbox.error ?? vitals.error) as Error | null;
+    return (
+      <Card>
+        <CardContent className="py-8 text-center text-sm text-destructive">
+          تعذّر تحميل الصندوق: {failure?.message ?? "خطأ غير معروف"}
+        </CardContent>
+      </Card>
+    );
+  }
 
   if (rows.length === 0 && vitalRows.length === 0) {
     return (

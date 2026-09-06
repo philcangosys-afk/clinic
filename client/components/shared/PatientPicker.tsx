@@ -22,6 +22,7 @@ export default function PatientPicker({
   const [term, setTerm] = useState("");
   const [results, setResults] = useState<PatientSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
   const { organization } = useOrganizationAccess();
@@ -29,6 +30,7 @@ export default function PatientPicker({
   useEffect(() => {
     if (term.trim().length < 2 || !organization?.id) {
       setResults([]);
+      setSearchError(null);
       return;
     }
     const handle = setTimeout(async () => {
@@ -45,10 +47,16 @@ export default function PatientPicker({
         .select("id, name_ar, name_en, mobile_number, file_number")
         .eq("organization_id", organization?.id)
         .limit(8);
-      const { data } = isNumeric
+      const { data, error } = isNumeric
         ? await query.or(`mobile_number.ilike.%${term.trim()}%,file_number.eq.${term.trim()}`)
         : await query.ilike("name_ar", `%${term.trim()}%`);
-      setResults((data as PatientSearchResult[]) ?? []);
+      /**
+       * `error` كان مُهمَلًا فتُعرض «لا توجد نتائج مطابقة.» على فشلٍ لم يُبلَّغ عنه
+       * (رفض RLS أو انقطاع) — نفيُ وجود المريض أخطر من رسالة خطأ: يدفع الموظّف
+       * إلى إنشاء ملفّ ثانٍ لمريض موجود.
+       */
+      setSearchError(error ? error.message : null);
+      setResults(error ? [] : ((data as PatientSearchResult[]) ?? []));
       setLoading(false);
     }, 300);
     return () => clearTimeout(handle);
@@ -72,7 +80,12 @@ export default function PatientPicker({
       {open && term.trim().length >= 2 && (
         <div className="absolute z-20 mt-1 w-full rounded-md border bg-popover shadow-lg">
           {loading && <p className="px-3 py-2 text-xs text-muted-foreground">جارٍ البحث...</p>}
-          {!loading && results.length === 0 && (
+          {!loading && searchError && (
+            <p className="px-3 py-2 text-xs text-destructive">
+              تعذّر البحث — أعد المحاولة: {searchError}
+            </p>
+          )}
+          {!loading && !searchError && results.length === 0 && (
             <p className="px-3 py-2 text-xs text-muted-foreground">لا توجد نتائج مطابقة.</p>
           )}
           {results.map((patient) => (

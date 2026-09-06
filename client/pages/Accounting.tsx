@@ -34,6 +34,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import LedgerWorkspace from "@/components/accounting/LedgerWorkspace";
+import { usePermissions } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
 
 const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
@@ -478,7 +479,10 @@ function NewVoucherDialog({
                     onChange={(e) => setRequiresVat(e.target.checked)}
                     className="h-4 w-4"
                   />
-                  مصروف خاضع لضريبة القيمة المضافة (15%)
+                  {/* النسبة من إعداد المنشأة: كان النصّ «(15%)» والمعاينة
+                      `* 0.15` بينما المحفوظ `orgVatRate` — فيقرأ المحاسب على
+                      الشاشة رقمًا ويُدخل في إقرار المدخلات رقمًا آخر. */}
+                  مصروف خاضع لضريبة القيمة المضافة ({orgVatRate}%)
                 </label>
                 {requiresVat && (
                   <div className="flex flex-col gap-1.5">
@@ -489,7 +493,8 @@ function NewVoucherDialog({
                       dir="ltr"
                     />
                     <p className="text-xs text-muted-foreground">
-                      الضريبة المحتسبة: {(((Number(amount) || 0) * 0.15) || 0).toFixed(2)} — الرقم الضريبي شرط
+                      الضريبة المحتسبة:{" "}
+                      {(Math.round((Number(amount) || 0) * (orgVatRate / 100) * 100) / 100).toFixed(2)} — الرقم الضريبي شرط
                       لخصم ضريبة المدخلات في الإقرار.
                     </p>
                   </div>
@@ -1366,9 +1371,18 @@ function NewAccountDialog({
 // ---------------------------------------------------------------------------
 // القيود اليومية
 // ---------------------------------------------------------------------------
+/**
+ * مفتاح هذا الاستعلام يخصّه وحده.
+ *
+ * كان يتشارك المفتاح `["journal-entries", orgId]` مع استعلام تبويب «دفتر
+ * الأستاذ والقوائم» بدالّتَي جلب مختلفتين: هذه تختار ستّة أعمدة بلا بنود،
+ * وتلك `"*, journal_entry_lines(...)"`. فالبيانات المخزَّنة من إحداهما تُعرض
+ * لحظيًّا في الأخرى — قيمة **0.00** لكل قيد وشارة مصدر خاطئة قبل أن تصحّح
+ * نفسها بعد إعادة الجلب.
+ */
 function useJournalEntries(organizationId: string | undefined) {
   return useQuery({
-    queryKey: ["journal-entries", organizationId],
+    queryKey: ["journal-entries-basic", organizationId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       const { data, error } = await supabase
@@ -1388,28 +1402,40 @@ function JournalEntriesTab() {
   const entries = useJournalEntries(organization?.id);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { can } = usePermissions();
   const [createOpen, setCreateOpen] = useState(false);
+
+  // بعد الترحيل أو الإنشاء يُبطَّل مفتاحا القيود معًا: الشاشتان تقرآن نفس
+  // الجدول بمفتاحين مختلفين، فتبطيل واحدٍ يترك الأخرى تعرض قيمة قديمة.
+  const invalidateEntries = () => {
+    queryClient.invalidateQueries({ queryKey: ["journal-entries-basic", organization?.id] });
+    queryClient.invalidateQueries({ queryKey: ["journal-entries-with-lines", organization?.id] });
+  };
 
   const postEntry = useMutation({
     mutationFn: async (entryId: string) => {
-      const { data: affectedRows, error } = await supabase.from("journal_entries").update({ status: "posted" }).eq("id", entryId)
-        .select("id");
+      /**
+       * الترحيل يمرّ بـ`app_post_journal_entry` لا بتحديث `status` مباشرة.
+       *
+       * التحديث المباشر يُرحّل القيد **بلا أثرٍ لمن رحّله**: `posted_by` و
+       * `posted_at` يبقيان فارغين ولا سجل في `audit_log`، ويتجاوز فحص صلاحية
+       * `gl.post` (سياسة RLS تكتفي بدور المحاسب) — فمن مُنع من الترحيل كان
+       * يرحّل من هذه الشاشة، وتبويب دفتر الأستاذ يمنعه. الدالّة تفعل الثلاثة.
+       */
+      const { error } = await supabase.rpc("app_post_journal_entry", { p_entry_id: entryId });
       if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["journal-entries", organization?.id] });
+      invalidateEntries();
       queryClient.invalidateQueries({ queryKey: ["account-balances", organization?.id] });
+      queryClient.invalidateQueries({ queryKey: ["trial-balance", organization?.id] });
       toast({ title: "تم ترحيل القيد" });
     },
     onError: (error: unknown) =>
       toast({
         variant: "destructive",
         title: "تعذر الترحيل",
-        description: error instanceof Error ? error.message : "القيد غير متوازن — تحقّق من إجمالي المدين والدائن",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
       }),
   });
 
@@ -1418,12 +1444,19 @@ function JournalEntriesTab() {
       <CardHeader className="flex flex-row items-center justify-between gap-3">
         <div>
           <CardTitle>القيود اليومية</CardTitle>
-          <CardDescription>الترحيل (Post) يرفضه النظام تلقائيًا إن لم يتساوَ إجمالي المدين والدائن</CardDescription>
+          <CardDescription>
+            الترحيل (Post) مقصور على صلاحية `gl.post` ويرفضه النظام إن لم يتساوَ إجمالي المدين
+            والدائن أو كانت الفترة مقفلة
+          </CardDescription>
         </div>
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          قيد جديد
-        </Button>
+        {/* القيد اليدويّ استثناء له صلاحيته: `app_create_manual_journal_entry`
+            ترفضه بلا `gl.manual_entry`، فلا يُعرض الزرّ لمن لا يملكها. */}
+        {can("gl.manual_entry") && (
+          <Button size="sm" onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" />
+            قيد يدويّ
+          </Button>
+        )}
       </CardHeader>
       <CardContent>
         {entries.isLoading && <Skeleton className="h-40 w-full" />}
@@ -1467,7 +1500,7 @@ function JournalEntriesTab() {
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    {entry.status === "draft" && (
+                    {entry.status === "draft" && can("gl.post") && (
                       <Button size="sm" variant="outline" disabled={postEntry.isPending} onClick={() => postEntry.mutate(entry.id)}>
                         <CheckCircle2 className="h-3.5 w-3.5" />
                         ترحيل
@@ -1504,7 +1537,9 @@ function NewJournalEntryDialog({
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const accounts = useChartOfAccounts(organizationId);
+  const [entryDate, setEntryDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [description, setDescription] = useState("");
+  const [reason, setReason] = useState("");
   const [lines, setLines] = useState<{ accountId: string; debit: string; credit: string }[]>([
     { accountId: "", debit: "", credit: "" },
     { accountId: "", debit: "", credit: "" },
@@ -1520,27 +1555,37 @@ function NewJournalEntryDialog({
       const validLines = lines.filter((line) => line.accountId && (Number(line.debit) > 0 || Number(line.credit) > 0));
       if (validLines.length < 2) throw new Error("القيد يحتاج سطرين على الأقل");
 
-      const { data: entry, error: entryError } = await supabase
-        .from("journal_entries")
-        .insert({ organization_id: organizationId, description: description.trim() || null })
-        .select("id")
-        .single();
-      if (entryError) throw entryError;
-
-      const { error: linesError } = await supabase.from("journal_entry_lines").insert(
-        validLines.map((line) => ({
-          journal_entry_id: entry.id,
+      /**
+       * القيد اليدويّ يمرّ بـ`app_create_manual_journal_entry` لا بإدراجين.
+       *
+       * الإدراجان (رأس ثم بنود) غير ذرّيَّين: فشل الثاني يترك رأس قيد بلا بنود
+       * يستهلك رقمًا من التسلسل ولا يقبل الترحيل أبدًا. والأسوأ أن الرأس كان
+       * يُدرَج بلا `is_manual` ولا `manual_reason` ولا فحص `gl.manual_entry`،
+       * فيظهر القيد في تبويب دفتر الأستاذ موسومًا **«من عملية»** — قيدًا
+       * مولَّدًا من النظام في عين المراجع — وسببه فارغ. الدالّة تفرض السبب
+       * والتوازن وحدًّا أدنى بندين والصلاحية في معاملة واحدة.
+       */
+      const { error } = await supabase.rpc("app_create_manual_journal_entry", {
+        p_organization_id: organizationId,
+        p_entry_date: entryDate,
+        p_description: description.trim() || null,
+        p_reason: reason.trim(),
+        p_lines: validLines.map((line) => ({
           account_id: line.accountId,
           debit: Number(line.debit) || 0,
           credit: Number(line.credit) || 0,
         })),
-      );
-      if (linesError) throw linesError;
+        p_branch_id: null,
+      });
+      if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["journal-entries", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["journal-entries-basic", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["journal-entries-with-lines", organizationId] });
       toast({ title: "تم حفظ القيد كمسودة — رحّله بعد التأكد من توازنه" });
+      setEntryDate(new Date().toISOString().slice(0, 10));
       setDescription("");
+      setReason("");
       setLines([
         { accountId: "", debit: "", credit: "" },
         { accountId: "", debit: "", credit: "" },
@@ -1559,13 +1604,30 @@ function NewJournalEntryDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>قيد يومية جديد</DialogTitle>
-          <DialogDescription>يُحفَظ كمسودة قابلة للتعديل، ولن يُقبَل ترحيله لاحقًا إلا إذا تساوى إجمالي المدين والدائن</DialogDescription>
+          <DialogTitle>قيد يومية يدويّ</DialogTitle>
+          <DialogDescription>
+            القاعدة أن تُولَّد القيود من العمليات؛ اليدويّ استثناء يحتاج سببًا مكتوبًا ويُدقَّق.
+            يُحفَظ كمسودة، ولن يُقبَل ترحيله إلا إذا تساوى إجمالي المدين والدائن.
+          </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>التاريخ *</Label>
+              <Input type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>الوصف</Label>
+              <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+            </div>
+          </div>
           <div className="flex flex-col gap-1.5">
-            <Label>الوصف</Label>
-            <Input value={description} onChange={(e) => setDescription(e.target.value)} />
+            <Label>سبب القيد اليدويّ *</Label>
+            <Input
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="لماذا لم يُولَّد هذا القيد من عملية؟"
+            />
           </div>
 
           {lines.map((line, index) => (
@@ -1618,7 +1680,10 @@ function NewJournalEntryDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button disabled={createEntry.isPending} onClick={() => createEntry.mutate()}>
+          <Button
+            disabled={!entryDate || !reason.trim() || !isBalanced || createEntry.isPending}
+            onClick={() => createEntry.mutate()}
+          >
             {createEntry.isPending ? "جارٍ الحفظ..." : "حفظ كمسودة"}
           </Button>
         </DialogFooter>

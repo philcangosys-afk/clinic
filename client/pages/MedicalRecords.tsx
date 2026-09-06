@@ -6,7 +6,11 @@ import { useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
-import { examFieldLabel, type ExamTemplateSchema } from "@/lib/exam-template-fields";
+import {
+  normalizeExamFields,
+  type ExamTemplateSchema,
+  type NormalizedExamField,
+} from "@/lib/exam-template-fields";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -37,6 +41,7 @@ import type { OccupationalExamPurpose, OccupationalFitnessStatus } from "@/lib/d
 import { useToast } from "@/hooks/use-toast";
 import DentalChart from "@/components/medical/DentalChart";
 import BodyDiagram, { type BodyDiagramData } from "@/components/medical/BodyDiagram";
+import VisitCanvasDetail from "@/components/medical/VisitCanvasDetail";
 import VisitOrders, {
   EMPTY_VISIT_ORDERS,
   hasAnyOrder,
@@ -49,6 +54,17 @@ const EXAM_PURPOSE_LABELS: Record<OccupationalExamPurpose, string> = {
   return_to_work: "العودة للعمل",
   exit: "مغادرة العمل",
 };
+/** نفس تسميات حالات الزيارة المعروضة في سجلّ الزيارات — لا تُعرض القيمة الخام. */
+const VISIT_STATUS_LABELS: Record<string, string> = {
+  planned: "مخطَّطة",
+  waiting: "منتظرة",
+  in_progress: "جارية",
+  completed: "مكتملة",
+  signed: "موقَّعة",
+  closed: "مغلقة",
+  cancelled: "ملغاة",
+};
+
 const FITNESS_STATUS_LABELS: Record<OccupationalFitnessStatus, string> = {
   fit: "لائق",
   fit_with_restrictions: "لائق بقيود",
@@ -56,12 +72,14 @@ const FITNESS_STATUS_LABELS: Record<OccupationalFitnessStatus, string> = {
   pending: "قيد المراجعة",
 };
 
-function useRecentVisits(organizationId: string | undefined) {
+function useRecentVisits(organizationId: string | undefined, patientId?: string | null) {
   return useQuery({
-    queryKey: ["medical-visits", organizationId],
+    // المريض جزءٌ من المفتاح لأنه جزءٌ من الاستعلام — وإلا خدمت الذاكرة
+    // المؤقتة قائمةَ منشأةٍ كاملة لمريضٍ بعينه.
+    queryKey: ["medical-visits", organizationId, patientId ?? null],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase
+      let query = supabase
         .from("patient_visits")
         .select(
           "id, visit_date, main_complaint, patient:patients!patient_visits_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!patient_visits_doctor_tenant_fk(id, name_ar)",
@@ -70,18 +88,67 @@ function useRecentVisits(organizationId: string | undefined) {
         .eq("organization_id", organizationId)
         .order("visit_date", { ascending: false })
         .limit(40);
+      if (patientId) query = query.eq("patient_id", patientId);
+      const { data, error } = await query;
       if (error) throw error;
       return data ?? [];
     },
   });
 }
 
+type FocusedVisit = {
+  id: string;
+  visit_date: string;
+  status: string | null;
+  main_complaint: string | null;
+  notes: string | null;
+  next_visit_plan: string | null;
+  patient: { id: string; name_ar: string; file_number: string | null } | { id: string; name_ar: string; file_number: string | null }[] | null;
+  doctor: { id: string; name_ar: string } | { id: string; name_ar: string }[] | null;
+};
+
+const one = <T,>(value: T | T[] | null): T | null =>
+  Array.isArray(value) ? value[0] ?? null : value;
+
+/**
+ * الزيارة المطلوبة بالرابط `?visitId=…`.
+ *
+ * زرّ «السجل الطبي» في شاشة سجل الزيارات كان يمرّر `visitId` وهذه الشاشة لا
+ * تقرأ إلا `appointmentId` — فتُفتح على «آخر ٤٠ زيارة» في المنشأة بلا أي
+ * إشارة إلى المريض ولا الزيارة، فيبحث الموظّف من جديد عن الزيارة التي جاء
+ * منها.
+ */
+function useFocusedVisit(visitId: string | null, organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["medical-visit-focus", organizationId, visitId],
+    enabled: Boolean(organizationId && visitId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patient_visits")
+        .select(
+          "id, visit_date, status, main_complaint, notes, next_visit_plan, patient:patients!patient_visits_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!patient_visits_doctor_tenant_fk(id, name_ar)",
+        )
+        .eq("id", visitId!)
+        .eq("organization_id", organizationId!)
+        .maybeSingle();
+      if (error) throw error;
+      return (data as unknown as FocusedVisit | null) ?? null;
+    },
+  });
+}
+
 export default function MedicalRecords() {
   const { organization } = useOrganizationAccess();
+  const { toast } = useToast();
   const [searchParams] = useSearchParams();
   const appointmentId = searchParams.get("appointmentId");
+  const visitId = searchParams.get("visitId");
   const [createOpen, setCreateOpen] = useState(false);
-  const visits = useRecentVisits(organization?.id);
+  const focused = useFocusedVisit(visitId, organization?.id);
+  const focusedPatient = one(focused.data?.patient ?? null);
+  // حين يُطلب سجلّ زيارةٍ بعينها تُحصر القائمة على مريضها: القائمة العامّة
+  // بجانب زيارة محدَّدة تُعيد الموظّف إلى البحث الذي جاء ليتجنّبه.
+  const visits = useRecentVisits(organization?.id, focusedPatient?.id ?? null);
   const appointment = useQuery({
     queryKey: ["medical-visit-appointment", organization?.id, appointmentId],
     enabled: Boolean(organization?.id && appointmentId),
@@ -98,6 +165,37 @@ export default function MedicalRecords() {
     if (appointment.data) setCreateOpen(true);
   }, [appointment.data]);
 
+  /**
+   * عرض سجلّ زيارةٍ بعينها اطّلاعٌ على ملفّ طبي، فيُسجَّل كما يُسجَّل فتح
+   * نموذج الزيارة وفتح ملفّ المريض — وإلا صار للاطّلاع بابٌ لا أثر له.
+   */
+  const loggedVisitId = useRef<string | null>(null);
+  useEffect(() => {
+    const openedVisit = focused.data;
+    const openedPatient = one(openedVisit?.patient ?? null);
+    if (!openedVisit || !openedPatient || loggedVisitId.current === openedVisit.id) return;
+    loggedVisitId.current = openedVisit.id;
+    void supabase
+      .rpc("app_log_record_access", {
+        p_patient_id: openedPatient.id,
+        p_access_type: "view",
+        p_context: "فتح سجلّ زيارة من سجل الزيارات",
+        p_reason: "تقديم الرعاية الطبية",
+        p_visit_id: openedVisit.id,
+        p_device_name: navigator.userAgent,
+      })
+      .then(({ error }) => {
+        if (error) {
+          loggedVisitId.current = null;
+          toast({
+            variant: "destructive",
+            title: "تعذر تسجيل الاطلاع على الملف",
+            description: error.message,
+          });
+        }
+      });
+  }, [focused.data, toast]);
+
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -111,10 +209,72 @@ export default function MedicalRecords() {
         </Button>
       </div>
 
+      {visitId && (
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              سجلّ الزيارة{focusedPatient ? ` — ${focusedPatient.name_ar}` : ""}
+            </CardTitle>
+            <CardDescription>
+              {focused.isLoading && "جارٍ تحميل الزيارة..."}
+              {!focused.isLoading && focused.data && (
+                <>
+                  {new Date(focused.data.visit_date).toLocaleString("ar-SA")}
+                  {one(focused.data.doctor) ? ` · د. ${one(focused.data.doctor)!.name_ar}` : ""}
+                  {focusedPatient?.file_number ? ` · ملف ${focusedPatient.file_number}` : ""}
+                </>
+              )}
+              {!focused.isLoading && !focused.isError && !focused.data &&
+                "الزيارة المطلوبة غير موجودة في هذه المنشأة."}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            {focused.isError && (
+              <p className="text-sm text-destructive">
+                تعذّر تحميل الزيارة: {(focused.error as Error)?.message ?? "خطأ غير متوقع"}
+              </p>
+            )}
+            {focused.data && (
+              <>
+                <div className="grid gap-2 text-sm sm:grid-cols-2">
+                  <div>
+                    <span className="text-muted-foreground">الشكوى: </span>
+                    <span>{focused.data.main_complaint ?? "—"}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">الحالة: </span>
+                    <span>
+                      {focused.data.status
+                        ? VISIT_STATUS_LABELS[focused.data.status] ?? focused.data.status
+                        : "—"}
+                    </span>
+                  </div>
+                  {focused.data.notes && (
+                    <div className="sm:col-span-2">
+                      <span className="text-muted-foreground">ملاحظات: </span>
+                      <span>{focused.data.notes}</span>
+                    </div>
+                  )}
+                  {focused.data.next_visit_plan && (
+                    <div className="sm:col-span-2">
+                      <span className="text-muted-foreground">خطة المتابعة: </span>
+                      <span>{focused.data.next_visit_plan}</span>
+                    </div>
+                  )}
+                </div>
+                <VisitCanvasDetail visitId={focused.data.id} />
+              </>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardHeader>
-          <CardTitle>آخر الزيارات</CardTitle>
-          <CardDescription>آخر 40 زيارة فحص في المنشأة</CardDescription>
+          <CardTitle>{focusedPatient ? "زيارات هذا المريض" : "آخر الزيارات"}</CardTitle>
+          <CardDescription>
+            {focusedPatient ? `آخر 40 زيارة فحص لـ${focusedPatient.name_ar}` : "آخر 40 زيارة فحص في المنشأة"}
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {visits.isLoading &&
@@ -166,11 +326,48 @@ function useDoctorsList(organizationId: string | undefined) {
   });
 }
 
+type ExamTemplateRow = {
+  id: string;
+  specialty_code: string | null;
+  canvas_type: string;
+  schema_definition: ExamTemplateSchema;
+};
+
+/**
+ * قالب الفحص المطابق لتخصص الطبيب.
+ *
+ * كان البحث على `specialty_code` وحده، بينما حوار «نموذج جديد» في شاشة النماذج
+ * يعرض التخصص كقائمة تكتب `specialty_value_id` ويعرض الرمز كحقل «للتوافق مع
+ * القوالب القديمة» — فيُترك فارغًا كما يوحي عنوانه. النتيجة: النموذج يظهر في
+ * الجدول «مفعَّلًا» ولا يطابقه أيّ استعلام، والطبيب يرى «لا يوجد قالب فحص
+ * مطابق». فالمطابقة الآن على معرّف التخصص أولًا (وهو المفتاح الذي تكتبه
+ * الشاشة)، ثم ترتدّ إلى الرمز للقوالب المزروعة القديمة التي لا تحمل معرّفًا.
+ *
+ * والترتيب على `organization_id` تنازليًّا بلا قيم فارغة أخيرًا يُقدّم نسخة
+ * المنشآة المخصَّصة على القالب النظاميّ المشترك.
+ */
 function useTemplateForSpecialty(specialtyValueId: string | null | undefined, organizationId: string | undefined) {
   return useQuery({
     queryKey: ["exam-template", specialtyValueId, organizationId],
-    enabled: Boolean(specialtyValueId),
+    // المنشأة شرطٌ لأن مرشّح الملكية يُبنى من معرّفها نصًّا.
+    enabled: Boolean(specialtyValueId && organizationId),
     queryFn: async () => {
+      const ownership = `organization_id.eq.${organizationId},organization_id.is.null`;
+
+      const { data: byValueId, error: byValueIdError } = await supabase
+        .from("clinic_exam_templates")
+        .select("id, specialty_code, canvas_type, schema_definition")
+        // القالب المعطَّل يجب ألّا يُستعمل: زر "تعطيل القالب" كان يكتب العلم
+        // ويعرض رسالة نجاح، ولا شيء يقرؤه — فيبقى الطبيب يرى القالب نفسه.
+        .eq("is_disabled", false)
+        .eq("specialty_value_id", specialtyValueId)
+        .or(ownership)
+        .order("organization_id", { ascending: false, nullsFirst: false })
+        .limit(1)
+        .maybeSingle();
+      if (byValueIdError) throw byValueIdError;
+      if (byValueId) return byValueId as ExamTemplateRow;
+
       const { data: specialty, error: specialtyError } = await supabase
         .from("lookup_values")
         .select("extra")
@@ -180,19 +377,17 @@ function useTemplateForSpecialty(specialtyValueId: string | null | undefined, or
       const specialtyCode = (specialty?.extra as { specialty_code?: string } | null)?.specialty_code;
       if (!specialtyCode) return null;
 
-      const { data: templates, error: templatesError } = await supabase
+      const { data: byCode, error: byCodeError } = await supabase
         .from("clinic_exam_templates")
         .select("id, specialty_code, canvas_type, schema_definition")
-        // القالب المعطَّل يجب ألّا يُستعمل: زر "تعطيل القالب" كان يكتب العلم
-        // ويعرض رسالة نجاح، ولا شيء يقرؤه — فيبقى الطبيب يرى القالب نفسه.
         .eq("is_disabled", false)
         .eq("specialty_code", specialtyCode)
-        .or(`organization_id.eq.${organizationId},organization_id.is.null`)
+        .or(ownership)
         .order("organization_id", { ascending: false, nullsFirst: false })
         .limit(1)
         .maybeSingle();
-      if (templatesError) throw templatesError;
-      return templates as { id: string; specialty_code: string; canvas_type: string; schema_definition: ExamTemplateSchema } | null;
+      if (byCodeError) throw byCodeError;
+      return (byCode ?? null) as ExamTemplateRow | null;
     },
   });
 }
@@ -244,6 +439,149 @@ function extractVitals(values: Record<string, string>) {
     // bmi عمود محسوب في القاعدة — لا يُكتب من هنا
   };
   return Object.values(row).some((value) => value !== null) ? row : null;
+}
+
+/**
+ * إدخال حقل واحد من قالب الفحص **حسب نوعه**.
+ *
+ * كانت الحلقة تعرض `<Input>` نصيًّا لكل حقل، فما يبنيه المصمّم من أنواع
+ * (قائمة اختيار، رقم، تاريخ، نعم/لا…) ووحدات وخيارات وإلزام كان بلا أثر في
+ * الشاشة التي يعبّئها الطبيب: خيارات محدَّدة تُكتب باليد فتتنوّع صياغتها ولا
+ * تصلح لتقرير، والرقم يُكتب نصًّا. القيمة تبقى نصًّا في `p_exam_data` (وهو ما
+ * تقرؤه `extractVitals` والزيارات القديمة) — النوع يضبط طريقة الإدخال لا شكل
+ * التخزين، فلا تنكسر قراءة ما حُفظ سابقًا.
+ */
+function ExamFieldInput({
+  field,
+  value,
+  onChange,
+}: {
+  field: NormalizedExamField;
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const options = field.options ?? [];
+
+  // القائمة والاختيار الواحد: كلاهما قيمة واحدة من مجموعة، فيُعرضان قائمة
+  // اختيار. حقل قائمة بلا خيارات معرَّفة لا يُعطَّل — تعطيله يمنع تسجيل الفحص
+  // كلّه بسبب نقص في القالب — بل يرتدّ إلى إدخال حرّ مع بيان السبب.
+  if (field.type === "select" || field.type === "radio") {
+    if (options.length === 0) {
+      return (
+        <Input
+          value={value}
+          placeholder="لا خيارات معرَّفة في القالب"
+          onChange={(event) => onChange(event.target.value)}
+        />
+      );
+    }
+    return (
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger>
+          <SelectValue placeholder="اختر" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label_ar}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  if (field.type === "yes_no") {
+    return (
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger>
+          <SelectValue placeholder="اختر" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="نعم">نعم</SelectItem>
+          <SelectItem value="لا">لا</SelectItem>
+        </SelectContent>
+      </Select>
+    );
+  }
+
+  if (field.type === "multi_select") {
+    // القيمة تبقى نصًّا واحدًا مفصولًا بفاصلة — `p_exam_data` جسون من نصوص،
+    // وتغيير شكل القيمة لنوع واحد يكسر قراءة الزيارات المحفوظة.
+    const chosen = value
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const toggle = (optionValue: string) => {
+      const next = chosen.includes(optionValue)
+        ? chosen.filter((entry) => entry !== optionValue)
+        : [...chosen, optionValue];
+      onChange(next.join(", "));
+    };
+    if (options.length === 0) {
+      return (
+        <Input
+          value={value}
+          placeholder="لا خيارات معرَّفة في القالب"
+          onChange={(event) => onChange(event.target.value)}
+        />
+      );
+    }
+    return (
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+        {options.map((option) => (
+          <label key={option.value} className="flex cursor-pointer items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={chosen.includes(option.value)}
+              onChange={() => toggle(option.value)}
+            />
+            {option.label_ar}
+          </label>
+        ))}
+      </div>
+    );
+  }
+
+  if (field.type === "checkbox") {
+    return (
+      <label className="flex h-9 cursor-pointer items-center gap-1.5 text-xs">
+        <input
+          type="checkbox"
+          checked={value === "نعم"}
+          onChange={(event) => onChange(event.target.checked ? "نعم" : "")}
+        />
+        {value === "نعم" ? "نعم" : "لا"}
+      </label>
+    );
+  }
+
+  if (field.type === "textarea") {
+    return <Textarea rows={2} value={value} onChange={(event) => onChange(event.target.value)} />;
+  }
+
+  if (field.type === "number" || field.type === "measurement") {
+    return (
+      <Input
+        type="number"
+        inputMode="decimal"
+        step="any"
+        dir="ltr"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  }
+
+  if (field.type === "date" || field.type === "time") {
+    return (
+      <Input type={field.type} dir="ltr" value={value} onChange={(event) => onChange(event.target.value)} />
+    );
+  }
+
+  // text وclinical_code وbody_map وfile — إدخال نصّي (لا مرفقات في نموذج
+  // الزيارة بعد، والحقل يبقى قابلًا للتوثيق بدل أن يختفي).
+  return <Input value={value} onChange={(event) => onChange(event.target.value)} />;
 }
 
 type AppointmentVisitContext = {
@@ -376,10 +714,70 @@ function NewVisitDialog({
       .then(({ data }) => setEmployerValueId((data as { work_entity_value_id: string | null } | null)?.work_entity_value_id ?? ""));
   }, [isOccupational, patient?.id]);
 
+  /**
+   * أقسام المجموعة بحقولها **مطبَّعة**.
+   *
+   * `app_rebuild_exam_schema` يُخرج حقول المجموعة كائنات
+   * `{key, label_ar, type, unit, required, options, visible_when}`، والقوالب
+   * النظامية المزروعة تُخرجها نصوصًا. الحلقة القديمة كانت تعامل كل عنصر نصًّا
+   * فتمرّر الكائن إلى `<Label>` (وReact ترفض الكائن كابن فتنكسر النافذة كلها)
+   * وتستعمله مفتاحًا للقيمة (فتُخزَّن كل الإجابات تحت `"[object Object]"`).
+   * التطبيع يوحّد الشكلين، فيُقرأ القالبان معًا وتُحترم أنواع الحقول.
+   */
   const groupSections = useMemo(
-    () => (template.data?.schema_definition.sections ?? []).filter((section) => section.type === "group"),
+    () =>
+      (template.data?.schema_definition?.sections ?? [])
+        .filter((section) => section.type === "group")
+        .map((section) => ({
+          key: section.key,
+          label_ar: section.label_ar,
+          fields: normalizeExamFields(section.fields),
+        })),
     [template.data],
   );
+
+  /**
+   * الحقول الظاهرة فعلًا — `visible_when` شرطٌ يبنيه المصمّم، فحقلٌ شرطه غير
+   * متحقّق لا يُعرض ولا تُطلب قيمته (وإلّا صار «إلزاميًّا» لا سبيل لتعبئته).
+   */
+  const isFieldVisible = (field: NormalizedExamField) =>
+    !field.visible_when || (fieldValues[field.visible_when.field] ?? "") === (field.visible_when.value ?? "");
+
+  /** الحقول الإلزامية الناقصة — تُمنع بها الزيارة قبل النداء لا بعده. */
+  const missingRequired = useMemo(() => {
+    const missing: string[] = [];
+    for (const section of groupSections) {
+      for (const field of section.fields) {
+        if (!field.required || !isFieldVisible(field)) continue;
+        if (!String(fieldValues[field.key] ?? "").trim()) missing.push(field.label_ar);
+      }
+    }
+    return missing;
+  }, [groupSections, fieldValues]);
+
+  /**
+   * هل في كتلة الأسنان ما يُحفظ؟
+   *
+   * كان الشرط `selectedTeeth.length > 0` وحده، فمع `p_dental = null` تتخطّى
+   * `app_save_visit` كتلة `dental_chart_entries` بالكامل: طبيب الأسنان يكتب
+   * الإجراء والتخدير والمضاد الوقائي والمضاعفات والتثقيف ويؤشّر الأشعة
+   * والتقويم، ثم يرى «تم الحفظ» ولا شيء من ذلك في القاعدة. والدالّة نفسها لا
+   * تشترط أسنانًا — `tooth_numbers` تُبنى بـ`coalesce(…, '{}')` — فالكشف
+   * العامّ بلا سنٍّ محدَّد حالة مشروعة لا سببًا لإسقاط البيانات بصمت.
+   */
+  const hasDentalData =
+    selectedTeeth.length > 0 ||
+    Boolean(
+      dentalProcedure.trim() ||
+        dentalAnesthesia.trim() ||
+        dentalAntibiotics.trim() ||
+        dentalComplications.trim() ||
+        dentalEducation.trim(),
+    ) ||
+    isXray ||
+    orthoUpper ||
+    orthoLower ||
+    fullArch;
 
   /**
    * حفظ الزيارة — نداء واحد لدالة `app_save_visit` (0061).
@@ -403,6 +801,12 @@ function NewVisitDialog({
   const createVisit = useMutation({
     mutationFn: async () => {
       if (!organizationId || !patient || !doctorId) throw new Error("أكمل بيانات المريض والطبيب");
+      // الإلزام الذي يضبطه القالب (`is_required`) كان معروضًا في المصمّم فقط
+      // ولا أثر له في نموذج الزيارة — فيُحفظ الفحص ناقصًا للحقل الذي وُصف
+      // بأنه إلزاميّ.
+      if (missingRequired.length > 0) {
+        throw new Error(`حقول إلزامية في القالب لم تُعبَّأ: ${missingRequired.join("، ")}`);
+      }
       await assertPatientNotBlocked(patient.id, "file");
 
       const { data, error } = await supabase.rpc("app_save_visit", {
@@ -430,7 +834,7 @@ function NewVisitDialog({
         // حُفظت. `extractVitals` يُسقط غير الرقمي أصلًا قبل الوصول إلى هنا.
         p_vitals: extractVitals(fieldValues),
         p_dental:
-          isDental && selectedTeeth.length > 0
+          isDental && hasDentalData
             ? {
                 tooth_numbers: selectedTeeth,
                 tooth_type: toothType,
@@ -577,12 +981,24 @@ function NewVisitDialog({
             <div key={section.key} className="rounded-lg border p-3">
               <p className="mb-2 text-sm font-semibold">{section.label_ar}</p>
               <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                {section.fields.map((fieldKey) => (
-                  <div key={fieldKey} className="flex flex-col gap-1">
-                    <Label className="text-xs font-normal text-muted-foreground">{examFieldLabel(fieldKey)}</Label>
-                    <Input
-                      value={fieldValues[fieldKey] ?? ""}
-                      onChange={(e) => setFieldValues((prev) => ({ ...prev, [fieldKey]: e.target.value }))}
+                {section.fields.filter((field) => isFieldVisible(field)).map((field) => (
+                  <div
+                    key={field.key}
+                    className={
+                      field.type === "textarea"
+                        ? "col-span-2 flex flex-col gap-1 sm:col-span-3"
+                        : "flex flex-col gap-1"
+                    }
+                  >
+                    <Label className="text-xs font-normal text-muted-foreground">
+                      {field.label_ar}
+                      {field.unit ? ` (${field.unit})` : ""}
+                      {field.required && <span className="text-destructive"> *</span>}
+                    </Label>
+                    <ExamFieldInput
+                      field={field}
+                      value={fieldValues[field.key] ?? ""}
+                      onChange={(next) => setFieldValues((prev) => ({ ...prev, [field.key]: next }))}
                     />
                   </div>
                 ))}
@@ -907,7 +1323,12 @@ function NewVisitDialog({
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="flex-col items-stretch gap-2 sm:flex-row sm:items-center">
+          {missingRequired.length > 0 && (
+            <p className="text-xs text-amber-800 sm:me-auto">
+              حقول إلزامية في القالب: {missingRequired.join("، ")}
+            </p>
+          )}
           <Button disabled={!patient || !doctorId || createVisit.isPending} onClick={() => createVisit.mutate()}>
             <Save className="h-4 w-4" />
             {createVisit.isPending ? "جارٍ الحفظ..." : "حفظ الزيارة"}

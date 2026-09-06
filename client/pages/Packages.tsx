@@ -65,6 +65,16 @@ function useDoctorsForPackages(organizationId: string | undefined) {
   });
 }
 
+/**
+ * تخصّصات المنشأة النشطة وحدها + التخصّصات العامة.
+ *
+ * سياستا `lookup_values_read`/`lookup_categories_read` تسمحان بـ
+ * `organization_id is null or app_is_member(organization_id)` — أي بكل منشأة
+ * ينتمي إليها المستخدم لا بالنشطة وحدها. فبلا التقييد الصريح كان من يعمل في
+ * منشأتين يرى تخصّصات المنشأة الأخرى مخلوطةً، فتُكتب في الباقة
+ * `allowed_specialty_value_id` لا يطابقه أي طبيب هنا، وتُرفَض الباقة عند البيع
+ * بـ«تخصّص الطبيب غير مشمول» بلا سبب ظاهر.
+ */
 function useSpecialtiesForPackages(organizationId: string | undefined) {
   return useQuery({
     queryKey: ["specialties-for-packages", organizationId],
@@ -72,9 +82,10 @@ function useSpecialtiesForPackages(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_reference_data")
-        .select("value_id, name_ar, category_key, is_disabled")
+        .select("value_id, name_ar, category_key, is_disabled, organization_id")
         .eq("category_key", "medical_specialties")
         .eq("is_disabled", false)
+        .or(`organization_id.is.null,organization_id.eq.${organizationId}`)
         .order("name_ar");
       if (error) throw error;
       return (data ?? []) as any[];
@@ -99,6 +110,15 @@ function usePackageCatalogView(organizationId: string | undefined) {
   });
 }
 
+/**
+ * الباقات غير المؤرشفة وحدها.
+ *
+ * بلا `is_archived = false` كانت الباقة المؤرشفة تبقى في الكتالوج بشارة خضراء
+ * «نشطة» (الشارة مشتقّة من `is_active` وحده) وبلا شريط بياناتها — لأن
+ * `usePackageCatalogView` يُرشِّح المؤرشف فيتفارق المصدران — وتبقى في قائمة
+ * «الباقة *» فيختارها الموظّف ثم يرتدّ رفض `app_check_package_eligibility`
+ * بـ«الباقة غير مفعّلة أو مؤرشفة» بعد أن أخبرته الشاشة أنها نشطة.
+ */
 function usePackagesCatalog(organizationId: string | undefined) {
   return useQuery({
     queryKey: ["packages-catalog", organizationId],
@@ -106,8 +126,9 @@ function usePackagesCatalog(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("packages")
-        .select("id, code, name_ar, price, validity_days, is_active, package_items(id, quantity_included, item:items(name_ar))")
+        .select("id, code, name_ar, price, validity_days, is_active, is_archived, package_items(id, quantity_included, item:items(name_ar))")
         .eq("organization_id", organizationId)
+        .eq("is_archived", false)
         .order("name_ar");
       if (error) throw error;
       return data ?? [];
@@ -227,6 +248,7 @@ function NewPackageDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { session } = useOrganizationAccess();
   const items = useItemsList(organizationId);
   const [nameAr, setNameAr] = useState("");
   const [price, setPrice] = useState("0");
@@ -247,6 +269,17 @@ function NewPackageDialog({
     { itemId: string; quantity: string; maxPerVisit: string; minDays: string }[]
   >([]);
 
+  /**
+   * الإنشاء على طلبين ليس ذرّيًّا — ولا دالّة `app_save_package` في القاعدة.
+   *
+   * الخطر: إن فشل إدراج البنود (رفض RLS، أو صنف أُرشف بين الاختيار والحفظ، أو
+   * انقطاع شبكة) تبقى الباقة منشأةً بسعرها الكامل وبلا بند واحد — تُباع للمريض
+   * بفاتورة ورصيدها صفر. فلذلك تتراجع الواجهة عمّا كتبته: لا حذف نهائي لبيانات
+   * مالية، فتُعطَّل الباقة وتُؤرشف حتى لا تظهر في الكتالوج ولا في قائمة البيع،
+   * ويُظهر الخطأ رسالة القاعدة كما هي. الحلّ الصحيح دالّة ذرّية واحدة
+   * `app_save_package(p_organization_id, p_package_id, p_payload, p_items)` على
+   * نمط `app_save_service`/`app_save_drug`، ترفض باقةً بلا بنود.
+   */
   const createPackage = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
@@ -286,10 +319,34 @@ function NewPackageDialog({
           min_days_between_uses: line.minDays ? Number(line.minDays) : null,
         })),
       );
-      if (itemsError) throw itemsError;
+      if (itemsError) {
+        const { data: reverted, error: revertError } = await supabase
+          .from("packages")
+          .update({
+            is_active: false,
+            is_archived: true,
+            archived_at: new Date().toISOString(),
+            archived_by: session?.user.id ?? null,
+          })
+          .eq("id", pkg.id)
+          .select("id");
+        if (revertError || !reverted || reverted.length === 0)
+          throw new Error(
+            `فشل حفظ أصناف الباقة: ${itemsError.message} — وتعذّر التراجع عن الباقة نفسها` +
+              `${revertError ? `: ${revertError.message}` : ""}. الباقة «${nameAr.trim()}» موجودة بلا أصناف؛ ` +
+              `عطّلها أو أرشفها يدويًّا قبل أن تُباع.`,
+          );
+        throw new Error(
+          `فشل حفظ أصناف الباقة: ${itemsError.message} — أُلغيت الباقة (عُطّلت وأُرشفت) فلن تُباع بلا أصناف. أعد المحاولة.`,
+        );
+      }
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["packages-catalog", organizationId] });
+      // شريط الوفر والأهلية يُقرأ من استعلام آخر (`v_package_catalog`)؛ بلا
+      // إبطاله تظهر الباقة الجديدة بلا نوع اشتراك ولا وفر ولا شروط عمر — لأن
+      // `PackageMetaRow` يُرجع null عند غياب صف المنظور — فيبدو أن ما أُدخل لم يُحفظ.
+      queryClient.invalidateQueries({ queryKey: ["package-catalog-view", organizationId] });
       toast({ title: "تم حفظ الباقة" });
       setNameAr("");
       setPrice("0");
@@ -588,7 +645,14 @@ function SubscribePatientDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>اشتراك مريض في باقة</DialogTitle>
-          <DialogDescription>سجّل فاتورة بيع الباقة من شاشة الفوترة بشكل منفصل — هذا فقط يربط المريض بالباقة ويبدأ حساب صلاحيتها</DialogDescription>
+          {/* الوصف بقي من مرحلة كان الاشتراك فيها إدراجًا مباشرًا بلا فاتورة. بعد
+              انتقال البيع إلى `app_sell_package` (تُنشئ الفاتورة والاشتراك معًا)
+              صار الوصف يدفع الموظّف إلى إنشاء فاتورة ثانية يدويًّا — فيُحصَّل ثمن
+              الباقة مرّتين، ويخالف رسالة النجاح في نفس النافذة. */}
+          <DialogDescription>
+            الحفظ يُنشئ فاتورة مسوّدة بسعر الباقة ويبدأ حساب صلاحيتها — أصدر الفاتورة واستلم الدفع من
+            شاشة الفوترة، ولا تُنشئ فاتورة أخرى لها
+          </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">

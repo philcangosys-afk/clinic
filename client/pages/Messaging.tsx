@@ -9,7 +9,6 @@ import type {
   InternalMessagingSettingsRow,
   InternalUnreadCountView,
   MessageChannel,
-  MessageLogStatus,
   MessageTemplateRow,
   OrganizationMemberDirectoryView,
   SmsCreditTransactionRow,
@@ -36,20 +35,47 @@ import SendMessageTab from "@/components/messaging/SendMessageTab";
 
 const CHANNEL_ICON: Record<MessageChannel, typeof Mail> = { sms: Smartphone, email: Mail, internal: MessageSquare };
 const CHANNEL_LABELS: Record<MessageChannel, string> = { sms: "رسالة نصية", email: "بريد إلكتروني", internal: "داخلي" };
-const STATUS_BADGE: Record<MessageLogStatus, "secondary" | "default" | "destructive" | "success"> = {
+/**
+ * الحالات السبع كما يسمح بها قيد `message_log_status_check` في القاعدة.
+ *
+ * كانت الخرائط تغطّي أربعًا فقط، فتُرسَم شارة **فارغة بلا نصّ** لكل رسالة
+ * `pending` (يُدرجها مُشغِّل التذكيرات) أو `processing` (يُعلّمها سحب الطابور)
+ * أو `cancelled` (يحوّلها مُحفِّز الحجب) — أي أن الرسالة الملغاة لمريض محجوب
+ * والرسالة التي لم يحن دورها لا يمكن تمييزهما ولا فهمهما.
+ */
+const STATUS_BADGE: Record<string, "secondary" | "default" | "destructive" | "success" | "warning"> = {
+  pending: "secondary",
   queued: "secondary",
+  processing: "default",
   sent: "default",
   delivered: "success",
   failed: "destructive",
+  cancelled: "warning",
 };
-const STATUS_LABELS: Record<MessageLogStatus, string> = {
+const STATUS_LABELS: Record<string, string> = {
+  pending: "بانتظار الدور",
   queued: "في الانتظار",
+  processing: "قيد الإرسال",
   sent: "أُرسلت",
   delivered: "تم التسليم",
   failed: "فشلت",
+  cancelled: "أُلغيت",
 };
 
 export default function Messaging() {
+  const { organization } = useOrganizationAccess();
+  /**
+   * إعدادات الدردشة تُقرأ هنا لا في تبويبها وحده.
+   *
+   * كان «تفعيل الدردشة الداخلية» يُحفظ ولا يقرؤه شيء: يُلغي المالك تأشيره
+   * فيرى رسالة نجاح، ويبقى التبويب مفتوحًا للفريق كله. الآن يُخفى التبويب فعلًا
+   * عند إلغاء التفعيل — مع ملاحظة صريحة أن هذا منعُ واجهة لا منعُ قاعدة
+   * (سياسات `internal_messages` لا تفحص هذا المفتاح بعد).
+   */
+  const chatSettings = useChatSettings(organization?.id);
+  const chatEnabled = chatSettings.data ? chatSettings.data.internal_chat_enabled : true;
+  const pollSeconds = Math.max(5, Number(chatSettings.data?.poll_interval_seconds ?? 15));
+
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
       <div>
@@ -64,7 +90,7 @@ export default function Messaging() {
           <TabsTrigger value="templates">القوالب</TabsTrigger>
           <TabsTrigger value="canned">النصوص الجاهزة</TabsTrigger>
           <TabsTrigger value="sms">رصيد SMS</TabsTrigger>
-          <TabsTrigger value="chat">الدردشة الداخلية</TabsTrigger>
+          {chatEnabled && <TabsTrigger value="chat">الدردشة الداخلية</TabsTrigger>}
           <TabsTrigger value="settings">إعدادات الدردشة</TabsTrigger>
         </TabsList>
         <TabsContent value="send" className="mt-4">
@@ -82,9 +108,11 @@ export default function Messaging() {
         <TabsContent value="sms" className="mt-4">
           <SmsLedgerTab />
         </TabsContent>
-        <TabsContent value="chat" className="mt-4">
-          <InternalChatTab />
-        </TabsContent>
+        {chatEnabled && (
+          <TabsContent value="chat" className="mt-4">
+            <InternalChatTab pollSeconds={pollSeconds} />
+          </TabsContent>
+        )}
         <TabsContent value="settings" className="mt-4">
           <ChatSettingsTab />
         </TabsContent>
@@ -104,7 +132,7 @@ function useMessageLog(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("message_log")
         .select(
-          "id, channel, event_key, message_text, status, sent_at, created_at, recipient_user_id, external_recipient, created_by, patient:patients(name_ar)",
+          "id, channel, event_key, message_text, status, last_error, sent_at, created_at, recipient_user_id, external_recipient, created_by, patient:patients(name_ar)",
         )
         .eq("organization_id", organizationId)
         .order("created_at", { ascending: false })
@@ -178,7 +206,19 @@ function MessageLogTab() {
                     </TableCell>
                     <TableCell className="max-w-xs truncate text-sm">{msg.message_text}</TableCell>
                     <TableCell>
-                      <Badge variant={STATUS_BADGE[msg.status as MessageLogStatus]}>{STATUS_LABELS[msg.status as MessageLogStatus]}</Badge>
+                      {/* سبب الفشل أو الإلغاء يظهر في تلميح على الشارة: بدونه
+                          تبقى «أُلغيت» بلا تفسير للموظّف الذي أرسلها. */}
+                      <Badge
+                        variant={STATUS_BADGE[String(msg.status)] ?? "secondary"}
+                        title={(msg as any).last_error ?? undefined}
+                      >
+                        {STATUS_LABELS[String(msg.status)] ?? String(msg.status)}
+                      </Badge>
+                      {(msg as any).last_error && (
+                        <p className="mt-0.5 max-w-40 truncate text-[10px] text-muted-foreground">
+                          {(msg as any).last_error}
+                        </p>
+                      )}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{new Date(msg.created_at).toLocaleString("ar-SA")}</TableCell>
                   </TableRow>
@@ -235,6 +275,7 @@ function TemplatesTab() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [createOpen, setCreateOpen] = useState(false);
 
   const saveTemplate = useMutation({
     mutationFn: async ({ id, text }: { id: string; text: string }) => {
@@ -277,11 +318,30 @@ function TemplatesTab() {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>قوالب الرسائل</CardTitle>
-        <CardDescription>8 قوالب نظامية زُرعت تلقائيًا عند إنشاء المؤسسة — التعديل مقيَّد بصفة مدير المؤسسة من قاعدة البيانات</CardDescription>
+      <CardHeader className="flex flex-row items-start justify-between gap-3">
+        <div>
+          <CardTitle>قوالب الرسائل</CardTitle>
+          {/* الوصف كان يقول إن ثمانية قوالب «زُرعت تلقائيًا» — والزرع ضاع من
+              دالّة إنشاء المنشأة الحيّة، فكان التبويب يظهر فارغًا بلا مخرج
+              وبوصفٍ يكذّب ما يراه المستخدم. */}
+          <CardDescription>
+            نصّ كل حدث تُبنى منه الرسالة (تذكير موعد، جاهزية نتيجة، إشعار فاتورة...). الزرع
+            التلقائي عند إنشاء المنشأة لا يعمل حاليًّا، فأنشئ ما تحتاجه من «قالب جديد».
+            الإضافة والتعديل مقيَّدان بصفة المالك أو مدير النظام في القاعدة.
+          </CardDescription>
+        </div>
+        <Button size="sm" onClick={() => setCreateOpen(true)}>
+          <Plus className="h-4 w-4" />
+          قالب جديد
+        </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        <NewTemplateDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          organizationId={organization?.id}
+          existing={templates.data ?? []}
+        />
         {templates.isLoading && <Skeleton className="h-40 w-full" />}
         {!templates.isLoading &&
           (templates.data ?? []).map((template) => (
@@ -315,10 +375,126 @@ function TemplatesTab() {
             </div>
           ))}
         {!templates.isLoading && (templates.data ?? []).length === 0 && (
-          <p className="py-8 text-center text-sm text-muted-foreground">لا توجد قوالب — هذا غير متوقَّع لأنها تُزرَع تلقائيًا عند إنشاء المؤسسة.</p>
+          <p className="py-8 text-center text-sm text-muted-foreground">
+            لا توجد قوالب لهذه المنشأة. تذكير المواعيد يقرأ قالبه من هنا — وبلا قالب لا نصّ،
+            فأنشئ قالب «تذكير بموعد» على الأقل.
+          </p>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * إنشاء قالب يدويًّا — المخرج من التبويب الفارغ.
+ *
+ * سياسة `message_templates_manage_admins` تسمح للمالك ومدير النظام بالإدراج
+ * أصلًا، ولم تكن هناك واجهة تفعله: فمنشأة فقدت الزرع التلقائي تبقى بلا قوالب
+ * إلى الأبد. مفاتيح الأحداث والقنوات محصورة بما يسمح به قيد القاعدة.
+ */
+function NewTemplateDialog({
+  open,
+  onOpenChange,
+  organizationId,
+  existing,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  organizationId: string | undefined;
+  existing: MessageTemplateRow[];
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [eventKey, setEventKey] = useState("appointment_reminder");
+  const [channel, setChannel] = useState<MessageChannel>("sms");
+  const [text, setText] = useState("");
+
+  const duplicate = existing.some((row) => row.event_key === eventKey && row.channel === channel);
+
+  const create = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      if (!text.trim()) throw new Error("اكتب نصّ القالب");
+      const { error } = await supabase.from("message_templates").insert({
+        organization_id: organizationId,
+        event_key: eventKey,
+        channel,
+        template_text: text.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["message-templates", organizationId] });
+      toast({ title: "أُضيف القالب" });
+      setText("");
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر إنشاء القالب",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>قالب رسالة جديد</DialogTitle>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>الحدث</Label>
+            <select
+              className="rounded-md border bg-background px-3 py-2 text-sm"
+              value={eventKey}
+              onChange={(e) => setEventKey(e.target.value)}
+            >
+              {Object.entries(EVENT_KEY_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>القناة</Label>
+            <select
+              className="rounded-md border bg-background px-3 py-2 text-sm"
+              value={channel}
+              onChange={(e) => setChannel(e.target.value as MessageChannel)}
+            >
+              {Object.entries(CHANNEL_LABELS).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+            {channel === "sms" && (
+              <p className="text-xs text-amber-700">
+                قناة الرسائل النصّية غير مفعّلة في النظام: القالب يُسجَّل ويُستعمل في توليد نصّ
+                الرسالة، لكن الرسالة لا تصل جوّال المريض بعد.
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>نصّ القالب *</Label>
+            <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={3} autoFocus />
+          </div>
+          {duplicate && (
+            <p className="text-xs text-amber-700">
+              يوجد قالب لهذا الحدث بهذه القناة — الإضافة ستُنشئ قالبًا ثانيًا له.
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button disabled={!text.trim() || create.isPending} onClick={() => create.mutate()}>
+            {create.isPending ? "جارٍ الحفظ..." : "حفظ القالب"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -557,9 +733,18 @@ function SmsLedgerTab() {
   const [amount, setAmount] = useState("100");
   const [threshold, setThreshold] = useState("");
 
+  // لا صفّ رصيد للمنشأة قبل أول تعبئة: دالّة إنشاء المنشأة الحيّة لا تُدرجه،
+  // ولا سياسة INSERT على الجدول — ينشئه `app_apply_sms_credit_transaction`
+  // عند أول تعبئة. هذه الحقيقة يجب أن تُقال، لا أن تُترجَم إلى «لا صلاحية».
+  const balanceRowMissing = !balance.isLoading && !balance.isError && balance.data == null;
+
   const saveThreshold = useMutation({
     mutationFn: async () => {
       if (!organization?.id) throw new Error("لا توجد مؤسسة نشطة");
+      if (balanceRowMissing)
+        throw new Error(
+          "لا يوجد سجل رصيد لهذه المنشأة بعد — يُنشأ بأول «تعبئة رصيد»، وبعدها يُحفظ حد التنبيه. المسألة ليست في صلاحيتك.",
+        );
       // كما في القوالب: تحديث لا يطابق صفًا ليس خطأً، فبلا هذا الفحص كان
       // حد التنبيه يبقى على قيمته القديمة مع رسالة نجاح.
       const { data, error } = await supabase
@@ -569,7 +754,9 @@ function SmsLedgerTab() {
         .select("organization_id");
       if (error) throw error;
       if (!data || data.length === 0)
-        throw new Error("لم يُحفظ الحد — تعديله مقيَّد بصفة مالك المنشأة أو مدير النظام");
+        throw new Error(
+          "لم يُحفظ الحد: لم يطابق التحديث أي سجل — إمّا لا سجل رصيد لهذه المنشأة (يُنشأ بأول تعبئة)، وإمّا أن تعديله مقيَّد بصفة مالك المنشأة أو مدير النظام",
+        );
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sms-balance", organization?.id] });
@@ -606,6 +793,12 @@ function SmsLedgerTab() {
 
   return (
     <div className="flex flex-col gap-4">
+      {balanceRowMissing && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          لا يوجد سجل رصيد لهذه المنشأة بعد — يُنشأ تلقائيًّا بأول «تعبئة رصيد»، وقبل ذلك لا
+          يمكن حفظ حد التنبيه.
+        </div>
+      )}
       <Card>
         <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
           <span>الرصيد الحالي: <strong>{(balance.data?.balance ?? 0).toLocaleString("ar-SA")}</strong> رسالة</span>
@@ -619,7 +812,12 @@ function SmsLedgerTab() {
               value={threshold}
               onChange={(e) => setThreshold(e.target.value)}
             />
-            <Button size="sm" variant="outline" disabled={!threshold || saveThreshold.isPending} onClick={() => saveThreshold.mutate()}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!threshold || saveThreshold.isPending || balanceRowMissing}
+              onClick={() => saveThreshold.mutate()}
+            >
               حفظ
             </Button>
           </div>
@@ -727,11 +925,17 @@ function useMembersDirectory(organizationId: string | undefined) {
   });
 }
 
-function useUnreadCounts(organizationId: string | undefined, userId: string | undefined) {
+function useUnreadCounts(
+  organizationId: string | undefined,
+  userId: string | undefined,
+  pollSeconds: number,
+) {
   return useQuery({
     queryKey: ["internal-unread", organizationId, userId],
     enabled: Boolean(organizationId) && Boolean(userId),
-    refetchInterval: 15_000,
+    // مدة التحديث تأتي من إعداد المنشأة `poll_interval_seconds`: كانت مثبَّتة
+    // على 15 و10 ثوانٍ، فتغييرها في الإعدادات لم يكن يغيّر شيئًا.
+    refetchInterval: pollSeconds * 1000,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_internal_unread_counts")
@@ -744,11 +948,11 @@ function useUnreadCounts(organizationId: string | undefined, userId: string | un
   });
 }
 
-function useConversationMessages(conversationId: string) {
+function useConversationMessages(conversationId: string, pollSeconds: number) {
   return useQuery({
     queryKey: ["internal-messages", conversationId],
     enabled: Boolean(conversationId),
-    refetchInterval: 10_000,
+    refetchInterval: pollSeconds * 1000,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("internal_messages")
@@ -762,12 +966,12 @@ function useConversationMessages(conversationId: string) {
   });
 }
 
-function InternalChatTab() {
+function InternalChatTab({ pollSeconds }: { pollSeconds: number }) {
   const { organization, session } = useOrganizationAccess();
   const currentUserId = session?.user.id;
   const conversations = useConversations(organization?.id);
   const members = useMembersDirectory(organization?.id);
-  const unread = useUnreadCounts(organization?.id, currentUserId);
+  const unread = useUnreadCounts(organization?.id, currentUserId, pollSeconds);
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
@@ -778,7 +982,7 @@ function InternalChatTab() {
   const [draft, setDraft] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const messages = useConversationMessages(selectedConversationId ?? "");
+  const messages = useConversationMessages(selectedConversationId ?? "", pollSeconds);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1127,6 +1331,10 @@ function ChatSettingsTab() {
               />
               <Label className="font-normal">تفعيل الدردشة الداخلية</Label>
             </div>
+            <p className="-mt-2 text-xs text-muted-foreground">
+              إلغاء التأشير يُخفي تبويب «الدردشة الداخلية» بعد الحفظ. إخفاءُ واجهة لا منعٌ في
+              القاعدة: سياسات الرسائل الداخلية لا تفحص هذا المفتاح بعد.
+            </p>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="flex flex-col gap-1.5">
                 <Label>مدة التحديث (ثانية)</Label>
@@ -1138,13 +1346,18 @@ function ChatSettingsTab() {
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label>مهلة اعتبار المستخدم "متصلًا" (ثانية)</Label>
+                <Label>مهلة اعتبار المستخدم "متصلًا" (ثانية) — غير مُطبَّقة بعد</Label>
                 <Input
                   type="number"
                   min={10}
                   value={form.online_timeout_seconds}
                   onChange={(e) => setForm((prev) => ({ ...prev, online_timeout_seconds: Number(e.target.value) || 60 }))}
                 />
+                {/* لا توجد في النظام حالة «متصل» أصلًا: لا جدول حضور ولا منظور
+                    يقرأ هذه المهلة. تُحفظ القيمة ولا أثر لها. */}
+                <p className="text-xs text-amber-700">
+                  لا تُعرض حالة «متصل» في أي شاشة بعد، فهذه القيمة تُحفظ بلا أثر.
+                </p>
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label>نطاق عرض المحادثات للمدير</Label>
@@ -1169,21 +1382,31 @@ function ChatSettingsTab() {
                 </select>
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={form.notifications_enabled}
-                onChange={(e) => setForm((prev) => ({ ...prev, notifications_enabled: e.target.checked }))}
-              />
-              <Label className="font-normal">تفعيل تنبيهات الرسائل الجديدة</Label>
-            </div>
-            <div className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={form.notify_by_role}
-                onChange={(e) => setForm((prev) => ({ ...prev, notify_by_role: e.target.checked }))}
-              />
-              <Label className="font-normal">تنبيه حسب الدور الوظيفي</Label>
+            {/* إدراج رسالة داخلية لا يُنتج تنبيهًا في القاعدة (المُحفِّز الوحيد
+                على الجدول يُحدِّث وقت آخر رسالة فقط)، فالمفتاحان بلا أثر حتى
+                يُضاف مُحفِّز يستدعي `app_notify_event` بشرطهما. */}
+            <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
+              <p className="text-sm font-semibold">مفتاحان يُحفظان ولا يُطبَّقان بعد</p>
+              <p className="mb-2 text-xs">
+                لا يُنشئ النظام تنبيهًا عند وصول رسالة داخلية — عدّاد «غير المقروء» في التبويب
+                هو ما ينبّه اليوم.
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={form.notifications_enabled}
+                  onChange={(e) => setForm((prev) => ({ ...prev, notifications_enabled: e.target.checked }))}
+                />
+                <Label className="font-normal">تفعيل تنبيهات الرسائل الجديدة</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={form.notify_by_role}
+                  onChange={(e) => setForm((prev) => ({ ...prev, notify_by_role: e.target.checked }))}
+                />
+                <Label className="font-normal">تنبيه حسب الدور الوظيفي</Label>
+              </div>
             </div>
             <div>
               <Button disabled={save.isPending} onClick={() => save.mutate()}>

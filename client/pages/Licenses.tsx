@@ -37,7 +37,7 @@ const ALERT_WINDOWS = [
   { value: "60", label: "خلال 60 يومًا" },
   { value: "90", label: "خلال 90 يومًا" },
   { value: "180", label: "خلال 180 يومًا" },
-  { value: "all", label: "كل التراخيص" },
+  { value: "all", label: "كل التراخيص (مع المعطَّلة)" },
 ];
 
 function daysUntil(dateStr: string) {
@@ -175,13 +175,22 @@ export default function Licenses() {
   const licenses = useLicenses(organization?.id);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<FacilityLicenseRow | null>(null);
-  const [alertWindow, setAlertWindow] = useState("90");
+  /**
+   * النطاق الابتدائي «كل التراخيص» لا «خلال 90 يومًا».
+   *
+   * الشاشة اسمها «تراخيص المنشأة» لا «التراخيص المنتهية»: بالبدء من 90 يومًا
+   * كان الترخيص المُضاف للتوّ لسنتين يختفي فور رسالة النجاح، فيظنّ المستخدم أن
+   * الحفظ فشل ويعيد الإضافة فتتكرّر التراخيص. النطاقات باقية كمُرشِّح اختياري.
+   */
+  const [alertWindow, setAlertWindow] = useState("all");
 
   const rows = useMemo(() => {
-    const all = (licenses.data ?? []).filter((row) => !row.is_disabled);
-    if (alertWindow === "all") return licenses.data ?? [];
+    // معالجة `is_disabled` موحّدة بين الفرعين: النطاقات الزمنية تعرض السارية
+    // وحدها (لأنها مُرشِّح تنبيه)، و«كل التراخيص» يعرض الكل — وهو ما يقوله نصّه.
+    const list = licenses.data ?? [];
+    if (alertWindow === "all") return list;
     const limit = Number(alertWindow);
-    return all.filter((row) => daysUntil(row.end_date) <= limit);
+    return list.filter((row) => !row.is_disabled && daysUntil(row.end_date) <= limit);
   }, [licenses.data, alertWindow]);
 
   const expiredCount = (licenses.data ?? []).filter(
@@ -322,7 +331,9 @@ export default function Licenses() {
                 {rows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
-                      لا توجد تراخيص ضمن النطاق المختار.
+                      {alertWindow === "all"
+                        ? "لا توجد تراخيص مسجَّلة بعد."
+                        : "لا توجد تراخيص ضمن النطاق المختار — اختر «كل التراخيص» لعرض الجميع."}
                     </TableCell>
                   </TableRow>
                 )}

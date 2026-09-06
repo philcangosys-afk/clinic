@@ -6,7 +6,6 @@ import { supabase } from "@/lib/supabase";
 import type {
   InsuranceClaimBatchStatus,
   InsuranceClaimFormType,
-  InsuranceClaimStatus,
   PreauthorizationStatus,
 } from "@/lib/database.types";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -40,35 +39,13 @@ import { useInsuranceSettings } from "@/lib/insurance-settings";
 import { InsuranceSettingsTab } from "@/pages/OperationsSettings";
 import FormRequirementsTab from "@/components/insurance/FormRequirementsTab";
 import ClaimsWorkspace from "@/components/insurance/ClaimsWorkspace";
+import {
+  CLAIM_STATUS_BADGE,
+  CLAIM_STATUS_LABELS,
+  claimValidationErrorsText,
+} from "@/components/insurance/claim-status";
 import { useToast } from "@/hooks/use-toast";
 
-/**
- * حالات المطالبة بعد 0089.
- *
- * كانت أربعًا، وكان `rejected` منها **طريقًا مسدودًا**: لا سبب رفض، ولا
- * رابط لإعادة تقديم. الأربع الجديدة تفتح الطريق: اعتماد جزئي، وإعادة تقديم،
- * ودفع، وإلغاء.
- */
-const CLAIM_STATUS_LABELS: Record<string, string> = {
-  draft: "مسودة",
-  submitted: "مُرسلة",
-  approved: "موافق عليها",
-  partially_approved: "معتمَدة جزئيًا",
-  rejected: "مرفوضة",
-  resubmitted: "أُعيد تقديمها",
-  paid: "مدفوعة",
-  cancelled: "ملغاة",
-};
-const CLAIM_STATUS_BADGE: Record<string, string> = {
-  draft: "bg-slate-100 text-slate-700",
-  submitted: "bg-sky-100 text-sky-700",
-  approved: "bg-emerald-100 text-emerald-700",
-  partially_approved: "bg-amber-100 text-amber-800",
-  rejected: "bg-rose-100 text-rose-700",
-  resubmitted: "bg-violet-100 text-violet-700",
-  paid: "bg-emerald-200 text-emerald-900",
-  cancelled: "bg-slate-200 text-slate-600",
-};
 const FORM_TYPE_LABELS: Record<InsuranceClaimFormType, string> = { ucaf: "UCAF", dcaf: "DCAF", ocaf: "OCAF" };
 const PREAUTH_STATUS_LABELS: Record<PreauthorizationStatus, string> = {
   pending: "قيد الانتظار",
@@ -882,7 +859,7 @@ function useClaimForms(organizationId: string | undefined, status: string) {
       let query = supabase
         .from("insurance_claim_forms")
         .select(
-          "id, form_type, status, auto_created, created_at, form_data, claimed_amount, approved_amount, rejected_amount, rejection_reason, rejection_code, resubmission_count, resubmission_of_id, submitted_at, responded_at, patient:patients(name_ar, file_number, id_number, birth_date, insurance_company_name, insurance_policy_number, insurance_membership_number), doctor:doctors(name_ar)",
+          "id, form_type, status, auto_created, created_at, form_data, claimed_amount, approved_amount, rejected_amount, rejection_reason, rejection_code, resubmission_count, resubmission_of_id, submitted_at, responded_at, validation_errors, patient:patients(name_ar, file_number, id_number, birth_date, insurance_company_name, insurance_policy_number, insurance_membership_number), doctor:doctors(name_ar)",
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
         .eq("organization_id", organizationId)
@@ -1108,20 +1085,39 @@ function ClaimsTab() {
                     {form.approved_amount != null && ` · المعتمَد ${Number(form.approved_amount).toLocaleString("ar-SA")} ر.س`}
                   </p>
                 )}
+                {/* المطالبة `validation_failed` كانت صفًّا ميتًا: لا نصّ يقول ما
+                    الناقص ولا إجراء. الأخطاء محفوظة في `validation_errors`. */}
+                {form.status === "validation_failed" && (
+                  <p className="text-xs text-rose-700">
+                    نقص يمنع الإرسال: {claimValidationErrorsText(form.validation_errors) ?? "راجع بيانات المريض والتغطية"}
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-2">
-                <Badge className={CLAIM_STATUS_BADGE[form.status as InsuranceClaimStatus]}>
-                  {CLAIM_STATUS_LABELS[form.status as InsuranceClaimStatus]}
+                {/* الحالة تأتي من القاعدة وقيدها يسمح بثلاث عشرة: بلا `??`
+                    كانت أي حالة غير مترجَمة تظهر شارةً فارغة بلا نصّ */}
+                <Badge className={CLAIM_STATUS_BADGE[form.status] ?? "bg-slate-100 text-slate-700"}>
+                  {CLAIM_STATUS_LABELS[form.status] ?? form.status}
                 </Badge>
                 <Button size="sm" variant="ghost" title="طباعة النموذج" onClick={() => printClaimForm(form)}>
                   <Printer className="h-3.5 w-3.5" />
                 </Button>
-                {form.status === "draft" && (
+                {/* الأزرار كانت مبنيّة على ثماني حالات فقط، فحالات القاعدة
+                    الأخرى (`validation_failed` و`ready` و`acknowledged` و
+                    `in_review` و`settled`) تظهر بلا أي إجراء. الانتقالات
+                    المسموحة معرَّفة في `app_claim_status_allowed`. */}
+                {form.status === "validation_failed" && (
+                  <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: form.id, status: "draft" })}>
+                    <RefreshCcw className="h-3.5 w-3.5" />
+                    إعادة التجهيز
+                  </Button>
+                )}
+                {["draft", "ready"].includes(form.status) && (
                   <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: form.id, status: "submitted" })}>
                     إرسال
                   </Button>
                 )}
-                {form.status === "submitted" && (
+                {["submitted", "acknowledged", "in_review"].includes(form.status) && (
                   <>
                     <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: form.id, status: "approved" })}>
                       <Check className="h-3.5 w-3.5" />
@@ -1138,7 +1134,7 @@ function ClaimsTab() {
                     </Button>
                   </>
                 )}
-                {form.status === "approved" && (
+                {["approved", "settled"].includes(form.status) && (
                   <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: form.id, status: "paid" })}>
                     تسجيل السداد
                   </Button>
@@ -1636,12 +1632,23 @@ function NewPreauthDialog({
 // دفعات مطالبات التأمين (Claim Batches) — تجميع فواتير تأمين مستحقة لشركة
 // واحدة في دفعة واحدة قابلة للتتبع عبر مراحل الإرسال/القبول/الرفض
 // ---------------------------------------------------------------------------
+/**
+ * حالات الدفعة **تتبّعٌ إداريّ لا سداد**.
+ *
+ * كانت الأسماء («مقبولة»، «مدفوعة جزئيًا») تُقرأ سدادًا من الشركة، بينما
+ * `updateStatus` لا تكتب مبلغًا ولا تاريخ سداد ولا سند قبض، ولا تُنقص متبقّي أي
+ * فاتورة في الدفعة، ولا تغيّر حالة أي مطالبة — فيقرأ المحاسب سدادًا لم يحدث.
+ * التحصيل الحقيقي مبنيّ في مسار آخر: `app_settle_insurance_claims` من تبويب
+ * «معالجة المطالبات والتحصيل». فسُمّيت الحالات بما تعنيه فعلًا، وأُزيل زرّ
+ * «مدفوعة جزئيًا» لأنه يوحي بمال لم يُسجَّل (والحالة تبقى مترجَمة للصفوف
+ * القديمة المحفوظة بها).
+ */
 const BATCH_STATUS_LABELS: Record<InsuranceClaimBatchStatus, string> = {
   draft: "مسودة",
-  submitted: "مُرسلة",
-  accepted: "مقبولة",
-  rejected: "مرفوضة",
-  partially_paid: "مدفوعة جزئيًا",
+  submitted: "أُبلغت الشركة",
+  accepted: "قبلتها الشركة (إداريًّا)",
+  rejected: "ردّتها الشركة",
+  partially_paid: "قبول جزئيّ (إداريًّا)",
 };
 const BATCH_STATUS_VARIANT: Record<InsuranceClaimBatchStatus, "secondary" | "default" | "success" | "destructive"> = {
   draft: "secondary",
@@ -1696,7 +1703,15 @@ function ClaimBatchesTab() {
     mutationFn: async ({ id, status }: { id: string; status: InsuranceClaimBatchStatus }) => {
       const { data, error } = await supabase
         .from("insurance_claim_batches")
-        .update({ status, submitted_at: status === "submitted" ? new Date().toISOString() : undefined })
+        .update({
+          status,
+          submitted_at: status === "submitted" ? new Date().toISOString() : undefined,
+          // ردّ الشركة الإداريّ بلا تاريخ لا يُقاس عليه تأخّر ولا يُبنى عليه
+          // متابعة — والعمود موجود ولم يكن يُكتب من أي مكان.
+          responded_at: ["accepted", "rejected"].includes(status)
+            ? new Date().toISOString()
+            : undefined,
+        })
         .eq("id", id)
         .select("id");
       if (error) throw error;
@@ -1705,6 +1720,13 @@ function ClaimBatchesTab() {
       if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insurance-claim-batches"] }),
+    // بلا هذا كان رفض RLS أو القيد يمرّ صامتًا فتبقى الحالة القديمة بلا تفسير
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر تحديث حالة الدفعة",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
   });
 
   return (
@@ -1719,7 +1741,12 @@ function ClaimBatchesTab() {
       <Card>
         <CardHeader>
           <CardTitle>دفعات مطالبات التأمين</CardTitle>
-          <CardDescription>كل دفعة تجمع فواتير تأمين مستحقة لشركة واحدة لتقديمها معًا</CardDescription>
+          <CardDescription>
+            كل دفعة تجمع مطالبات فواتير تأمين لشركة واحدة لتقديمها معًا، والمبلغ هو حصّة
+            الشركة لا صافي الفاتورة. حالات الدفعة تتبّع إداريّ فقط ولا تسجّل مالًا: المبلغ
+            المحصَّل يُسجَّل من تبويب «معالجة المطالبات والتحصيل» فيُوزَّع على المطالبات
+            ويُنقص المتبقّي.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-2">
           {batches.isLoading && <Skeleton className="h-24 w-full" />}
@@ -1734,7 +1761,7 @@ function ClaimBatchesTab() {
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {b.period_start && b.period_end ? `${b.period_start} → ${b.period_end} · ` : ""}
-                  الإجمالي: {Number(b.total_amount).toLocaleString("ar-SA")} ر.س
+                  المطالَب به من الشركة: {Number(b.total_amount).toLocaleString("ar-SA")} ر.س
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -1751,14 +1778,14 @@ function ClaimBatchesTab() {
                 )}
                 {b.status === "submitted" && (
                   <>
+                    {/* «قبول» و«ردّ» تسجيلُ ردٍّ إداريّ من الشركة لا سداد. زرّ
+                        «مدفوعة جزئيًا» أُزيل: كان يوسم الدفعة بالسداد بلا مبلغ
+                        ولا سند ولا أثر على متبقّي أي فاتورة. */}
                     <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: b.id, status: "accepted" })}>
-                      قبول كامل
-                    </Button>
-                    <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: b.id, status: "partially_paid" })}>
-                      مدفوعة جزئيًا
+                      تسجيل قبول الشركة
                     </Button>
                     <Button size="sm" variant="ghost" className="text-destructive" onClick={() => updateStatus.mutate({ id: b.id, status: "rejected" })}>
-                      رفض
+                      تسجيل ردّ الشركة
                     </Button>
                   </>
                 )}
@@ -1895,11 +1922,31 @@ function BatchItemsDialog({
     queryClient.invalidateQueries({ queryKey: ["insurance-claim-batches"] });
   };
 
+  /**
+   * إجمالي الدفعة يُعاد حسابه من بنودها بعد كل إضافة أو حذف.
+   *
+   * كان الاستعلامان بلا فحص خطأ: `const { data } = await ...` تُهمل `error`،
+   * والتحديث لا يفحص `error` ولا عدد الصفوف المتأثّرة. فإن رفضت RLS التحديث أو
+   * فشل استعلام الجمع بقي `total_amount` على قيمته القديمة و**ظهرت رسالة نجاح**
+   * — فتُرسَل الدفعة إلى شركة التأمين بإجماليٍّ لا يساوي مجموع بنودها. ولا
+   * محفِّز في القاعدة يصحّح الرقم لاحقًا، فالفحص هنا هو الضمانة الوحيدة.
+   */
   const recalcTotal = async () => {
     if (!batch) return;
-    const { data } = await supabase.from("insurance_claim_batch_items").select("amount").eq("batch_id", batch.id);
+    const { data, error } = await supabase
+      .from("insurance_claim_batch_items")
+      .select("amount")
+      .eq("batch_id", batch.id);
+    if (error) throw error;
     const total = (data ?? []).reduce((sum, row: any) => sum + Number(row.amount), 0);
-    await supabase.from("insurance_claim_batches").update({ total_amount: total }).eq("id", batch.id);
+    const { data: updated, error: updateError } = await supabase
+      .from("insurance_claim_batches")
+      .update({ total_amount: total })
+      .eq("id", batch.id)
+      .select("id");
+    if (updateError) throw updateError;
+    if (!updated || updated.length === 0)
+      throw new Error("تعذّر تحديث إجمالي الدفعة — الإجمالي المعروض لا يساوي مجموع بنودها");
   };
 
   const searchInvoices = async () => {
@@ -1911,32 +1958,64 @@ function BatchItemsDialog({
      * وإضافة الخطأ منهما تُدرج مبلغ منشأة أخرى في دفعة مطالبات هذه المنشأة
      * ثم يُرسَل الإجمالي إلى شركة التأمين.
      */
-    const { data } = await supabase
+    /**
+     * الدفعة لا تقبل إلا فاتورة تأمين قائمة: كان البحث يُظهر **أي** فاتورة
+     * بذلك الرقم — نقدية غير تأمينية، أو ملغاة، أو عرض سعر — وبإضافتها تُطالَب
+     * شركة التأمين بما لا يخصّها. والخطأ كان مُهمَلًا فيظهر «لا نتائج» بدل
+     * رسالة القاعدة.
+     */
+    const { data, error } = await supabase
       .from("sales_invoices")
-      .select("id, invoice_number, net_amount, is_insurance_invoice, patient:patients!sales_invoices_patient_tenant_fk(name_ar)")
+      .select("id, invoice_number, net_amount, insurance_share_amount, is_insurance_invoice, patient:patients!sales_invoices_patient_tenant_fk(name_ar)")
       .eq("organization_id", organization?.id)
       .eq("invoice_number", Number(invoiceSearch) || 0)
+      .eq("is_insurance_invoice", true)
+      .eq("is_temporary", false)
+      .not("status", "eq", "void")
       .limit(5);
+    if (error) {
+      setInvoiceResults([]);
+      toast({
+        variant: "destructive",
+        title: "تعذر البحث",
+        description: error.message,
+      });
+      return;
+    }
     setInvoiceResults(data ?? []);
   };
 
   const addItem = useMutation({
-    mutationFn: async (invoice: { id: string; net_amount: number }) => {
+    mutationFn: async (invoice: { id: string; insurance_share_amount: number | null }) => {
       if (!batch) return;
+      /**
+       * المبلغ المُدرَج هو **حصّة شركة التأمين** التي حسبتها القاعدة وخزّنتها،
+       * لا صافي الفاتورة: الصافي يشمل حصّة المريض (نسبة التحمّل)، وإدراجه
+       * يطالب الشركة بأكثر مما تستحقّه المنشأة عليها — فتُرفض الدفعة أو تُخصَم
+       * لاحقًا. ولا يُحسب هنا: يُقرأ كما حفظته القاعدة.
+       */
+      if (invoice.insurance_share_amount == null)
+        throw new Error("الفاتورة بلا حصّة تأمين محسوبة — راجع تغطية المريض قبل إدراجها في الدفعة");
       const { error } = await supabase
         .from("insurance_claim_batch_items")
-        .insert({ batch_id: batch.id, sales_invoice_id: invoice.id, amount: invoice.net_amount });
+        .insert({
+          batch_id: batch.id,
+          sales_invoice_id: invoice.id,
+          amount: invoice.insurance_share_amount,
+        });
       if (error) throw error;
       await recalcTotal();
     },
     onSuccess: () => {
-      invalidate();
       toast({ title: "تمت إضافة الفاتورة للدفعة" });
       setInvoiceResults([]);
       setInvoiceSearch("");
     },
     onError: (error: unknown) =>
       toast({ variant: "destructive", title: "تعذرت الإضافة", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+    // التبطيل في كل الحالات: البند قد يكون أُدرِج ثم فشلت إعادة حساب الإجمالي،
+    // فالقائمة والإجمالي المعروضان يجب أن يعودا من القاعدة لا من الذاكرة.
+    onSettled: invalidate,
   });
 
   const removeItem = useMutation({
@@ -1952,7 +2031,10 @@ function BatchItemsDialog({
       if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
       await recalcTotal();
     },
-    onSuccess: invalidate,
+    // بلا هذا كان فشل الحذف أو فشل إعادة حساب الإجمالي صامتًا تمامًا
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذر الحذف", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+    onSettled: invalidate,
   });
 
   const setItemStatus = useMutation({
@@ -1968,6 +2050,8 @@ function BatchItemsDialog({
       if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: invalidate,
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذر تحديث حالة البند", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
   });
 
   return (
@@ -1999,7 +2083,18 @@ function BatchItemsDialog({
                 <span>
                   #{inv.invoice_number} · {inv.patient?.name_ar ?? "—"}
                 </span>
-                <span>{Number(inv.net_amount).toLocaleString("ar-SA")} ر.س</span>
+                {/* المعروض هو ما سيُدرَج فعلًا: حصّة الشركة، والصافي للسياق */}
+                <span>
+                  حصّة الشركة{" "}
+                  {inv.insurance_share_amount == null
+                    ? "—"
+                    : Number(inv.insurance_share_amount).toLocaleString("ar-SA")}{" "}
+                  ر.س
+                  <span className="text-xs text-muted-foreground">
+                    {" "}
+                    (صافي الفاتورة {Number(inv.net_amount).toLocaleString("ar-SA")})
+                  </span>
+                </span>
               </button>
             ))}
           </div>
@@ -2613,6 +2708,9 @@ function CoverageRulesDialog({
         .eq("organization_id", contract?.organization_id)
         .eq("item_type", "service")
         .eq("is_archived", false)
+        // الخدمة المعطّلة لم تُعد تُقدَّم، فقاعدة تغطيتها لا معنى لها. كل قوائم
+        // الخدمات الأخرى في هذا الملفّ تُرشِّح الاثنين (مؤرشف + معطّل).
+        .eq("is_disabled", false)
         .order("name_ar")
         .limit(500);
       if (error) throw error;

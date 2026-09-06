@@ -1125,12 +1125,26 @@ function ConsultationSettingsTab({ organizationId, readOnly }: { organizationId:
       <Card>
         <CardHeader>
           <CardTitle>إعدادات الكشفية</CardTitle>
+          {/*
+            الوصف كان يقول إن التنبيه «يُحسَب تلقائيًا» — ولا شيء يحسبه: جدول
+            `consultation_fee_settings` لا تقرؤه أي دالّة ولا منظور، ودالّة
+            الاستحقاق `app_is_consultation_renewal_due` لا يستدعيها أحد.
+          */}
           <CardDescription>
-            تنبيه "حان وقت تجديد الكشفية" يُحسَب تلقائيًا من تاريخ آخر فاتورة كشفية فعلية لكل مريض
+            المدّة التي تبقى فيها الكشفية سارية تُدار من القواعد أدناه.
+            <span className="mt-1 block font-medium text-amber-700">
+              تنبيه تجديد الكشفية غير مُنفَّذ بعد: لا يُنشئ النظام تنبيهًا عند حلول موعد التجديد،
+              والمفتاح أدناه يُسجَّل استعدادًا لذلك فقط.
+            </span>
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <ToggleRow label="تفعيل تنبيه تجديد الكشفية" checked={enabled} disabled={readOnly} onChange={setEnabled} />
+          <ToggleRow
+            label="تفعيل تنبيه تجديد الكشفية (غير مُنفَّذ بعد)"
+            checked={enabled}
+            disabled={readOnly}
+            onChange={setEnabled}
+          />
           {!readOnly && (
             <Button
               className="self-start"
@@ -1272,8 +1286,21 @@ function ConsultationRulesList({
     <Card>
       <CardHeader>
         <CardTitle>قواعد الكشفية حسب التخصص</CardTitle>
+        {/*
+          القواعد تُحفظ ولا تُطبَّق: `consultation_fee_rules` لا يقرؤه إلا
+          `app_auto_create_insurance_claim_form` ولغرض واحد (هل الصنف كشفية أم
+          لا)، ولا يقرأ `renewal_days` ولا `free_reviews_count` ولا `doctor_ids`.
+          فالمريض العائد بعد أسبوع يُفوَّتر كشفية جديدة كاملة. لا يجوز أن تقول
+          الشاشة «تلقائيًا» عن شيء لا يقع.
+        */}
         <CardDescription>
-          تحدد خدمة الكشفية وخدمة المراجعة لكل تخصص، ومدة صلاحية الكشفية بالأيام، وعدد المراجعات المجانية خلالها
+          تحدد خدمة الكشفية وخدمة المراجعة لكل تخصص، ومدة صلاحية الكشفية بالأيام، وعدد المراجعات
+          المجانية خلالها — سجلٌّ مرجعيّ يعتمده الموظّف عند الفوترة.
+          <span className="mt-1 block font-medium text-amber-700">
+            الاحتساب التلقائي غير مُنفَّذ بعد: الفوترة لا تستبدل صنف الكشفية بصنف المراجعة ولا
+            تخصم من المراجعات المجانية ولا تُقصر القاعدة على الأطباء المحدَّدين — استبدال الصنف
+            يجري يدويًّا في الفاتورة.
+          </span>
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
@@ -1435,7 +1462,8 @@ function ConsultationRulesList({
               {(rules.data ?? []).length === 0 && (
                 <TableRow>
                   <TableCell colSpan={readOnly ? 7 : 8} className="py-8 text-center text-sm text-muted-foreground">
-                    لا توجد قواعد كشفية — أضف قاعدة لتفعيل احتساب الكشفية والمراجعات تلقائيًا.
+                    لا توجد قواعد كشفية — أضف قاعدة لتوثيق خدمة الكشفية والمراجعة ومدّة السريان
+                    لكل تخصص (الاحتساب عند الفوترة يدويّ حتى الآن).
                   </TableCell>
                 </TableRow>
               )}
@@ -1483,25 +1511,44 @@ export function InsuranceSettingsTab({ organizationId, readOnly }: { organizatio
     <Card>
       <CardHeader>
         <CardTitle>إعدادات التأمين الطبي</CardTitle>
-        <CardDescription>من يتحمل الضريبة، القوالب الافتراضية لنماذج المطالبات، والإشعارات عند تعديل بيانات الطبيب</CardDescription>
+        <CardDescription>القوالب الافتراضية لنماذج المطالبات، وقواعد منع التكرار، والإنشاء التلقائي للنماذج</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        <div className="flex items-center justify-between gap-4">
-          <Label>الجهة التي تتحمّل الضريبة</Label>
-          <Select
-            value={value.vat_responsibility}
-            disabled={readOnly}
-            onValueChange={(v) => setForm((f) => ({ ...f, vat_responsibility: v as InsuranceSettingsRow["vat_responsibility"] }))}
-          >
-            <SelectTrigger className="w-56">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="patient">المريض</SelectItem>
-              <SelectItem value="insurance_company">شركة التأمين</SelectItem>
-              <SelectItem value="by_item_category">حسب فئة الصنف</SelectItem>
-            </SelectContent>
-          </Select>
+        {/*
+          أربعة إعدادات تُحفظ ولا يقرؤها شيء: `vat_responsibility` (الدالّة التي
+          تحسب الضريبة فعلًا `app_resolve_vat_rate` لا تقرؤه، ولا يذكره أي من
+          مستهلكي إعدادات التأمين في الفوترة والمطالبات)، ومفتاحا إشعار التعديل
+          (لا مُحفِّز على `insurance_claim_forms` يُنشئ إشعارًا)،
+          و`allow_doctor_edit_radiology_data` (لا نموذج يفحصه). كانت مبثوثة بين
+          الإعدادات النافذة فتبدو مثلها — وأخطرها الضريبة لأن المالك يضبطها ثم
+          تُحتسب الفواتير التأمينية كما كانت تمامًا. فجُمعت وأُعلنت صراحةً.
+        */}
+        <div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900">
+          <p className="text-sm font-semibold">إعدادات تُحفظ ولا تُطبَّق بعد</p>
+          <p className="text-xs">
+            تُسجَّل في القاعدة ولا يقرؤها أي حساب أو إشعار اليوم. احتساب الضريبة يتبع نسبة
+            المنشأة وفئات الأصناف والجنسيات المعفاة من تبويب «الضريبة».
+          </p>
+          <div className="flex items-center justify-between gap-4">
+            <Label>الجهة التي تتحمّل الضريبة (غير مُطبَّقة)</Label>
+            <Select
+              value={value.vat_responsibility}
+              disabled={readOnly}
+              onValueChange={(v) => setForm((f) => ({ ...f, vat_responsibility: v as InsuranceSettingsRow["vat_responsibility"] }))}
+            >
+              <SelectTrigger className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="patient">المريض</SelectItem>
+                <SelectItem value="insurance_company">شركة التأمين</SelectItem>
+                <SelectItem value="by_item_category">حسب فئة الصنف</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {toggle("allow_doctor_edit_radiology_data", "السماح للطبيب بتعديل بيانات الأشعة في النموذج (غير مُطبَّق)")}
+          {toggle("notify_treating_doctor_on_changes", "إشعار الطبيب المعالج عند أي تعديل على النموذج (لا إشعار يُرسَل)")}
+          {toggle("notify_form_owner_on_changes", "إشعار منشئ النموذج عند أي تعديل (لا إشعار يُرسَل)")}
         </div>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
@@ -1527,10 +1574,6 @@ export function InsuranceSettingsTab({ organizationId, readOnly }: { organizatio
         {toggle("auto_create_forms_on_consultation_invoice", "إنشاء نموذج مطالبة تلقائيًا عند فوترة كشفية تأمين")}
         {toggle("exclude_offer_discount_invoices_from_auto_create", "استثناء فواتير العروض من الإنشاء التلقائي")}
         {toggle("disable_patient_max_copay_field", "تعطيل حقل الحد الأقصى لمشاركة المريض")}
-        {toggle("allow_doctor_edit_radiology_data", "السماح للطبيب بتعديل بيانات الأشعة في النموذج")}
-        <Separator />
-        {toggle("notify_treating_doctor_on_changes", "إشعار الطبيب المعالج عند أي تعديل على النموذج")}
-        {toggle("notify_form_owner_on_changes", "إشعار منشئ النموذج عند أي تعديل")}
         {!readOnly && (
           <Button className="self-start" disabled={save.isPending} onClick={() => save.mutate(form)}>
             {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
@@ -1584,6 +1627,10 @@ function MessagingSettingsTab({ organizationId, readOnly }: { organizationId: st
           disabled={readOnly}
           onChange={(checked) => setForm((f) => ({ ...f, internal_chat_enabled: checked }))}
         />
+        <p className="-mt-2 text-xs text-muted-foreground">
+          إلغاء التفعيل يُخفي تبويب «الدردشة الداخلية» في شاشة الرسائل — إخفاءُ واجهة لا منعٌ في
+          القاعدة: سياسات الرسائل الداخلية لا تفحص هذا المفتاح بعد.
+        </p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
             <Label>فترة التحديث (ثانية)</Label>
@@ -1596,7 +1643,7 @@ function MessagingSettingsTab({ organizationId, readOnly }: { organizationId: st
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label>مهلة اعتبار المستخدم "متصلًا" (ثانية)</Label>
+            <Label>مهلة اعتبار المستخدم "متصلًا" (ثانية) — غير مُطبَّقة</Label>
             <Input
               type="number"
               min={10}
@@ -1604,6 +1651,8 @@ function MessagingSettingsTab({ organizationId, readOnly }: { organizationId: st
               value={value.online_timeout_seconds}
               onChange={(e) => setForm((f) => ({ ...f, online_timeout_seconds: Number(e.target.value) || 60 }))}
             />
+            {/* لا حالة «متصل» في النظام: لا جدول حضور ولا منظور يقرأ هذه المهلة. */}
+            <span className="text-xs text-amber-700">لا تُعرض حالة «متصل» في أي شاشة بعد.</span>
           </div>
         </div>
         <div className="flex items-center justify-between gap-4">
@@ -1639,18 +1688,27 @@ function MessagingSettingsTab({ organizationId, readOnly }: { organizationId: st
           </Select>
         </div>
         <Separator />
-        <ToggleRow
-          label="تفعيل الإشعارات"
-          checked={value.notifications_enabled}
-          disabled={readOnly}
-          onChange={(checked) => setForm((f) => ({ ...f, notifications_enabled: checked }))}
-        />
-        <ToggleRow
-          label="إشعار حسب الصفة الوظيفية"
-          checked={value.notify_by_role}
-          disabled={readOnly}
-          onChange={(checked) => setForm((f) => ({ ...f, notify_by_role: checked }))}
-        />
+        {/* إدراج رسالة داخلية لا يُنشئ تنبيهًا في القاعدة، فالمفتاحان بلا أثر
+            حتى يُضاف مُحفِّز يستدعي `app_notify_event` بشرطهما. */}
+        <div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900">
+          <p className="text-sm font-semibold">مفتاحان يُحفظان ولا يُطبَّقان بعد</p>
+          <p className="text-xs">
+            لا يُنشئ النظام تنبيهًا عند وصول رسالة داخلية — عدّاد «غير المقروء» في تبويب الدردشة
+            هو ما ينبّه اليوم.
+          </p>
+          <ToggleRow
+            label="تفعيل الإشعارات"
+            checked={value.notifications_enabled}
+            disabled={readOnly}
+            onChange={(checked) => setForm((f) => ({ ...f, notifications_enabled: checked }))}
+          />
+          <ToggleRow
+            label="إشعار حسب الصفة الوظيفية"
+            checked={value.notify_by_role}
+            disabled={readOnly}
+            onChange={(checked) => setForm((f) => ({ ...f, notify_by_role: checked }))}
+          />
+        </div>
         {!readOnly && (
           <Button className="self-start" disabled={save.isPending} onClick={() => save.mutate(form)}>
             {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
@@ -1685,6 +1743,16 @@ function SmsSettingsTab({ organizationId, readOnly }: { organizationId: string |
 
   if (query.isLoading) return <SettingsSkeleton />;
 
+  /**
+   * لا سجلّ رصيد قبل أول تعبئة.
+   *
+   * دالّة إنشاء المنشأة الحيّة لا تُدرِج صفًّا في `sms_credit_balance`، والجدول
+   * **لا يملك سياسة INSERT** إطلاقًا — فمحاولة `upsert` من هذا التبويب تُرفَض
+   * برسالة RLS خامّة يفهم منها المالك أنه لا يملك الصلاحية، والحقيقة أن الصفّ
+   * غائب. ينشئه `app_apply_sms_credit_transaction` عند أول تعبئة رصيد.
+   */
+  const rowMissing = !query.isError && query.data == null;
+
   return (
     <Card>
       <CardHeader>
@@ -1692,6 +1760,12 @@ function SmsSettingsTab({ organizationId, readOnly }: { organizationId: string |
         <CardDescription>الرصيد الحالي للمؤسسة، وحد التنبيه عند انخفاضه — الاستهلاك والتعبئة يتمّان من سجل الحركات فقط</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        {rowMissing && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+            لا يوجد سجل رصيد لهذه المنشأة بعد، فلا يمكن حفظ حد التنبيه من هنا. يُنشأ السجل
+            تلقائيًّا بأول «تعبئة رصيد» من شاشة «الرسائل والتنبيهات» ← تبويب «رصيد SMS».
+          </div>
+        )}
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted-foreground">الرصيد الحالي:</span>
           <Badge variant={((query.data?.balance ?? 0) <= Number(threshold)) ? "warning" : "secondary"} className="text-base">
@@ -1712,7 +1786,7 @@ function SmsSettingsTab({ organizationId, readOnly }: { organizationId: string |
         {!readOnly && (
           <Button
             className="self-start"
-            disabled={save.isPending}
+            disabled={save.isPending || rowMissing}
             onClick={() => save.mutate({ low_balance_alert_threshold: Number(threshold) || 0 })}
           >
             {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
@@ -2793,7 +2867,7 @@ function LocaleTab({ organizationId }: { organizationId: string | undefined }) {
                   </span>
                 </div>
                 <div className="flex flex-col gap-1.5">
-                  <Label>التقويم المعروض</Label>
+                  <Label>التقويم المعروض — غير مُطبَّق بعد</Label>
                   <Select value={String(val("calendar_display"))} disabled={!editable}
                           onValueChange={(v) => set("calendar_display", v)}>
                     <SelectTrigger><SelectValue /></SelectTrigger>
@@ -2803,6 +2877,15 @@ function LocaleTab({ organizationId }: { organizationId: string | undefined }) {
                       <SelectItem value="both">كلاهما</SelectItem>
                     </SelectContent>
                   </Select>
+                  {/*
+                    `calendarDisplay` يُخرَج في `client/lib/locale.ts` ولا يستهلكه أي
+                    مكوّن: كل التواريخ مكتوبة بـ `toLocaleDateString("ar-SA")` مباشرةً.
+                    فاختيار «هجري» كان يُظهر رسالة نجاح ولا يغيّر تاريخًا واحدًا.
+                  */}
+                  <span className="text-[10px] font-medium text-amber-700">
+                    الاختيار يُحفظ ولا يُطبَّق بعد: كل التواريخ في الشاشات تُعرض ميلاديًّا حتى
+                    تُوحَّد دالّة عرض التاريخ في النظام.
+                  </span>
                 </div>
               </div>
 
@@ -2836,6 +2919,13 @@ function LocaleTab({ organizationId }: { organizationId: string | undefined }) {
             قبل تشغيل لغة عرض البيانات بالإنجليزية: ما ينقصه الاسم الإنجليزي
             يُعرض بالعربية بدل أن يظهر فارغًا.
             {totalMissing > 0 && ` — ينقص ${totalMissing} اسمًا.`}
+            {/* الجدول تقريرُ تغطية صحيح، لكن الاستهلاك الفعلي محدود: اختيار
+                الاسم بحسب اللغة يُستدعى في نافذة اختيار الصنف وحدها. */}
+            <span className="mt-1 block font-medium text-amber-700">
+              لغة عرض البيانات تُطبَّق حاليًّا على أسماء الخدمات والأصناف فقط (نافذة اختيار
+              الصنف والتحليلات). العيادات والأطباء وفحوص المختبر والأشعة تُعرض بالعربية حتى
+              تُوصَل بها.
+            </span>
           </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">

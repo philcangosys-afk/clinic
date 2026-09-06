@@ -1,5 +1,5 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
@@ -110,6 +110,7 @@ const today = () => new Date().toISOString().slice(0, 10);
 export default function PatientVisits() {
   const { organization } = useOrganizationAccess();
   const { can } = usePermissions();
+  const [searchParams] = useSearchParams();
   const organizationId = organization?.id;
   const [tab, setTab] = useState("register");
 
@@ -151,6 +152,10 @@ export default function PatientVisits() {
         .from("clinics")
         .select("id, name")
         .eq("organization_id", organizationId)
+        // مرشِّح لا يُختار منه: العيادة المعطَّلة لا تُستقبل فيها زيارة اليوم،
+        // فوجودها في القائمة يطيلها بأسماء لا معنى لاختيارها. والترشيح على
+        // القائمة لا على النتائج — زيارات العيادة القديمة تبقى كما هي.
+        .eq("is_disabled", false)
         .order("name");
       if (error) throw error;
       return (data ?? []) as any[];
@@ -166,14 +171,44 @@ export default function PatientVisits() {
         .from("doctors")
         .select("id, name_ar")
         .eq("organization_id", organizationId)
+        // كما في شاشة السجل الطبي وحوار طلب المؤشرات: الطبيب الموقوف لا يُرشَّح به.
+        .eq("is_enabled", true)
         .order("name_ar");
       if (error) throw error;
       return (data ?? []) as any[];
     },
   });
 
+  /**
+   * ما يدخل الاستعلام فعلًا — بلا `search`.
+   *
+   * المفتاح كان يضمّ كائن المرشِّحات كاملًا ومنه `search`، وهو لا يُستعمل في
+   * الاستعلام إطلاقًا (الترشيح عليه محلّي في `rows` أدناه). فكل حرف يُكتب في
+   * مربّع البحث كان يُطلق طلبًا جديدًا بخمس مئة صفّ ويرتعش الجدول بلا داع.
+   */
+  const serverFilters = useMemo(
+    () => ({
+      from: filters.from,
+      to: filters.to,
+      status: filters.status,
+      branch: filters.branch,
+      clinic: filters.clinic,
+      doctor: filters.doctor,
+      invoice: filters.invoice,
+    }),
+    [
+      filters.from,
+      filters.to,
+      filters.status,
+      filters.branch,
+      filters.clinic,
+      filters.doctor,
+      filters.invoice,
+    ],
+  );
+
   const visits = useQuery({
-    queryKey: ["visit-register", organizationId, filters],
+    queryKey: ["visit-register", organizationId, serverFilters],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       let query = supabase
@@ -182,22 +217,54 @@ export default function PatientVisits() {
           "id, patient_id, patient_name, file_number, doctor_name, clinic_name, branch_name, visit_date, started_at, ended_at, status, main_complaint, primary_diagnosis, service_count, unbilled_service_count, services_amount, invoice_id, invoice_number, invoice_status, invoice_amount, remaining_amount, is_insurance_invoice, insurance_company_name, claim_status, has_services_no_invoice, appointment_id, signed_at, closed_at, reopened_at",
         )
         .eq("organization_id", organizationId)
-        .gte("visit_date", filters.from)
-        .lte("visit_date", filters.to)
+        .gte("visit_date", serverFilters.from)
+        .lte("visit_date", serverFilters.to)
         .order("visit_date", { ascending: false })
         .limit(500);
-      if (filters.status !== "all") query = query.eq("status", filters.status);
-      if (filters.branch !== "all") query = query.eq("branch_name", filters.branch);
-      if (filters.clinic !== "all") query = query.eq("clinic_name", filters.clinic);
-      if (filters.doctor !== "all") query = query.eq("doctor_name", filters.doctor);
-      if (filters.invoice === "none") query = query.is("invoice_id", null);
-      if (filters.invoice === "unpaid") query = query.in("invoice_status", ["unpaid", "partial"]);
-      if (filters.invoice === "paid") query = query.eq("invoice_status", "paid");
+      if (serverFilters.status !== "all") query = query.eq("status", serverFilters.status);
+      if (serverFilters.branch !== "all") query = query.eq("branch_name", serverFilters.branch);
+      if (serverFilters.clinic !== "all") query = query.eq("clinic_name", serverFilters.clinic);
+      if (serverFilters.doctor !== "all") query = query.eq("doctor_name", serverFilters.doctor);
+      if (serverFilters.invoice === "none") query = query.is("invoice_id", null);
+      if (serverFilters.invoice === "unpaid") {
+        query = query.in("invoice_status", ["unpaid", "partial"]);
+      }
+      if (serverFilters.invoice === "paid") query = query.eq("invoice_status", "paid");
       const { data, error } = await query;
       if (error) throw error;
       return (data ?? []) as any[];
     },
   });
+
+  /**
+   * الزيارة المطلوبة برابط `?visitId=…`.
+   *
+   * شاشات أخرى (رحلة المريض مثلًا) توجّه إلى هنا بـ`visitId` وهذه الشاشة لم
+   * تكن تقرأ مُعاملات الرابط إطلاقًا، فتُفتح على سجلّ اليوم العامّ ويبحث
+   * الموظّف من جديد عن الزيارة التي جاء منها. وتُقرأ بمفردها لأنها قد تكون
+   * خارج الفترة المُرشَّحة (المبدئي: اليوم) فلا توجد في صفوف القائمة.
+   */
+  const deepVisitId = searchParams.get("visitId");
+  const deepVisit = useQuery({
+    queryKey: ["visit-register-one", organizationId, deepVisitId],
+    enabled: Boolean(organizationId && deepVisitId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_visit_register")
+        .select(
+          "id, patient_id, patient_name, file_number, doctor_name, clinic_name, visit_date, status, main_complaint, primary_diagnosis, service_count, services_amount, invoice_id, appointment_id, signed_at, closed_at, reopened_at",
+        )
+        .eq("organization_id", organizationId)
+        .eq("id", deepVisitId!)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as any | null;
+    },
+  });
+
+  useEffect(() => {
+    if (deepVisit.data) setTarget(deepVisit.data);
+  }, [deepVisit.data]);
 
   const incomplete = useQuery({
     queryKey: ["incomplete-visits", organizationId],
@@ -292,6 +359,17 @@ export default function PatientVisits() {
           تصدير
         </Button>
       </div>
+
+      {deepVisitId && deepVisit.isError && (
+        <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3 text-sm">
+          تعذّر فتح الزيارة المطلوبة: {(deepVisit.error as Error)?.message ?? "خطأ غير متوقع"}
+        </p>
+      )}
+      {deepVisitId && !deepVisit.isLoading && !deepVisit.isError && !deepVisit.data && (
+        <p className="rounded-lg border bg-muted/40 px-4 py-3 text-sm">
+          الزيارة المطلوبة غير موجودة في هذه المنشأة.
+        </p>
+      )}
 
       <Tabs value={tab} onValueChange={setTab}>
         <TabsList>

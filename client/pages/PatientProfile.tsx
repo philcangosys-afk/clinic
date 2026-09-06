@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Plus, Save, Trash2 } from "lucide-react";
+import { ArrowRight, Plus, Receipt, Save, Stethoscope, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import type { HealthConditionRow, PatientHealthConditionRow, PatientNoteRow, PatientRow } from "@/lib/database.types";
@@ -32,6 +32,16 @@ import WalletTab from "@/components/patients/WalletTab";
 import DocumentsTab from "@/components/patients/DocumentsTab";
 import RadiologyImagesTab from "@/components/patients/RadiologyImagesTab";
 import Odontogram from "@/components/medical/Odontogram";
+import SendToDoctorDialog from "@/components/patients/SendToDoctorDialog";
+import RequiredLabel, { requiredInputClass } from "@/components/shared/RequiredLabel";
+import {
+  ageFromBirthDate,
+  ageMonthsFromBirthDate,
+  birthDateFromAge,
+  nameWordCount,
+  transliterateArabicName,
+} from "@/lib/arabic-name";
+import { useUnsavedGuard } from "@/hooks/use-unsaved-guard";
 import { useToast } from "@/hooks/use-toast";
 
 function usePatient(id: string | undefined) {
@@ -49,6 +59,24 @@ function usePatient(id: string | undefined) {
 export default function PatientProfile() {
   const { id } = useParams();
   const patient = usePatient(id);
+
+  /**
+   * مسوّدة تبويب «نظرة عامة» تُحفظ **خارج** التبويب.
+   *
+   * كان ما يُكتب في الملف يضيع كلّه بمجرّد الانتقال إلى تبويب آخر والعودة:
+   * Radix يفكّ تركيب التبويب غير النشط، وحالة النموذج كانت تُبنى من `patient`
+   * مرّة واحدة عند التركيب — فتُبنى من جديد فارغةً من كل تعديل. والموظف يظن
+   * أن النظام مسح بياناته، وهو ما حدث فعلًا.
+   *
+   * `null` يعني «لا تعديل بعد، اقرأ من السجل»، فلا تُجمَّد قيمة قديمة في
+   * الذاكرة بعد أن يُحدَّث السجل من مكان آخر.
+   */
+  const [overviewDraft, setOverviewDraft] = useState<PatientFormState | null>(null);
+  const overviewDirty = Boolean(
+    overviewDraft && patient.data && isFormDirty(overviewDraft, patient.data),
+  );
+  // تنبيه المتصفّح قبل إغلاق التبويب أو إعادة التحميل على تعديلات غير محفوظة
+  useUnsavedGuard(overviewDirty);
 
   /**
    * تسجيل الاطّلاع على الملف الطبي (المرحلة 15).
@@ -104,6 +132,9 @@ export default function PatientProfile() {
             <h1 className="text-xl font-bold">{patient.data.name_ar}</h1>
             <p className="text-sm text-muted-foreground">
               ملف رقم #{patient.data.file_number} · {patient.data.mobile_number ?? "بلا جوال"}
+              {ageFromBirthDate(patient.data.birth_date) !== null && (
+                <> · {ageFromBirthDate(patient.data.birth_date)} سنة</>
+              )}
             </p>
           </div>
         </div>
@@ -115,6 +146,7 @@ export default function PatientProfile() {
               ملف مدموج — استخدم الملف الأصلي
             </Badge>
           )}
+          <PatientQuickActions patient={patient.data} />
           <MergeButton patientId={patient.data.id} patientName={patient.data.name_ar} />
           {patient.data.block_file && <Badge variant="destructive">الملف محجوب بالكامل</Badge>}
           {patient.data.block_appointments && <Badge variant="destructive">محجوب عن المواعيد</Badge>}
@@ -133,7 +165,12 @@ export default function PatientProfile() {
         */}
       <Tabs defaultValue="file">
         <TabsList className="flex h-auto flex-wrap justify-start gap-1">
-          <TabsTrigger value="file">الملف</TabsTrigger>
+          {/* علامة «غير محفوظ» على التبويب نفسه: المسوّدة تبقى محفوظة عند
+              الانتقال، لكن من انتقل يجب أن يعرف أن عليه العودة والحفظ. */}
+          <TabsTrigger value="file">
+            الملف
+            {overviewDirty && <span className="ms-1 text-amber-600" title="تعديلات غير محفوظة">•</span>}
+          </TabsTrigger>
           <TabsTrigger value="medical">الطبي</TabsTrigger>
           <TabsTrigger value="financial">المالي</TabsTrigger>
           <TabsTrigger value="admin">المواعيد والمستندات</TabsTrigger>
@@ -150,7 +187,11 @@ export default function PatientProfile() {
               <TabsTrigger value="blocking">الحجب</TabsTrigger>
             </TabsList>
             <TabsContent value="overview" className="mt-4">
-              <OverviewTab patient={patient.data} />
+              <OverviewTab
+                patient={patient.data}
+                draft={overviewDraft}
+                setDraft={setOverviewDraft}
+              />
             </TabsContent>
             <TabsContent value="conditions" className="mt-4">
               <HealthConditionsTab patientId={patient.data.id} />
@@ -251,25 +292,15 @@ export default function PatientProfile() {
 /** قيمة "بدون" في قائمة الطبيب المعالج (Select لا يقبل قيمة فارغة). */
 const NO_DOCTOR = "__none__";
 
-function OverviewTab({ patient }: { patient: PatientRow }) {
-  const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const doctors = useQuery({
-    queryKey: ["doctors-for-patient", patient.organization_id],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("doctors")
-        .select("id, name_ar")
-        .eq("organization_id", patient.organization_id)
-        // عمود التفعيل في `doctors` اسمه `is_enabled` لا `is_disabled` (0002).
-        // الاستعلام القديم كان يفشل كليًا فتبقى قائمة الأطباء فارغة دائمًا.
-        .eq("is_enabled", true)
-        .order("name_ar");
-      if (error) throw error;
-      return (data ?? []) as { id: string; name_ar: string }[];
-    },
-  });
-  const [form, setForm] = useState({
+/**
+ * حالة نموذج البيانات الأساسية مبنيّةً من السجل.
+ *
+ * دالّة على مستوى الوحدة لا داخل المكوّن: تُستدعى من التبويب لبناء المسوّدة،
+ * ومن الصفحة لمعرفة هل تغيّر شيء فعلًا — ولو تكرّرت في موضعَين لاختلفت
+ * القائمتان وصار «غير محفوظ» يظهر بلا سبب أو لا يظهر حين يجب.
+ */
+function buildPatientForm(patient: PatientRow) {
+  return {
     name_ar: patient.name_ar ?? "",
     name_en: patient.name_en ?? "",
     mobile_number: patient.mobile_number ?? "",
@@ -283,6 +314,23 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
     // `city_value_id` كان عمودًا ميّتًا بمرشّح حيّ: شاشة المرضى تصفّي به
     // (Patients.tsx:129) بلا أي حقل إدخال هنا — فالمرشّح لا يُرجع نتيجة أبدًا.
     city_value_id: patient.city_value_id ?? "",
+    /**
+     * العمر مُدخَلًا بدل تاريخ الميلاد — ويُعرض محسوبًا من التاريخ المخزَّن.
+     *
+     * فلو كان في الملف تاريخ ميلاد مأخوذ من الهوية ظهر عمره صحيحًا، وتعديل
+     * العمر يُعيد حساب التاريخ ويوسمه تقديريًا. وترك الحقلَين فارغَين لا
+     * يمسّ تاريخ ميلاد قائمًا: الفراغ يعني «لم أُعدّله» لا «امحُه».
+     */
+    age_years: (() => {
+      const age = ageFromBirthDate(patient.birth_date);
+      return age === null ? "" : String(age);
+    })(),
+    age_months: (() => {
+      const age = ageFromBirthDate(patient.birth_date);
+      const months = ageMonthsFromBirthDate(patient.birth_date);
+      // الأشهر تُعرض للرضّع والأطفال دون السنتين فقط — «٣٤ سنة و٧ أشهر» ضجيج
+      return age !== null && age < 2 && months !== null ? String(months) : "";
+    })(),
     blood_type: patient.blood_type ?? "",
     guarantor_name: patient.guarantor_name ?? "",
     guarantor_number: patient.guarantor_number ?? "",
@@ -314,13 +362,160 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
     insurance_membership_expiry: patient.insurance_membership_expiry ?? "",
     local_order_weight_kg:
       patient.local_order_weight_kg != null ? String(patient.local_order_weight_kg) : "",
+  };
+}
+
+export type PatientFormState = ReturnType<typeof buildPatientForm>;
+
+/** هل تختلف المسوّدة عن السجل المحفوظ؟ */
+function isFormDirty(draft: PatientFormState, patient: PatientRow): boolean {
+  const saved = buildPatientForm(patient);
+  return (Object.keys(saved) as (keyof PatientFormState)[]).some(
+    (key) => String(draft[key] ?? "") !== String(saved[key] ?? ""),
+  );
+}
+
+/**
+ * أزرار الملف السريعة: إصدار فاتورة، وإرسال إلى الطبيب.
+ *
+ * الفوترة تنتقل إلى شاشة الفواتير بالمريض محدَّدًا سلفًا، ولا تُبنى نافذة
+ * فاتورة ثانية هنا: نافذة الفواتير تحمل التسعير والخصومات والتأمين وبنود
+ * الزيارة غير المفوتَرة، ونسخةٌ مصغَّرة منها كانت ستُصدر فواتير بقواعد أقلّ.
+ */
+function PatientQuickActions({ patient }: { patient: PatientRow }) {
+  const navigate = useNavigate();
+  const { membership, legacyMode } = useOrganizationAccess();
+  const [sendOpen, setSendOpen] = useState(false);
+
+  /**
+   * الصفات هنا **نفس** الصفات التي تفرضها القاعدة، لا مفاتيح صلاحية جديدة.
+   *
+   * `app_add_walk_in` تشترط الصفات الأربع أدناه، وشاشة الفواتير تشترط قائمتها
+   * الخاصّة. واختراع مفتاح صلاحية لزرّ جديد كان سيُنتج زرًّا يظهر ثم تُرفض
+   * عمليته في القاعدة — أو مفتاحًا لا يعرفه جدول الصلاحيات فيرفضه أصلًا.
+   */
+  const canQueue =
+    legacyMode ||
+    ["owner", "organization_admin", "branch_manager", "receptionist"].includes(
+      membership?.role_key ?? "",
+    );
+  const canBill =
+    legacyMode ||
+    ["owner", "organization_admin", "accountant", "receptionist"].includes(
+      membership?.role_key ?? "",
+    );
+
+  return (
+    <>
+      {canBill && !patient.block_invoices && !patient.block_file && (
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => navigate(`/billing?patientId=${patient.id}`)}
+        >
+          <Receipt className="h-3.5 w-3.5" />
+          إصدار فاتورة
+        </Button>
+      )}
+      {canQueue && !patient.block_appointments && !patient.block_file && (
+        <Button size="sm" onClick={() => setSendOpen(true)}>
+          <Stethoscope className="h-3.5 w-3.5" />
+          إرسال إلى الطبيب
+        </Button>
+      )}
+      {sendOpen && (
+        <SendToDoctorDialog
+          open={sendOpen}
+          onOpenChange={setSendOpen}
+          patientId={patient.id}
+          patientName={patient.name_ar}
+          organizationId={patient.organization_id}
+          defaultDoctorId={patient.treating_doctor_id}
+        />
+      )}
+    </>
+  );
+}
+
+function OverviewTab({
+  patient,
+  draft,
+  setDraft,
+}: {
+  patient: PatientRow;
+  draft: PatientFormState | null;
+  setDraft: (draft: PatientFormState | null) => void;
+}) {
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const doctors = useQuery({
+    queryKey: ["doctors-for-patient", patient.organization_id],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", patient.organization_id)
+        // عمود التفعيل في `doctors` اسمه `is_enabled` لا `is_disabled` (0002).
+        // الاستعلام القديم كان يفشل كليًا فتبقى قائمة الأطباء فارغة دائمًا.
+        .eq("is_enabled", true)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
   });
+  const form = draft ?? buildPatientForm(patient);
+
+  /** هل كُتب الاسم الإنجليزي بيد الموظف في هذه الجلسة؟ فلا يُكتب فوقه. */
+  const nameEnTouched = useRef(false);
+
+  const missing = {
+    name_ar: !form.name_ar.trim(),
+    id_number: !patient.is_newborn && !form.id_number.trim(),
+    mobile_number: !form.mobile_number.trim(),
+    age: !form.age_years.trim() && !form.age_months.trim(),
+    nationality_value_id: !form.nationality_value_id,
+  };
+  const missingCount = Object.values(missing).filter(Boolean).length;
+  const nameIsShort = !missing.name_ar && nameWordCount(form.name_ar) < 4;
+  const dirty = draft !== null && isFormDirty(form, patient);
 
   const save = useMutation({
     mutationFn: async () => {
+      /**
+       * تاريخ الميلاد يُعاد حسابه من العمر **فقط إن غُيِّر العمر**.
+       *
+       * إرسال التاريخ في كل حفظ كان سيُزحزح تاريخ ميلاد مأخوذ من الهوية بيوم
+       * أو يومَين مع كل تعديل عنوان أو رقم جوال — ويوسمه تقديريًا بلا سبب.
+       */
+      const saved = buildPatientForm(patient);
+      const ageChanged =
+        form.age_years !== saved.age_years || form.age_months !== saved.age_months;
+      const derivedBirthDate = birthDateFromAge(form.age_years, form.age_months);
+
+      // الهوية المكرَّرة تُمنع قبل الحفظ برسالة تقول أين الملف الآخر
+      const idNumber = form.id_number.trim();
+      if (idNumber && idNumber !== (patient.id_number ?? "").trim()) {
+        const { data: existing, error: idError } = await supabase.rpc("app_patient_by_id_number", {
+          p_organization_id: patient.organization_id,
+          p_id_number: idNumber,
+          p_exclude_patient_id: patient.id,
+        });
+        if (idError) throw idError;
+        const live = (existing ?? []).find((row: { is_merged: boolean }) => !row.is_merged) as
+          | { name_ar: string; file_number: number }
+          | undefined;
+        if (live)
+          throw new Error(
+            `رقم الهوية ${idNumber} مسجَّل في الملف رقم ${live.file_number} (${live.name_ar}) — لا يمكن تكراره.`,
+          );
+      }
+
       const { data: affectedRows, error } = await supabase
         .from("patients")
         .update({
+          ...(ageChanged && derivedBirthDate
+            ? { birth_date: derivedBirthDate, birth_date_is_estimated: true }
+            : {}),
           name_ar: form.name_ar.trim(),
           name_en: form.name_en.trim() || null,
           mobile_number: form.mobile_number.trim() || null,
@@ -375,6 +570,9 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["patient", patient.id] });
       queryClient.invalidateQueries({ queryKey: ["patients-list"] });
+      // المسوّدة تُفرَغ بعد الحفظ فتُقرأ القيم من السجل المحدَّث لا من الذاكرة
+      setDraft(null);
+      nameEnTouched.current = false;
       toast({ title: "تم حفظ بيانات المريض" });
     },
     onError: (error: unknown) =>
@@ -385,35 +583,129 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
       }),
   });
 
-  const set = (key: keyof typeof form, value: string | boolean) =>
-    setForm((prev) => ({ ...prev, [key]: value }));
+  const set = (key: keyof PatientFormState, value: string | boolean) =>
+    setDraft({ ...form, [key]: value });
+
+  /** الاسم العربي يُقترح مقابله الإنجليزي ما لم يكتبه الموظف بنفسه. */
+  const setNameAr = (value: string) =>
+    setDraft({
+      ...form,
+      name_ar: value,
+      name_en: nameEnTouched.current ? form.name_en : transliterateArabicName(value),
+    });
 
   return (
     <Card>
       <CardHeader>
         <CardTitle>البيانات الأساسية</CardTitle>
-        <CardDescription>الهوية والاتصال والتأمين</CardDescription>
+        <CardDescription>
+          الهوية والاتصال والتأمين — الحقول بالأحمر أساسية لفوترة المريض ومطالبته التأمينية.
+        </CardDescription>
       </CardHeader>
       <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {/**
+          * شريط «غير محفوظ» ملتصق بأعلى النموذج.
+          *
+          * التعديلات لم تكن تُفقَد بالانتقال بين التبويبات فحسب — كان الموظف
+          * لا يعرف أصلًا أن عليه الضغط على «حفظ التعديلات» في آخر الصفحة.
+          */}
+        {dirty && (
+          <div className="sticky top-0 z-10 -mx-2 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-400 bg-amber-50 px-3 py-2 text-sm sm:col-span-2">
+            <span className="font-medium text-amber-900">تعديلات غير محفوظة</span>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="ghost" onClick={() => setDraft(null)}>
+                تجاهل
+              </Button>
+              <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending}>
+                <Save className="h-3.5 w-3.5" />
+                {save.isPending ? "جارٍ الحفظ..." : "حفظ الآن"}
+              </Button>
+            </div>
+          </div>
+        )}
+        {missingCount > 0 && (
+          <div className="rounded-lg border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800 sm:col-span-2">
+            ناقص في هذا الملف {missingCount} من الحقول الأساسية — أكملها لتفادي رفض الفواتير والمطالبات.
+          </div>
+        )}
         <div className="flex flex-col gap-1.5">
-          <Label>الاسم بالعربية</Label>
-          <Input value={form.name_ar} onChange={(e) => set("name_ar", e.target.value)} />
+          <RequiredLabel missing={missing.name_ar}>الاسم الرباعي بالعربية</RequiredLabel>
+          <Input
+            value={form.name_ar}
+            onChange={(e) => setNameAr(e.target.value)}
+            className={requiredInputClass(missing.name_ar)}
+          />
+          {nameIsShort && (
+            <span className="text-xs text-amber-700">
+              الاسم أقلّ من أربعة مقاطع — يُفضَّل الاسم الرباعي كما في الهوية.
+            </span>
+          )}
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label>الاسم بالإنجليزية</Label>
-          <Input value={form.name_en} onChange={(e) => set("name_en", e.target.value)} />
+          <Label>الاسم بالإنجليزية (يُقترح من العربي)</Label>
+          <Input
+            value={form.name_en}
+            dir="ltr"
+            onChange={(e) => {
+              nameEnTouched.current = true;
+              set("name_en", e.target.value);
+            }}
+          />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label>رقم الجوال</Label>
-          <Input value={form.mobile_number} onChange={(e) => set("mobile_number", e.target.value)} />
+          <RequiredLabel missing={missing.mobile_number}>رقم الجوال</RequiredLabel>
+          <Input
+            value={form.mobile_number}
+            onChange={(e) => set("mobile_number", e.target.value)}
+            className={requiredInputClass(missing.mobile_number)}
+            inputMode="tel"
+          />
         </div>
         <div className="flex flex-col gap-1.5">
           <Label>هاتف إضافي</Label>
           <Input value={form.phone_1} onChange={(e) => set("phone_1", e.target.value)} />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label>رقم الهوية/الإقامة</Label>
-          <Input value={form.id_number} onChange={(e) => set("id_number", e.target.value)} />
+          <RequiredLabel missing={missing.id_number}>رقم الهوية/الإقامة</RequiredLabel>
+          <Input
+            value={form.id_number}
+            dir="ltr"
+            onChange={(e) => set("id_number", e.target.value)}
+            className={requiredInputClass(missing.id_number)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <RequiredLabel missing={missing.age}>العمر</RequiredLabel>
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              min={0}
+              max={130}
+              inputMode="numeric"
+              placeholder="سنة"
+              value={form.age_years}
+              onChange={(e) => set("age_years", e.target.value)}
+              className={requiredInputClass(missing.age)}
+            />
+            <span className="text-xs text-muted-foreground">سنة</span>
+            <Input
+              type="number"
+              min={0}
+              max={11}
+              inputMode="numeric"
+              placeholder="شهر"
+              value={form.age_months}
+              onChange={(e) => set("age_months", e.target.value)}
+            />
+            <span className="text-xs text-muted-foreground">شهر</span>
+          </div>
+          <span className="text-xs text-muted-foreground">
+            {patient.birth_date
+              ? `تاريخ الميلاد المخزَّن: ${patient.birth_date}${
+                  (patient as any).birth_date_is_estimated ? " (تقديريّ من عمر مُدخَل)" : ""
+                }`
+              : "لا تاريخ ميلاد مخزَّن — يُحسب من العمر عند الحفظ."}
+          </span>
         </div>
         <div className="flex flex-col gap-1.5">
           <Label>رقم الجواز</Label>
@@ -428,11 +720,12 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
           <Input type="email" value={form.email_1} onChange={(e) => set("email_1", e.target.value)} />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label>الجنسية</Label>
+          <RequiredLabel missing={missing.nationality_value_id}>الجنسية</RequiredLabel>
           <LookupSelect
             categoryKey="nationalities"
             value={form.nationality_value_id}
             onChange={(v) => set("nationality_value_id", v)}
+            triggerClassName={requiredInputClass(missing.nationality_value_id)}
           />
         </div>
         <div className="flex flex-col gap-1.5">
@@ -627,11 +920,12 @@ function OverviewTab({ patient }: { patient: PatientRow }) {
           <Label>ملاحظة عامة</Label>
           <Textarea value={form.general_note} onChange={(e) => set("general_note", e.target.value)} />
         </div>
-        <div className="sm:col-span-2">
-          <Button onClick={() => save.mutate()} disabled={save.isPending}>
+        <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
+          <Button onClick={() => save.mutate()} disabled={save.isPending || !dirty}>
             <Save className="h-4 w-4" />
             {save.isPending ? "جارٍ الحفظ..." : "حفظ التعديلات"}
           </Button>
+          {!dirty && <span className="text-xs text-muted-foreground">لا تعديلات لحفظها</span>}
         </div>
       </CardContent>
     </Card>
@@ -675,15 +969,29 @@ function MedicalHistoryTab({ patientId }: { patientId: string }) {
 
   const save = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase
+      const { data: affectedRows, error } = await supabase
         .from("patient_medical_history")
-        .upsert({ patient_id: patientId, ...form, updated_at: new Date().toISOString() });
+        .upsert({ patient_id: patientId, ...form, updated_at: new Date().toISOString() })
+        .select("patient_id");
       if (error) throw error;
+      // بلا فحص الصفوف المتأثّرة: رفض RLS لا يرفع خطأً دائمًا، فتبقى حساسية
+      // الدواء معروضة على الشاشة من حالة المكوّن كأنها محفوظة، ولا يتبيّن
+      // ضياعها إلا عند إعادة فتح الملف.
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُحفظ السوابق الصحية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["patient-history", patientId] });
       toast({ title: "تم حفظ السوابق الصحية" });
     },
+    // كانت بلا `onError` وبلا معالج أخطاء عام في `QueryClient`: فشل الحفظ كان
+    // يمضي بصمت — لا نجاح ولا خطأ — وهو أسوأ من رسالة خطأ صريحة.
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر حفظ السوابق الصحية",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   const set = (key: keyof typeof form, value: string) => setForm((prev) => ({ ...prev, [key]: value }));
@@ -918,15 +1226,28 @@ function HealthConditionsTab({ patientId }: { patientId: string }) {
 
   const saveNote = useMutation({
     mutationFn: async (conditionId: string) => {
-      const { error } = await supabase.from("patient_health_conditions").upsert({
-        patient_id: patientId,
-        condition_id: conditionId,
-        is_checked: checkedIds.has(conditionId),
-        note: notes[conditionId]?.trim() || null,
-      });
+      const { data: affectedRows, error } = await supabase
+        .from("patient_health_conditions")
+        .upsert({
+          patient_id: patientId,
+          condition_id: conditionId,
+          is_checked: checkedIds.has(conditionId),
+          note: notes[conditionId]?.trim() || null,
+        })
+        .select("condition_id");
       if (error) throw error;
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُحفظ الملاحظة — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: invalidate,
+    // الحفظ يجري عند مغادرة الحقل (`onBlur`) بلا أي مؤشّر: بلا `onError` كانت
+    // الملاحظة تبقى ظاهرة من حالة الشاشة وحدها بعد فشل الكتابة.
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر حفظ الملاحظة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   return (

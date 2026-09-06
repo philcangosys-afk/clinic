@@ -100,6 +100,23 @@ function isActiveNow(offer: OfferRow) {
   return true;
 }
 
+/**
+ * لماذا لا يدخل الوقت في حساب السريان هنا؟
+ *
+ * `app_resolve_discount` — الدالّة الوحيدة التي تقرأ `offers` عند الفوترة —
+ * تفحص `offer_scope` و`start_date` و`end_date` فقط ولا تمسّ `start_time`
+ * و`end_time`. فحقلا الوقت في النموذج كانا يَعِدان الموظّف بقيدٍ لا وجود له:
+ * «عرض المساء ٣٠٪» كان يُخصم على فواتير الصباح أيضًا. وحُذف الحقلان من النموذج
+ * بدل إظهار «خارج الفترة» على عرضٍ يُطبَّق فعلًا — فتناقض الشاشة مع الفاتورة
+ * أسوأ من فقدان الميزة. والقيم القديمة المحفوظة تُعرض هنا صريحةً بأنها
+ * غير مُطبَّقة حتى لا يُبنى عليها قرار. تفعيل العروض بالساعة يحتاج شرط الوقت
+ * داخل `app_resolve_discount` (مع مراعاة تجاوز منتصف الليل).
+ */
+function legacyTimeWindow(offer: OfferRow) {
+  if (!offer.start_time && !offer.end_time) return null;
+  return `${offer.start_time?.slice(0, 5) ?? "—"} – ${offer.end_time?.slice(0, 5) ?? "—"}`;
+}
+
 function OfferFormDialog({
   open,
   onOpenChange,
@@ -121,10 +138,6 @@ function OfferFormDialog({
   const [startDate, setStartDate] = useState(initial?.start_date ?? "");
   const [endDate, setEndDate] = useState(initial?.end_date ?? "");
   const [discountPercent, setDiscountPercent] = useState(String(initial?.discount_percent ?? "10"));
-  // وقتا البدء والانتهاء عمودان في جدول offers منذ 0004 بلا حقلي إدخال —
-  // يُستخدمان للعروض التي تسري ضمن ساعات محددة من اليوم (لقطة 11).
-  const [startTime, setStartTime] = useState(initial?.start_time ?? "");
-  const [endTime, setEndTime] = useState(initial?.end_time ?? "");
   const [appliesToAll, setAppliesToAll] = useState(initial?.applies_to_all_items ?? true);
   const existingItems = useOfferItems(initial?.id);
   const [newItems, setNewItems] = useState<{ id: string; name_ar: string }[]>([]);
@@ -150,8 +163,9 @@ function OfferFormDialog({
         // نطاق مفتوح = بلا تواريخ، حتى لا تبقى تواريخ قديمة تشوّش القراءة
         start_date: scope === "date_range" ? startDate : null,
         end_date: scope === "date_range" ? endDate : null,
-        start_time: startTime || null,
-        end_time: endTime || null,
+        // `start_time`/`end_time` لا يُكتبان من هنا: لا شيء في القاعدة يفحصهما،
+        // فكتابتهما وعدٌ بقيد غير موجود. وما بقي منهما في صفوف قديمة يُترك كما هو
+        // ويُعرض في الجدول موصوفًا بأنه غير مُطبَّق (انظر legacyTimeWindow).
         discount_percent: percent,
         applies_to_all_items: appliesToAll,
         created_by: session?.user.id ?? null,
@@ -264,14 +278,12 @@ function OfferFormDialog({
               </div>
             </>
           )}
-          <div className="flex flex-col gap-1.5">
-            <Label>وقت البدء (اختياري)</Label>
-            <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>وقت الانتهاء (اختياري)</Label>
-            <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
-          </div>
+          {initial && legacyTimeWindow(initial) && (
+            <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 sm:col-span-2">
+              على هذا العرض ساعات محفوظة ({legacyTimeWindow(initial)}) لا تُطبَّق عند الفوترة —
+              الخصم يسري كل اليوم داخل فترة التواريخ. للتحديد بالساعة يلزم تعديل احتساب الخصم في القاعدة.
+            </p>
+          )}
           <div className="flex flex-col gap-1.5 sm:col-span-2">
             <Label>الوصف</Label>
             <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={2} />
@@ -435,6 +447,11 @@ export default function Offers() {
                         {row.offer_scope === "open_date"
                           ? "مفتوح"
                           : `${row.start_date ?? "—"} ← ${row.end_date ?? "—"}`}
+                        {legacyTimeWindow(row) && (
+                          <span className="block text-[10px] text-amber-700">
+                            ساعات محفوظة {legacyTimeWindow(row)} — غير مُطبَّقة عند الفوترة
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="text-sm">
                         {row.applies_to_all_items ? "كل الأصناف" : "أصناف محددة"}

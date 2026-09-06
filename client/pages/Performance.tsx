@@ -56,8 +56,13 @@ function useEmployeesList(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("employees")
         .select("id, name_ar")
+        // النشط غير المعطَّل فقط، مطابقًا لشرط `app_calculate_payroll_run`
+        // (`status='active'` **و** `is_disabled=false`): موظّفٌ معطَّل أو انتهت
+        // خدمته يُقبل في قائمة الاختيار ثمّ يستثنيه المسيّر، فيبدو المُسند
+        // مسجَّلًا وهو لا يُحتسب.
         .eq("organization_id", organizationId)
         .eq("status", "active")
+        .eq("is_disabled", false)
         .order("name_ar");
       if (error) throw error;
       return (data as { id: string; name_ar: string }[]) ?? [];
@@ -110,6 +115,33 @@ function CyclesTab({ organizationId }: { organizationId: string | undefined }) {
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
 
+  /**
+   * إغلاق الدورة/إعادة فتحها.
+   *
+   * `status` كان عرضيًّا: لا زرّ في النظام كلّه يكتبه، فتبقى كل دورة «مفتوحة»
+   * إلى الأبد ويمكن إنشاء تقييمات جديدة في دورة سنةٍ مضت. الإغلاق قرار إداريّ
+   * يُتَّخذ من هنا، والقائمة في تبويب التقييمات ترشّح على المفتوح.
+   */
+  const setStatus = useMutation({
+    mutationFn: async ({ id, status }: { id: string; status: "open" | "closed" }) => {
+      const { data: affectedRows, error } = await supabase
+        .from("performance_review_cycles")
+        .update({ status })
+        .eq("id", id)
+        .select("id");
+      if (error) throw error;
+      // تحديث لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر رسالة
+      // نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: (_, vars) => {
+      queryClient.invalidateQueries({ queryKey: ["perf-cycles", organizationId] });
+      toast({ title: vars.status === "closed" ? "أُغلقت الدورة" : "أُعيد فتح الدورة" });
+    },
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
+  });
+
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
@@ -155,6 +187,7 @@ function CyclesTab({ organizationId }: { organizationId: string | undefined }) {
               <TableHead>الاسم</TableHead>
               <TableHead>الفترة</TableHead>
               <TableHead>الحالة</TableHead>
+              <TableHead>إجراءات</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -167,11 +200,35 @@ function CyclesTab({ organizationId }: { organizationId: string | undefined }) {
                 <TableCell>
                   <Badge variant={c.status === "open" ? "success" : "secondary"}>{c.status === "open" ? "مفتوحة" : "مغلقة"}</Badge>
                 </TableCell>
+                <TableCell>
+                  {c.status === "open" ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={setStatus.isPending}
+                      onClick={() => {
+                        if (!window.confirm(`إغلاق دورة «${c.name_ar}»؟ لن تظهر في قائمة اختيار الدورة لتقييم جديد.`)) return;
+                        setStatus.mutate({ id: c.id, status: "closed" });
+                      }}
+                    >
+                      إغلاق الدورة
+                    </Button>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={setStatus.isPending}
+                      onClick={() => setStatus.mutate({ id: c.id, status: "open" })}
+                    >
+                      إعادة فتح
+                    </Button>
+                  )}
+                </TableCell>
               </TableRow>
             ))}
             {(cycles.data ?? []).length === 0 && (
               <TableRow>
-                <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
+                <TableCell colSpan={4} className="py-6 text-center text-sm text-muted-foreground">
                   لا توجد دورات تقييم بعد.
                 </TableCell>
               </TableRow>
@@ -195,6 +252,20 @@ function ReviewsTab({ organizationId }: { organizationId: string | undefined }) 
   const [employeeId, setEmployeeId] = useState("");
   const [scores, setScores] = useState<Record<string, number>>({});
   const [comments, setComments] = useState("");
+  const [showClosed, setShowClosed] = useState(false);
+
+  /**
+   * الدورة المغلقة تُقرأ ولا يُقيَّم فيها.
+   *
+   * كانت القائمة تعرض كل الدورات، فتُنشأ تقييمات جديدة في دورة سنةٍ انتهت
+   * فترتها. الترشيح على المفتوحة، مع خيار صريح لعرض المغلقة للقراءة — والدورة
+   * المختارة تبقى في القائمة حتى إن أُغلقت بعد اختيارها كي لا يفرغ الاختيار.
+   */
+  const cycleOptions = (cycles.data ?? []).filter(
+    (c) => showClosed || c.status === "open" || c.id === cycleId,
+  );
+  const selectedCycleClosed =
+    (cycles.data ?? []).find((c) => c.id === cycleId)?.status === "closed";
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["perf-reviews", organizationId, cycleId] });
 
@@ -239,6 +310,10 @@ function ReviewsTab({ organizationId }: { organizationId: string | undefined }) 
       invalidate();
       toast({ title: "تم إرسال التقييم" });
     },
+    // بلا `onError` يفشل «إرسال» صامتًا: الرسالة تُرفَع ولا يعرضها أحد
+    // (`QueryClient` في App.tsx بلا معالج أخطاء افتراضيّ)، فيظنّ المقيّم أن
+    // التقييم أُرسل — أو أن الشاشة معلَّقة.
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
 
   return (
@@ -249,21 +324,26 @@ function ReviewsTab({ organizationId }: { organizationId: string | undefined }) 
           <CardDescription>الدرجة الكلية تُحسَب تلقائيًا من متوسط المعايير المرجَّح بالوزن — لا تُدخَل يدويًا</CardDescription>
         </div>
         <div className="flex items-center gap-2">
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <input type="checkbox" checked={showClosed} onChange={(e) => setShowClosed(e.target.checked)} />
+            عرض المغلقة (قراءة)
+          </label>
           <Select value={cycleId} onValueChange={setCycleId}>
             <SelectTrigger className="w-48">
               <SelectValue placeholder="اختر دورة تقييم" />
             </SelectTrigger>
             <SelectContent>
-              {(cycles.data ?? []).map((c) => (
+              {cycleOptions.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
                   {c.name_ar}
+                  {c.status === "closed" ? " (مغلقة)" : ""}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
           <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
-              <Button size="sm" disabled={!cycleId}>
+              <Button size="sm" disabled={!cycleId || selectedCycleClosed}>
                 <Plus className="ms-1 h-4 w-4" /> تقييم جديد
               </Button>
             </DialogTrigger>
@@ -326,6 +406,9 @@ function ReviewsTab({ organizationId }: { organizationId: string | undefined }) 
       </CardHeader>
       <CardContent>
         {!cycleId && <p className="py-8 text-center text-sm text-muted-foreground">اختر دورة تقييم لعرض تقييماتها.</p>}
+        {cycleId && selectedCycleClosed && (
+          <p className="pb-2 text-xs text-muted-foreground">هذه الدورة مغلقة — للقراءة فقط، ولا تُنشأ فيها تقييمات جديدة.</p>
+        )}
         {cycleId && (
           <Table>
             <TableHeader>

@@ -47,6 +47,30 @@ const STATUS_BADGE: Record<WaitlistStatus, "warning" | "success" | "secondary"> 
 };
 const ANY_DOCTOR = "__any__";
 
+/**
+ * الأولوية والتاريخ المرغوب كانا يُحفظان ولا يُعرضان.
+ *
+ * الموظف يختار «طارئ» ويحدّد تاريخًا، ثم يرى صفوفًا متشابهة مرتَّبة بالأقدمية
+ * وحدها — فيتعذّر معرفة مَن يُقدَّم عند توفّر شاغر إلا بفتح كل صفّ. الترتيب
+ * هنا بالأولوية ثم الأقدمية، كترتيب طابور الاستقبال نفسه، حتى لا يكون لنفس
+ * السؤال جوابان في شاشتين.
+ */
+const PRIORITY_ORDER: Record<string, number> = {
+  emergency: 0,
+  urgent: 1,
+  accessibility: 2,
+  elderly: 3,
+  normal: 4,
+};
+
+const PRIORITY_LABELS: Record<string, string> = {
+  emergency: "طارئ",
+  urgent: "عاجل",
+  accessibility: "ذوو الإعاقة",
+  elderly: "كبار السن",
+  normal: "عادي",
+};
+
 type WaitlistRowJoined = AppointmentWaitlistRow & {
   patient: { id: string; name_ar: string; file_number: number | null; mobile_number: string | null } | null;
   doctor: { id: string; name_ar: string } | null;
@@ -67,7 +91,14 @@ function useWaitlist(organizationId: string | undefined, status: string) {
       if (status !== "all") query = query.eq("status", status);
       const { data, error } = await query;
       if (error) throw error;
-      return (data ?? []) as unknown as WaitlistRowJoined[];
+      const rows = (data ?? []) as unknown as WaitlistRowJoined[];
+      // الترتيب بالأولوية يجري بعد الجلب: قيم `priority` نصّية، وترتيبها في
+      // القاعدة أبجديٌّ يضع «عادي» قبل «طارئ».
+      return [...rows].sort(
+        (a, b) =>
+          (PRIORITY_ORDER[a.priority ?? "normal"] ?? 4) - (PRIORITY_ORDER[b.priority ?? "normal"] ?? 4) ||
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
     },
   });
 }
@@ -282,7 +313,7 @@ export default function Waitlist() {
             <CalendarClock className="h-4 w-4" />
             القائمة
           </CardTitle>
-          <CardDescription>مرتَّبة حسب أسبقية التسجيل — الأقدم أولًا</CardDescription>
+          <CardDescription>مرتَّبة بالأولوية ثم أسبقية التسجيل — كترتيب طابور الاستقبال</CardDescription>
         </CardHeader>
         <CardContent>
           {list.isLoading && <Skeleton className="h-40 w-full" />}
@@ -294,6 +325,8 @@ export default function Waitlist() {
                   <TableHead>رقم الملف</TableHead>
                   <TableHead>الجوال</TableHead>
                   <TableHead>الطبيب المطلوب</TableHead>
+                  <TableHead>الأولوية</TableHead>
+                  <TableHead>التاريخ المرغوب</TableHead>
                   <TableHead>تاريخ التسجيل</TableHead>
                   <TableHead>ملاحظة</TableHead>
                   <TableHead>الحالة</TableHead>
@@ -307,6 +340,22 @@ export default function Waitlist() {
                     <TableCell className="font-mono text-xs">{row.patient?.file_number ?? "—"}</TableCell>
                     <TableCell className="font-mono text-xs">{row.patient?.mobile_number ?? "—"}</TableCell>
                     <TableCell className="text-sm">{row.doctor?.name_ar ?? "أي طبيب"}</TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          row.priority === "emergency"
+                            ? "destructive"
+                            : row.priority && row.priority !== "normal"
+                              ? "warning"
+                              : "outline"
+                        }
+                      >
+                        {PRIORITY_LABELS[row.priority ?? "normal"] ?? row.priority}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-xs tabular-nums">
+                      {row.desired_date ? new Date(row.desired_date).toLocaleDateString("ar-SA") : "—"}
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {new Date(row.created_at).toLocaleDateString("ar-SA")}
                     </TableCell>
@@ -342,7 +391,7 @@ export default function Waitlist() {
                 ))}
                 {(list.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={10} className="py-8 text-center text-sm text-muted-foreground">
                       لا يوجد مرضى في هذه القائمة.
                     </TableCell>
                   </TableRow>

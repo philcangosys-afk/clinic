@@ -644,9 +644,19 @@ function RetentionPanel() {
               <FileLock2 className="h-4 w-4" />
               سياسة احتفاظ جديدة
             </CardTitle>
+            {/*
+              السياسة **تُعلَن** ولا تُنفَّذ آليًّا: لا دالّة ولا مُحفِّز ولا جدولة تقرأ
+              `data_retention_policies` لتؤرشف أو تُخفي هوية، و`app_apply_retention_policy`
+              تَعُدّ الصفوف المتجاوزة وتختم وقت المراجعة فقط. كانت الشارة «سارية» والزرّ
+              «تفعيل» يقولان للمستخدم غير ذلك — فيظنّ الأرشفة واقعة اليوم أو بعد عشر سنين.
+            */}
             <CardDescription>
               الإجراء عند الانتهاء لا يتضمّن الحذف: البيانات الطبية والمالية تُؤرشَف أو
               تُخفى هويّتها. والسند النظاميّ إلزاميّ.
+              <span className="mt-1 block font-medium text-amber-700">
+                التنفيذ الآلي غير مُفعَّل بعد: السياسة تُعلَن ويُحسَب أثرها، والأرشفة أو إخفاء
+                الهوية يجري يدويًّا لكل نوع بيانات حتى تُبنى جدولة تنفيذها.
+              </span>
             </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 sm:grid-cols-4">
@@ -704,6 +714,10 @@ function RetentionPanel() {
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-base">السياسات المسجَّلة</CardTitle>
+          <CardDescription>
+            «معلَنة» تعني أن المنشأة تبنّت المدّة والإجراء — لا أن النظام ينفّذهما. زرّ «حساب
+            الأثر» يعدّ ما تجاوز المدّة ويختم وقت المراجعة، ولا يحذف ولا يعدّل سجلًّا.
+          </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {policies.isLoading && <Skeleton className="h-24 w-full" />}
@@ -735,8 +749,8 @@ function RetentionPanel() {
                       {p.legal_basis}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={p.is_active ? "success" : "secondary"}>
-                        {p.is_active ? "سارية" : "معطّلة"}
+                      <Badge variant={p.is_active ? "default" : "secondary"}>
+                        {p.is_active ? "معلَنة" : "موقوفة"}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-end">
@@ -764,7 +778,7 @@ function RetentionPanel() {
                               toggle.mutate({ id: p.id, is_active: !p.is_active })
                             }
                           >
-                            {p.is_active ? "تعطيل" : "تفعيل"}
+                            {p.is_active ? "إيقاف الإعلان" : "إعلان"}
                           </Button>
                         </div>
                       )}

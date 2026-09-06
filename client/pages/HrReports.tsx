@@ -159,8 +159,20 @@ function SummaryCards({ organizationId }: { organizationId: string | undefined }
   );
 }
 
+/**
+ * الشهر الحالي **بتوقيت المتصفح**.
+ *
+ * `toISOString().slice(0,7)` يعطي شهر UTC: في الرياض (UTC+3) ليلة الأول من
+ * الشهر (بين منتصف الليل والثالثة فجرًا) يُعيد الشهر السابق، فتُفتح الشاشة على
+ * حضور شهر مضى ويُقرأ كأنه الشهر الجاري.
+ */
+function currentMonthValue() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
 function AttendanceReportTab({ organizationId }: { organizationId: string | undefined }) {
-  const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [month, setMonth] = useState(currentMonthValue);
   const monthly = useMonthlyAttendance(organizationId, month);
   return (
     <Card>

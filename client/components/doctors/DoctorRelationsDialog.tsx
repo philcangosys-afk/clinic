@@ -1101,7 +1101,11 @@ function LicenseTab({ doctorId, canManage }: { doctorId: string; canManage: bool
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["doctor-license", doctorId] });
-      queryClient.invalidateQueries({ queryKey: ["doctors"] });
+      // المفتاح كان `["doctors"]` ولا يستعمله أي استعلام في المشروع، فلم يكن
+      // يُحدِّث شيئًا: قائمة الأطباء مفتاحها `doctors-list` والقوائم المنسدلة
+      // `doctors-enabled`.
+      queryClient.invalidateQueries({ queryKey: ["doctors-list"] });
+      queryClient.invalidateQueries({ queryKey: ["doctors-enabled"] });
       toast({ title: "حُفظت بيانات الترخيص" });
     },
     onError: (error: unknown) =>

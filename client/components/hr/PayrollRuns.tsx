@@ -16,6 +16,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
+} from "@/components/ui/dialog";
 
 /**
  * مسيّرات الرواتب — المرحلة 20.
@@ -64,6 +67,11 @@ function useEmployeeList(orgId: string | undefined) {
         .from("employees")
         .select("id, name_ar, job_number, basic_salary, status, is_disabled")
         .eq("organization_id", orgId)
+        // مطابقة شرط `app_calculate_payroll_run` حرفًا بحرف: المسيّر يشترط
+        // `status='active'` **و** `is_disabled=false`. بلا شرط `status` تُسجَّل
+        // سلفة — أو يُسند بدل/استقطاع — لموظّف انتهت خدمته، فتظهر سلفةً
+        // «سارية» لا تُخصم أبدًا لأن المسيّر يستثنيه أصلًا.
+        .eq("status", "active")
         .eq("is_disabled", false)
         .order("name_ar");
       if (error) throw error;
@@ -119,8 +127,20 @@ function RunsPanel() {
       const { data, error } = await supabase.rpc("app_payroll_bank_file", {
         p_run_id: openRun,
       });
-      // المسير غير المعتمَد يرفض إخراج الملف — ليس خطأ يُعرض للمستخدم
-      if (error) return [] as any[];
+      if (error) {
+        // «لا يُخرَج ملف التحويل من مسير حالته...» رفضٌ متوقَّع لمسيّر لم يُعتمد
+        // ويُخفى. أمّا انعدام صلاحية `payroll.pay` أو انقطاع الشبكة فليس
+        // متوقَّعًا: معاملته كالرفض تُخفي بطاقة «غير جاهزين للتحويل» بلا سبب،
+        // فلا يعرف المستخدم أن هناك موظفين بلا آيبان.
+        if (!(error.message ?? "").includes("لا يُخرَج ملف التحويل")) {
+          toast({
+            variant: "destructive",
+            title: "تعذر قراءة ملف التحويل البنكيّ",
+            description: error.message ?? "خطأ غير متوقع",
+          });
+        }
+        return [] as any[];
+      }
       return (data ?? []) as any[];
     },
     retry: false,
@@ -566,9 +586,14 @@ function ComponentsPanel() {
     queryKey: ["salary-components", organization?.id],
     enabled: Boolean(organization?.id),
     queryFn: async () => {
+      // النشط فقط: `app_calculate_payroll_run` تتجاهل المكوّن المعطَّل
+      // (`where sc.is_active`)، فإسناد مكوّن معطَّل يُنتج بدلًا/استقطاعًا يبدو
+      // مُسندًا ولا يصل إلى القسيمة أبدًا.
       const { data, error } = await supabase
         .from("salary_components").select("*")
-        .eq("organization_id", organization!.id).order("sort_order");
+        .eq("organization_id", organization!.id)
+        .eq("is_active", true)
+        .order("sort_order");
       if (error) throw error;
       return (data ?? []) as any[];
     },
@@ -580,7 +605,9 @@ function ComponentsPanel() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("employee_salary_components")
-        .select("*, employee:employees(name_ar), component:salary_components(name_ar, component_type, calculation)")
+        // `is_active` يُقرأ ليُعرَض: إسنادٌ لمكوّن عُطّل لاحقًا يبقى في الجدول
+        // ويجب أن يُرى أنه لا يصل إلى القسيمة.
+        .select("*, employee:employees(name_ar), component:salary_components(name_ar, component_type, calculation, is_active)")
         .eq("organization_id", organization!.id)
         .order("effective_from", { ascending: false })
         .limit(200);
@@ -759,7 +786,14 @@ function ComponentsPanel() {
                 {(assignments.data ?? []).map((a) => (
                   <TableRow key={a.id}>
                     <TableCell className="text-sm">{a.employee?.name_ar ?? "—"}</TableCell>
-                    <TableCell className="text-sm">{a.component?.name_ar ?? "—"}</TableCell>
+                    <TableCell className="text-sm">
+                      {a.component?.name_ar ?? "—"}
+                      {a.component && a.component.is_active === false && (
+                        <Badge variant="destructive" className="ms-1 text-[10px]">
+                          مكوّن معطَّل — لا يُحتسب
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell className="text-sm">
                       <Badge variant={
                         a.component?.component_type === "allowance" ? "success" : "destructive"}>
@@ -1076,7 +1110,20 @@ function AttendancePanel() {
   const { toast } = useToast();
   const { can } = usePermissions();
 
+  const employees = useEmployeeList(organization?.id);
+
   const [month, setMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [swapOpen, setSwapOpen] = useState(false);
+  const [swapRequester, setSwapRequester] = useState("");
+  const [swapTarget, setSwapTarget] = useState("");
+  const [swapDate, setSwapDate] = useState("");
+  const [swapReason, setSwapReason] = useState("");
+
+  /** أول يوم في الشهر التالي، حدًّا أعلى مع `.lt`. */
+  const nextMonthStart = (m: string) => {
+    const [y, mi] = m.split("-").map(Number);
+    return new Date(Date.UTC(y, mi, 1)).toISOString().slice(0, 10);
+  };
 
   const summary = useQuery({
     queryKey: ["attendance-summary", organization?.id, month],
@@ -1096,10 +1143,10 @@ function AttendancePanel() {
     queryKey: ["pending-overtime", organization?.id, month],
     enabled: Boolean(organization?.id),
     queryFn: async () => {
+      // الحدّ الأعلى بأوّل الشهر التالي و`.lt`: حساب آخر يوم بمنشئ التاريخ
+      // المحلّي ثمّ `toISOString` يزيح الحدّ يومًا كاملًا في المناطق الشرقية،
+      // فيسقط إضافيّ آخر يوم في الشهر من قائمة الاعتماد.
       const start = `${month}-01`;
-      const d = new Date(start);
-      const end = new Date(d.getFullYear(), d.getMonth() + 1, 0)
-        .toISOString().slice(0, 10);
       const { data, error } = await supabase
         .from("attendance_records")
         .select("id, work_date, overtime_minutes, absence_reason, status, employee:employees(name_ar)")
@@ -1107,7 +1154,32 @@ function AttendancePanel() {
         .gt("overtime_minutes", 0)
         .is("overtime_approved_by", null)
         .gte("work_date", start)
-        .lte("work_date", end)
+        .lt("work_date", nextMonthStart(month))
+        .order("work_date");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  /**
+   * أيام الغياب في الشهر.
+   *
+   * الغياب يُخصم من الراتب، فسببه يجب أن يكون موثَّقًا يُراجَع عند اعتراض
+   * الموظّف: عمود `absence_reason` كان يُقرأ ولا يُعرض ولا يُكتب من أي مكان،
+   * ودالّة `setAbsenceReason` مكتوبة بلا أي حقل يستدعيها. وأيام الغياب مجموعة
+   * أخرى غير أيام الإضافيّ، فلها جدولها.
+   */
+  const absentDays = useQuery({
+    queryKey: ["absent-days", organization?.id, month],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("attendance_records")
+        .select("id, work_date, absence_reason, status, employee:employees(name_ar)")
+        .eq("organization_id", organization!.id)
+        .eq("status", "absent")
+        .gte("work_date", `${month}-01`)
+        .lt("work_date", nextMonthStart(month))
         .order("work_date");
       if (error) throw error;
       return (data ?? []) as any[];
@@ -1168,10 +1240,59 @@ function AttendancePanel() {
       if (!data || data.length === 0) throw new Error("لم يُحفَظ — راجع صلاحيتك");
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["pending-overtime", organization?.id, month] });
+      queryClient.invalidateQueries({ queryKey: ["absent-days", organization?.id, month] });
       toast({ title: "سُجّل سبب الغياب" });
     },
     onError: fail("تعذر الحفظ"),
+  });
+
+  /**
+   * الحلقة الناقصة في تبديل المناوبات.
+   *
+   * الجدول كان يُقرأ فقط: لا إنشاء لطلب ولا قبول من الزميل، وزرّ الاعتماد
+   * مشروط بحالة `accepted` التي لا سبيل للوصول إليها — فبقيت البطاقة تقول «لا
+   * طلبات تبديل» إلى الأبد ودالّة `app_approve_shift_swap` بلا مُستدعٍ.
+   */
+  const createSwap = useMutation({
+    mutationFn: async () => {
+      if (!swapRequester || !swapTarget || !swapDate) throw new Error("اختر الطالب والزميل والتاريخ");
+      if (swapRequester === swapTarget) throw new Error("لا يُبدَّل الموظّف مناوبته مع نفسه");
+      const { error } = await supabase.from("shift_swap_requests").insert({
+        organization_id: organization!.id,
+        requester_id: swapRequester,
+        target_employee_id: swapTarget,
+        swap_date: swapDate,
+        reason: swapReason.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["shift-swaps", organization?.id] });
+      toast({ title: "سُجّل طلب التبديل", description: "لا يُعتمد قبل قبول الزميل" });
+      setSwapOpen(false);
+      setSwapRequester(""); setSwapTarget(""); setSwapDate(""); setSwapReason("");
+    },
+    onError: fail("تعذر تسجيل الطلب"),
+  });
+
+  const acceptSwap = useMutation({
+    mutationFn: async (id: string) => {
+      const { data, error } = await supabase
+        .from("shift_swap_requests")
+        .update({ status: "accepted", accepted_at: new Date().toISOString() })
+        .eq("id", id)
+        // القبول يقع على طلب معلَّق وحده: قبولٌ على طلب مرفوض أو معتمَد يعيد
+        // فتح ما أُغلق.
+        .eq("status", "pending")
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error("لم يُحفَظ — الطلب ليس معلَّقًا أو راجع صلاحيتك");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["shift-swaps", organization?.id] });
+      toast({ title: "قُبل التبديل من الزميل", description: "بانتظار الاعتماد" });
+    },
+    onError: fail("تعذر تسجيل القبول"),
   });
 
   const approveSwap = useMutation({
@@ -1259,6 +1380,64 @@ function AttendancePanel() {
 
       <Card>
         <CardHeader className="pb-2">
+          <CardTitle className="text-base">أيام الغياب — وسببها</CardTitle>
+          <CardDescription>
+            **الغياب المخصوم من الراتب يحتاج سببًا موثَّقًا** — بلا سبب مكتوب لا جواب
+            لاعتراض الموظّف على خصم يومٍ كامل.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="overflow-x-auto">
+          {absentDays.isLoading && <Skeleton className="h-24 w-full" />}
+          {!absentDays.isLoading && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>الموظف</TableHead>
+                  <TableHead>التاريخ</TableHead>
+                  <TableHead>سبب الغياب</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(absentDays.data ?? []).map((a) => (
+                  <TableRow key={a.id}>
+                    <TableCell className="text-sm">{a.employee?.name_ar ?? "—"}</TableCell>
+                    <TableCell className="font-mono text-xs">{a.work_date}</TableCell>
+                    <TableCell>
+                      {can("hr.attendance") ? (
+                        <Input
+                          key={`${a.id}-${a.absence_reason ?? ""}`}
+                          defaultValue={a.absence_reason ?? ""}
+                          placeholder="سبب الغياب..."
+                          className="h-8 w-64 text-xs"
+                          disabled={setAbsenceReason.isPending}
+                          onBlur={(e) => {
+                            const next = e.target.value.trim();
+                            if (next !== (a.absence_reason ?? "")) {
+                              setAbsenceReason.mutate({ id: a.id, reason: next });
+                            }
+                          }}
+                        />
+                      ) : (
+                        <span className="text-xs text-muted-foreground">{a.absence_reason ?? "—"}</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(absentDays.data ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={3} className="py-6 text-center text-sm text-muted-foreground">
+                      لا أيام غياب في هذا الشهر.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-2">
           <CardTitle className="text-base">ملخّص الحضور الشهريّ</CardTitle>
           <CardDescription>
             الإضافيّ المسجَّل منفصلٌ عن المعتمَد — الفرق بينهما هو ما ينتظر قرارًا.
@@ -1320,11 +1499,65 @@ function AttendancePanel() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">تبديل المناوبات</CardTitle>
-          <CardDescription>
-            **قبول الزميل شرطٌ للاعتماد** — الاعتماد وحده يفرض مناوبةً على من لم يوافق.
-          </CardDescription>
+        <CardHeader className="flex flex-row items-start justify-between pb-2">
+          <div>
+            <CardTitle className="text-base">تبديل المناوبات</CardTitle>
+            <CardDescription>
+              **قبول الزميل شرطٌ للاعتماد** — الاعتماد وحده يفرض مناوبةً على من لم يوافق.
+            </CardDescription>
+          </div>
+          <Dialog open={swapOpen} onOpenChange={setSwapOpen}>
+            <DialogTrigger asChild>
+              <Button size="sm" variant="outline">طلب تبديل</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>طلب تبديل مناوبة</DialogTitle>
+              </DialogHeader>
+              <div className="grid gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <Label>الطالب *</Label>
+                  <Select value={swapRequester} onValueChange={setSwapRequester}>
+                    <SelectTrigger><SelectValue placeholder="اختر" /></SelectTrigger>
+                    <SelectContent>
+                      {(employees.data ?? []).map((e) => (
+                        <SelectItem key={e.id} value={e.id}>{e.name_ar}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>الزميل *</Label>
+                  <Select value={swapTarget} onValueChange={setSwapTarget}>
+                    <SelectTrigger><SelectValue placeholder="اختر" /></SelectTrigger>
+                    <SelectContent>
+                      {(employees.data ?? [])
+                        .filter((e) => e.id !== swapRequester)
+                        .map((e) => (
+                          <SelectItem key={e.id} value={e.id}>{e.name_ar}</SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>تاريخ التبديل *</Label>
+                  <Input type="date" value={swapDate} onChange={(e) => setSwapDate(e.target.value)} />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>السبب</Label>
+                  <Input value={swapReason} onChange={(e) => setSwapReason(e.target.value)} />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button
+                  disabled={!swapRequester || !swapTarget || !swapDate || createSwap.isPending}
+                  onClick={() => createSwap.mutate()}
+                >
+                  حفظ الطلب
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {swaps.isLoading && <Skeleton className="h-24 w-full" />}
@@ -1355,6 +1588,16 @@ function AttendancePanel() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-end">
+                      {s.status === "pending" && (
+                        <Button size="sm" variant="outline" disabled={acceptSwap.isPending}
+                                onClick={() => {
+                                  const who = s.target?.name_ar ?? "الزميل";
+                                  if (!window.confirm(`تأكيد قبول ${who} للتبديل بتاريخ ${s.swap_date}؟`)) return;
+                                  acceptSwap.mutate(s.id);
+                                }}>
+                          قبول الزميل
+                        </Button>
+                      )}
                       {s.status === "accepted" && can("hr.attendance") && (
                         <Button size="sm" variant="outline" disabled={approveSwap.isPending}
                                 onClick={() => approveSwap.mutate(s.id)}>

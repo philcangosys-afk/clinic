@@ -29,6 +29,8 @@ import {
  */
 const BUCKET = "patient-documents";
 const MAX_FILE_MB = 20;
+/** سقف صفوف جدول المستندات — يُعلن في الشاشة عند بلوغه. */
+const DOCUMENT_ROW_LIMIT = 500;
 
 const KINDS: Record<string, string> = {
   patient_document: "مستند مريض",
@@ -84,17 +86,34 @@ function AllDocuments() {
   const [showArchived, setShowArchived] = useState(false);
   const [uploading, setUploading] = useState(false);
 
+  /**
+   * مرشّح النوع و«إظهار المؤرشف» **يدخلان الاستعلام**.
+   *
+   * كانا يُطبَّقان في المتصفّح على أول 500 صف بترتيب زمني نازل: منشأة فيها ألف
+   * مستند تختار «مستند موظف» فترى ما وقع من مستندات الموظفين داخل أحدث 500 صف
+   * فقط — وقد تكون النتيجة فارغة تمامًا مع وجود مئات المستندات. والأسوأ أن
+   * إخفاء المؤرشف كان يقصّ من الـ500 بعد قراءتها فيبدو الجدول أقصر بلا سبب.
+   *
+   * و`count: "exact"` يكشف بلوغ السقف بعد الترشيح، فلا تُقرأ قائمة مقصوصة
+   * كأنها كل المستندات.
+   */
   const documents = useQuery({
-    queryKey: ["all-documents", organization?.id],
+    queryKey: ["all-documents", organization?.id, kind, showArchived],
     enabled: Boolean(organization?.id),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("v_documents").select("*")
+      let query = supabase
+        .from("v_documents").select("*", { count: "exact" })
         .eq("organization_id", organization!.id)
         .order("created_at", { ascending: false })
-        .limit(500);
+        .limit(DOCUMENT_ROW_LIMIT);
+      if (kind !== "all") query = query.eq("document_kind", kind);
+      // `is_archived` غير قابل للعدم في الجداول الثلاثة، فـ`eq(false)` مكافئ
+      // تمامًا للشرط الذي كان في المتصفّح
+      if (!showArchived) query = query.eq("is_archived", false);
+      const { data, error, count } = await query;
       if (error) throw error;
-      return (data ?? []) as any[];
+      const rows = (data ?? []) as any[];
+      return { rows, matchedCount: count ?? rows.length };
     },
   });
 
@@ -112,9 +131,9 @@ function AllDocuments() {
       }),
   });
 
-  const rows = (documents.data ?? []).filter(
-    (r) => (kind === "all" || r.document_kind === kind) && (showArchived || !r.is_archived),
-  );
+  const rows = documents.data?.rows ?? [];
+  const matchedCount = documents.data?.matchedCount ?? 0;
+  const isCapped = matchedCount > rows.length;
 
   return (
     <div className="flex flex-col gap-4">
@@ -152,6 +171,11 @@ function AllDocuments() {
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {documents.isLoading && <Skeleton className="h-40 w-full" />}
+          {!documents.isLoading && isCapped && (
+            <p className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+              معروض {rows.length} من {matchedCount} مستند مطابق (الأحدث أولًا) — ضيّق النوع لعرض الباقي.
+            </p>
+          )}
           {!documents.isLoading && (
             <Table>
               <TableHeader>

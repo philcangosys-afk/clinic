@@ -283,8 +283,18 @@ function NewEmployeeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>موظف جديد</DialogTitle>
-          <DialogDescription>إجمالي الراتب يُحسب تلقائيًا من مكوّنات الراتب أدناه</DialogDescription>
+          {/*
+            العنوان يتبع الوضع لا يُكتب ثابتًا: نافذة التعديل كانت تقول «موظف
+            جديد» وهي معبّأة ببيانات موظّف قائم، فيخشى المستخدم أنه يُنشئ سجلًّا
+            مكرَّرًا فيتردّد في الحفظ — وكل بقيّة النافذة (الحمولة، رسالة النجاح)
+            تعرف الوضع من `initial` أصلًا.
+          */}
+          <DialogTitle>{initial ? `تعديل ملف — ${initial.name_ar}` : "موظف جديد"}</DialogTitle>
+          <DialogDescription>
+            {initial
+              ? "تعديل بيانات موظّف قائم — إجمالي الراتب يُحسب تلقائيًا من مكوّناته أدناه"
+              : "إجمالي الراتب يُحسب تلقائيًا من مكوّنات الراتب أدناه"}
+          </DialogDescription>
         </DialogHeader>
 
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">

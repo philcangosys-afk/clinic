@@ -110,6 +110,14 @@ function usePatientsList(organizationId: string | undefined, search: string, fil
           "id, file_number, name_ar, name_en, mobile_number, gender, birth_date, id_number, file_date, block_appointments, block_invoices, block_file, block_sms, insurance_company_name",
         )
         .eq("organization_id", organizationId)
+        /**
+         * الملفات المدموجة تُستثنى. دالّة الدمج `app_merge_patients` تُعلّم
+         * المكرَّر بـ`merged_into_id` وتضع عليه `block_appointments` فقط — لا
+         * `block_sms` ولا `block_file` — فمرشّحا الرسائل الجماعية لا يمسّانه:
+         * كان الشخص يستقبل رسالتين ويُخصم رصيد رسالتين، ويفتح الموظف الملف
+         * الميّت فيجده فارغًا.
+         */
+        .is("merged_into_id", null)
         .order("created_at", { ascending: false })
         .limit(RESULT_CAP);
 
@@ -275,22 +283,39 @@ export default function Patients() {
       if (!organization?.id) throw new Error("لا توجد مؤسسة نشطة");
       if (!smsText.trim()) throw new Error("اكتب نص الرسالة");
       if (smsRecipients.length === 0) throw new Error("لا يوجد مستلمون في نتيجة البحث");
-      const { error } = await supabase.from("message_log").insert(
-        smsRecipients.map((row) => ({
-          organization_id: organization.id,
-          patient_id: row.id,
-          external_recipient: row.mobile_number,
-          channel: "sms" as const,
-          message_text: smsText.trim(),
-          status: "queued" as const,
-          created_by: session?.user.id ?? null,
-        })),
-      );
+      /**
+       * الحالة تُقرأ من الصفوف المُدرَجة لا من طول القائمة: المُحفِّز
+       * `app_enforce_messaging_block` يقلب صفّ كل محظور في «الجهات المحجوبة»
+       * إلى `cancelled` ولا يرفع خطأً، فالإدراج ينجح والرسالة لا تُرسَل —
+       * وعدّاد الشاشة كان يعلن رقمًا أعلى من الواقع.
+       */
+      const { data, error } = await supabase
+        .from("message_log")
+        .insert(
+          smsRecipients.map((row) => ({
+            organization_id: organization.id,
+            patient_id: row.id,
+            external_recipient: row.mobile_number,
+            channel: "sms" as const,
+            message_text: smsText.trim(),
+            status: "queued" as const,
+            created_by: session?.user.id ?? null,
+          })),
+        )
+        .select("id, status");
       if (error) throw error;
-      return smsRecipients.length;
+      const inserted = data ?? [];
+      const cancelled = inserted.filter((row) => row.status === "cancelled").length;
+      return { queued: inserted.length - cancelled, cancelled };
     },
-    onSuccess: (count) => {
-      toast({ title: `تم وضع ${count} رسالة في طابور الإرسال` });
+    onSuccess: ({ queued, cancelled }) => {
+      toast({
+        title: `تم وضع ${queued} رسالة في طابور الإرسال`,
+        description:
+          cancelled > 0
+            ? `أُلغيت ${cancelled} رسالة لمستلمين محجوبين عن الرسائل في «الجهات المحجوبة»`
+            : undefined,
+      });
       setSmsText("");
       setSmsOpen(false);
     },

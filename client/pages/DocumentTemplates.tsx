@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileStack, FilePlus2, Plus, Printer, Trash2 } from "lucide-react";
+import { FileStack, FilePlus2, Plus, Printer } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type { DocumentTemplateAppliesTo, DocumentTemplateRow } from "@/lib/database.types";
@@ -439,23 +439,17 @@ function TemplatesTab({ organizationId, currentUserId }: { organizationId: strin
       toast({ variant: "destructive", title: "تعذر التحديث", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
   });
 
-  const deleteTemplate = useMutation({
-    mutationFn: async (id: string) => {
-      const { data: affectedRows, error } = await supabase.from("document_templates").delete().eq("id", id)
-        .select("id");
-      if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["document-templates", organizationId] });
-      toast({ title: "تم حذف القالب" });
-    },
-    onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحذف", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
-  });
+  /*
+    لا حذف نهائيّ للقالب.
+    ــــــــــــــــــــــــ
+    القالب هو الأصل الذي تُصاغ به العقود والشهادات، وكان يُمحى من القاعدة بضغطة
+    واحدة على أيقونة سلّة بلا سؤال ولا سبب ولا تراجع — ولا مُحفِّز في القاعدة
+    يمنع ذلك (حُرّاس `app_block_document_delete` مربوطون بالمستندات لا
+    بالقوالب). وإن كان القالب مستعملًا في `patient_documents` فشل الحذف برسالة
+    قاعدة بيانات خامّة. البديل «تعطيل» موجود بجانبه ويؤدّي الغرض بلا محو:
+    القالب المعطَّل يبقى للمراجعة ولإعادة التفعيل ولا يولّد مستندات جديدة.
+    فأُزيل زرّ الحذف ودالّته.
+  */
 
   return (
     <div className="flex flex-col gap-4">
@@ -481,16 +475,25 @@ function TemplatesTab({ organizationId, currentUserId }: { organizationId: strin
                   <CardTitle className="text-sm">{tpl.name_ar}</CardTitle>
                   <div className="flex gap-1">
                     <Badge variant="secondary">{APPLIES_TO_LABELS[tpl.applies_to]}</Badge>
+                    {tpl.is_disabled && <Badge variant="destructive">معطَّل</Badge>}
                     {tpl.organization_id === null && <Badge variant="outline">نظامي</Badge>}
                   </div>
                 </div>
                 {tpl.category?.name_ar && <CardDescription>{tpl.category.name_ar}</CardDescription>}
               </CardHeader>
               <CardContent className="flex flex-wrap items-center gap-2">
-                <Button size="sm" onClick={() => setGenerating(tpl)}>
+                {/*
+                  التعطيل كان أثره بصريًّا فقط (`opacity-60`) وزرّ التوليد يعمل
+                  كما قبل، فتُطبَع عقود من نسخة أُوقفت عن العمل. القالب يبقى
+                  معروضًا لإعادة تفعيله، ولكن لا يولّد.
+                */}
+                <Button size="sm" disabled={tpl.is_disabled} onClick={() => setGenerating(tpl)}>
                   <FilePlus2 className="h-3.5 w-3.5" />
                   توليد مستند
                 </Button>
+                {tpl.is_disabled && (
+                  <span className="text-xs text-muted-foreground">القالب معطَّل — فعِّله لتوليد مستند منه</span>
+                )}
                 {tpl.organization_id !== null && (
                   <>
                     <Button
@@ -505,9 +508,6 @@ function TemplatesTab({ organizationId, currentUserId }: { organizationId: strin
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => toggleDisabled.mutate(tpl)}>
                       {tpl.is_disabled ? "تفعيل" : "تعطيل"}
-                    </Button>
-                    <Button size="sm" variant="ghost" onClick={() => deleteTemplate.mutate(tpl.id)}>
-                      <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </>
                 )}

@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -60,6 +60,16 @@ const STATUS_LABEL: Record<string, string> = {
 };
 
 /**
+ * رتبة الأولوية للترتيب.
+ *
+ * `priority` عمود نصّي قيمه `routine | urgent | stat`، والترتيب الأبجدي
+ * التصاعدي يعطي `routine` ثم `stat` ثم `urgent` — أي أن العادي يتقدّم الطابور
+ * والعاجل يقع في ذيله، فيعمل الفنّي بالترتيب المعروض ويؤخّر العاجل. الرتبة
+ * الصريحة هي الترتيب الطبّي الصحيح.
+ */
+const PRIORITY_RANK: Record<string, number> = { stat: 0, urgent: 1, routine: 2 };
+
+/**
  * شاشة مختصّ الأشعة — المرحلة 33.
  *
  * تحلّ مشكلة واقعية: الطبيب كان يطلب الصورة، والمختصّ لا يرى الطلب في
@@ -83,10 +93,13 @@ export default function RadiologyConsole() {
         .from("v_radiology_console_queue")
         .select("*")
         .eq("organization_id", organization!.id)
-        .order("priority", { ascending: true })
         .order("ordered_at", { ascending: true });
       if (error) throw error;
-      return (data ?? []) as QueueRow[];
+      return [...((data ?? []) as QueueRow[])].sort(
+        (a, b) =>
+          (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9) ||
+          String(a.ordered_at ?? "").localeCompare(String(b.ordered_at ?? "")),
+      );
     },
   });
 
@@ -129,7 +142,16 @@ export default function RadiologyConsole() {
 
         <TabsContent value="queue" className="mt-4">
           {queue.isLoading && <Skeleton className="h-64 w-full" />}
-          {!queue.isLoading && rows.length === 0 && (
+          {/* الفشل يُعرض فشلًا: «لا طلبات معلّقة» على استعلامٍ سقط يقرأه الفنّي
+              طابورًا فارغًا فيمضي، والطلبات في انتظاره. */}
+          {queue.isError && (
+            <Card className="border-destructive">
+              <CardContent className="py-6 text-center text-sm text-destructive">
+                تعذّر تحميل الطابور: {(queue.error as any)?.message ?? "خطأ غير معروف"}
+              </CardContent>
+            </Card>
+          )}
+          {!queue.isLoading && !queue.isError && rows.length === 0 && (
             <Card>
               <CardContent className="grid place-items-center gap-2 py-12 text-center">
                 <CheckCircle2 className="h-10 w-10 text-emerald-600" />
@@ -309,6 +331,11 @@ function UploadPanel({
           .eq("ordering_doctor_id", effectiveDoctor)
           .limit(300),
       ]);
+      // بلا فحص `error` في الثلاثة يُقرأ رفضُ RLS أو انقطاع الشبكة «لا صفوف»،
+      // فتظهر «لا مرضى مسجَّلون لهذا الطبيب» أو قائمة ناقصة بلا أي إشارة —
+      // ويرفع الفنّي الصور لمريضٍ آخر وهو يظنّ القائمة كاملة.
+      const failure = appts.error ?? visits.error ?? orders.error;
+      if (failure) throw failure;
       const ids = Array.from(
         new Set(
           [...(appts.data ?? []), ...(visits.data ?? []), ...(orders.data ?? [])]
@@ -342,8 +369,48 @@ function UploadPanel({
     },
   });
 
+  /**
+   * فحوص الطلب المختار وحدها.
+   *
+   * «نوع التصوير» كان يعرض كل فحوص الكتالوج بلا صلة بالطلب ويبدأ فارغًا. ولأن
+   * `app_radiology_deliver_images` تُنشئ بندًا جديدًا حين لا تجد بندًا للفحص
+   * الممرَّر، فاختيار فحصٍ مشابه بالاسم (صدر جانبي بدل صدر أمامي) ينجح ظاهريًّا:
+   * تُضاف الصور إلى بندٍ لم يطلبه أحد، ويبقى بند الطلب الأصلي غير منفَّذ فلا
+   * ينقل المحفّز الطلب إلى «الصور جاهزة» — يبقى في الطابور أبدًا ولا يظهر في
+   * صندوق الطبيب. حصرُ القائمة ببنود الطلب يجعل ذلك غير ممكن من الواجهة.
+   */
+  const orderExams = useQuery({
+    queryKey: ["rad-upload-order-exams", lockedOrder],
+    enabled: Boolean(lockedOrder),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("radiology_order_items")
+        .select("radiology_exam_id, radiology_exam:radiology_exams(id, name_ar, modality)")
+        .eq("radiology_order_id", lockedOrder!);
+      if (error) throw error;
+      return ((data ?? []) as any[]).map((row) => {
+        const exam = Array.isArray(row.radiology_exam) ? row.radiology_exam[0] : row.radiology_exam;
+        return {
+          id: row.radiology_exam_id as string,
+          name_ar: (exam?.name_ar as string) ?? "—",
+          modality: (exam?.modality as string) ?? "",
+        };
+      });
+    },
+  });
+
+  // فحصٌ واحد في الطلب يُختار تلقائيًا: تركُه فارغًا يدفع الفنّي إلى الاختيار
+  // من قائمةٍ لا يعرف أيّها المطلوب.
+  useEffect(() => {
+    if (!lockedOrder) return;
+    const list = orderExams.data;
+    // ما دامت بنود الطلب لم تُحمَّل بعد يبقى الحقل فارغًا: لو ورث اختيار الطلب
+    // السابق لَرُفعت صور طلبٍ إلى فحص طلبٍ آخر.
+    setExamId(list && list.length === 1 ? list[0].id : "");
+  }, [lockedOrder, orderExams.data]);
+
   const patientList = patients.data ?? [];
-  const examList = exams.data ?? [];
+  const examList = lockedOrder ? orderExams.data ?? [] : exams.data ?? [];
 
   const canSave = useMemo(
     () => Boolean(organizationId && effectivePatient && examId && files.length > 0 && !busy),
@@ -505,11 +572,22 @@ function UploadPanel({
                   </option>
                 ))}
               </select>
-              {!allPatients && doctorId && !patients.isLoading && patientList.length === 0 && (
-                <span className="text-xs text-muted-foreground">
-                  لا مرضى مسجَّلون لهذا الطبيب — استعمل «بحث في كل المرضى».
+              {!allPatients && doctorId && patients.isError && (
+                <span className="text-xs text-destructive">
+                  تعذّر تحميل مرضى الطبيب:{" "}
+                  {(patients.error as any)?.message ?? "خطأ غير معروف"} — القائمة غير مكتملة، أعد
+                  المحاولة قبل الرفع.
                 </span>
               )}
+              {!allPatients &&
+                doctorId &&
+                !patients.isLoading &&
+                !patients.isError &&
+                patientList.length === 0 && (
+                  <span className="text-xs text-muted-foreground">
+                    لا مرضى مسجَّلون لهذا الطبيب — استعمل «بحث في كل المرضى».
+                  </span>
+                )}
             </div>
           </div>
         )}
@@ -530,7 +608,22 @@ function UploadPanel({
               </option>
             ))}
           </select>
-          {examList.length === 0 && !exams.isLoading && (
+          {lockedOrder && (
+            <span className="text-xs text-muted-foreground">
+              فحوص هذا الطلب فقط — الرفع لفحصٍ غير مطلوب يفتح بندًا جديدًا ويترك الطلب معلّقًا.
+            </span>
+          )}
+          {lockedOrder && orderExams.isError && (
+            <span className="text-xs text-destructive">
+              تعذّر تحميل فحوص الطلب: {(orderExams.error as any)?.message ?? "خطأ غير معروف"}
+            </span>
+          )}
+          {lockedOrder && !orderExams.isLoading && !orderExams.isError && examList.length === 0 && (
+            <span className="text-xs text-destructive">
+              هذا الطلب بلا بنود — لا يمكن رفع صوره، راجعه من شاشة «الأشعة».
+            </span>
+          )}
+          {!lockedOrder && examList.length === 0 && !exams.isLoading && (
             <span className="text-xs text-destructive">
               لا فحوص في الكتالوج — أضفها من شاشة «الأشعة» أولًا.
             </span>

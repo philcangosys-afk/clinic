@@ -52,9 +52,30 @@ const PO_STATUS: Record<string, { label: string; variant: any }> = {
   cancelled:          { label: "ملغى",           variant: "destructive" },
 };
 
-export default function PurchaseCycle() {
+/**
+ * التبويب الداخلي يقبل التحكّم من الخارج (`tab`/`onTabChange`) ويعمل بلا ذلك.
+ *
+ * السبب: شاشة المشتريات صارت تُوجّه المستخدم إلى **مستند الاستلام** كمسارٍ
+ * وحيد لإدخال بضاعة الشراء إلى المخزون، بعد إزالة الاستلام المباشر من نافذة
+ * فاتورة الشراء. توجيهٌ لا ينقل المستخدم إلى الموضع الصحيح هو نصٌّ يُقرأ ثم
+ * يُهمَل، فيبحث المستخدم عن الاستلام في التبويب الخطأ.
+ */
+export default function PurchaseCycle({
+  tab,
+  onTabChange,
+}: {
+  tab?: string;
+  onTabChange?: (next: string) => void;
+}) {
+  const [innerTab, setInnerTab] = useState("requests");
+  const value = tab ?? innerTab;
+  const setValue = (next: string) => {
+    setInnerTab(next);
+    onTabChange?.(next);
+  };
+
   return (
-    <Tabs defaultValue="requests">
+    <Tabs value={value} onValueChange={setValue}>
       <TabsList>
         <TabsTrigger value="requests">طلبات الشراء</TabsTrigger>
         <TabsTrigger value="orders">أوامر الشراء والاستلام</TabsTrigger>
@@ -707,6 +728,8 @@ function OrdersPanel() {
         </CardContent>
       </Card>
 
+      <DraftReceiptsCard />
+
       <PostedReceiptsCard onInvoice={(id) => {
         const number = window.prompt("رقم فاتورة المورد؟") ?? "";
         if (!number.trim()) return;
@@ -766,6 +789,138 @@ function OrdersPanel() {
 
       <ReceiveDialog order={receiving} onClose={() => setReceiving(null)} />
     </div>
+  );
+}
+
+/**
+ * مستندات الاستلام التي بقيت مسوّدة.
+ *
+ * **لماذا وُجدت هذه البطاقة**: إنشاء مستند الاستلام وترحيله ثلاث عمليات غير
+ * ذرّية (رأس، بنود، `app_post_goods_receipt`)، فرفض الترحيل — صنفٌ يُتتبَّع
+ * بالصلاحية بلا تاريخ انتهاء، أو استلام زائد بلا صلاحية — يترك مستندًا
+ * بحالة `draft` لا يظهر في أي شاشة (بطاقة «الاستلامات المرحَّلة» ترشِّح
+ * `posted`) ولا يمكن حذفه (`trg_block_delete_goods_receipts`). فكانت هذه
+ * المستندات تتراكم غير مرئية بينما يعيد المستخدم الإدخال فيُنشئ مستندًا آخر.
+ *
+ * الإلغاء لا الحذف: القاعدة تسمح بحذف المسوّدة، لكن مستندًا مخزنيًّا لا يُمحى —
+ * يُلغى بسببٍ مكتوب فيبقى أثره.
+ *
+ * البطاقة تختفي حين لا توجد مسوّدات: وجودها الدائم يوحي بأن المسوّدات حالة
+ * طبيعية، وهي ليست كذلك.
+ */
+function DraftReceiptsCard() {
+  const { organization } = useOrganizationAccess();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { can } = usePermissions();
+
+  const drafts = useQuery({
+    queryKey: ["goods-receipts-draft", organization?.id],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("goods_receipts")
+        .select("id, receipt_number, received_at, delivery_note_ref, distributor:distributors(name_ar), goods_receipt_items(id, qty_received, item:items(name_ar))")
+        .eq("organization_id", organization!.id)
+        .eq("status", "draft")
+        .order("received_at", { ascending: false })
+        .limit(50);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const cancelReceipt = useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const { data, error } = await supabase
+        .from("goods_receipts")
+        .update({
+          status: "cancelled",
+          cancelled_at: new Date().toISOString(),
+          cancel_reason: reason,
+        })
+        .eq("id", id)
+        // شرط الحالة يمنع إلغاء مستند رحّله غيرك بين آخر تحميل والضغط
+        .eq("status", "draft")
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0)
+        throw new Error("لم يُلغَ المستند — قد يكون رُحّل من مستخدم آخر أو لا تسمح صلاحيتك");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["goods-receipts-draft", organization?.id] });
+      toast({ title: "أُلغي مستند الاستلام" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive", title: "تعذر الإلغاء",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  if (drafts.isLoading || (drafts.data ?? []).length === 0) return null;
+
+  return (
+    <Card className="border-amber-300">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-base">مستندات استلام مسوّدة</CardTitle>
+        <CardDescription>
+          هذه المستندات **لم تدخل المخزون**: أُنشئت ثم رفضت القاعدة ترحيلها. صحّح البيانات
+          واستلم من جديد، ثم ألغِ المسوّدة حتى لا تبقى معلَّقة.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>المستند</TableHead>
+              <TableHead>المورد</TableHead>
+              <TableHead>التاريخ</TableHead>
+              <TableHead>البنود</TableHead>
+              <TableHead />
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(drafts.data ?? []).map((g) => (
+              <TableRow key={g.id}>
+                <TableCell className="font-mono text-xs">
+                  {g.receipt_number ?? g.id.slice(0, 8)}
+                  {g.delivery_note_ref && (
+                    <span className="block text-[10px] text-muted-foreground">
+                      إشعار {g.delivery_note_ref}
+                    </span>
+                  )}
+                </TableCell>
+                <TableCell className="text-sm">{g.distributor?.name_ar ?? "—"}</TableCell>
+                <TableCell className="font-mono text-xs">
+                  {new Date(g.received_at).toLocaleDateString("ar-SA")}
+                </TableCell>
+                <TableCell className="text-xs">
+                  {(g.goods_receipt_items ?? []).map((li: any) => (
+                    <span key={li.id} className="block">
+                      {li.item?.name_ar} × {li.qty_received}
+                    </span>
+                  ))}
+                </TableCell>
+                <TableCell className="text-end">
+                  {can("purchasing.receive") && (
+                    <Button size="sm" variant="outline" disabled={cancelReceipt.isPending}
+                            onClick={() => {
+                              const reason = window.prompt("سبب إلغاء المستند؟") ?? "";
+                              if (!reason.trim()) return;
+                              cancelReceipt.mutate({ id: g.id, reason: reason.trim() });
+                            }}>
+                      <XCircle className="h-3.5 w-3.5" />
+                      إلغاء المستند
+                    </Button>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -947,13 +1102,21 @@ function ReceiveDialog({ order, onClose }: { order: any | null; onClose: () => v
       const { data, error: postError } = await supabase.rpc("app_post_goods_receipt", {
         p_receipt_id: gr.id,
       });
-      if (postError) throw postError;
+      // الثلاث خطوات ليست ذرّية عبر PostgREST: لو رفضت القاعدة الترحيل بقي
+      // المستند وبنوده مُدرَجين بحالة `draft`. الرسالة تقول ذلك صراحةً وتدلّ
+      // على مكان إلغائه، لأن الصمت عنه كان يجعل المستخدم يعيد الإدخال فيُنشئ
+      // مستندًا ثانيًا، والمسوّدات تتراكم بلا شاشة تراها ولا إمكان حذفها.
+      if (postError)
+        throw new Error(
+          `${postError.message} — بقي مستند الاستلام مسوّدةً (${number.trim() || gr.id.slice(0, 8)})؛ صحّح البيانات ثم ألغِه من بطاقة «مستندات استلام مسوّدة» حتى لا يتراكم.`,
+        );
       return data as number;
     },
     onSuccess: (count) => {
       queryClient.invalidateQueries({ queryKey: ["purchase-orders", organization?.id] });
       queryClient.invalidateQueries({ queryKey: ["pending-receipts", organization?.id] });
       queryClient.invalidateQueries({ queryKey: ["goods-receipts", organization?.id] });
+      queryClient.invalidateQueries({ queryKey: ["goods-receipts-draft", organization?.id] });
       setLines({}); setNumber(""); setDeliveryRef("");
       onClose();
       toast({
@@ -961,11 +1124,14 @@ function ReceiveDialog({ order, onClose }: { order: any | null; onClose: () => v
         description: `${count} بندًا — أُنشئت تشغيلاتها بتكلفتها`,
       });
     },
-    onError: (error: unknown) =>
+    onError: (error: unknown) => {
+      // المسوّدة الناتجة عن الفشل يجب أن تظهر فورًا في بطاقة المسوّدات
+      queryClient.invalidateQueries({ queryKey: ["goods-receipts-draft", organization?.id] });
       toast({
         variant: "destructive", title: "تعذر الاستلام",
         description: error instanceof Error ? error.message : "خطأ غير متوقع",
-      }),
+      });
+    },
   });
 
   return (
@@ -1074,8 +1240,6 @@ function ReceiveDialog({ order, onClose }: { order: any | null; onClose: () => v
  * ════════════════════════════════════════════════════════════════════════ */
 function SupplierBalancesPanel() {
   const { organization } = useOrganizationAccess();
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
   const { can } = usePermissions();
   const [selected, setSelected] = useState<any | null>(null);
 
@@ -1108,44 +1272,7 @@ function SupplierBalancesPanel() {
     },
   });
 
-  const payMethods = useQuery({
-    queryKey: ["pc-payment-methods"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("v_reference_data")
-        .select("value_id, name_ar, category_key, is_disabled")
-        .eq("category_key", "payment_methods")
-        .eq("is_disabled", false);
-      if (error) throw error;
-      return (data ?? []) as any[];
-    },
-  });
-
-  const pay = useMutation({
-    mutationFn: async ({ invoiceId, amount, methodId }: {
-      invoiceId: string; amount: number; methodId: string;
-    }) => {
-      const { error } = await supabase.rpc("app_pay_supplier_invoice", {
-        p_invoice_id: invoiceId,
-        p_amount: amount,
-        p_payment_method_value_id: methodId,
-        p_cash_register_id: null,
-        p_reference: null,
-        p_note: null,
-      });
-      if (error) throw error;
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["supplier-balances", organization?.id] });
-      queryClient.invalidateQueries({ queryKey: ["supplier-ledger", selected?.distributor_id] });
-      toast({ title: "سُجّل السداد" });
-    },
-    onError: (error: unknown) =>
-      toast({
-        variant: "destructive", title: "تعذر السداد",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
-      }),
-  });
+  const [paying, setPaying] = useState<any | null>(null);
 
   return (
     <div className="flex flex-col gap-4">
@@ -1283,24 +1410,12 @@ function SupplierBalancesPanel() {
                             <Button
                               size="sm"
                               variant="ghost"
-                              disabled={pay.isPending}
-                              onClick={() => {
-                                const amount = window.prompt("المبلغ المراد سداده؟") ?? "";
-                                if (!amount || Number(amount) <= 0) return;
-                                const method = (payMethods.data ?? [])[0];
-                                if (!method) {
-                                  toast({
-                                    variant: "destructive",
-                                    title: "لا طريقة دفع مُعرَّفة",
-                                  });
-                                  return;
-                                }
-                                pay.mutate({
-                                  invoiceId: l.reference_id,
-                                  amount: Number(amount),
-                                  methodId: method.value_id,
-                                });
-                              }}
+                              onClick={() => setPaying({
+                                invoiceId: l.reference_id,
+                                invoiceNumber: l.reference_number,
+                                supplierName: selected.supplier_name,
+                                distributorId: selected.distributor_id,
+                              })}
                             >
                               سداد
                             </Button>
@@ -1321,10 +1436,197 @@ function SupplierBalancesPanel() {
           </CardContent>
         </Card>
       )}
+
+      <PaySupplierDialog invoice={paying} onClose={() => setPaying(null)} />
     </div>
   );
 }
 
+/**
+ * نافذة سداد فاتورة مورد.
+ *
+ * **لماذا كانت الحالة السابقة خطأً**: الزرّ كان يسأل عن المبلغ بـ
+ * `window.prompt` ثم يأخذ `payMethods.data[0]` — أوّل صفٍّ يعود من استعلام بلا
+ * `order`. أي أن طريقة الدفع المسجَّلة في السند لم يخترها أحد: من يدفع نقدًا قد
+ * يُسجَّل له «تحويل بنكي»، فيكذب كشف حساب المورد والسجل المالي ولا شيء في
+ * الشاشة يُظهر ما اختاره النظام. والاستعلام لم يكن مقيَّدًا بالمنشأة، فمن يعمل
+ * في منشأتين كان يرى طرق دفع منشأة أخرى مخلوطةً بطرقه.
+ *
+ * القيم النظامية في `v_reference_data` تحمل `organization_id = null`، فالتقييد
+ * هو «بلا منشأة أو منشأتي» لا «منشأتي» وحدها.
+ */
+function PaySupplierDialog({ invoice, onClose }: { invoice: any | null; onClose: () => void }) {
+  const { organization } = useOrganizationAccess();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [amount, setAmount] = useState("");
+  const [methodId, setMethodId] = useState("");
+  const [registerId, setRegisterId] = useState("");
+  const [reference, setReference] = useState("");
+  const [note, setNote] = useState("");
+
+  const payMethods = useQuery({
+    queryKey: ["pc-payment-methods", organization?.id],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_reference_data")
+        .select("value_id, code, name_ar, category_key, is_disabled, organization_id, sort_order")
+        .eq("category_key", "payment_methods")
+        .eq("is_disabled", false)
+        .or(`organization_id.is.null,organization_id.eq.${organization!.id}`)
+        .order("sort_order")
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const registers = useQuery({
+    queryKey: ["pc-cash-registers", organization?.id],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("cash_registers")
+        .select("id, name, is_disabled")
+        .eq("organization_id", organization!.id)
+        .eq("is_disabled", false)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  // المتبقّي يُقرأ من الفاتورة نفسها لا من كشف الحساب: العرض يُظهر المدين ولا
+  // يُظهر ما سُدّد منه، والدالّة ترفض الدفع فوق المستحقّ — فإظهار الرقم قبل
+  // الكتابة أصدق من رسالة خطأ بعدها.
+  const invoiceRow = useQuery({
+    queryKey: ["pc-invoice-due", invoice?.invoiceId],
+    enabled: Boolean(invoice?.invoiceId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("purchase_invoices")
+        .select("id, invoice_number, net_amount, paid_amount, status")
+        .eq("id", invoice!.invoiceId)
+        .single();
+      if (error) throw error;
+      return data as any;
+    },
+  });
+  const due = invoiceRow.data
+    ? Number(invoiceRow.data.net_amount ?? 0) - Number(invoiceRow.data.paid_amount ?? 0)
+    : null;
+
+  const selectedMethod = (payMethods.data ?? []).find((m) => m.value_id === methodId);
+  const isCash = selectedMethod?.code === "cash";
+
+  const pay = useMutation({
+    mutationFn: async () => {
+      if (!invoice) throw new Error("لا فاتورة محدَّدة");
+      const value = Number(amount);
+      if (!Number.isFinite(value) || value <= 0) throw new Error("المبلغ يجب أن يكون أكبر من صفر");
+      if (!methodId) throw new Error("اختر طريقة الدفع");
+      const { error } = await supabase.rpc("app_pay_supplier_invoice", {
+        p_invoice_id: invoice.invoiceId,
+        p_amount: value,
+        p_payment_method_value_id: methodId,
+        // الصندوق يُمرَّر للنقدي فقط: تمريره لتحويل بنكي يُقيّد حركة على صندوق
+        // لم يدخله شيء.
+        p_cash_register_id: isCash ? registerId || null : null,
+        p_reference: reference.trim() || null,
+        p_note: note.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["supplier-balances", organization?.id] });
+      queryClient.invalidateQueries({ queryKey: ["supplier-ledger", invoice?.distributorId] });
+      queryClient.invalidateQueries({ queryKey: ["pc-invoice-due", invoice?.invoiceId] });
+      toast({ title: "سُجّل السداد" });
+      setAmount(""); setMethodId(""); setRegisterId(""); setReference(""); setNote("");
+      onClose();
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive", title: "تعذر السداد",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Dialog open={Boolean(invoice)} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>سداد فاتورة {invoice?.invoiceNumber ?? ""}</DialogTitle>
+          <DialogDescription>
+            {invoice?.supplierName ?? ""}
+            {due !== null ? ` — المتبقّي ${due.toLocaleString("ar-SA")}` : ""}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>المبلغ *</Label>
+            <Input type="number" min={0} step="0.01" value={amount}
+                   onChange={(e) => setAmount(e.target.value)} autoFocus />
+            {due !== null && due > 0 && (
+              <Button size="sm" variant="ghost" className="self-start"
+                      onClick={() => setAmount(String(due))}>
+                سدّد المتبقّي كاملًا
+              </Button>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>طريقة الدفع *</Label>
+            <Select value={methodId} onValueChange={setMethodId}>
+              <SelectTrigger>
+                <SelectValue placeholder="اختر طريقة الدفع" />
+              </SelectTrigger>
+              <SelectContent>
+                {(payMethods.data ?? []).map((m) => (
+                  <SelectItem key={m.value_id} value={m.value_id}>{m.name_ar}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!payMethods.isLoading && (payMethods.data ?? []).length === 0 && (
+              <p className="text-xs text-destructive">
+                لا طريقة دفع مُعرَّفة — أضفها من إعدادات البيانات المرجعية أولًا.
+              </p>
+            )}
+          </div>
+          {isCash && (
+            <div className="flex flex-col gap-1.5">
+              <Label>الصندوق</Label>
+              <Select value={registerId} onValueChange={setRegisterId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="اختر الصندوق الذي خرج منه المبلغ" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(registers.data ?? []).map((r) => (
+                    <SelectItem key={r.id} value={r.id}>{r.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+          <div className="flex flex-col gap-1.5">
+            <Label>المرجع</Label>
+            <Input value={reference} onChange={(e) => setReference(e.target.value)}
+                   placeholder="رقم الحوالة أو الشيك" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>ملاحظة</Label>
+            <Input value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button disabled={!amount || !methodId || pay.isPending} onClick={() => pay.mutate()}>
+            {pay.isPending ? "جارٍ التسجيل..." : "تسجيل السداد"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 /* ══════════════════════════════════════════════════════════════════════════
  * المرتجعات والتكلفة الواصلة
@@ -1340,6 +1642,8 @@ function ReturnsAndCostsPanel() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { can } = usePermissions();
+  const [returnOpen, setReturnOpen] = useState(false);
+  const [expenseOpen, setExpenseOpen] = useState(false);
 
   const returns = useQuery({
     queryKey: ["purchase-returns", organization?.id],
@@ -1418,11 +1722,19 @@ function ReturnsAndCostsPanel() {
   return (
     <div className="flex flex-col gap-4">
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">مرتجعات المشتريات</CardTitle>
-          <CardDescription>
-            المرتجع يخرج من **التشغيلة نفسها** التي دخلت، ولا يتجاوز رصيدها، ولا يُرحَّل مرّتين.
-          </CardDescription>
+        <CardHeader className="flex flex-row items-start justify-between gap-3 pb-2">
+          <div>
+            <CardTitle className="text-base">مرتجعات المشتريات</CardTitle>
+            <CardDescription>
+              المرتجع يخرج من **التشغيلة نفسها** التي دخلت، ولا يتجاوز رصيدها، ولا يُرحَّل مرّتين.
+            </CardDescription>
+          </div>
+          {can("purchasing.return") && (
+            <Button size="sm" onClick={() => setReturnOpen(true)}>
+              <Plus className="h-4 w-4" />
+              مرتجع جديد
+            </Button>
+          )}
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {returns.isLoading && <Skeleton className="h-24 w-full" />}
@@ -1485,12 +1797,20 @@ function ReturnsAndCostsPanel() {
       </Card>
 
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">مصروفات الشراء الإضافية</CardTitle>
-          <CardDescription>
-            الشحن والتخليص تُوزَّع على التشغيلات فتصير التكلفة **واصلةً** لا سعرَ فاتورة.
-            الشحن يُوزَّع بالكمّية عادةً، والتخليص بالقيمة.
-          </CardDescription>
+        <CardHeader className="flex flex-row items-start justify-between gap-3 pb-2">
+          <div>
+            <CardTitle className="text-base">مصروفات الشراء الإضافية</CardTitle>
+            <CardDescription>
+              الشحن والتخليص تُوزَّع على التشغيلات فتصير التكلفة **واصلةً** لا سعرَ فاتورة.
+              الشحن يُوزَّع بالكمّية عادةً، والتخليص بالقيمة.
+            </CardDescription>
+          </div>
+          {can("purchasing.invoice") && (
+            <Button size="sm" onClick={() => setExpenseOpen(true)}>
+              <Plus className="h-4 w-4" />
+              مصروف شراء جديد
+            </Button>
+          )}
         </CardHeader>
         <CardContent className="overflow-x-auto">
           {expenses.isLoading && <Skeleton className="h-24 w-full" />}
@@ -1550,6 +1870,378 @@ function ReturnsAndCostsPanel() {
           )}
         </CardContent>
       </Card>
+
+      <NewPurchaseReturnDialog open={returnOpen} onOpenChange={setReturnOpen} />
+      <NewPurchaseExpenseDialog open={expenseOpen} onOpenChange={setExpenseOpen} />
     </div>
+  );
+}
+
+/**
+ * الاستلامات المرحَّلة — مصدرُ كل مرتجع ومصروف.
+ *
+ * المرتجع والمصروف كلاهما يُنسَب إلى مستند استلام لا إلى أمر شراء: التشغيلات
+ * التي ستخرج بضاعتها أو ترتفع تكلفتها أُنشئت بالاستلام، و`app_allocate_purchase_expense`
+ * ترفض مصروفًا بلا `goods_receipt_id` صراحةً.
+ */
+function usePostedReceipts(orgId: string | undefined) {
+  return useQuery({
+    queryKey: ["posted-receipts-picker", orgId],
+    enabled: Boolean(orgId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("goods_receipts")
+        .select("id, receipt_number, received_at, branch_id, warehouse_id, distributor_id, distributor:distributors(name_ar)")
+        .eq("organization_id", orgId)
+        .eq("status", "posted")
+        .order("received_at", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+}
+
+/**
+ * مرتجع مشتريات جديد.
+ *
+ * **لماذا لم يكن التبويب صادقًا قبل هذا**: جدولا المرتجعات والمصروفات كانا
+ * للعرض فقط ولا مسار إنشاء لهما في العميل كلّه، فيظلّان «لا مرتجعات مسجّلة»
+ * أبدًا وزرّا «ترحيل» و«توزيع على التكلفة» لا يظهران قطّ — أي أن إرجاع بضاعة
+ * لمورد وتحميل الشحن على التكلفة كانا مستحيلين، فتبقى تكلفة المخزون أقلّ من
+ * الحقيقة والهامش يبدو أكبر ممّا هو.
+ *
+ * المستند يُنشأ **مسوّدةً** ولا يُرحَّل هنا: الترحيل زرٌّ قائم في الجدول يستدعي
+ * `app_post_purchase_return` وهي وحدها من تكتب حركة الخروج وتفحص رصيد
+ * التشغيلة. ولو رُحّل من هنا لصار الإنشاء والترحيل عمليتين غير ذرّيتين تتركان
+ * مستندًا يتيمًا عند فشل الثانية — نفس الخلل الذي في مستند الاستلام.
+ */
+function NewPurchaseReturnDialog({
+  open, onOpenChange,
+}: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { organization } = useOrganizationAccess();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const receipts = usePostedReceipts(organization?.id);
+  const [receiptId, setReceiptId] = useState("");
+  const [returnNumber, setReturnNumber] = useState("");
+  const [reason, setReason] = useState("");
+  const [qtyByLine, setQtyByLine] = useState<Record<string, string>>({});
+
+  const receipt = (receipts.data ?? []).find((r) => r.id === receiptId);
+
+  const receiptItems = useQuery({
+    queryKey: ["receipt-items-for-return", receiptId],
+    enabled: Boolean(receiptId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("goods_receipt_items")
+        .select("id, item_id, qty_received, free_qty, unit_cost, lot_id, item:items(name_ar), lot:inventory_lots(lot_number, qty_remaining, expiry_date)")
+        .eq("goods_receipt_id", receiptId);
+      if (error) throw error;
+      return (data ?? []) as any[];
+    },
+  });
+
+  const create = useMutation({
+    mutationFn: async () => {
+      if (!organization?.id) throw new Error("لا توجد منشأة نشطة");
+      if (!receipt) throw new Error("اختر مستند الاستلام");
+      if (!reason.trim()) throw new Error("سبب المرتجع مطلوب");
+      const chosen = (receiptItems.data ?? [])
+        .map((li) => ({ line: li, qty: Number(qtyByLine[li.id] ?? 0) }))
+        .filter((row) => row.qty > 0);
+      if (chosen.length === 0) throw new Error("أدخل كمّية مرتجعة لبند واحد على الأقل");
+      for (const row of chosen) {
+        const received = Number(row.line.qty_received ?? 0) + Number(row.line.free_qty ?? 0);
+        if (row.qty > received)
+          throw new Error(
+            `مرتجع «${row.line.item?.name_ar ?? ""}» يتجاوز المستلَم (${received})`,
+          );
+      }
+
+      const { data: header, error } = await supabase
+        .from("purchase_returns")
+        .insert({
+          organization_id: organization.id,
+          branch_id: receipt.branch_id,
+          warehouse_id: receipt.warehouse_id,
+          distributor_id: receipt.distributor_id,
+          goods_receipt_id: receipt.id,
+          return_number: returnNumber.trim() || null,
+          reason: reason.trim(),
+        })
+        .select("id")
+        .single();
+      if (error) throw error;
+
+      const { error: linesError } = await supabase.from("purchase_return_items").insert(
+        chosen.map((row) => ({
+          organization_id: organization.id,
+          purchase_return_id: header.id,
+          item_id: row.line.item_id,
+          // التشغيلة تُمرَّر كما هي: المرتجع يخرج من الدفعة نفسها التي دخلت،
+          // لا من أقرب دفعة انتهاءً — وإلا خرجت بضاعة مورّد آخر.
+          lot_id: row.line.lot_id,
+          receipt_item_id: row.line.id,
+          qty_returned: row.qty,
+          unit_cost: Number(row.line.unit_cost ?? 0),
+        })),
+      );
+      if (linesError) throw linesError;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["purchase-returns", organization?.id] });
+      setReceiptId(""); setReturnNumber(""); setReason(""); setQtyByLine({});
+      onOpenChange(false);
+      toast({
+        title: "سُجّل المرتجع مسوّدةً",
+        description: "اضغط «ترحيل» في الجدول ليخرج من التشغيلات",
+      });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive", title: "تعذر حفظ المرتجع",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>مرتجع مشتريات جديد</DialogTitle>
+          <DialogDescription>
+            يُنشأ مسوّدةً من مستند استلام مرحَّل، ثم يُرحَّل من الجدول فيخرج من تشغيلاته.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>مستند الاستلام *</Label>
+              <Select value={receiptId} onValueChange={(v) => { setReceiptId(v); setQtyByLine({}); }}>
+                <SelectTrigger>
+                  <SelectValue placeholder="اختر الاستلام" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(receipts.data ?? []).map((r) => (
+                    <SelectItem key={r.id} value={r.id}>
+                      {(r.receipt_number ?? r.id.slice(0, 8))} — {r.distributor?.name_ar ?? "—"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {!receipts.isLoading && (receipts.data ?? []).length === 0 && (
+                <p className="text-xs text-muted-foreground">
+                  لا استلامات مرحَّلة — المرتجع لا يُنشأ إلا من بضاعة دخلت فعلًا.
+                </p>
+              )}
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>رقم المرتجع</Label>
+              <Input value={returnNumber} onChange={(e) => setReturnNumber(e.target.value)} />
+            </div>
+          </div>
+
+          {receiptId && (
+            <div className="max-h-72 overflow-y-auto">
+              {receiptItems.isLoading && <Skeleton className="h-20 w-full" />}
+              {(receiptItems.data ?? []).map((li) => {
+                const lot = Array.isArray(li.lot) ? li.lot[0] : li.lot;
+                const received = Number(li.qty_received ?? 0) + Number(li.free_qty ?? 0);
+                return (
+                  <div key={li.id} className="mb-2 flex flex-wrap items-center gap-2 rounded-md border p-2">
+                    <span className="flex-1 text-sm font-medium">{li.item?.name_ar ?? "—"}</span>
+                    <span className="font-mono text-xs text-muted-foreground">
+                      المستلَم {received}
+                      {lot ? ` · تشغيلة ${lot.lot_number ?? "بلا رقم"} متبقٍّ ${lot.qty_remaining}` : " · بلا تشغيلة"}
+                    </span>
+                    <Input type="number" min={0} max={received} className="w-24" placeholder="المرتجع"
+                           value={qtyByLine[li.id] ?? ""}
+                           onChange={(e) => setQtyByLine((s) => ({ ...s, [li.id]: e.target.value }))} />
+                  </div>
+                );
+              })}
+              {!receiptItems.isLoading && (receiptItems.data ?? []).length === 0 && (
+                <p className="py-4 text-center text-sm text-muted-foreground">لا بنود في هذا المستند.</p>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            <Label>سبب المرتجع *</Label>
+            <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)}
+                      placeholder="مثال: تلف بالنقل، صلاحية قريبة، صنف غير مطابق" />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button disabled={!receiptId || !reason.trim() || create.isPending}
+                  onClick={() => create.mutate()}>
+            {create.isPending ? "جارٍ الحفظ..." : "حفظ المرتجع مسوّدةً"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * مصروف شراء جديد (شحن/تخليص/تأمين/مناولة).
+ *
+ * يُنشأ **غير موزَّع**، والتوزيع زرٌّ قائم يستدعي
+ * `app_allocate_purchase_expense` — وهي من ترفع تكلفة كل تشغيلة وتمنع التوزيع
+ * مرّتين. الربط بمستند الاستلام إلزامي لأن الدالّة ترفض المصروف بلا استلام:
+ * بلا استلام لا يُعرف على أيّ تشغيلات يُوزَّع.
+ */
+function NewPurchaseExpenseDialog({
+  open, onOpenChange,
+}: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  const { organization } = useOrganizationAccess();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const receipts = usePostedReceipts(organization?.id);
+  const [receiptId, setReceiptId] = useState("");
+  const [expenseType, setExpenseType] = useState("shipping");
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState("by_qty");
+  const [referenceNumber, setReferenceNumber] = useState("");
+  const [note, setNote] = useState("");
+
+  const receipt = (receipts.data ?? []).find((r) => r.id === receiptId);
+
+  // فاتورة المورد المبنية على هذا الاستلام إن وُجدت: ربط المصروف بها هو ما
+  // يجعل `expenses_amount` في الفاتورة يطابق ما وُزّع فعلًا.
+  const receiptInvoice = useQuery({
+    queryKey: ["receipt-invoice-for-expense", receiptId],
+    enabled: Boolean(receiptId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("purchase_invoices")
+        .select("id, invoice_number")
+        .eq("goods_receipt_id", receiptId)
+        .maybeSingle();
+      if (error) throw error;
+      return data as any;
+    },
+  });
+
+  const create = useMutation({
+    mutationFn: async () => {
+      if (!organization?.id) throw new Error("لا توجد منشأة نشطة");
+      if (!receipt) throw new Error("اختر مستند الاستلام");
+      const value = Number(amount);
+      if (!Number.isFinite(value) || value <= 0) throw new Error("المبلغ يجب أن يكون أكبر من صفر");
+      const { error } = await supabase.from("purchase_expenses").insert({
+        organization_id: organization.id,
+        goods_receipt_id: receipt.id,
+        purchase_invoice_id: receiptInvoice.data?.id ?? null,
+        distributor_id: receipt.distributor_id,
+        expense_type: expenseType,
+        amount: value,
+        allocation_method: method,
+        reference_number: referenceNumber.trim() || null,
+        note: note.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["purchase-expenses", organization?.id] });
+      setReceiptId(""); setAmount(""); setReferenceNumber(""); setNote("");
+      onOpenChange(false);
+      toast({
+        title: "سُجّل المصروف",
+        description: "اضغط «توزيع على التكلفة» ليرتفع سعر تكلفة تشغيلاته",
+      });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive", title: "تعذر حفظ المصروف",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>مصروف شراء جديد</DialogTitle>
+          <DialogDescription>
+            يُسجَّل غير موزَّع، ثم يُوزَّع من الجدول على تشغيلات الاستلام فتصير التكلفة واصلة.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>مستند الاستلام *</Label>
+            <Select value={receiptId} onValueChange={setReceiptId}>
+              <SelectTrigger>
+                <SelectValue placeholder="اختر الاستلام" />
+              </SelectTrigger>
+              <SelectContent>
+                {(receipts.data ?? []).map((r) => (
+                  <SelectItem key={r.id} value={r.id}>
+                    {(r.receipt_number ?? r.id.slice(0, 8))} — {r.distributor?.name_ar ?? "—"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {receiptId && receiptInvoice.data && (
+              <p className="text-xs text-muted-foreground">
+                سيُضاف المبلغ إلى مصروفات الفاتورة {receiptInvoice.data.invoice_number ?? ""} عند التوزيع.
+              </p>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>النوع *</Label>
+              <Select value={expenseType} onValueChange={setExpenseType}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="shipping">شحن</SelectItem>
+                  <SelectItem value="customs">تخليص جمركي</SelectItem>
+                  <SelectItem value="insurance">تأمين نقل</SelectItem>
+                  <SelectItem value="handling">مناولة</SelectItem>
+                  <SelectItem value="other">أخرى</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>المبلغ *</Label>
+              <Input type="number" min={0} step="0.01" value={amount}
+                     onChange={(e) => setAmount(e.target.value)} />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>طريقة التوزيع *</Label>
+            <Select value={method} onValueChange={setMethod}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="by_qty">بالكمّية (الشحن والمناولة)</SelectItem>
+                <SelectItem value="by_value">بالقيمة (التخليص والتأمين)</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>المستند المرجعي</Label>
+              <Input value={referenceNumber} onChange={(e) => setReferenceNumber(e.target.value)}
+                     placeholder="رقم فاتورة الشحن" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>ملاحظة</Label>
+              <Input value={note} onChange={(e) => setNote(e.target.value)} />
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button disabled={!receiptId || !amount || create.isPending} onClick={() => create.mutate()}>
+            {create.isPending ? "جارٍ الحفظ..." : "حفظ المصروف"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

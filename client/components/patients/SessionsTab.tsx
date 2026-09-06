@@ -69,6 +69,15 @@ function useSessions(patientId: string) {
         )
         // المريض ينتمي لمنشأة واحدة، فالتقييد به يكفي لعزل المؤسسات
         .eq("patient_id", patientId)
+        /**
+         * جلسات هذا التبويب فقط — أي التي بلا `item_id`. الجلسات السريرية
+         * (ليزر/تجميل) تُسجَّل بـ`app_record_treatment_session` وتُرقَّم **لكل
+         * خدمة على حدة**، بينما هذا التبويب يُرقّم تسلسلًا واحدًا لكل مريض:
+         * سردهما في جدول واحد كان يُظهر جلستين برقم `1` لنفس المريض ولا قيد
+         * فريد في القاعدة يمنع ذلك. الجلسات السريرية معروضة في اللوح السريري
+         * فوق هذا التبويب بأرقامها ومعناها الصحيح.
+         */
+        .is("item_id", null)
         .order("session_number", { ascending: true });
       if (error) throw error;
       return (data ?? []) as unknown as SessionRow[];
@@ -329,7 +338,7 @@ function NewSessionDialog({
 }
 
 export default function SessionsTab({ patientId }: { patientId: string }) {
-  const { organization } = useOrganizationAccess();
+  const { organization, session } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const sessions = useSessions(patientId);
@@ -337,9 +346,10 @@ export default function SessionsTab({ patientId }: { patientId: string }) {
 
   const rows = sessions.data ?? [];
   /**
-   * الترقيم يبدأ من آخر رقم موجود — ولذلك **لا يجوز الجدولة قبل تحميل
-   * الجلسات**: مريض له جلسات 1..10 وقائمته لم تُحمَّل بعد كان يحصل على
-   * جلسات جديدة بأرقام 1، 2، 3 مكرَّرة، ولا قيد فريد في القاعدة يمنع ذلك.
+   * الترقيم يبدأ من آخر رقم في **جلسات هذا التبويب** (بلا `item_id`) — ولذلك
+   * **لا يجوز الجدولة قبل تحميل الجلسات**: مريض له جلسات 1..10 وقائمته لم
+   * تُحمَّل بعد كان يحصل على جلسات جديدة بأرقام 1، 2، 3 مكرَّرة، ولا قيد فريد
+   * في القاعدة يمنع ذلك.
    */
   const nextNumber = rows.length > 0 ? Math.max(...rows.map((row) => row.session_number)) + 1 : 1;
   const canSchedule = !sessions.isLoading && !sessions.isError;
@@ -348,9 +358,20 @@ export default function SessionsTab({ patientId }: { patientId: string }) {
 
   const setStatus = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: SessionRow["status"] }) => {
+      /**
+       * «منفَّذة» ليست حالةً فقط: الجلسة سجل علاجي يجيب عن «من نفّذها ومتى؟».
+       * التحديث القديم كتب `status` وحده، فبقيت `performed_at` و`performed_by`
+       * فارغتين — والعرض `v_session_history` يُظهر الجلسة بتاريخ فارغ، واللوح
+       * السريري بلا اسم منفِّذ، وهو نفس ما تكتبه `app_record_treatment_session`
+       * في المسار الآخر.
+       */
+      const patch: Record<string, unknown> =
+        status === "completed"
+          ? { status, performed_at: new Date().toISOString(), performed_by: session?.user.id ?? null }
+          : { status };
       const { data, error } = await supabase
         .from("treatment_sessions")
-        .update({ status })
+        .update(patch)
         .eq("id", id)
         .select("id");
       if (error) throw error;
@@ -425,7 +446,9 @@ export default function SessionsTab({ patientId }: { patientId: string }) {
           <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
           <span>
             الجلسات تسجّل <strong>تنفيذ</strong> خطة العلاج ولا تمسّ المبالغ. فوترة الاتفاقية تتم
-            من شاشة الفوترة، والمبلغ المُفوتَر يحسبه النظام من الفواتير نفسها.
+            من شاشة الفوترة، والمبلغ المُفوتَر يحسبه النظام من الفواتير نفسها. أما الجلسات
+            السريرية (الخدمة والجهاز والمنطقة) فتُسجَّل وتُعرض في اللوح السريري أعلاه بترقيمها
+            الخاص بكل خدمة.
           </span>
         </div>
 

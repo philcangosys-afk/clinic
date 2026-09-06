@@ -101,6 +101,17 @@ const NEXT_STATUS: Record<string, { value: string; label: string; needsReason?: 
   approved: [{ value: "delivered", label: "تسليم" }],
   recollection_required: [{ value: "specimen_collected", label: "سحب جديد" }],
 };
+/**
+ * حالات الطلب التي تسمح فيها `app_enter_lab_result` بإدخال نتيجة — حرفيًّا كما
+ * في الدالّة.
+ *
+ * الحقول كانت مفتوحة في كل الحالات، والحفظ في `onBlur` وحده: يكتب الفنّي
+ * النتيجة على طلبٍ «مطلوب» فتُرفض الدالّة، ويبقى الرقم معروضًا في الحقل كأنه
+ * محفوظ فيقرأه من بعده نتيجةً مسجَّلة. ولو أدخل النتائج كلّها قبل استلام
+ * العيّنة لم تُحفظ واحدة منها.
+ */
+const RESULT_ENTRY_STATUSES = ["received", "in_progress", "resulted", "verified"];
+
 type LabTestWithCategory = LabTestRow & {
   category: { name_ar: string } | { name_ar: string }[] | null;
 };
@@ -172,8 +183,12 @@ export default function Laboratory() {
         <TabsContent value="orders" className="mt-4">
           <Card>
             <CardHeader>
-              <CardTitle>الطلبات غير الموثَّقة</CardTitle>
-              <CardDescription>تختفي من هذه القائمة تلقائيًا بعد توثيق النتيجة (verified)</CardDescription>
+              <CardTitle>الطلبات الجارية</CardTitle>
+              {/* المنظور كان يُخفي الطلب فور اعتماد نتيجته، ومسار المختبر بعد
+                  الاعتماد خطوتان: الاعتماد الإداري ثم التسليم — فكان الطلب
+                  يختفي وهو ينتظر التسليم ولا سبيل إلى إتمامه. صار يبقى حتى
+                  يُسلَّم (0144). */}
+              <CardDescription>تبقى حتى الاعتماد والتسليم، ثم تخرج من القائمة</CardDescription>
             </CardHeader>
             <CardContent>
               {orders.isLoading && (
@@ -229,7 +244,16 @@ export default function Laboratory() {
                         </TableCell>
                       </TableRow>
                     ))}
-                    {(orders.data ?? []).length === 0 && (
+                    {/* الفشل يُعرض فشلًا لا «لا توجد طلبات»: الطابور الفارغ
+                        الكاذب يجعل المختبر يمضي وطلباتٌ في انتظاره. */}
+                    {orders.isError && (
+                      <TableRow>
+                        <TableCell colSpan={7} className="py-8 text-center text-sm text-destructive">
+                          تعذّر تحميل الطلبات: {(orders.error as any)?.message ?? "خطأ غير معروف"}
+                        </TableCell>
+                      </TableRow>
+                    )}
+                    {!orders.isError && (orders.data ?? []).length === 0 && (
                       <TableRow>
                         <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
                           لا توجد طلبات فحص معلّقة حاليًا.
@@ -503,6 +527,7 @@ function NewLabOrderDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { branch } = useOrganizationAccess();
   const tests = useLabTests(organizationId);
   const doctors = useDoctorsList();
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
@@ -511,27 +536,39 @@ function NewLabOrderDialog({
   const [selectedTestIds, setSelectedTestIds] = useState<string[]>([]);
   const [notes, setNotes] = useState("");
 
+  /**
+   * الكتالوج يعرض الفحص المعطَّل (لتفعيله لاحقًا)، أمّا الطلب فلا.
+   *
+   * فحصٌ عُطِّل — جهاز خارج الخدمة أو تحليل توقّف — لا يُنفَّذ، وطلبه يصل
+   * المختبر فحصًا لا أحد يستطيع إنجازه، فيبقى الطلب معلّقًا إلى الأبد.
+   * و`app_create_lab_order` ترفضه أصلًا (`coalesce(is_active, true)`)، فإظهاره
+   * هنا وعدٌ لا يُنفَّذ.
+   */
+  const selectableTests = (tests.data ?? []).filter((test) => test.is_active);
+
   const createOrder = useMutation({
+    /**
+     * الإنشاء عبر `app_create_lab_order` لا بإدخالين متتاليين.
+     *
+     * الإدخالان (`lab_orders` ثم `lab_order_items`) ليسا في معاملة واحدة: لو
+     * فشل الثاني بقي طلبٌ بلا فحص واحد — يظهر في الطابور بعدد صفر ولا يمكن
+     * إنجازه أبدًا. والدالّة أيضًا تفرض صلاحية `lab.order`، وتتحقّق من انتماء
+     * المريض للمنشأة، وتُطلق إخطار القسم (`/laboratory`) الذي كان الطلب
+     * المُنشأ من هذه الشاشة لا يُطلقه، فلا يعلم به المختبر.
+     */
     mutationFn: async () => {
       if (!organizationId || !patient) throw new Error("اختر المريض أولًا");
       if (selectedTestIds.length === 0) throw new Error("اختر فحصًا واحدًا على الأقل");
-      const { data: order, error: orderError } = await supabase
-        .from("lab_orders")
-        .insert({
-          organization_id: organizationId,
-          patient_id: patient.id,
-          ordering_doctor_id: doctorId || null,
-          priority,
-          notes: notes.trim() || null,
-        })
-        .select("id")
-        .single();
-      if (orderError) throw orderError;
-
-      const { error: itemsError } = await supabase
-        .from("lab_order_items")
-        .insert(selectedTestIds.map((testId) => ({ lab_order_id: order.id, lab_test_id: testId })));
-      if (itemsError) throw itemsError;
+      const { error } = await supabase.rpc("app_create_lab_order", {
+        p_organization_id: organizationId,
+        p_patient_id: patient.id,
+        p_doctor_id: doctorId || null,
+        p_test_ids: selectedTestIds,
+        p_priority: priority,
+        p_notes: notes.trim() || null,
+        p_branch_id: branch?.id ?? null,
+      });
+      if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["lab-orders", organizationId] });
@@ -608,7 +645,7 @@ function NewLabOrderDialog({
           <div className="flex flex-col gap-1.5">
             <Label>الفحوصات المطلوبة *</Label>
             <div className="flex max-h-48 flex-col gap-1 overflow-y-auto rounded-md border p-2">
-              {(tests.data ?? []).map((test) => (
+              {selectableTests.map((test) => (
                 <label key={test.id} className="flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted">
                   <input
                     type="checkbox"
@@ -622,9 +659,11 @@ function NewLabOrderDialog({
                   {test.name_ar}
                 </label>
               ))}
-              {(tests.data ?? []).length === 0 && (
+              {selectableTests.length === 0 && (
                 <p className="px-2 py-3 text-center text-sm text-muted-foreground">
-                  لا توجد فحوصات في الكتالوج بعد — أضفها من تبويب "كتالوج الفحوصات".
+                  {(tests.data ?? []).length === 0
+                    ? 'لا توجد فحوصات في الكتالوج بعد — أضفها من تبويب "كتالوج الفحوصات".'
+                    : "كل فحوص الكتالوج معطَّلة — فعّل الفحص من تبويب «كتالوج الفحوصات» قبل طلبه."}
                 </p>
               )}
             </div>
@@ -719,12 +758,20 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
         });
       }
     },
-    onError: (error: unknown) =>
+    onError: (error: unknown, variables) => {
+      // إرجاع الحقل إلى قيمته المحفوظة: الرقم الذي رُفض حفظه لو بقي معروضًا
+      // قرأه من يمرّ على الشاشة بعده نتيجةً مسجَّلة، وهي ليست في القاعدة.
+      setDraftValues((draft) => {
+        const next = { ...draft };
+        delete next[variables.itemId];
+        return next;
+      });
       toast({
         variant: "destructive",
         title: "تعذر حفظ النتيجة",
         description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
-      }),
+      });
+    },
   });
 
   /**
@@ -765,18 +812,8 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
       }),
   });
 
-  const toggleCritical = useMutation({
-    mutationFn: async ({ itemId, critical }: { itemId: string; critical: boolean }) => {
-      const { data: affectedRows, error } = await supabase.from("lab_order_items").update({ is_critical: critical }).eq("id", itemId)
-        .select("id");
-      if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
-    },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["lab-order-details", orderId] }),
-  });
+  const orderStatus = (details.data?.order as { status?: string } | undefined)?.status ?? "";
+  const canEnterResults = RESULT_ENTRY_STATUSES.includes(orderStatus);
 
   return (
     <Dialog open={Boolean(orderId)} onOpenChange={(next) => !next && onOpenChange()}>
@@ -791,6 +828,13 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
         </DialogHeader>
 
         {details.isLoading && <Skeleton className="h-48 w-full" />}
+        {!details.isLoading && !canEnterResults && (details.data?.items ?? []).length > 0 && (
+          <p className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+            {orderStatus === "ordered" || orderStatus === "specimen_collected"
+              ? "إدخال النتائج مغلق — استلم العيّنة أولًا من أزرار الحالة أسفل النافذة."
+              : `إدخال النتائج مغلق والطلب في حالة «${STATUS_LABELS[orderStatus] ?? orderStatus}».`}
+          </p>
+        )}
         {!details.isLoading && (
           <div className="flex flex-col gap-3">
             {(details.data?.items ?? []).map((item) => {
@@ -810,22 +854,21 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
                   <div className="flex items-center gap-2">
                     <Input
                       value={value}
+                      disabled={!canEnterResults || saveResult.isPending}
                       onChange={(e) => setDraftValues((d) => ({ ...d, [item.id]: e.target.value }))}
                       onBlur={() => {
                         if (value !== (item.result_value ?? "")) saveResult.mutate({ itemId: item.id, value });
                       }}
-                      placeholder="النتيجة..."
+                      placeholder={canEnterResults ? "النتيجة..." : "غير متاح الآن"}
                       className="max-w-40"
                     />
                     {item.is_abnormal && <Badge variant="warning">غير طبيعي</Badge>}
-                    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                      <input
-                        type="checkbox"
-                        checked={item.is_critical}
-                        onChange={(e) => toggleCritical.mutate({ itemId: item.id, critical: e.target.checked })}
-                      />
-                      قيمة حرجة
-                    </label>
+                    {/* «قيمة حرجة» قراءةٌ لا كتابة: `app_enter_lab_result` تعيد
+                        حسابها من المدى المرجعي لعمر المريض وجنسه عند كل إدخال،
+                        فأي علامة يدوية تُمحى صامتةً عند أول تصحيح للرقم — وتضيع
+                        تنبيهة الطبيب على قيمةٍ يعرف الفنّي أنها حرجة. عرضُها
+                        كما حسبتها القاعدة لا يَعِد بما لا يبقى. */}
+                    {item.is_critical && <Badge variant="destructive">قيمة حرجة</Badge>}
                   </div>
                 </div>
               );

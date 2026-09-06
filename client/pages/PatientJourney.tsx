@@ -35,6 +35,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
 /**
  * رحلة المريض — خط زمني موحَّد (0067).
@@ -109,6 +117,7 @@ export default function PatientJourney() {
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [period, setPeriod] = useState<string>("all");
   const [term, setTerm] = useState("");
+  const [record, setRecord] = useState<{ kind: "invoice" | "visit"; id: string } | null>(null);
 
   const from = useMemo(() => {
     const days = PERIOD_OPTIONS[period]?.days;
@@ -162,9 +171,21 @@ export default function PatientJourney() {
     return Array.from(map.entries());
   }, [filtered]);
 
+  /**
+   * فتح السجل المصدر للحدث.
+   *
+   * كان الزرّ ينقل إلى `/billing?invoiceId=…` و`/patient-visits?visitId=…`
+   * وشاشتا الفوترة والزيارات **لا تقرآن هذين المعاملَين** (الفوترة تقرأ
+   * `appointmentId` وتفتح به نافذة فاتورة جديدة، لا الفاتورة القائمة) — فكان
+   * الضغط ينقل إلى قائمة الشاشة كاملة ويترك المستخدم يبحث يدويًا عن السجل
+   * الذي كان أمامه، أو — أسوأ — يفتح نافذة إنشاء فاتورة ثانية.
+   *
+   * فتُقرأ الفاتورة والزيارة هنا بمعرّفهما وتُعرضان في نافذة، وتبقى أحداث
+   * الموعد على شاشة الاستقبال التي تقرأ `appointmentId` فعلًا.
+   */
   const openSource = (event: TimelineEvent) => {
-    if (event.invoice_id) return navigate(`/billing?invoiceId=${event.invoice_id}`);
-    if (event.visit_id) return navigate(`/patient-visits?visitId=${event.visit_id}`);
+    if (event.invoice_id) return setRecord({ kind: "invoice", id: event.invoice_id });
+    if (event.visit_id) return setRecord({ kind: "visit", id: event.visit_id });
     if (event.appointment_id) return navigate(`/reception?appointmentId=${event.appointment_id}`);
     if (patient) return navigate(`/patients/${patient.id}`);
   };
@@ -348,6 +369,142 @@ export default function PatientJourney() {
             </div>
           </div>
         ))}
+
+      <RecordDialog
+        record={record}
+        onClose={() => setRecord(null)}
+        onOpenPatient={() => {
+          if (patient) navigate(`/patients/${patient.id}`);
+        }}
+      />
     </div>
+  );
+}
+
+/**
+ * نافذة السجل المصدر — فاتورة أو زيارة.
+ *
+ * تُقرأ الحقول المالية والسريرية كما هي في القاعدة بلا أي حساب في المتصفّح:
+ * رقم مُعاد حسابه هنا قد يخالف ما تطبعه الفاتورة، والاختلاف في مبلغ أسوأ من
+ * غيابه.
+ */
+function RecordDialog({
+  record,
+  onClose,
+  onOpenPatient,
+}: {
+  record: { kind: "invoice" | "visit"; id: string } | null;
+  onClose: () => void;
+  onOpenPatient: () => void;
+}) {
+  const invoice = useQuery({
+    queryKey: ["journey-invoice", record?.kind === "invoice" ? record.id : null],
+    enabled: record?.kind === "invoice",
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sales_invoices")
+        .select(
+          "id, invoice_number, invoice_type, document_type, status, is_temporary, created_at, issued_at, net_amount, paid_amount, remaining_amount, discount_amount, vat_amount, insurance_share_amount, patient_share_amount, insurance_company_name, note",
+        )
+        .eq("id", record!.id)
+        .maybeSingle();
+      if (error) throw error;
+      return data as Record<string, any> | null;
+    },
+  });
+
+  const visit = useQuery({
+    queryKey: ["journey-visit", record?.kind === "visit" ? record.id : null],
+    enabled: record?.kind === "visit",
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patient_visits")
+        .select("id, visit_date, status, main_complaint, notes, next_visit_plan, next_visit_date, created_at")
+        .eq("id", record!.id)
+        .maybeSingle();
+      if (error) throw error;
+      return data as Record<string, any> | null;
+    },
+  });
+
+  const active = record?.kind === "invoice" ? invoice : visit;
+  const money = (value: unknown) => Number(value ?? 0).toLocaleString("ar-SA", { minimumFractionDigits: 2 });
+
+  return (
+    <Dialog open={Boolean(record)} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{record?.kind === "invoice" ? "الفاتورة" : "الزيارة"}</DialogTitle>
+          <DialogDescription>السجل كما هو في القاعدة — للاطّلاع فقط، والتعديل من شاشته.</DialogDescription>
+        </DialogHeader>
+
+        {active?.isLoading && <Skeleton className="h-40 w-full" />}
+        {/* الخطأ يُعرض ولا يُخفى: نافذة فارغة تُفهم كسجل بلا بيانات. */}
+        {active?.isError && (
+          <p className="text-sm text-destructive">
+            {active.error instanceof Error ? active.error.message : "تعذر قراءة السجل"}
+          </p>
+        )}
+        {active && !active.isLoading && !active.isError && !active.data && (
+          <p className="text-sm text-muted-foreground">السجل غير موجود أو لا تملك الوصول إليه.</p>
+        )}
+
+        {record?.kind === "invoice" && invoice.data && (
+          <div className="flex flex-col gap-1.5 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold tabular-nums">
+                {invoice.data.invoice_number ?? invoice.data.id.slice(0, 8)}
+              </span>
+              <Badge variant="outline">{invoice.data.status}</Badge>
+              {invoice.data.invoice_type === "return" && <Badge variant="destructive">مرتجع</Badge>}
+              {invoice.data.is_temporary && <Badge variant="secondary">مؤقتة</Badge>}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {new Date(invoice.data.issued_at ?? invoice.data.created_at).toLocaleString("ar-SA")}
+            </p>
+            <div className="mt-1 grid gap-1 sm:grid-cols-2">
+              <span className="tabular-nums">الصافي: {money(invoice.data.net_amount)}</span>
+              <span className="tabular-nums">المدفوع: {money(invoice.data.paid_amount)}</span>
+              <span className="tabular-nums">المتبقّي: {money(invoice.data.remaining_amount)}</span>
+              <span className="tabular-nums">الخصم: {money(invoice.data.discount_amount)}</span>
+              <span className="tabular-nums">الضريبة: {money(invoice.data.vat_amount)}</span>
+              {invoice.data.insurance_company_name && (
+                <span className="tabular-nums">
+                  حصّة التأمين: {money(invoice.data.insurance_share_amount)} ({invoice.data.insurance_company_name})
+                </span>
+              )}
+              <span className="tabular-nums">حصّة المريض: {money(invoice.data.patient_share_amount)}</span>
+            </div>
+            {invoice.data.note && <p className="mt-1 text-xs text-muted-foreground">{invoice.data.note}</p>}
+          </div>
+        )}
+
+        {record?.kind === "visit" && visit.data && (
+          <div className="flex flex-col gap-1.5 text-sm">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-semibold">
+                {new Date(visit.data.visit_date ?? visit.data.created_at).toLocaleString("ar-SA")}
+              </span>
+              {visit.data.status && <Badge variant="outline">{visit.data.status}</Badge>}
+            </div>
+            <p>الشكوى الرئيسة: {visit.data.main_complaint ?? "—"}</p>
+            {visit.data.notes && <p className="text-xs text-muted-foreground">{visit.data.notes}</p>}
+            {visit.data.next_visit_plan && <p className="text-xs">خطة الزيارة القادمة: {visit.data.next_visit_plan}</p>}
+            {visit.data.next_visit_date && (
+              <p className="text-xs">
+                الزيارة القادمة: {new Date(visit.data.next_visit_date).toLocaleDateString("ar-SA")}
+              </p>
+            )}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onOpenPatient}>
+            <ExternalLink className="h-3.5 w-3.5" />
+            ملف المريض
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

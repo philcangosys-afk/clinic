@@ -170,8 +170,11 @@ begin
     end if;
   end;
   begin
+    -- رقم **غير مستعمل** بطول سعودي: الرقم السابق نفسه صار مسجَّلًا في ملف
+    -- أعلاه، فحارس تفرّد الهوية (0146) كان يرفضه أولًا برسالته — فيُختبر
+    -- الحارس الخطأ ويظنّ الاختبار أن التحقّق من البلد لم يعمل.
     insert into patients (organization_id, name_ar, id_number)
-      values (v_org, 'رقم سعودي في منشأة إماراتية', '1000000008');
+      values (v_org, 'رقم سعودي في منشأة إماراتية', '1000000016');
     raise exception 'فشل: قُبل رقم بطول سعودي والبلد إماراتي';
   exception when others then
     if sqlerrm like 'فشل:%' then raise; end if;

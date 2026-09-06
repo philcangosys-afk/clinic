@@ -69,14 +69,26 @@ const TYPE_LABELS: Record<BlockRow["block_type"], string> = {
   all: "الكل",
 };
 
-type StatusFilter = "in_effect" | "expired" | "lifted" | "all";
+type StatusFilter = "in_effect" | "scheduled" | "expired" | "lifted" | "all";
 
+/**
+ * حالة رابعة لازمة: العرض `v_blocked_contacts` يحسب
+ * `is_in_effect = is_active and starts_at <= now() and (ends_at is null or ends_at > now())`،
+ * فكل ما ليس ساريًا وهو نشط كان يُعرض «منتهٍ» — بما فيه حظرٌ **لم يبدأ بعد**
+ * (والنافذة تسمح بتاريخ بداية مستقبلي). فيقرؤه الموظف كحظرٍ انقضى، فيسجّل
+ * حظرًا ثانيًا أو يظنّ الحجز مسموحًا.
+ */
 const STATUS_LABELS: Record<StatusFilter, string> = {
   in_effect: "ساري الآن",
+  scheduled: "يبدأ لاحقًا",
   expired: "منتهٍ",
   lifted: "مرفوع",
   all: "الكل",
 };
+
+/** حظر نشط لم يحن موعد بدايته بعد — لا ساريًا ولا منتهيًا. */
+const isScheduled = (row: BlockRow) =>
+  row.is_active && !row.is_in_effect && new Date(row.starts_at).getTime() > Date.now();
 
 function useBlockedContacts(organizationId: string | undefined) {
   return useQuery({
@@ -111,9 +123,12 @@ export default function BlockedContacts() {
     return (rows.data ?? []).filter((row) => {
       if (typeFilter !== "all_types" && row.block_type !== typeFilter) return false;
       if (statusFilter === "in_effect" && !row.is_in_effect) return false;
+      if (statusFilter === "scheduled" && !isScheduled(row)) return false;
       // «منتهٍ» يعني انقضت مدّته وهو ما زال غير مرفوع — لا يُخلط بالمرفوع
       // يدويًا: الأول انتهى بنفسه، والثاني قرارٌ اتّخذه شخص وله سبب مسجَّل.
-      if (statusFilter === "expired" && (!row.is_active || row.is_in_effect)) return false;
+      // ولا بمن لم يبدأ بعد: ذاك حظر قادم لا حظر انقضى.
+      if (statusFilter === "expired" && (!row.is_active || row.is_in_effect || isScheduled(row)))
+        return false;
       if (statusFilter === "lifted" && row.is_active) return false;
       if (!needle) return true;
       return [row.patient_name, row.patient_file_number, row.mobile_number, row.full_name, row.id_number]
@@ -233,6 +248,10 @@ export default function BlockedContacts() {
                     <TableCell>
                       {row.is_in_effect ? (
                         <Badge variant="destructive">ساري</Badge>
+                      ) : isScheduled(row) ? (
+                        <Badge variant="warning">
+                          يبدأ {new Date(row.starts_at).toLocaleDateString("ar-SA")}
+                        </Badge>
                       ) : row.is_active ? (
                         <Badge variant="outline">منتهٍ</Badge>
                       ) : (

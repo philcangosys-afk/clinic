@@ -36,9 +36,16 @@ export type CategoryRow = {
 };
 
 /** الجدول الذي يستهلك التصنيف — لمعرفة كم فحصًا يستعمله قبل الحذف. */
+/**
+ * مفتاح استعلام الشاشة التي تقرأ هذه التصنيفات — لا اسم الجدول.
+ *
+ * كان يحمل اسم الجدول (`lab_tests`) ومفتاح الاستعلام في شاشة المختبر
+ * `["lab-tests", org]`، فلا يتطابقان: يُضيف الموظّف تصنيفًا ولا يظهر في قائمة
+ * الفحوص حتى يُحدِّث الصفحة.
+ */
 const CONSUMER: Record<CategoryTable, string> = {
-  lab_test_categories: "lab_tests",
-  radiology_exam_categories: "radiology_exams",
+  lab_test_categories: "lab-tests",
+  radiology_exam_categories: "radiology-exams",
 };
 
 /**
@@ -134,7 +141,7 @@ export default function ExamCategoryManager({
       // يشمل الفحوصات المرتبطة بتصنيف عام أيضًا: العدّ معروض لكل صف، وتقييده
       // بتصنيفات المنشأة كان سيُظهر صفرًا أمام تصنيف عام تستعمله عشرات الفحوص.
       const { data, error } = await supabase
-        .from(CONSUMER[table])
+        .from(table === "lab_test_categories" ? "lab_tests" : "radiology_exams")
         .select("category_id")
         .eq("organization_id", organization?.id)
         .not("category_id", "is", null);

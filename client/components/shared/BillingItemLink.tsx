@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Link2, Link2Off } from "lucide-react";
+import { Link2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -101,15 +101,16 @@ export default function BillingItemLink({
           </DialogHeader>
           <div className="flex flex-col gap-3">
             <ItemPicker onSelect={(item) => save.mutate(item.id)} />
+            {/*
+              لا زرّ «إلغاء الربط»: عمود صنف الفوترة إلزاميّ في القاعدة منذ
+              0083/0084، فكان الزرّ يمرّر فارغًا وتردّه القاعدة في كل مرّة —
+              زرٌّ لا ينجح أبدًا. الربط يُغيَّر باختيار صنف آخر، ولا يُلغى.
+            */}
             {value && (
-              <Button
-                variant="outline"
-                onClick={() => save.mutate(null)}
-                disabled={save.isPending}
-              >
-                <Link2Off className="h-4 w-4" />
-                إلغاء الربط الحالي ({value.name_ar})
-              </Button>
+              <p className="text-xs text-muted-foreground">
+                المربوط الآن: {value.name_ar} — اختر صنفًا آخر لتغييره. لا يمكن ترك الفحص بلا
+                صنف فوترة، فبدونه لا يدخل الفاتورة.
+              </p>
             )}
           </div>
         </DialogContent>

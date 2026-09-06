@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarRange, Plus, Trash2 } from "lucide-react";
+import { CalendarRange, CalendarX, Plus } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type { ShiftTemplateRow } from "@/lib/database.types";
@@ -56,8 +56,13 @@ function useEmployeesList(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("employees")
         .select("id, name_ar, status")
+        // النشط غير المعطَّل فقط، مطابقًا لشرط `app_calculate_payroll_run`
+        // (`status='active'` **و** `is_disabled=false`): موظّفٌ معطَّل أو انتهت
+        // خدمته يُقبل في قائمة الاختيار ثمّ يستثنيه المسيّر، فيبدو المُسند
+        // مسجَّلًا وهو لا يُحتسب.
         .eq("organization_id", organizationId)
         .eq("status", "active")
+        .eq("is_disabled", false)
         .order("name_ar");
       if (error) throw error;
       return (data as { id: string; name_ar: string; status: string }[]) ?? [];
@@ -218,6 +223,9 @@ function AssignmentsTab({ organizationId }: { organizationId: string | undefined
   const [employeeId, setEmployeeId] = useState("");
   const [shiftId, setShiftId] = useState("");
   const [weekdays, setWeekdays] = useState<number[]>([0, 1, 2, 3, 4]);
+  const [showEnded, setShowEnded] = useState(false);
+  const [ending, setEnding] = useState<any | null>(null);
+  const [endDate, setEndDate] = useState("");
 
   const toggleDay = (day: number) => {
     setWeekdays((prev) => (prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day].sort()));
@@ -243,9 +251,25 @@ function AssignmentsTab({ organizationId }: { organizationId: string | undefined
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
 
-  const deleteAssignment = useMutation({
-    mutationFn: async (id: string) => {
-      const { data: affectedRows, error } = await supabase.from("employee_shift_assignments").delete().eq("id", id)
+  /**
+   * إنهاء الإسناد بتاريخ لا حذفه.
+   *
+   * نقل موظّف من الصباحيّة إلى المسائيّة كان يُنفَّذ بحذف الإسناد القديم، فيُمحى
+   * أثر أنه كان يعمل صباحًا: وأيّ مراجعة لاحقة لتأخير شهر ماضٍ تُقاس على
+   * المناوبة الجديدة (المُحفِّز `app_fill_attendance_shift` يختار الإسناد
+   * السّاري في `work_date` نفسه). والجدول يحمل `effective_to` وهو الحقل
+   * المخصّص لذلك، ولم تكن أي واجهة تكتبه.
+   */
+  const endAssignment = useMutation({
+    mutationFn: async ({ id, endDate, from }: { id: string; endDate: string; from: string }) => {
+      if (!endDate) throw new Error("حدّد تاريخ الإنهاء");
+      // القيد في القاعدة يفرض effective_to >= effective_from — نمنعه هنا برسالة
+      // مفهومة بدل رسالة قيد خامّة.
+      if (endDate < from) throw new Error("تاريخ الإنهاء لا يكون قبل تاريخ بداية الإسناد");
+      const { data: affectedRows, error } = await supabase
+        .from("employee_shift_assignments")
+        .update({ effective_to: endDate })
+        .eq("id", id)
         .select("id");
       if (error) throw error;
       // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
@@ -255,9 +279,17 @@ function AssignmentsTab({ organizationId }: { organizationId: string | undefined
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["shift-assignments", organizationId] });
-      toast({ title: "تم حذف الإسناد" });
+      toast({ title: "أُنهي الإسناد بتاريخه", description: "سجلّ المناوبة السابقة محفوظ للمراجعة" });
+      setEnding(null);
     },
+    // بلا `onError` تفشل العملية صامتة: الرسالة تُرفَع ولا يعرضها أحد
+    // (`QueryClient` في App.tsx بلا معالج أخطاء افتراضيّ).
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
+
+  const today = new Date().toISOString().slice(0, 10);
+  const isActiveAssignment = (a: any) => !a.effective_to || a.effective_to >= today;
+  const rows = (assignments.data ?? []).filter((a: any) => showEnded || isActiveAssignment(a));
 
   return (
     <Card>
@@ -336,6 +368,10 @@ function AssignmentsTab({ organizationId }: { organizationId: string | undefined
         </Dialog>
       </CardHeader>
       <CardContent>
+        <label className="mb-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+          <input type="checkbox" checked={showEnded} onChange={(e) => setShowEnded(e.target.checked)} />
+          عرض الإسنادات المنتهية أيضًا
+        </label>
         <Table>
           <TableHeader>
             <TableRow>
@@ -343,35 +379,89 @@ function AssignmentsTab({ organizationId }: { organizationId: string | undefined
               <TableHead>المناوبة</TableHead>
               <TableHead>الأيام</TableHead>
               <TableHead>من تاريخ</TableHead>
+              <TableHead>إلى تاريخ</TableHead>
               <TableHead></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(assignments.data ?? []).map((a: any) => (
-              <TableRow key={a.id}>
+            {rows.map((a: any) => (
+              <TableRow key={a.id} className={isActiveAssignment(a) ? undefined : "opacity-60"}>
                 <TableCell className="font-medium">{a.employees?.name_ar ?? "—"}</TableCell>
                 <TableCell>{a.shift_templates?.name_ar ?? "—"}</TableCell>
                 <TableCell className="text-xs">
                   {(a.weekdays ?? []).map((d: number) => WEEKDAYS.find((w) => w.value === d)?.label).join("، ")}
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">{a.effective_from}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">
+                  {a.effective_to ?? "—"}
+                  {a.effective_to && (
+                    <Badge variant="secondary" className="ms-1 text-[10px]">
+                      منتهٍ
+                    </Badge>
+                  )}
+                </TableCell>
                 <TableCell>
-                  <Button variant="ghost" size="icon" onClick={() => deleteAssignment.mutate(a.id)}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  {isActiveAssignment(a) && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      title="إنهاء الإسناد بتاريخ"
+                      onClick={() => {
+                        setEnding(a);
+                        setEndDate(today);
+                      }}
+                    >
+                      <CalendarX className="h-4 w-4 text-destructive" />
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
-            {(assignments.data ?? []).length === 0 && (
+            {rows.length === 0 && (
               <TableRow>
-                <TableCell colSpan={5} className="py-6 text-center text-sm text-muted-foreground">
-                  لا توجد إسنادات بعد.
+                <TableCell colSpan={6} className="py-6 text-center text-sm text-muted-foreground">
+                  {(assignments.data ?? []).length === 0 ? "لا توجد إسنادات بعد." : "لا إسنادات سارية — أظهر المنتهية لعرضها."}
                 </TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
       </CardContent>
+
+      {/* تأكيد صريح: الإنهاء يغيّر ما تُقاس عليه المناوبة من تاريخه، فلا يقع بضغطة واحدة */}
+      <Dialog open={Boolean(ending)} onOpenChange={(next) => !next && setEnding(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>إنهاء إسناد المناوبة</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3 text-sm">
+            <p>
+              {ending?.employees?.name_ar ?? "—"} — {ending?.shift_templates?.name_ar ?? "—"} (من {ending?.effective_from})
+            </p>
+            <p className="text-xs text-muted-foreground">
+              الإسناد لا يُحذف: يُنهى بتاريخ فيبقى محفوظًا لمراجعة تأخير الأشهر الماضية على المناوبة التي كانت سارية فعلًا.
+            </p>
+            <div>
+              <Label>تاريخ الإنهاء</Label>
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEnding(null)}>
+              رجوع
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!endDate || endAssignment.isPending}
+              onClick={() =>
+                endAssignment.mutate({ id: ending.id, endDate, from: ending.effective_from })
+              }
+            >
+              تأكيد الإنهاء
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }

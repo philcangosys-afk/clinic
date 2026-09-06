@@ -50,25 +50,46 @@ export function useLookupValues(categoryKey: string) {
  * (lookup_categories.key) — بدل تكرار استعلام نفس النمط في كل شاشة تحتاج
  * قائمة مرجعية (تخصصات، فئات أصناف، مصادر مرضى...).
  */
+/**
+ * قيمة العنصر المحيَّد («كل الفئات» / «بدون»).
+ *
+ * `Select` من Radix لا يقبل `value=""` لعنصر، فالقيمة الابتدائية الفارغة تُظهر
+ * النائب ولا يمكن **الرجوع** إليها بعد الاختيار: مُرشِّح فئة لا يُرجَع إلى الكل
+ * إلا بإعادة تحميل الصفحة، وفئة أُسندت بالخطأ في محرّر الخدمة لا تُنزَع فتُحفظ
+ * الخدمة بفئة لا تنتمي إليها. فيُدرج عنصر صريح بقيمة محيَّدة ويُعاد `""` للمستدعي.
+ */
+const CLEAR_VALUE = "__clear__";
+
 export default function LookupSelect({
   categoryKey,
   value,
   onChange,
   placeholder = "اختر...",
+  allowClear = false,
+  clearLabel = "بدون",
+  triggerClassName,
 }: {
   categoryKey: string;
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  allowClear?: boolean;
+  clearLabel?: string;
+  /** لتمييز الحقل الأساسيّ بصريًا (إطار أحمر) من الشاشة المستدعية. */
+  triggerClassName?: string;
 }) {
   const options = useLookupValues(categoryKey);
 
   return (
-    <Select value={value} onValueChange={onChange}>
-      <SelectTrigger>
+    <Select
+      value={allowClear && !value ? CLEAR_VALUE : value}
+      onValueChange={(next) => onChange(next === CLEAR_VALUE ? "" : next)}
+    >
+      <SelectTrigger className={triggerClassName}>
         <SelectValue placeholder={placeholder} />
       </SelectTrigger>
       <SelectContent>
+        {allowClear && <SelectItem value={CLEAR_VALUE}>{clearLabel}</SelectItem>}
         {(options.data ?? []).map((option) => (
           <SelectItem key={option.id} value={option.id}>
             {option.name_ar}

@@ -44,8 +44,13 @@ function useEmployeesList(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("employees")
         .select("id, name_ar")
+        // النشط غير المعطَّل فقط، مطابقًا لشرط `app_calculate_payroll_run`
+        // (`status='active'` **و** `is_disabled=false`): موظّفٌ معطَّل أو انتهت
+        // خدمته يُقبل في قائمة الاختيار ثمّ يستثنيه المسيّر، فيبدو المُسند
+        // مسجَّلًا وهو لا يُحتسب.
         .eq("organization_id", organizationId)
         .eq("status", "active")
+        .eq("is_disabled", false)
         .order("name_ar");
       if (error) throw error;
       return (data as { id: string; name_ar: string }[]) ?? [];
@@ -181,10 +186,32 @@ export default function Contracts() {
   const contracts = useContracts(organization?.id);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const [terminating, setTerminating] = useState<EmployeeContractStatusView | null>(null);
+  const [terminationReason, setTerminationReason] = useState("");
 
+  /**
+   * إنهاء العقد بسبب مكتوب وتأكيد صريح.
+   *
+   * كان الإنهاء يقع بضغطة واحدة على أيقونة صغيرة بجانب أيقونة التجديد: بلا
+   * تأكيد ولا سبب ولا تراجع (الأزرار تظهر لعقد `active` وحده)، والعقد بيانات
+   * تعاقديّة لا تُغيَّر حالتها بلا سبب موثَّق.
+   *
+   * السبب يُحفظ في عموده `termination_reason` (أُضيف في 0144)، ويُلحَق كذلك
+   * بملاحظة العقد مؤرَّخًا حتى يبقى ظاهرًا لمن يقرأ الملاحظة وحدها.
+   */
   const terminate = useMutation({
-    mutationFn: async (id: string) => {
-      const { data: affectedRows, error } = await supabase.from("employee_contracts").update({ status: "terminated" }).eq("id", id)
+    mutationFn: async ({ contract, reason }: { contract: EmployeeContractStatusView; reason: string }) => {
+      const trimmed = reason.trim();
+      if (!trimmed) throw new Error("سبب إنهاء العقد مطلوب");
+      // التاريخ محليّ لا عالميّ: `toISOString` يُخرج يوم أمس بعد التاسعة مساءً.
+      const today = new Date();
+      const stampDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+      const stamp = `إنهاء العقد بتاريخ ${stampDate}: ${trimmed}`;
+      const nextNote = [contract.note?.trim() || null, stamp].filter(Boolean).join(" | ");
+      const { data: affectedRows, error } = await supabase
+        .from("employee_contracts")
+        .update({ status: "terminated", note: nextNote, termination_reason: trimmed })
+        .eq("id", contract.id)
         .select("id");
       if (error) throw error;
       // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
@@ -194,7 +221,9 @@ export default function Contracts() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["employee-contracts", organization?.id] });
-      toast({ title: "تم إنهاء العقد" });
+      toast({ title: "تم إنهاء العقد", description: "سُجّل السبب في سجلّ العقد" });
+      setTerminating(null);
+      setTerminationReason("");
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
@@ -272,7 +301,15 @@ export default function Contracts() {
                             </Button>
                           }
                         />
-                        <Button size="sm" variant="outline" onClick={() => terminate.mutate(c.id)}>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          title="إنهاء العقد"
+                          onClick={() => {
+                            setTerminating(c);
+                            setTerminationReason("");
+                          }}
+                        >
                           <Ban className="h-3.5 w-3.5 text-destructive" />
                         </Button>
                       </div>
@@ -291,6 +328,45 @@ export default function Contracts() {
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog
+        open={Boolean(terminating)}
+        onOpenChange={(next) => {
+          if (!next) setTerminating(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>إنهاء عقد — {terminating?.employee_name}</DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3 text-sm">
+            <p className="text-xs text-muted-foreground">
+              حالة العقد ستصير «منتهٍ» ولا يظهر له زرّ تجديد بعدها. السبب يُسجَّل في ملاحظة العقد ولا يُحذف.
+            </p>
+            <div>
+              <Label>سبب الإنهاء *</Label>
+              <Input
+                value={terminationReason}
+                onChange={(e) => setTerminationReason(e.target.value)}
+                placeholder="استقالة، فسخ بالتراضي، انتهاء مشروع..."
+                autoFocus
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setTerminating(null)}>
+              رجوع
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={!terminationReason.trim() || terminate.isPending}
+              onClick={() => terminate.mutate({ contract: terminating!, reason: terminationReason })}
+            >
+              تأكيد الإنهاء
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

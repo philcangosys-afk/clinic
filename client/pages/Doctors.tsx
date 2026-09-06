@@ -296,9 +296,12 @@ function NewDoctorDialog({
   const [authority, setAuthority] = useState(initial?.specialty_authority ?? "");
   const [authorityNumber, setAuthorityNumber] = useState(initial?.specialty_authority_number ?? "");
   const [disabledFromBooking, setDisabledFromBooking] = useState(Boolean(initial?.disabled_from_booking));
-  const [receiveConfirmationSms, setReceiveConfirmationSms] = useState(
-    Boolean(initial?.receive_appointment_confirmation_sms),
-  );
+  /**
+   * حُذف مفتاح «يستلم رسالة تأكيد المواعيد» (`receive_appointment_confirmation_sms`)
+   * من النموذج: لا يقرؤه شيء في القاعدة ولا في العميل، وقناة الرسائل النصّية
+   * غير مفعّلة بقرار المالك — فمفتاحٌ يوعد بوصول رسالة إلى جوّال الطبيب وعدٌ
+   * لا سبيل إلى الوفاء به. العمود باقٍ في القاعدة بقيمه السابقة.
+   */
   const [hidePatientMessages, setHidePatientMessages] = useState(Boolean(initial?.hide_patient_messages));
   const [forceSessionSelection, setForceSessionSelection] = useState(
     Boolean(initial?.force_session_selection),
@@ -325,7 +328,6 @@ function NewDoctorDialog({
     setAuthority("");
     setAuthorityNumber("");
     setDisabledFromBooking(false);
-    setReceiveConfirmationSms(false);
     setHidePatientMessages(false);
     setForceSessionSelection(false);
   };
@@ -355,7 +357,6 @@ function NewDoctorDialog({
         specialty_authority: authority.trim() || null,
         specialty_authority_number: authorityNumber.trim() || null,
         disabled_from_booking: disabledFromBooking,
-        receive_appointment_confirmation_sms: receiveConfirmationSms,
         hide_patient_messages: hidePatientMessages,
         force_session_selection: forceSessionSelection,
       };
@@ -394,7 +395,9 @@ function NewDoctorDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>طبيب جديد</DialogTitle>
+          {/* العنوان كان ثابتًا «طبيب جديد» حتى عند التعديل، فيظنّ المستخدم أنه
+              يُنشئ سجلًّا ثانيًا للطبيب نفسه. المكوّن يعرف حالته من `initial`. */}
+          <DialogTitle>{initial ? `تعديل: د. ${initial.name_ar}` : "طبيب جديد"}</DialogTitle>
           <DialogDescription>التخصص يحدّد قالب الفحص الافتراضي في السجل الطبي</DialogDescription>
         </DialogHeader>
 
@@ -466,18 +469,6 @@ function NewDoctorDialog({
             <Label>مدة الموعد الافتراضية (دقيقة)</Label>
             <Input type="number" min={5} step={5} value={duration} onChange={(e) => setDuration(e.target.value)} />
           </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>أيام تجديد الكشفية (اتركها فارغة لاعتماد إعداد المؤسسة)</Label>
-            <Input type="number" min={1} value={renewalDays} onChange={(e) => setRenewalDays(e.target.value)} />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>عدد المراجعات المجانية</Label>
-            <Input type="number" min={0} value={freeReviews} onChange={(e) => setFreeReviews(e.target.value)} />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <Label>مدة انتظار المريض (دقيقة)</Label>
-            <Input type="number" min={0} value={waitingMinutes} onChange={(e) => setWaitingMinutes(e.target.value)} />
-          </div>
           <div className="flex flex-col gap-1.5 sm:col-span-2">
             <Label>العنوان</Label>
             <Input value={address} onChange={(e) => setAddress(e.target.value)} />
@@ -491,7 +482,7 @@ function NewDoctorDialog({
             <Input value={authorityNumber} onChange={(e) => setAuthorityNumber(e.target.value)} />
           </div>
           <div className="flex flex-col gap-2 rounded-lg border p-3 sm:col-span-2">
-            <p className="text-sm font-semibold">إعدادات الحجز والرسائل</p>
+            <p className="text-sm font-semibold">إعدادات الحجز</p>
             <label className="flex cursor-pointer items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -501,15 +492,25 @@ function NewDoctorDialog({
               />
               محجوب عن الحجز (لا تظهر له مواعيد جديدة)
             </label>
-            <label className="flex cursor-pointer items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={receiveConfirmationSms}
-                onChange={(e) => setReceiveConfirmationSms(e.target.checked)}
-                className="h-4 w-4"
-              />
-              يستلم رسالة تأكيد المواعيد
-            </label>
+            <p className="text-xs text-muted-foreground">
+              هذا المفتاح مُطبَّق فعلًا: يفحصه النظام قبل قبول أي موعد جديد.
+            </p>
+          </div>
+
+          {/*
+            هذه الحقول تُحفظ في `doctors` ولا يقرؤها شيء بعد — لا دالّة ولا
+            مُحفِّز ولا شاشة. إبقاؤها بين إعدادات الحجز كان يجعلها تبدو نافذة،
+            وأخطرها «حجب المرضى عن رسائل المواعيد» لأنه وعدُ خصوصية يبني عليه
+            المستخدم قراره. فصارت معلَنة صراحةً حتى تُوصَل في القاعدة (فحص الحجب
+            في مُحفِّز تذكير الموعد، وفحص الجلسة في نافذة الحجز، وسلسلة احتساب
+            الكشفية عند الفوترة).
+          */}
+          <div className="flex flex-col gap-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-amber-900 sm:col-span-2">
+            <p className="text-sm font-semibold">حقول تُحفظ ولا تُطبَّق بعد</p>
+            <p className="text-xs">
+              تُسجَّل في ملفّ الطبيب لكن لا شيء في النظام يقرؤها اليوم — لا تبنِ عليها قرارًا
+              تشغيليًّا ولا قرار خصوصية.
+            </p>
             <label className="flex cursor-pointer items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -517,7 +518,7 @@ function NewDoctorDialog({
                 onChange={(e) => setHidePatientMessages(e.target.checked)}
                 className="h-4 w-4"
               />
-              حجب المرضى عن رسائل المواعيد
+              حجب المرضى عن رسائل المواعيد (غير مُنفَّذ: التذكيرات لا تفحصه)
             </label>
             <label className="flex cursor-pointer items-center gap-2 text-sm">
               <input
@@ -526,8 +527,22 @@ function NewDoctorDialog({
                 onChange={(e) => setForceSessionSelection(e.target.checked)}
                 className="h-4 w-4"
               />
-              فرض اختيار جلسة عند الحجز
+              فرض اختيار جلسة عند الحجز (غير مُنفَّذ: نافذة الحجز لا تفحصه)
             </label>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">مدة انتظار المريض (دقيقة)</Label>
+                <Input type="number" min={0} value={waitingMinutes} onChange={(e) => setWaitingMinutes(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">أيام تجديد الكشفية</Label>
+                <Input type="number" min={1} value={renewalDays} onChange={(e) => setRenewalDays(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">عدد المراجعات المجانية</Label>
+                <Input type="number" min={0} value={freeReviews} onChange={(e) => setFreeReviews(e.target.value)} />
+              </div>
+            </div>
           </div>
 
           <div className="flex flex-col gap-1.5 sm:col-span-2">

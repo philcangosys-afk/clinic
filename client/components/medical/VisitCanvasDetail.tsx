@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, FlaskConical, Pill, Scan, Stethoscope, Wrench } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Badge } from "@/components/ui/badge";
@@ -154,6 +154,7 @@ function SectionCard({
 
 export default function VisitCanvasDetail({ visitId }: { visitId: string }) {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const dental = useQuery({
     queryKey: ["visit-dental-chart", visitId],
     enabled: Boolean(visitId),
@@ -228,6 +229,16 @@ export default function VisitCanvasDetail({ visitId }: { visitId: string }) {
     },
     onSuccess: () => {
       services.refetch();
+      /**
+       * البطاقة ليست المكان الوحيد الذي يعدّ هذه الخدمة.
+       *
+       * `v_visit_register` و`v_incomplete_visits` يحسبان `service_count`
+       * و`unbilled_service_count` و`services_amount` وشارة «بلا فاتورة»
+       * وتبويب «غير المكتملة». والاكتفاء بـ`refetch()` المحلّي كان يُبقيها
+       * على أرقامها القديمة حتى يُحدَّث المتصفّح — فيُطارَد مبلغٌ أُلغي.
+       */
+      queryClient.invalidateQueries({ queryKey: ["visit-register"] });
+      queryClient.invalidateQueries({ queryKey: ["incomplete-visits"] });
       toast({ title: "أُلغيت الخدمة" });
       setCancelTarget(null);
       setCancelReason("");

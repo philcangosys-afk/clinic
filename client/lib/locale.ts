@@ -96,6 +96,20 @@ export function isFallbackName(
 const HIJRI_LOCALE = "ar-SA-u-ca-islamic-umalqura";
 
 /**
+ * العربية بأرقام لاتينية وتقويم ميلادي **صريحين**.
+ *
+ * `"ar-SA"` وحدها لا تعني ما تبدو أنها تعنيه: المتصفّحات تُرجع بها التقويم
+ * الهجري (أم القرى) والأرقام العربية-الهندية (٠١٢٣). فكان إعداد المنشأة
+ * «تقويم ميلادي» يُنتج تاريخًا هجريًا، والمبالغ تُطبع بأرقام لا تُطابق أرقام
+ * الفاتورة المطبوعة ولا رقم الفاتورة اللاتيني في الصف نفسه — فتظهر الجداول
+ * المالية «مقطّعة» بخلط اتجاهَين وأبجديتَي أرقام في السطر الواحد.
+ *
+ * التصريح بـ`-u-ca-gregory-nu-latn` يجعل النتيجة واحدة في كل متصفّح.
+ */
+const AR_GREGORIAN = "ar-SA-u-ca-gregory-nu-latn";
+const AR_NUMBERS = "ar-SA-u-nu-latn";
+
+/**
  * التاريخ بالتقويم المختار. التحويل الهجري يتمّ في المتصفّح عبر `Intl`
  * (تقويم أم القرى) — لا جدول تحويل يدويّ في القاعدة، لأن جدولًا يدويًّا
  * يتأخّر عن التعديلات الرسمية ويُنتج تواريخ خاطئة بصمت.
@@ -109,7 +123,7 @@ export function formatDate(
   const date = value instanceof Date ? value : new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
 
-  const gregorian = date.toLocaleDateString(language === "en" ? "en-GB" : "ar-SA", {
+  const gregorian = date.toLocaleDateString(language === "en" ? "en-GB" : AR_GREGORIAN, {
     year: "numeric", month: "2-digit", day: "2-digit",
   });
 
@@ -137,7 +151,7 @@ export function formatMoney(
 ): string {
   const amount = Number(value ?? 0);
   try {
-    return amount.toLocaleString(language === "en" ? "en-US" : "ar-SA", {
+    return amount.toLocaleString(language === "en" ? "en-US" : AR_NUMBERS, {
       style: "currency",
       currency: currencyCode,
       minimumFractionDigits: 2,
@@ -146,4 +160,55 @@ export function formatMoney(
   } catch {
     return `${amount.toFixed(2)} ${currencyCode}`;
   }
+}
+
+/**
+ * مبلغ في عمود جدول — بلا رمز عملة وبمنزلتَين عشريتَين دائمًا.
+ *
+ * رمز العملة في كل خلية من ستّة أعمدة مالية يُضاعف عرض الجدول ويكرّر ما
+ * يقوله عنوان العمود مرّة، فيُكتب في العنوان ويُترك الرقم صافيًا. والمنزلتان
+ * ثابتتان: عمودٌ فيه «150» و«149.5» و«3.75» لا تصطفّ أرقامه فيُقرأ خطأً.
+ */
+export function formatAmount(value: unknown, language: DataLanguage = "ar"): string {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount)) return "—";
+  return amount.toLocaleString(language === "en" ? "en-US" : AR_NUMBERS, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+/** عدد صحيح (كمّيات، أعداد) بأرقام لاتينية موحَّدة. */
+export function formatCount(value: unknown, language: DataLanguage = "ar"): string {
+  const amount = Number(value ?? 0);
+  if (!Number.isFinite(amount)) return "—";
+  return amount.toLocaleString(language === "en" ? "en-US" : AR_NUMBERS, {
+    maximumFractionDigits: 3,
+  });
+}
+
+/** الوقت بأرقام لاتينية — بلا ثوانٍ. */
+export function formatTime(
+  value: string | number | Date | null | undefined,
+  language: DataLanguage = "ar",
+): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleTimeString(language === "en" ? "en-GB" : AR_NUMBERS, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** التاريخ والوقت في سطر واحد — للجداول التي لا تتحمّل عمودَين. */
+export function formatDateTime(
+  value: string | number | Date | null | undefined,
+  calendar: CalendarDisplay = "gregorian",
+  language: DataLanguage = "ar",
+): string {
+  if (value === null || value === undefined || value === "") return "—";
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return "—";
+  return `${formatDate(date, calendar, language)} · ${formatTime(date, language)}`;
 }

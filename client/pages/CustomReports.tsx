@@ -4,6 +4,7 @@ import { Download, LayoutGrid, Play, Plus, Save, Trash2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type { CustomReportRow } from "@/lib/database.types";
+import { localDayRange } from "@/lib/date-range";
 import {
   getReportSource,
   OPERATORS_BY_TYPE,
@@ -29,7 +30,32 @@ import { useToast } from "@/hooks/use-toast";
 
 const RESULT_ROW_CAP = 500;
 
-function toCsv(rows: Record<string, unknown>[], fields: string[], labels: Record<string, string>): string {
+/**
+ * الأعمدة الزمنية (`timestamptz`) في مصادر التقارير، بمفتاح «المصدر.العمود».
+ *
+ * **لماذا القائمة موجودة**: مرشّحات التاريخ كانت تمرّر نصّ اليوم كما هو، وعمودٌ
+ * زمنيّ يُقارَن بـ`"2026-09-06"` يعني اللحظة 00:00 تمامًا — فـ«يساوي 2026-09-06»
+ * يُعيد صفرًا دائمًا (لا صف مخزَّن على منتصف الليل بالضبط)، و«حتى 2026-09-06»
+ * تُسقط يوم النهاية كلّه. أمّا الأعمدة من نوع `date` فمقارنتها بالنصّ صحيحة،
+ * ولو طُبِّق عليها مدى اللحظات لانحرفت بمقدار إزاحة المنطقة الزمنية. فلا بدّ من
+ * التمييز بينهما — وهو ما تفعله هذه القائمة، مأخوذة من أنواع الأعمدة في
+ * القاعدة (`patients.birth_date` مثلًا `date`، و`patients.file_date`
+ * `timestamptz`).
+ */
+const TIMESTAMP_FIELDS = new Set([
+  "patients.file_date",
+  "appointments.scheduled_start",
+  "appointments.created_at",
+  "sales_invoices.created_at",
+  "external_clients.registered_at",
+]);
+
+function toCsv(
+  rows: Record<string, unknown>[],
+  fields: string[],
+  labels: Record<string, string>,
+  notice?: string,
+): string {
   const header = fields.map((f) => labels[f] ?? f).join(",");
   const lines = rows.map((row) =>
     fields
@@ -40,6 +66,8 @@ function toCsv(rows: Record<string, unknown>[], fields: string[], labels: Record
       })
       .join(","),
   );
+  // التحذير يُكتب في الملفّ نفسه: من يفتح CSV لا يرى تحذير الشاشة
+  if (notice) lines.push(`"${notice.replace(/"/g, '""')}"`);
   return [header, ...lines].join("\n");
 }
 
@@ -88,6 +116,9 @@ export default function CustomReports() {
   const [saveOpen, setSaveOpen] = useState(false);
   const [reportName, setReportName] = useState("");
   const [loadedReportId, setLoadedReportId] = useState<string | null>(null);
+  /** عدد الصفوف المقروءة فعلًا وعدد المطابق في القاعدة — للتمييز بينهما. */
+  const [fetchedCount, setFetchedCount] = useState(0);
+  const [matchedCount, setMatchedCount] = useState(0);
 
   const source = getReportSource(sourceKey)!;
   const fieldLabels = useMemo(() => Object.fromEntries(source.fields.map((f) => [f.key, f.label])), [source]);
@@ -105,6 +136,7 @@ export default function CustomReports() {
     setResults(null);
     setGrouped(null);
     setLoadedReportId(null);
+    setReportName("");
   };
 
   const toggleField = (key: string) => {
@@ -131,15 +163,28 @@ export default function CustomReports() {
       if (groupByField) fieldsToFetch.add(groupByField);
       if (aggregation === "sum" && aggregationField) fieldsToFetch.add(aggregationField);
 
+      // `count: "exact"` يكشف كم صفًّا يطابق الفلاتر **قبل** السقف: بلا هذا
+      // العدد كان التجميع يُحسب على أول 500 صف ويُعرض كإجمالي بلا أي إشارة.
       let query = supabase
         .from(source.table)
-        .select(Array.from(fieldsToFetch).join(","))
+        .select(Array.from(fieldsToFetch).join(","), { count: "exact" })
         .eq("organization_id", organization.id);
 
       for (const filter of filters) {
         if (!filter.value && filter.operator !== "is_empty" && filter.operator !== "is_not_empty") continue;
         const fieldDef = source.fields.find((f) => f.key === filter.field);
         if (!fieldDef) continue;
+        // عمود زمنيّ: «يساوي يومًا» مدى اليوم كاملًا، و«حتى يوم» نهايته —
+        // بحدود بتوقيت المستخدم من `date-range.ts` لا بتوقيت الخادم.
+        if (fieldDef.type === "date" && TIMESTAMP_FIELDS.has(`${sourceKey}.${filter.field}`)) {
+          const bounds = localDayRange(String(filter.value), String(filter.value));
+          if (bounds.from && bounds.to) {
+            if (filter.operator === "eq") query = query.gte(filter.field, bounds.from).lte(filter.field, bounds.to);
+            else if (filter.operator === "gte") query = query.gte(filter.field, bounds.from);
+            else if (filter.operator === "lte") query = query.lte(filter.field, bounds.to);
+          }
+          continue;
+        }
         const value: string | number | boolean =
           fieldDef.type === "number" ? Number(filter.value) : fieldDef.type === "boolean" ? filter.value === "true" : filter.value;
         switch (filter.operator as FilterOperator) {
@@ -176,9 +221,11 @@ export default function CustomReports() {
       if (source.defaultOrderBy) query = query.order(source.defaultOrderBy, { ascending: false });
       query = query.limit(RESULT_ROW_CAP);
 
-      const { data, error } = await query;
+      const { data, error, count } = await query;
       if (error) throw error;
       const rows = (data ?? []) as unknown as Record<string, unknown>[];
+      setFetchedCount(rows.length);
+      setMatchedCount(count ?? rows.length);
 
       if (groupByField && aggregation) {
         const map = new Map<string, number>();
@@ -232,7 +279,8 @@ export default function CustomReports() {
       queryClient.invalidateQueries({ queryKey: ["custom-reports", organization?.id] });
       toast({ title: "تم حفظ التقرير" });
       setSaveOpen(false);
-      setReportName("");
+      // الاسم يبقى بعد تحديث تقرير محمَّل ليظهر في المرّة القادمة
+      if (!loadedReportId) setReportName("");
     },
     onError: (error: unknown) =>
       toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
@@ -262,9 +310,17 @@ export default function CustomReports() {
     setAggregation((report.aggregation as "count" | "sum" | null) ?? "");
     setAggregationField(report.aggregation_field ?? "");
     setLoadedReportId(report.id);
+    // اسم التقرير المحمَّل يُحمَل معه: زرّ «تحديث الحفظ» كان يفتح الحوار باسم
+    // فارغ فيُرفض بـ«اسم التقرير مطلوب»، أو يُعاد كتابته باسم مختلف فيتغيّر
+    // اسم تقرير محفوظ بلا قصد.
+    setReportName(report.name);
     setResults(null);
     setGrouped(null);
   };
+
+  /** بلغ التشغيل سقف الصفوف: المطابق في القاعدة أكثر من المقروء. */
+  const isCapped = matchedCount > fetchedCount;
+  const capNotice = `تحذير: بلغ التشغيل حدّه الأقصى (${RESULT_ROW_CAP} صف) — قُرئ ${fetchedCount} من ${matchedCount} صفًّا مطابقًا، وما أدناه محسوب على المقروء فقط لا على كل المطابق.`;
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
@@ -444,7 +500,13 @@ export default function CustomReports() {
             </div>
             <div className="flex flex-col gap-1.5">
               <Label className="text-xs">العمود المُجمَّع (عند الجمع)</Label>
-              <Select value={aggregationField || "__none"} onValueChange={setAggregationField} disabled={aggregation !== "sum"}>
+              {/* «—» رمز واجهة لا اسم عمود: تخزينه كما هو كان يضع `__none` في
+                  قائمة الأعمدة المطلوبة فيفشل التشغيل بخطأ عمود غير موجود. */}
+              <Select
+                value={aggregationField || "__none"}
+                onValueChange={(v) => setAggregationField(v === "__none" ? "" : v)}
+                disabled={aggregation !== "sum"}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
@@ -482,8 +544,19 @@ export default function CustomReports() {
               variant="outline"
               onClick={() =>
                 grouped
-                  ? downloadCsv("report.csv", toCsv(grouped as unknown as Record<string, unknown>[], ["group", "value"], { group: fieldLabels[groupByField] ?? groupByField, value: "القيمة" }))
-                  : downloadCsv("report.csv", toCsv(results ?? [], selectedFields, fieldLabels))
+                  ? downloadCsv(
+                      "report.csv",
+                      toCsv(
+                        grouped as unknown as Record<string, unknown>[],
+                        ["group", "value"],
+                        { group: fieldLabels[groupByField] ?? groupByField, value: "القيمة" },
+                        isCapped ? capNotice : undefined,
+                      ),
+                    )
+                  : downloadCsv(
+                      "report.csv",
+                      toCsv(results ?? [], selectedFields, fieldLabels, isCapped ? capNotice : undefined),
+                    )
               }
             >
               <Download className="h-3.5 w-3.5" />
@@ -491,6 +564,14 @@ export default function CustomReports() {
             </Button>
           </CardHeader>
           <CardContent>
+            {/* التحذير فوق النتائج ولكلا العرضين: كان داخل فرع «النتائج
+                المفصّلة» وحده، فيختفي تمامًا في العرض المجمَّع — وهو العرض
+                الذي يُقرأ فيه الرقم كإجمالي. */}
+            {isCapped && (
+              <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                {capNotice} ضيّق الفلاتر ليكون الرقم كاملًا.
+              </p>
+            )}
             {grouped && (
               <Table>
                 <TableHeader>
@@ -538,11 +619,6 @@ export default function CustomReports() {
                     )}
                   </TableBody>
                 </Table>
-                {results.length === RESULT_ROW_CAP && (
-                  <p className="mt-2 text-xs text-amber-700">
-                    تم الوصول للحد الأقصى ({RESULT_ROW_CAP} صف) — قد توجد نتائج إضافية غير معروضة، ضيّق الفلاتر لعرض نتائج أدق.
-                  </p>
-                )}
               </div>
             )}
           </CardContent>
@@ -552,8 +628,12 @@ export default function CustomReports() {
       <Dialog open={saveOpen} onOpenChange={setSaveOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>حفظ التقرير</DialogTitle>
-            <DialogDescription>يُحفظ تعريف التقرير (المصدر والأعمدة والفلاتر) لتشغيله لاحقًا بنفس الإعدادات</DialogDescription>
+            <DialogTitle>{loadedReportId ? "تحديث التقرير المحفوظ" : "حفظ التقرير"}</DialogTitle>
+            <DialogDescription>
+              {loadedReportId
+                ? "يُحدَّث تعريف التقرير المحمَّل بالإعدادات الحالية. تغيير الاسم هنا يعيد تسميته."
+                : "يُحفظ تعريف التقرير (المصدر والأعمدة والفلاتر) لتشغيله لاحقًا بنفس الإعدادات"}
+            </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-1.5">
             <Label>اسم التقرير</Label>

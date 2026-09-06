@@ -62,8 +62,13 @@ function useEmployeesList(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("employees")
         .select("id, name_ar")
+        // النشط غير المعطَّل فقط، مطابقًا لشرط `app_calculate_payroll_run`
+        // (`status='active'` **و** `is_disabled=false`): موظّفٌ معطَّل أو انتهت
+        // خدمته يُقبل في قائمة الاختيار ثمّ يستثنيه المسيّر، فيبدو المُسند
+        // مسجَّلًا وهو لا يُحتسب.
         .eq("organization_id", organizationId)
         .eq("status", "active")
+        .eq("is_disabled", false)
         .order("name_ar");
       if (error) throw error;
       return (data as { id: string; name_ar: string }[]) ?? [];
@@ -123,6 +128,22 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
     queryClient.invalidateQueries({ queryKey: ["leave-balances", organizationId] });
   };
 
+  /**
+   * اعتماد الإجازة **يكتب في سجلّ الحضور** (أيام بحالة `on_leave`)، وشاشة
+   * الحضور تقرأ نفس الجدول بمفاتيح استعلام أخرى.
+   *
+   * بلا إبطالها كان المستخدم يعتمد إجازة ثم يفتح شاشة الحضور فيرى الموظّف «لم
+   * يسجّل» أو «غائب» على يومٍ هو في إجازة معتمدة — فيسجّل غيابًا أو يُخصَم من
+   * راتبه، والسبب مجرّد ذاكرة استعلام قديمة.
+   */
+  const invalidateAttendance = () => {
+    queryClient.invalidateQueries({ queryKey: ["today-attendance", organizationId] });
+    queryClient.invalidateQueries({ queryKey: ["attendance-history", organizationId] });
+    // بطاقتا «ملخّص الحضور» و«أيام الغياب» في شاشة الرواتب تُحتسبان من نفس الصفوف.
+    queryClient.invalidateQueries({ queryKey: ["attendance-summary", organizationId] });
+    queryClient.invalidateQueries({ queryKey: ["absent-days", organizationId] });
+  };
+
   const createRequest = useMutation({
     mutationFn: async () => {
       if (!organizationId || !employeeId || !leaveTypeId || !startDate || !endDate) {
@@ -158,8 +179,26 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
      *
      * وحين يوجد تعارض ترفض الدالّة الاعتماد إلّا بقرار مكتوب — والحقل النصّي
      * في الصفّ هو موضع كتابته (وهو نفسه سبب الرفض عند الرفض).
+     *
+     * الدالّة تُثبِّت كذلك أيام الإجازة في `attendance_records` بحالة `on_leave`
+     * (تحترم أيام عمل المناوبة المُسندة، ولا تمسّ يومًا سُجِّل فيه حضور فعليّ).
+     * نعدّ الأيام المثبَّتة بعد الاعتماد لنقولها للمستخدم: قبل ذلك كان الاعتماد
+     * صامتًا فلا يعرف المستخدم أن الحضور تأثّر أصلًا، فيظنّ أن عليه إدخال أيام
+     * الإجازة يدويًّا في شاشة الحضور — وهو ما كان يُنتج صفوفًا مكرَّرة أو غيابًا.
      */
-    mutationFn: async ({ id, status }: { id: string; status: "approved" | "rejected" }) => {
+    mutationFn: async ({
+      id,
+      status,
+      employeeId,
+      startDate,
+      endDate,
+    }: {
+      id: string;
+      status: "approved" | "rejected";
+      employeeId?: string | null;
+      startDate?: string | null;
+      endDate?: string | null;
+    }) => {
       const note = rejectionReasons[id]?.trim() || null;
       if (status === "approved") {
         const { error } = await supabase.rpc("app_approve_leave_request", {
@@ -167,7 +206,19 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
           p_conflict_note: note,
         });
         if (error) throw error;
-        return;
+        if (!organizationId || !employeeId || !startDate || !endDate) return { leaveDays: null };
+        // العدّ بعد الاعتماد لا قبله. وفشلُه لا يُبطل اعتمادًا تمّ فعلًا في
+        // القاعدة — نُرجع «غير معروف» بدل رمي خطأ يوحي بأن الاعتماد لم ينفَّذ.
+        const { count, error: countError } = await supabase
+          .from("attendance_records")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .eq("employee_id", employeeId)
+          .eq("status", "on_leave")
+          .gte("work_date", startDate)
+          .lte("work_date", endDate);
+        if (countError) return { leaveDays: null };
+        return { leaveDays: count ?? null };
       }
       const { data: affectedRows, error } = await supabase
         .from("leave_requests")
@@ -179,10 +230,25 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
       // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
       if (!affectedRows || affectedRows.length === 0)
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+      return { leaveDays: null };
     },
-    onSuccess: (_, vars) => {
+    onSuccess: (result, vars) => {
       invalidate();
-      toast({ title: vars.status === "approved" ? "تم اعتماد الطلب" : "تم رفض الطلب" });
+      if (vars.status !== "approved") {
+        toast({ title: "تم رفض الطلب" });
+        return;
+      }
+      invalidateAttendance();
+      const days = result?.leaveDays ?? null;
+      toast({
+        title: "تم اعتماد الطلب",
+        description:
+          days === null
+            ? "أيام الإجازة تُثبَّت في سجلّ الحضور بحالة «في إجازة» — راجع شاشة الحضور."
+            : days > 0
+              ? `ثُبِّت ${days} يومًا في سجلّ الحضور بحالة «في إجازة» فلا تُحسب غيابًا.`
+              : "لم يُثبَّت أي يوم في سجلّ الحضور — الأيام خارج أيام عمل المناوبة المُسندة، أو سُجِّل فيها حضور فعليّ.",
+      });
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
@@ -192,7 +258,10 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle className="text-base">طلبات الإجازة</CardTitle>
-          <CardDescription>قاعدة البيانات تمنع تلقائيًا أي طلب يتداخل مع طلب آخر أو يتجاوز الرصيد المتاح</CardDescription>
+          <CardDescription>
+            قاعدة البيانات تمنع تلقائيًا أي طلب يتداخل مع طلب آخر أو يتجاوز الرصيد المتاح.
+            والاعتماد يُثبِّت أيام الإجازة في سجلّ الحضور بحالة «في إجازة» — فلا تُدخلها يدويًّا هناك.
+          </CardDescription>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
@@ -291,7 +360,20 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
                         value={rejectionReasons[r.id] ?? ""}
                         onChange={(e) => setRejectionReasons((prev) => ({ ...prev, [r.id]: e.target.value }))}
                       />
-                      <Button size="sm" variant="outline" onClick={() => decide.mutate({ id: r.id, status: "approved" })}>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        title="اعتماد — يُثبِّت أيام الإجازة في سجلّ الحضور"
+                        onClick={() =>
+                          decide.mutate({
+                            id: r.id,
+                            status: "approved",
+                            employeeId: r.employee_id,
+                            startDate: r.start_date,
+                            endDate: r.end_date,
+                          })
+                        }
+                      >
                         <Check className="h-3.5 w-3.5 text-emerald-600" />
                       </Button>
                       <Button size="sm" variant="outline" onClick={() => decide.mutate({ id: r.id, status: "rejected" })}>

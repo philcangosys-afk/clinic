@@ -961,8 +961,20 @@ function MaintenancePanel() {
       });
       if (error) throw error;
       if (requestId) {
-        await supabase.from("maintenance_requests")
-          .update({ status: "in_progress" }).eq("id", requestId);
+        // كان التحديث بلا قراءة error ولا فحص الصفوف المتأثّرة: تحديثٌ لا يطابق
+        // صفًا ليس خطأً في PostgREST، فلو حُلّ البلاغ من مستخدم آخر في الأثناء
+        // بقي معروضًا في «بلاغات الأعطال المفتوحة» وله أمر مفتوح، ورسالة
+        // النجاح تظهر كما هي فلا شيء يشير إلى التناقض.
+        const { data: touched, error: reqError } = await supabase
+          .from("maintenance_requests")
+          .update({ status: "in_progress" })
+          .eq("id", requestId)
+          .select("id");
+        if (reqError) throw reqError;
+        if (!touched || touched.length === 0)
+          throw new Error(
+            "فُتح أمر الصيانة لكن لم تُحدَّث حالة البلاغ — راجع البلاغ: قد يكون حُلّ أو أُلغي من مستخدم آخر",
+          );
       }
     },
     onSuccess: () => { invalidate(); toast({ title: "فُتح أمر صيانة" }); },

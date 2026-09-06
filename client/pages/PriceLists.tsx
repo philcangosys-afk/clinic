@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ListPlus, Plus, Tag } from "lucide-react";
+import { ListPlus, Pencil, Plus, Tag } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { usePermissions } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
@@ -44,10 +44,48 @@ const today = () => new Date().toISOString().slice(0, 10);
 export default function PriceLists() {
   const { organization } = useOrganizationAccess();
   const { can } = usePermissions();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const organizationId = organization?.id;
   const canPrice = can("catalog.pricing");
   const [createOpen, setCreateOpen] = useState(false);
   const [selected, setSelected] = useState<any | null>(null);
+  const [editing, setEditing] = useState<any | null>(null);
+
+  /**
+   * التفعيل/التعطيل من الصف.
+   *
+   * لم يكن في الشاشة كلّها أي تحديث على `price_lists`: تعرفة تأمين انتهى عقدها
+   * تبقى مفعَّلة وتتقدّم على السعر الصحيح عند الفوترة (السُّلَّم في
+   * `app_resolve_item_price` يقرأ القوائم المفعَّلة السارية)، والموظّف يرى
+   * المشكلة ولا يملك زرًّا لحلّها. والتعطيل — لا الحذف — هو الصواب لأن الأسعار
+   * التاريخية داخل القائمة مرجع للفواتير الصادرة.
+   */
+  const toggleActive = useMutation({
+    mutationFn: async (row: any) => {
+      const { data: affectedRows, error } = await supabase
+        .from("price_lists")
+        .update({ is_active: !row.is_active })
+        .eq("id", row.id)
+        .select("id");
+      if (error) throw error;
+      // تحديث لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر رسالة
+      // نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["price-lists-page"] });
+      queryClient.invalidateQueries({ queryKey: ["price-lists"] });
+      toast({ title: "تم تحديث حالة القائمة" });
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر التحديث",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
 
   const lists = useQuery({
     queryKey: ["price-lists-page", organizationId],
@@ -150,10 +188,28 @@ export default function PriceLists() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-end">
-                      <Button size="sm" variant="ghost" onClick={() => setSelected(row)}>
-                        <ListPlus className="h-4 w-4" />
-                        الأسعار
-                      </Button>
+                      <div className="flex justify-end gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => setSelected(row)}>
+                          <ListPlus className="h-4 w-4" />
+                          الأسعار
+                        </Button>
+                        {canPrice && (
+                          <>
+                            <Button size="sm" variant="ghost" onClick={() => setEditing(row)}>
+                              <Pencil className="h-4 w-4" />
+                              تعديل
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              disabled={toggleActive.isPending}
+                              onClick={() => toggleActive.mutate(row)}
+                            >
+                              {row.is_active ? "تعطيل" : "تفعيل"}
+                            </Button>
+                          </>
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -171,6 +227,11 @@ export default function PriceLists() {
       </Card>
 
       <CreateListDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organizationId} />
+      {/* `key` من معرّف الصف: بلا إعادة التركيب تبقى حالة النموذج من الفتحة
+          السابقة فتُحفظ أولوية قائمة على قائمة أخرى. */}
+      {editing && (
+        <EditListDialog key={editing.id} list={editing} onClose={() => setEditing(null)} />
+      )}
       <ListItemsDialog list={selected} onClose={() => setSelected(null)} canPrice={canPrice} />
     </div>
   );
@@ -192,6 +253,7 @@ function CreateListDialog({
   const [scopeId, setScopeId] = useState("");
   const [priority, setPriority] = useState("0");
   const [effectiveFrom, setEffectiveFrom] = useState(today());
+  const [effectiveTo, setEffectiveTo] = useState("");
   const [note, setNote] = useState("");
 
   const branches = useQuery({
@@ -208,6 +270,8 @@ function CreateListDialog({
     },
   });
 
+  // الجهات المعطَّلة مستثناة: تعرفةٌ لجهة أُوقف التعامل معها تبقى في قوائم
+  // الأسعار بلا أثر ولا تفسير. والقاعدة نفسها متّبعة في `ClaimCodesEditor`.
   const companies = useQuery({
     queryKey: ["pricelist-companies", organizationId],
     enabled: open && Boolean(organizationId),
@@ -216,6 +280,7 @@ function CreateListDialog({
         .from("insurance_companies")
         .select("id, name_ar")
         .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
         .order("name_ar");
       if (error) throw error;
       return (data ?? []) as any[];
@@ -230,6 +295,7 @@ function CreateListDialog({
         .from("external_clients")
         .select("id, name")
         .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
         .order("name");
       if (error) throw error;
       return (data ?? []) as any[];
@@ -250,6 +316,8 @@ function CreateListDialog({
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
       if (!name.trim()) throw new Error("اسم القائمة مطلوب");
       if (kind !== "base" && !scopeId) throw new Error("اختر نطاق القائمة");
+      if (effectiveTo && effectiveTo < effectiveFrom)
+        throw new Error("«تسري إلى» يجب أن يساوي «تسري من» أو يليه");
       const { error } = await supabase.from("price_lists").insert({
         organization_id: organizationId,
         name: name.trim(),
@@ -259,6 +327,7 @@ function CreateListDialog({
         external_client_id: kind === "corporate" ? scopeId : null,
         priority: Number(priority) || 0,
         effective_from: effectiveFrom,
+        effective_to: effectiveTo || null,
         note: note.trim() || null,
       });
       if (error) throw error;
@@ -269,6 +338,7 @@ function CreateListDialog({
       toast({ title: "أُنشئت القائمة" });
       setName("");
       setScopeId("");
+      setEffectiveTo("");
       setNote("");
       onOpenChange(false);
     },
@@ -348,6 +418,10 @@ function CreateListDialog({
                 onChange={(e) => setEffectiveFrom(e.target.value)}
               />
             </div>
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <Label>تسري إلى (اختياري — اتركه فارغًا للمفتوح)</Label>
+              <Input type="date" value={effectiveTo} onChange={(e) => setEffectiveTo(e.target.value)} />
+            </div>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>ملاحظة</Label>
@@ -358,6 +432,111 @@ function CreateListDialog({
         <DialogFooter>
           <Button disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}>
             {create.isPending ? "..." : "إنشاء"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * تعديل بيانات القائمة نفسها — الاسم والأولوية ونهاية السريان والحالة.
+ *
+ * النطاق (`list_kind` والجهة) لا يُعدَّل: تغييره يُحوِّل تعرفة شركة إلى تعرفة
+ * أخرى بأسعارها كما هي، فالأصحّ إنشاء قائمة جديدة وتعطيل القديمة.
+ */
+function EditListDialog({ list, onClose }: { list: any; onClose: () => void }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [name, setName] = useState(String(list.name ?? ""));
+  const [priority, setPriority] = useState(String(list.priority ?? 0));
+  const [effectiveTo, setEffectiveTo] = useState(list.effective_to ?? "");
+  const [isActive, setIsActive] = useState(Boolean(list.is_active));
+  const [note, setNote] = useState(String(list.note ?? ""));
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!name.trim()) throw new Error("اسم القائمة مطلوب");
+      const priorityValue = Number(priority);
+      if (!Number.isInteger(priorityValue)) throw new Error("الأولوية يجب أن تكون عددًا صحيحًا");
+      if (effectiveTo && list.effective_from && effectiveTo < list.effective_from)
+        throw new Error("«تسري إلى» يجب أن يساوي «تسري من» أو يليه");
+      const { data: affectedRows, error } = await supabase
+        .from("price_lists")
+        .update({
+          name: name.trim(),
+          priority: priorityValue,
+          effective_to: effectiveTo || null,
+          is_active: isActive,
+          note: note.trim() || null,
+        })
+        .eq("id", list.id)
+        .select("id");
+      if (error) throw error;
+      // بلا فحص عدد الصفوف المتأثّرة تظهر رسالة نجاح كاذبة على رفض RLS.
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["price-lists-page"] });
+      queryClient.invalidateQueries({ queryKey: ["price-lists"] });
+      toast({ title: "حُفظت التعديلات" });
+      onClose();
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذر الحفظ",
+        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>تعديل قائمة الأسعار</DialogTitle>
+          <DialogDescription>
+            الأسعار داخل القائمة لا تُمسّ من هنا. التعطيل يُخرج القائمة من احتساب سعر الفاتورة ويُبقي
+            تاريخها كما هو.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>الاسم *</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+          </div>
+          <div className="rounded-md border px-3 py-2 text-xs text-muted-foreground">
+            النوع: {LIST_KINDS[list.list_kind] ?? list.list_kind} · تسري من:{" "}
+            <span className="font-mono">{list.effective_from}</span>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label>الأولوية</Label>
+              <Input type="number" value={priority} onChange={(e) => setPriority(e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>تسري إلى (فارغ = مفتوح)</Label>
+              <Input type="date" value={effectiveTo} onChange={(e) => setEffectiveTo(e.target.value)} />
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>ملاحظة</Label>
+            <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <Switch checked={isActive} onCheckedChange={setIsActive} />
+            مفعَّلة (تدخل في احتساب سعر الفاتورة)
+          </label>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            إلغاء
+          </Button>
+          <Button disabled={!name.trim() || save.isPending} onClick={() => save.mutate()}>
+            {save.isPending ? "..." : "حفظ"}
           </Button>
         </DialogFooter>
       </DialogContent>

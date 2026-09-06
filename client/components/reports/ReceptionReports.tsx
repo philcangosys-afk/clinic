@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { Download, Info, Printer } from "lucide-react";
+import { AlertTriangle, Download, Info, Printer } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { usePermissions } from "@/lib/permissions";
@@ -67,10 +67,40 @@ function exportCsv(name: string, headers: string[], rows: (string | number | nul
   URL.revokeObjectURL(url);
 }
 
+/**
+ * حالات كل بطاقة **كما تعدّها القاعدة بالضبط**.
+ *
+ * `app_report_appointments` تعدّ «غير مؤكدة» على `new|scheduled|unconfirmed`
+ * و«ملغاة» على الإلغاء من المريض ومن الموظف معًا و«حضوريون» على
+ * `walk_in|waiting`. البطاقات كانت تنتقل بحالة واحدة من كل مجموعة
+ * (`?status=cancelled_by_staff` مثلًا)، فيرى الموظف رقمًا في البطاقة ونصفه في
+ * الشاشة التي تفتحها — فيظن أن سجلات ناقصة أو أن الرقم خطأ.
+ */
+const CARD_STATUSES: { key: string; label: string; statuses: string[] }[] = [
+  { key: "total", label: "إجمالي المواعيد", statuses: [] },
+  { key: "confirmed", label: "مؤكدة", statuses: ["confirmed"] },
+  { key: "unconfirmed", label: "غير مؤكدة", statuses: ["new", "scheduled", "unconfirmed"] },
+  { key: "completed", label: "زيارات مكتملة", statuses: ["completed"] },
+  { key: "cancelled", label: "ملغاة", statuses: ["cancelled_by_patient", "cancelled_by_staff"] },
+  { key: "no_show", label: "عدم حضور", statuses: ["no_show"] },
+  { key: "walk_in", label: "حضوريون", statuses: ["walk_in", "waiting"] },
+];
+
+/** جملة تُقال في وصف كل تقرير لا تقبل دالّته مرشّح العيادة. */
+
 export default function ReceptionReports() {
   const { organization } = useOrganizationAccess();
   const organizationId = organization?.id;
-  const { can } = usePermissions();
+  const { can, isLoading: permissionsLoading } = usePermissions();
+  const queryClient = useQueryClient();
+  /**
+   * `can()` تُعيد `false` أثناء التحميل وعند فشل استعلام الصلاحيات (اتجاه
+   * مقصود للأزرار)، فبناء رسالة «صلاحيتك لا تسمح» عليه يعني إخبار مستخدمٍ
+   * يملك الصلاحية أنه لا يملكها — وتبقى الرسالة قائمة إن فشل الاستعلام.
+   * حالة الاستعلام تُقرأ من ذاكرة react-query للتمييز بين الحالات الثلاث.
+   */
+  const permissionsFailed =
+    queryClient.getQueryState(["my-permissions", organizationId])?.status === "error";
   const navigate = useNavigate();
 
   const [filters, setFilters] = useState<Filters>({
@@ -168,8 +198,7 @@ export default function ReceptionReports() {
     queryKey: ["report-occupancy", args],
     enabled,
     queryFn: async () => {
-      const { p_clinic_id, ...rest } = args;
-      const { data, error } = await supabase.rpc("app_report_occupancy", rest);
+      const { data, error } = await supabase.rpc("app_report_occupancy", args);
       if (error) throw error;
       return (data ?? []) as any[];
     },
@@ -179,8 +208,7 @@ export default function ReceptionReports() {
     queryKey: ["report-sources", args],
     enabled,
     queryFn: async () => {
-      const { p_clinic_id, ...rest } = args;
-      const { data, error } = await supabase.rpc("app_report_booking_sources", rest);
+      const { data, error } = await supabase.rpc("app_report_booking_sources", args);
       if (error) throw error;
       return (data ?? []) as any[];
     },
@@ -190,28 +218,48 @@ export default function ReceptionReports() {
     queryKey: ["report-no-show", args],
     enabled,
     queryFn: async () => {
-      const { p_clinic_id, ...rest } = args;
-      const { data, error } = await supabase.rpc("app_report_no_show", rest);
+      const { data, error } = await supabase.rpc("app_report_no_show", args);
       if (error) throw error;
       return (data ?? []) as any[];
     },
   });
 
   const repeatNoShow = useQuery({
-    queryKey: ["report-repeat-no-show", organizationId, filters.from, filters.to],
+    queryKey: ["report-repeat-no-show", organizationId, filters],
     enabled,
     queryFn: async () => {
+      // المُرشِّحات الثلاثة صارت مقبولة في 0144: كانت الدالّة تُجمِّع على
+      // المنشأة كلّها فتُعرض قائمة المتخلّفين عن مواعيد عيادةٍ أخرى تحت
+      // مُرشِّح عيادة.
       const { data, error } = await supabase.rpc("app_report_repeat_no_show", {
         p_organization_id: organizationId,
         p_from: filters.from,
         p_to: filters.to,
         p_min_count: 2,
+        p_branch_id: filters.branchId === ALL ? null : filters.branchId,
+        p_doctor_id: filters.doctorId === ALL ? null : filters.doctorId,
+        p_clinic_id: filters.clinicId === ALL ? null : filters.clinicId,
       });
       if (error) throw error;
       return (data ?? []) as any[];
     },
   });
 
+  // أثناء تحميل الصلاحيات لا يُقال شيء قاطع — لا «تسمح» ولا «لا تسمح»
+  if (permissionsLoading) {
+    return <Skeleton className="h-40 w-full" />;
+  }
+  if (permissionsFailed) {
+    return (
+      <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          تعذّر التحقّق من صلاحياتك — هذه ليست رسالة نفي صلاحية. أعد تحميل الصفحة، وإن تكرّر فراجع
+          مدير المنشأة.
+        </span>
+      </div>
+    );
+  }
   if (!can("reports.reception")) {
     return (
       <p className="py-12 text-center text-sm text-muted-foreground">
@@ -220,22 +268,16 @@ export default function ReceptionReports() {
     );
   }
 
-  const cards = [
-    { key: "total", label: "إجمالي المواعيد", status: null },
-    { key: "confirmed", label: "مؤكدة", status: "confirmed" },
-    { key: "unconfirmed", label: "غير مؤكدة", status: "scheduled" },
-    { key: "completed", label: "زيارات مكتملة", status: "completed" },
-    { key: "cancelled", label: "ملغاة", status: "cancelled_by_staff" },
-    { key: "no_show", label: "عدم حضور", status: "no_show" },
-    { key: "walk_in", label: "حضوريون", status: "walk_in" },
-  ];
-
   return (
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base">المرشِّحات</CardTitle>
-          <CardDescription>تُطبَّق على التقارير كلها، وعلى التصدير أيضًا.</CardDescription>
+          <CardDescription>
+            الفترة والفرع والطبيب تُطبَّق على التقارير كلها وعلى التصدير. أمّا العيادة فتُطبَّق على
+            بطاقات المواعيد وتقرير الانتظار فقط — التقارير الثلاثة التي لا تقبلها مكتوب فيها ذلك.
+            وتقرير «متكرّرو عدم الحضور» يتبع الفترة وحدها.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap items-end gap-3">
           <div className="flex flex-col gap-1">
@@ -318,17 +360,19 @@ export default function ReceptionReports() {
 
       {/* بطاقات المواعيد */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
-        {cards.map((card) => (
+        {CARD_STATUSES.map((card) => (
           <button
             key={card.key}
             type="button"
             // الانتقال من الرقم إلى السجلات المكوِّنة له: بطاقة لا يمكن فتحها
             // تجعل الموظف يعيد بناء نفس التصفية يدويًا في شاشة المواعيد.
-            onClick={() =>
-              navigate(
-                `/appointments${card.status ? `?status=${card.status}` : ""}`,
-              )
-            }
+            // الحالات كلها تُمرَّر مفصولة بفاصلة **مع الفترة**، لأن الرقم في
+            // البطاقة محسوب على الفترة لا على اليوم الذي تفتحه تلك الشاشة.
+            onClick={() => {
+              const params = new URLSearchParams({ from: filters.from, to: filters.to });
+              if (card.statuses.length > 0) params.set("status", card.statuses.join(","));
+              navigate(`/appointments?${params.toString()}`);
+            }}
             className="rounded-lg border p-3 text-start transition hover:border-primary hover:bg-primary/5"
           >
             <div className="text-xs text-muted-foreground">{card.label}</div>
@@ -358,7 +402,7 @@ export default function ReceptionReports() {
 
       <ReportTable
         title="تقرير الإشغال"
-        description="الساعات المتاحة من دوام الطبيب المسجَّل. طبيب بلا دوام مسجَّل تظهر نسبته «لا يُعرف» لا صفرًا."
+        description={`الساعات المتاحة من دوام الطبيب المسجَّل. طبيب بلا دوام مسجَّل تظهر نسبته «لا يُعرف» لا صفرًا.`}
         loading={occupancy.isLoading}
         headers={["الطبيب", "ساعات متاحة", "ساعات محجوزة", "نسبة الإشغال %", "ساعات غير مستغلة"]}
         rows={(occupancy.data ?? []).map((row) => [
@@ -373,7 +417,7 @@ export default function ReceptionReports() {
 
       <ReportTable
         title="مصادر الحجز"
-        description="المواعيد بلا مصدر تظهر باسمها الصريح «غير محدَّد» — نصيبها مؤشّر على جودة الإدخال."
+        description={`المواعيد بلا مصدر تظهر باسمها الصريح «غير محدَّد» — نصيبها مؤشّر على جودة الإدخال.`}
         loading={sources.isLoading}
         headers={["المصدر", "العدد", "مكتملة", "عدم حضور", "النسبة %"]}
         rows={(sources.data ?? []).map((row) => [
@@ -388,7 +432,7 @@ export default function ReceptionReports() {
 
       <ReportTable
         title="الإلغاء وعدم الحضور"
-        description="الخسارة تقديرية: متوسط صافي فواتير الطبيب في الفترة × عدد المتغيّبين. ليست خسارة محقّقة."
+        description={`الخسارة تقديرية: متوسط صافي فواتير الطبيب في الفترة × عدد المتغيّبين. ليست خسارة محقّقة.`}
         loading={noShow.isLoading}
         headers={["الطبيب", "إجمالي المواعيد", "عدم حضور", "ملغاة", "نسبة عدم الحضور %", "متوسط الفاتورة", "خسارة تقديرية"]}
         rows={(noShow.data ?? []).map((row) => [
@@ -405,7 +449,7 @@ export default function ReceptionReports() {
 
       <ReportTable
         title="مرضى متكرّرو عدم الحضور"
-        description="مرّتان فأكثر في الفترة المحدَّدة."
+        description="مرّتان فأكثر في الفترة المحدَّدة. هذا التقرير يتبع الفترة وحدها: دالّته لا تقبل الفرع ولا الطبيب ولا العيادة."
         loading={repeatNoShow.isLoading}
         headers={["المريض", "رقم الملف", "الجوال", "مرات عدم الحضور", "آخر مرة"]}
         rows={(repeatNoShow.data ?? []).map((row) => [
@@ -422,7 +466,8 @@ export default function ReceptionReports() {
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
         <span>
           كل الأرقام محسوبة في قاعدة البيانات بالمنطقة الزمنية للمنشأة، وبنفس تعريف الانتظار
-          المستعمل في لوحة الاستقبال. والتصدير يحترم المرشِّحات نفسها.
+          المستعمل في لوحة الاستقبال. والتصدير يحترم المرشِّحات المطبَّقة على كل تقرير كما هي
+          مذكورة في وصفه — لا مرشّح يعمل في الشاشة ولا يعمل في الملف.
         </span>
       </div>
     </div>

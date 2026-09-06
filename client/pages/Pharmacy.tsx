@@ -650,7 +650,7 @@ function usePrescriptionsList(organizationId: string | undefined, statusFilter: 
       let query = supabase
         .from("prescriptions")
         .select(
-          "id, status, issued_at, notes, insurance_company_name, insurance_policy_number, is_billed, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug:items!prescription_items_drug_item_id_fkey(name_ar, price))",
+          "id, status, issued_at, notes, insurance_company_name, insurance_policy_number, is_billed, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug:items!prescription_items_drug_item_id_fkey(name_ar)), dispensing_records(id, status, dispensing_items(id, prescription_item_id, quantity_dispensed, unit_price))",
         )
         .eq("organization_id", organizationId)
         .order("issued_at", { ascending: false })
@@ -677,7 +677,17 @@ type PrescriptionListRow = {
     id: string;
     quantity_prescribed: number;
     dispensed_quantity: number | null;
-    drug: { name_ar: string; price: number | null } | null;
+    drug: { name_ar: string } | null;
+  }[];
+  dispensing_records: {
+    id: string;
+    status: string;
+    dispensing_items: {
+      id: string;
+      prescription_item_id: string | null;
+      quantity_dispensed: number;
+      unit_price: number | null;
+    }[];
   }[];
 };
 
@@ -689,12 +699,77 @@ const PRESCRIPTION_STATUS_LABELS: Record<string, string> = {
   cancelled: "ملغاة",
 };
 
-/** إجمالي سعر الوصفة = مجموع (الكمية الموصوفة × سعر الدواء) لكل بند. */
-function prescriptionTotal(row: PrescriptionListRow) {
-  return (row.prescription_items ?? []).reduce((sum, line) => {
-    const drug = Array.isArray(line.drug) ? line.drug[0] : line.drug;
-    return sum + Number(line.quantity_prescribed ?? 0) * Number(drug?.price ?? 0);
-  }, 0);
+/**
+ * مبلغ الوصفة = قيمة **ما صُرف فعلًا** بسعر دفعته المسجَّل في `dispensing_items`.
+ *
+ * كان يُحسب سابقًا: الكمية الموصوفة × `items.price`. وذلك خطأ من وجهين:
+ * • الصرف يُسعّر من الدفعة (`app_dispense_prescription` تكتب
+ *   `unit_price = coalesce(lot.selling_price, item.price, 0)`)، فكانت الشاشة
+ *   تعرض مبلغين مختلفين للوصفة نفسها: عمود «الإجمالي» وسجلّ الصرف.
+ * • `items.price` ليس سعر مريض التأمين: السعر يمرّ بسُلَّم
+ *   `app_resolve_item_price_v2` (تأمين ← عقد ← فرع ← أساس). فكان المؤمَّن
+ *   تُطبَع له ورقة بمبلغ ليس هو ما سيُحصَّل.
+ *
+ * وما لم يُصرف بعد لا يُسعَّر هنا تخمينًا: سعره يُحسم عند الصرف/الفوترة، ويُعرض
+ * ككمية معلّقة لا كمال. (إظهار مبلغ متوقَّع قبل الصرف يحتاج منظورًا/دالّة في
+ * القاعدة تُطبّق سُلَّم الأسعار على بنود الوصفة.)
+ */
+function dispensedAmount(row: PrescriptionListRow) {
+  return (row.dispensing_records ?? [])
+    .filter((rec) => rec.status !== "cancelled")
+    .reduce(
+      (sum, rec) =>
+        sum +
+        (rec.dispensing_items ?? []).reduce(
+          (lineSum, it) => lineSum + Number(it.quantity_dispensed ?? 0) * Number(it.unit_price ?? 0),
+          0,
+        ),
+      0,
+    );
+}
+
+/**
+ * الكمية المصروفة فعلًا — لا الموصوفة. تُستعمل لتمييز «مصروف غير مفوتر» عن
+ * «لم يُصرف»: الأول دواءٌ خرج من المخزون ويجب أن يُفوتَر، والثاني لا شيء عليه
+ * بعد. (لا تُقاس بالمبلغ: دواء بسعر دفعة صفر مصروفٌ كذلك.)
+ */
+function dispensedQuantity(row: PrescriptionListRow) {
+  return (row.dispensing_records ?? [])
+    .filter((rec) => rec.status !== "cancelled")
+    .reduce(
+      (sum, rec) =>
+        sum +
+        (rec.dispensing_items ?? []).reduce(
+          (lineSum, it) => lineSum + Number(it.quantity_dispensed ?? 0),
+          0,
+        ),
+      0,
+    );
+}
+
+/** الكمية الموصوفة التي لم تُصرف بعد — تُعرض ككمية لأن سعرها غير محسوم. */
+function pendingQuantity(row: PrescriptionListRow) {
+  return (row.prescription_items ?? []).reduce(
+    (sum, line) =>
+      sum + Math.max(0, Number(line.quantity_prescribed ?? 0) - Number(line.dispensed_quantity ?? 0)),
+    0,
+  );
+}
+
+/** الكمية المصروفة والمبلغ الفعليّ لكل بند، من `dispensing_items` لا من سعر الصنف. */
+function dispensedByLine(row: PrescriptionListRow) {
+  const byLine = new Map<string, { quantity: number; amount: number }>();
+  for (const rec of row.dispensing_records ?? []) {
+    if (rec.status === "cancelled") continue;
+    for (const it of rec.dispensing_items ?? []) {
+      if (!it.prescription_item_id) continue;
+      const current = byLine.get(it.prescription_item_id) ?? { quantity: 0, amount: 0 };
+      current.quantity += Number(it.quantity_dispensed ?? 0);
+      current.amount += Number(it.quantity_dispensed ?? 0) * Number(it.unit_price ?? 0);
+      byLine.set(it.prescription_item_id, current);
+    }
+  }
+  return byLine;
 }
 
 function escapeHtml(value: string) {
@@ -706,13 +781,17 @@ function escapeHtml(value: string) {
 function printPrescriptions(rows: PrescriptionListRow[], organizationName: string) {
   const body = rows
     .map((row) => {
+      const dispensed = dispensedByLine(row);
       const lines = (row.prescription_items ?? [])
         .map((line) => {
           const drug = Array.isArray(line.drug) ? line.drug[0] : line.drug;
-          const lineTotal = Number(line.quantity_prescribed ?? 0) * Number(drug?.price ?? 0);
-          return `<tr><td>${escapeHtml(drug?.name_ar ?? "—")}</td><td>${line.quantity_prescribed}</td><td>${Number(
-            drug?.price ?? 0,
-          ).toFixed(2)}</td><td>${lineTotal.toFixed(2)}</td></tr>`;
+          // المبلغ من الصرف الفعليّ فقط؛ البند غير المصروف يُطبَع بلا مبلغ بدل
+          // مبلغٍ بسعر الصنف لا يُحصَّل (خاصة لمريض التأمين).
+          const done = dispensed.get(line.id);
+          const amount = done?.amount ?? 0;
+          return `<tr><td>${escapeHtml(drug?.name_ar ?? "—")}</td><td>${line.quantity_prescribed}</td><td>${
+            done?.quantity ?? 0
+          }</td><td>${done && done.quantity > 0 ? amount.toFixed(2) : "لم يُصرف بعد"}</td></tr>`;
         })
         .join("");
       return `<section style="page-break-inside:avoid;margin-bottom:24px;border-bottom:1px solid #ccc;padding-bottom:12px">
@@ -733,12 +812,19 @@ function printPrescriptions(rows: PrescriptionListRow[], organizationName: strin
             : ""
         }
         <table style="width:100%;border-collapse:collapse;font-size:13px" border="1" cellpadding="4">
-          <thead><tr><th>الدواء</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr></thead>
+          <thead><tr><th>الدواء</th><th>الموصوف</th><th>المصروف</th><th>قيمة المصروف</th></tr></thead>
           <tbody>${lines}</tbody>
         </table>
-        <p style="margin:6px 0 0;font-size:13px;font-weight:bold">إجمالي الوصفة: ${prescriptionTotal(row).toFixed(
+        <p style="margin:6px 0 0;font-size:13px;font-weight:bold">قيمة ما صُرف: ${dispensedAmount(row).toFixed(
           2,
         )}</p>
+        ${
+          pendingQuantity(row) > 0
+            ? `<p style="margin:2px 0 0;font-size:12px">لم يُصرف بعد: ${pendingQuantity(
+                row,
+              )} وحدة — تُسعَّر عند الصرف حسب قائمة أسعار المريض، وهذه الورقة ليست فاتورة.</p>`
+            : ""
+        }
       </section>`;
     })
     .join("");
@@ -796,31 +882,20 @@ function PrescriptionsTab() {
       }),
   });
 
-  const toggleBilled = useMutation({
-    mutationFn: async (row: PrescriptionListRow) => {
-      const { data: affectedRows, error } = await supabase
-        .from("prescriptions")
-        .update({ is_billed: !row.is_billed })
-        .eq("id", row.id)
-        .select("id");
-      if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["prescriptions-list"] });
-      toast({ title: "تم تحديث حالة الفوترة" });
-    },
-    onError: (error: unknown) =>
-      toast({
-        variant: "destructive",
-        title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
-      }),
-  });
-
+  /**
+   * **حُذف زرّ «لم تُفوتَر / تمت الفوترة»** الذي كان هنا.
+   *
+   * لماذا كان خطأً قاتلًا: الزرّ كان يقلب `prescriptions.is_billed` بتحديث
+   * مباشر — علمٌ منطقي لا يُنشئ فاتورة ولا بندًا ولا إيرادًا ولا قيدًا. فكان
+   * الصيدليّ يصرف الدواء (المخزون ينقص فعلًا)، يضغط «تمت الفوترة»، فيرى الصفّ
+   * أخضر ويطمئن — ولا مال حُصِّل، ولا مستند ضريبي صدر. والأسوأ أن قلبه إلى
+   * `true` كان **يُخفي** الوصفة عن قائمة «أدوية مصروفة غير مفوترة» في شاشة
+   * الفوترة (وعن المنظور `v_unbilled_dispensed_prescriptions` الذي يشترط
+   * `is_billed = false`) — فيمحو الأثر الوحيد الدالّ على إيراد لم يُحصَّل.
+   *
+   * الآن: الحالة **تُعرَض** للصيدليّ ولا تُحرَّر. و`is_billed` لا يكتبها إلا
+   * `app_create_sales_invoice` داخل معاملة الفاتورة.
+   */
   const rows = prescriptions.data ?? [];
 
   return (
@@ -828,7 +903,10 @@ function PrescriptionsTab() {
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3">
         <div>
           <CardTitle>الوصفات</CardTitle>
-          <CardDescription>كل الوصفات الصادرة مع حالة الصرف والفوترة وبيانات التأمين</CardDescription>
+          <CardDescription>
+            كل الوصفات الصادرة مع حالة الصرف والفوترة وبيانات التأمين — والمبلغ هو قيمة ما صُرف فعلًا
+            بسعر دفعته، لا تقديرًا بسعر الصنف
+          </CardDescription>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -870,7 +948,7 @@ function PrescriptionsTab() {
                 <TableHead>الطبيب</TableHead>
                 <TableHead>الحالة</TableHead>
                 <TableHead>الأدوية</TableHead>
-                <TableHead>الإجمالي</TableHead>
+                <TableHead>قيمة المصروف</TableHead>
                 <TableHead>التأمين</TableHead>
                 <TableHead>الفوترة</TableHead>
               </TableRow>
@@ -907,16 +985,32 @@ function PrescriptionsTab() {
                     <TableCell className="text-xs tabular-nums">
                       {dispensed} / {(row.prescription_items ?? []).length}
                     </TableCell>
-                    <TableCell className="tabular-nums">{prescriptionTotal(row).toFixed(2)}</TableCell>
+                    <TableCell className="tabular-nums">
+                      {dispensedAmount(row).toFixed(2)}
+                      {pendingQuantity(row) > 0 && (
+                        <span className="block text-[10px] text-muted-foreground">
+                          + {pendingQuantity(row)} لم تُصرف (تُسعَّر عند الصرف)
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {row.insurance_company_name ?? "—"}
                       {row.insurance_policy_number ? ` · ${row.insurance_policy_number}` : ""}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
-                        <Button size="sm" variant={row.is_billed ? "outline" : "ghost"} onClick={() => toggleBilled.mutate(row)}>
-                          {row.is_billed ? "تمت الفوترة" : "لم تُفوتَر"}
-                        </Button>
+                        {row.is_billed ? (
+                          <Badge variant="success">مفوترة</Badge>
+                        ) : dispensedQuantity(row) > 0 ? (
+                          <div className="flex flex-col gap-0.5">
+                            <Badge variant="warning">مصروف غير مفوتر</Badge>
+                            <span className="text-[10px] text-muted-foreground">
+                              يُفوتَر من شاشة الفوترة
+                            </span>
+                          </div>
+                        ) : (
+                          <Badge variant="secondary">لم يُصرف</Badge>
+                        )}
                         {can("pharmacy.prescribe") &&
                           !["cancelled", "dispensed"].includes(row.status) && (
                             <Button size="sm" variant="ghost" onClick={() => setCancelRow(row)}>
@@ -992,7 +1086,15 @@ function NewPrescriptionDialog({
    */
   const [insuranceCompany, setInsuranceCompany] = useState("");
   const [insurancePolicy, setInsurancePolicy] = useState("");
-  const [isBilled, setIsBilled] = useState(false);
+  /**
+   * **حُذفت خانة «تمت الفوترة»** من هذه النافذة.
+   *
+   * كانت تكتب `is_billed = true` على وصفة **لم تُصرف ولم تُفوتَر بعد**، فتُخرجها
+   * من `v_unbilled_dispensed_prescriptions` نهائيًا: الدواء يُصرف لاحقًا وينقص
+   * المخزون ولا يظهر في قائمة «أدوية مصروفة غير مفوترة» أبدًا. علمُ الفوترة
+   * نتيجةُ إصدار فاتورة لا مُدخَل من مُصدِر الوصفة، وتضعه القاعدة وحدها داخل
+   * معاملة `app_create_sales_invoice` — والعمود `not null default false`.
+   */
   const [lines, setLines] = useState<
     { drugId: string; instructions: string; frequency: string; durationDays: string; quantity: string; route: PrescriptionRoute }[]
   >([]);
@@ -1015,7 +1117,6 @@ function NewPrescriptionDialog({
           status: "issued",
           insurance_company_name: insuranceCompany.trim() || null,
           insurance_policy_number: insurancePolicy.trim() || null,
-          is_billed: isBilled,
         })
         .select("id")
         .single();
@@ -1035,14 +1136,17 @@ function NewPrescriptionDialog({
       if (itemsError) throw itemsError;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["pending-prescriptions", organizationId] });
+      // مفتاح طابور الصرف هو ["pharmacy-queue", …] كما في `usePendingPrescriptions`.
+      // كان المفتاح المبطَّل هنا ["pending-prescriptions", …] ولا يستخدمه أي
+      // استعلام، فلا تظهر الوصفة الجديدة في تبويب «الصرف» حتى تحديث الصفحة —
+      // فيظنّ المُصدِر أن الحفظ فشل ويُصدر وصفة ثانية لنفس المريض.
+      queryClient.invalidateQueries({ queryKey: ["pharmacy-queue", organizationId] });
       queryClient.invalidateQueries({ queryKey: ["prescriptions-list"] });
       toast({ title: "تم إصدار الوصفة" });
       setPatient(null);
       setDoctorId("");
       setInsuranceCompany("");
       setInsurancePolicy("");
-      setIsBilled(false);
       setLines([]);
       onOpenChange(false);
     },
@@ -1110,10 +1214,10 @@ function NewPrescriptionDialog({
               />
             </div>
           </div>
-          <label className="flex cursor-pointer items-center gap-2 text-sm">
-            <input type="checkbox" className="h-4 w-4" checked={isBilled} onChange={(e) => setIsBilled(e.target.checked)} />
-            تمت الفوترة
-          </label>
+          <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            الوصفة تُصدر غير مفوترة. ما يُصرف منها يظهر في «أدوية مصروفة غير مفوترة» بشاشة
+            الفوترة، ويُختَم «مفوترة» بإصدار الفاتورة من هناك.
+          </p>
 
           <Separator />
           <div className="flex items-center justify-between">
@@ -1603,6 +1707,14 @@ function DispenseDialog({
             const info = stock.data?.[line.drug_item_id];
             const available = info?.available ?? 0;
             const short = warehouseId && available < remaining;
+            /**
+             * `available || remaining` كان يسقط الحدّ كلّه عند انعدام الرصيد:
+             * الصفر قيمة كاذبة في جافاسكربت فيصير الحدّ = المتبقّي من الوصفة.
+             * فيملأ زرّ «الأقصى» كميةً غير موجودة، ويرفع `app_fefo_lots` استثناءً
+             * فتفشل المعاملة كلّها — بما فيها الأسطر التي لها رصيد.
+             */
+            const maxDispensable = warehouseId ? Math.min(remaining, available) : remaining;
+            const noStock = Boolean(warehouseId) && available === 0;
             return (
               <div key={line.id} className="flex flex-col gap-2 rounded-md border p-3">
                 <div className="flex items-center justify-between">
@@ -1619,18 +1731,20 @@ function DispenseDialog({
                   <Input
                     type="number"
                     min={0}
-                    max={Math.min(remaining, available || remaining)}
-                    placeholder="الكمية المصروفة"
+                    max={maxDispensable}
+                    disabled={noStock}
+                    placeholder={noStock ? "لا رصيد" : "الكمية المصروفة"}
                     value={quantities[line.id] ?? ""}
                     onChange={(e) => setQuantities((prev) => ({ ...prev, [line.id]: e.target.value }))}
                   />
                   <Button
                     size="sm"
                     variant="ghost"
+                    disabled={noStock || maxDispensable <= 0}
                     onClick={() =>
                       setQuantities((prev) => ({
                         ...prev,
-                        [line.id]: String(Math.min(remaining, available || remaining)),
+                        [line.id]: String(maxDispensable),
                       }))
                     }
                   >
@@ -1642,9 +1756,10 @@ function DispenseDialog({
                     المتاح أقلّ من المتبقّي — الصرف الجزئي مسموح، والباقي يبقى على الوصفة.
                   </p>
                 )}
-                {warehouseId && available === 0 && (
+                {noStock && (
                   <p className="text-xs text-destructive">
-                    لا رصيد صالح لهذا الدواء في هذا المستودع — راجع الدفعات وتواريخ الانتهاء.
+                    لا رصيد صالح لهذا الدواء في هذا المستودع — راجع الدفعات وتواريخ الانتهاء. حقل الكمية
+                    معطَّل لهذا السطر حتى لا يفشل الصرف كلّه.
                   </p>
                 )}
               </div>

@@ -174,6 +174,23 @@ export default function ServiceEditorDialog({
       setDraft(EMPTY_DRAFT);
       setBranchIds([]);
       setResourceIds([]);
+      /**
+       * كود قصير مقترَح للخدمة الجديدة (رقمان أو ثلاثة).
+       *
+       * الكود كان حقلًا إلزاميًا يُكتب يدويًا بلا نمط، فتنشأ أكواد طويلة لا
+       * يحفظها الاستقبال — وهو الذي يبحث بالكود عند الفوترة. الدالّة تُعطي
+       * أصغر رقم حرّ في المنشأة (تتحقّق من المنتجات كذلك لأن التفرّد على
+       * المنشأة لا على النوع)، والاقتراح قابل للتعديل.
+       */
+      if (organizationId) {
+        void (async () => {
+          const { data, error } = await supabase.rpc("app_next_short_item_code", {
+            p_organization_id: organizationId,
+          });
+          // تعذّر التوليد لا يمنع إنشاء الخدمة — يُكتب الكود يدويًا
+          if (!error && data) setDraft((prev) => ({ ...prev, code: String(data) }));
+        })();
+      }
       return;
     }
     if (existing.data) {
@@ -191,7 +208,7 @@ export default function ServiceEditorDialog({
       setBranchIds(existing.data.branchIds);
       setResourceIds(existing.data.resourceIds);
     }
-  }, [open, isNew, existing.data]);
+  }, [open, isNew, existing.data, organizationId]);
 
   const branches = useQuery({
     queryKey: ["catalog-branches", organizationId],
@@ -422,8 +439,39 @@ export default function ServiceEditorDialog({
                   onChange={(e) => set("name_en", e.target.value)}
                 />
               </Field>
-              <Field label="الكود">
-                <Input value={draft.code} disabled={!canManage} onChange={(e) => set("code", e.target.value)} />
+              <Field label="الكود (رقمان أو ثلاثة ليسهل حفظه)">
+                <div className="flex gap-2">
+                  <Input
+                    value={draft.code}
+                    dir="ltr"
+                    disabled={!canManage}
+                    onChange={(e) => set("code", e.target.value)}
+                  />
+                  {canManage && organizationId && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      title="أصغر كود قصير حرّ في المنشأة"
+                      onClick={async () => {
+                        const { data, error } = await supabase.rpc("app_next_short_item_code", {
+                          p_organization_id: organizationId,
+                        });
+                        if (error) {
+                          toast({
+                            variant: "destructive",
+                            title: "تعذر توليد كود قصير",
+                            description: error.message,
+                          });
+                          return;
+                        }
+                        if (data) set("code", String(data));
+                      }}
+                    >
+                      كود قصير
+                    </Button>
+                  )}
+                </div>
               </Field>
               <Field label="الباركود">
                 <Input
@@ -457,6 +505,8 @@ export default function ServiceEditorDialog({
                   value={draft.category_value_id}
                   onChange={(value) => set("category_value_id", value)}
                   placeholder="بدون فئة"
+                  allowClear
+                  clearLabel="بدون فئة"
                 />
               </Field>
             </div>

@@ -40,8 +40,13 @@ function useEmployeesList(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("employees")
         .select("id, name_ar")
+        // النشط غير المعطَّل فقط، مطابقًا لشرط `app_calculate_payroll_run`
+        // (`status='active'` **و** `is_disabled=false`): موظّفٌ معطَّل أو انتهت
+        // خدمته يُقبل في قائمة الاختيار ثمّ يستثنيه المسيّر، فيبدو المُسند
+        // مسجَّلًا وهو لا يُحتسب.
         .eq("organization_id", organizationId)
         .eq("status", "active")
+        .eq("is_disabled", false)
         .order("name_ar");
       if (error) throw error;
       return (data as { id: string; name_ar: string }[]) ?? [];
@@ -232,6 +237,10 @@ function EnrollmentsTab({ organizationId }: { organizationId: string | undefined
       invalidate();
       toast({ title: "تم تسجيل الإتمام" });
     },
+    // بلا `onError` يفشل «تسجيل إتمام» صامتًا: الرسالة تُرفَع ولا يعرضها أحد
+    // (`QueryClient` في App.tsx بلا معالج أخطاء افتراضيّ)، فلا يعرف المستخدم
+    // أن العملية رُفضت ويعيد المحاولة ظانًّا الشاشة معلَّقة.
+    onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
 
   return (

@@ -16,6 +16,7 @@ import NotificationBell from "./NotificationBell";
 import SectionGuideButton from "./SectionGuideButton";
 import { guideKeyForPath } from "@/lib/section-guides";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { supabase } from "@/lib/supabase";
 import { useLiveBadgeCounts, formatBadgeNumber } from "@/hooks/use-live-badges";
 import { demoRoleAllowsModule, demoRoleLabel } from "@/lib/demo-role";
 import { useDemoRole } from "@/contexts/DemoRoleContext";
@@ -284,6 +285,122 @@ function useCurrentModuleAccess() {
   }, [canAccess, location.pathname, role]);
 }
 
+/**
+ * بحث الترويسة — موصول ببحث ملفات المرضى.
+ *
+ * كان المربّع بلا `value` ولا `onChange` ولا `onSubmit`: عنصر واجهة كامل في
+ * أعلى كل شاشة لا يفعل شيئًا، ونصّه يوعد ببحث المواعيد والفواتير أيضًا. الآن
+ * يبحث فعلًا — في ملفات المرضى وحدها، ونصّه يقول ذلك بدل أن يوعد بما لا يقع.
+ *
+ * القراءة من `v_patient_directory` لا من `patients`: المنظور يُخفي الهوية
+ * والجوال في القاعدة لمن لا يملك `patients.view_identity`، فالإخفاء لا يكون
+ * شكليًّا في الواجهة. والمربّع نفسه لا يظهر لمن لا يملك صلاحية شاشة المرضى.
+ */
+type HeaderSearchResult = {
+  id: string;
+  name_ar: string;
+  file_number: number | null;
+  phone_1: string | null;
+};
+
+function HeaderSearch() {
+  const navigate = useNavigate();
+  const { organization, canAccess } = useOrganizationAccess();
+  const allowed = canAccess("patients", "patients.view");
+  const [term, setTerm] = useState("");
+  const [results, setResults] = useState<HeaderSearchResult[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    if (!allowed || !organization?.id || term.trim().length < 2) {
+      setResults([]);
+      setError(null);
+      return;
+    }
+    const handle = setTimeout(async () => {
+      setLoading(true);
+      const value = term.trim();
+      const numeric = /^\d+$/.test(value);
+      const query = supabase
+        .from("v_patient_directory")
+        .select("id, name_ar, file_number, phone_1")
+        // التقييد بالمنشأة النشطة: RLS يسمح بكل منشأة ينتمي إليها المستخدم.
+        .eq("organization_id", organization.id)
+        .limit(8);
+      const { data, error: queryError } = numeric
+        ? await query.or(`file_number.eq.${value},phone_1.ilike.%${value}%`)
+        : await query.ilike("name_ar", `%${value}%`);
+      // نفيُ وجود المريض عند فشل الاستعلام أخطر من رسالة خطأ: يدفع الموظّف إلى
+      // فتح ملفّ ثانٍ لمريض موجود.
+      setError(queryError ? queryError.message : null);
+      setResults(queryError ? [] : ((data as HeaderSearchResult[]) ?? []));
+      setLoading(false);
+    }, 300);
+    return () => clearTimeout(handle);
+  }, [term, organization?.id, allowed]);
+
+  if (!allowed) return <div className="hidden flex-1 sm:block" />;
+
+  const goTo = (id: string) => {
+    setTerm("");
+    setResults([]);
+    setOpen(false);
+    navigate(`/patients/${id}`);
+  };
+
+  return (
+    <div className="relative hidden flex-1 sm:block">
+      <div className="flex items-center gap-2 rounded-lg border bg-muted/40 px-3 py-1.5">
+        <Search className="h-4 w-4 text-muted-foreground" />
+        <input
+          dir="rtl"
+          value={term}
+          onChange={(event) => {
+            setTerm(event.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setOpen(false);
+            // Enter يفتح أول نتيجة: الضغط عليه كان بلا أثر إطلاقًا.
+            if (event.key === "Enter" && results[0]) goTo(results[0].id);
+          }}
+          placeholder="بحث عن مريض بالاسم أو رقم الجوال أو رقم الملف..."
+          className="flex-1 bg-transparent text-start text-sm outline-none placeholder:text-muted-foreground"
+        />
+      </div>
+
+      {open && term.trim().length >= 2 && (
+        <div className="absolute z-50 mt-1 w-full rounded-lg border bg-popover p-1 shadow-lg">
+          {loading && <p className="px-3 py-2 text-xs text-muted-foreground">جارٍ البحث...</p>}
+          {error && <p className="px-3 py-2 text-xs text-destructive">تعذّر البحث: {error}</p>}
+          {!loading && !error && results.length === 0 && (
+            <p className="px-3 py-2 text-xs text-muted-foreground">لا مريض مطابق.</p>
+          )}
+          {results.map((row) => (
+            <button
+              key={row.id}
+              type="button"
+              onClick={() => goTo(row.id)}
+              className="flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-start text-sm hover:bg-muted"
+            >
+              <span className="truncate">{row.name_ar}</span>
+              <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                #{row.file_number ?? "—"} · {row.phone_1 ?? "—"}
+              </span>
+            </button>
+          ))}
+          <p className="border-t px-3 py-1.5 text-[10px] text-muted-foreground">
+            البحث يغطّي ملفات المرضى فقط في هذه المرحلة — المواعيد والفواتير من شاشتيهما.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
@@ -323,14 +440,7 @@ export default function AppShell() {
             <Menu className="h-5 w-5" />
           </Button>
 
-          <div className="hidden flex-1 items-center gap-2 rounded-lg border bg-muted/40 px-3 py-1.5 sm:flex">
-            <Search className="h-4 w-4 text-muted-foreground" />
-            <input
-              dir="rtl"
-              placeholder="بحث عن مريض، موعد، فاتورة..."
-              className="flex-1 bg-transparent text-start text-sm outline-none placeholder:text-muted-foreground"
-            />
-          </div>
+          <HeaderSearch />
           <div className="flex-1 sm:hidden" />
 
           {role && (

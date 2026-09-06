@@ -1,7 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { MonitorCog, Download, Info, HardDriveDownload } from "lucide-react";
-import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -9,7 +7,6 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 
 /**
@@ -25,19 +22,21 @@ import { useToast } from "@/hooks/use-toast";
  */
 const STORAGE_KEY = "zaincare-device-settings";
 
+/**
+ * حُذفت أربع تفضيلات كانت تُحفظ ولا تقرؤها أي شاشة: «عدد الصفوف في الصفحة»،
+ * و«المستودع الافتراضي»، و«العيادة الافتراضية»، و«مقاس الورق لهذا الجهاز»
+ * (`rowsPerPage`/`defaultWarehouseId`/`defaultClinicId`/`paperOverride` — صفر
+ * مرجع خارج هذا الملفّ). كان المستخدم يضبط مقاس الورق لجهاز الاستقبال ويطبع
+ * على المقاس الخطأ وهو واثق أنه ضبطه؛ فإعدادٌ صامت أسوأ من غيابه. يبقى «اسم
+ * الجهاز» وهو الحقل الموصول فعلًا (يُرسَل ترويسة `x-device-name` ويظهر في سجل
+ * التدقيق). تُعاد أيّ منها متى وُصلت بقارئها الحقيقي (المقاس في دمج المستندات،
+ * والمستودع/العيادة كقيمة أولية في نماذج الصرف والحجز).
+ */
 type DeviceSettings = {
-  defaultWarehouseId: string;
-  defaultClinicId: string;
-  paperOverride: "" | "a4" | "thermal_80mm";
-  rowsPerPage: string;
   deviceName: string;
 };
 
 const DEFAULTS: DeviceSettings = {
-  defaultWarehouseId: "",
-  defaultClinicId: "",
-  paperOverride: "",
-  rowsPerPage: "50",
   deviceName: "",
 };
 
@@ -94,7 +93,6 @@ function toCsv(rows: Record<string, unknown>[]) {
 }
 
 export default function DeviceSettings() {
-  const { organization } = useOrganizationAccess();
   const { toast } = useToast();
   const [settings, setSettings] = useState<DeviceSettings>(DEFAULTS);
   const [exporting, setExporting] = useState<string | null>(null);
@@ -102,36 +100,6 @@ export default function DeviceSettings() {
   // القراءة في تأثير لا في القيمة الأولية: التقديم من الخادم (SSR) لا يملك
   // window، والقراءة المباشرة كانت ستنهار قبل الوصول للمتصفح.
   useEffect(() => setSettings(readDeviceSettings()), []);
-
-  const warehouses = useQuery({
-    queryKey: ["device-warehouses", organization?.id],
-    enabled: Boolean(organization?.id),
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("warehouses")
-        .select("id, name")
-        .eq("organization_id", organization?.id)
-        .eq("is_disabled", false)
-        .order("name");
-      if (error) throw error;
-      return (data ?? []) as { id: string; name: string }[];
-    },
-  });
-
-  const clinics = useQuery({
-    queryKey: ["device-clinics", organization?.id],
-    enabled: Boolean(organization?.id),
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("clinics")
-        .select("id, name")
-        .eq("organization_id", organization?.id)
-        .eq("is_disabled", false)
-        .order("name");
-      if (error) throw error;
-      return (data ?? []) as { id: string; name: string }[];
-    },
-  });
 
   const save = () => {
     if (writeDeviceSettings(settings)) toast({ title: "حُفظت إعدادات هذا الجهاز" });
@@ -206,7 +174,7 @@ export default function DeviceSettings() {
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="flex flex-col gap-1.5">
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
               <Label>اسم الجهاز</Label>
               <Input
                 value={settings.deviceName}
@@ -214,91 +182,17 @@ export default function DeviceSettings() {
                 placeholder="استقبال 1"
               />
               <p className="text-xs text-muted-foreground">
-                يُعرض في سجل التدقيق مع العمليات المنفَّذة من هذا الجهاز.
+                يُعرض في سجل التدقيق مع العمليات المنفَّذة من هذا الجهاز — ويسري على الطلبات بعد
+                تحديث الصفحة (يُقرأ مرة عند إقلاع التطبيق).
               </p>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>عدد الصفوف في الصفحة</Label>
-              <Select
-                value={settings.rowsPerPage}
-                onValueChange={(value) => setSettings((prev) => ({ ...prev, rowsPerPage: value }))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {["25", "50", "100", "200"].map((value) => (
-                    <SelectItem key={value} value={value}>
-                      {value}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>المستودع الافتراضي</Label>
-              <Select
-                value={settings.defaultWarehouseId || "none"}
-                onValueChange={(value) =>
-                  setSettings((prev) => ({ ...prev, defaultWarehouseId: value === "none" ? "" : value }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="بدون" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">بدون</SelectItem>
-                  {(warehouses.data ?? []).map((warehouse) => (
-                    <SelectItem key={warehouse.id} value={warehouse.id}>
-                      {warehouse.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>العيادة الافتراضية</Label>
-              <Select
-                value={settings.defaultClinicId || "none"}
-                onValueChange={(value) =>
-                  setSettings((prev) => ({ ...prev, defaultClinicId: value === "none" ? "" : value }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="بدون" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">بدون</SelectItem>
-                  {(clinics.data ?? []).map((clinic) => (
-                    <SelectItem key={clinic.id} value={clinic.id}>
-                      {clinic.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex flex-col gap-1.5 sm:col-span-2">
-              <Label>مقاس الورق لهذا الجهاز</Label>
-              <Select
-                value={settings.paperOverride || "org"}
-                onValueChange={(value) =>
-                  setSettings((prev) => ({
-                    ...prev,
-                    paperOverride: value === "org" ? "" : (value as "a4" | "thermal_80mm"),
-                  }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="org">حسب إعداد المنشأة</SelectItem>
-                  <SelectItem value="a4">A4</SelectItem>
-                  <SelectItem value="thermal_80mm">حراري 80mm</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
           </div>
+
+          <p className="text-xs text-muted-foreground">
+            مقاس الورق لهذا الجهاز والمستودع/العيادة الافتراضيان وعدد الصفوف: أُزيلت من هذه
+            الشاشة لأنها كانت تُحفظ ولا تقرؤها أي شاشة — فالطباعة تتبع إعداد المنشأة من تبويب
+            «الطباعة» في إعدادات التشغيل.
+          </p>
 
           <Button className="self-start" onClick={save}>
             حفظ إعدادات الجهاز

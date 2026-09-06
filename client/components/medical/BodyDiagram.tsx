@@ -3,6 +3,16 @@ import { Eraser, Undo2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 
 /**
  * مخطط الجسم التفاعلي لعيادة الجلدية (لقطة 117).
@@ -124,6 +134,8 @@ export default function BodyDiagram({
   const [color, setColor] = useState(COLORS[0].value);
   const [width, setWidth] = useState(WIDTHS[1]);
   const [drawing, setDrawing] = useState(false);
+  /** المنظر الذي يُنتقل إليه بانتظار تأكيد المستخدم (الرسم الحالي سيُفقد). */
+  const [pendingView, setPendingView] = useState<BodyDiagramView | null>(null);
 
   /** يحوّل إحداثيات المؤشر إلى نسبة 0-1 من أبعاد المخطط. */
   const relativePoint = (event: React.PointerEvent<SVGSVGElement>) => {
@@ -165,6 +177,31 @@ export default function BodyDiagram({
 
   return (
     <div className="flex flex-col gap-3">
+      <AlertDialog open={pendingView !== null} onOpenChange={(open) => !open && setPendingView(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>الانتقال يمحو الرسم الحالي</AlertDialogTitle>
+            <AlertDialogDescription>
+              المخطّط يحفظ منظرًا واحدًا لكل زيارة، فالانتقال إلى «
+              {pendingView ? VIEW_LABELS[pendingView] : ""}» يمحو{" "}
+              {value.strokes.length} علامة مرسومة على «{VIEW_LABELS[value.view]}» ولا
+              تُستعاد. احفظ الزيارة أولًا إن أردت الإبقاء على هذا الرسم.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>تراجع</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingView) onChange({ view: pendingView, strokes: [] });
+                setPendingView(null);
+              }}
+            >
+              انتقل وامسح الرسم
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex gap-1">
           {(Object.keys(VIEW_LABELS) as BodyDiagramView[]).map((view) => (
@@ -173,10 +210,20 @@ export default function BodyDiagram({
               type="button"
               size="sm"
               variant={value.view === view ? "default" : "outline"}
-              // الضغط على المنظر النشط نفسه كان يمسح كل الرسم بلا تأكيد ولا
-              // تراجع (undo يزيل آخر خط فقط) — فنقرة زائدة تُفقد عمل الطبيب.
+              /**
+               * تبديل المنظر يُصفّر `strokes` لأن بنية البيانات تحمل منظرًا
+               * واحدًا (`{ view, strokes }`) و`app_save_visit` يكتب صفًّا
+               * لمنظر واحد. فكان طبيب الجلدية يرسم مواضع الآفات على الأمامي
+               * ثم يضغط «خلفي» ليكمل التوثيق فيختفي كل ما رسمه بلا سؤال —
+               * و«تراجع» لا يُعيده (يزيل خطًّا واحدًا). فلا يُمحى عملٌ قائم
+               * إلا بتأكيد صريح.
+               */
               onClick={() => {
                 if (view === value.view) return;
+                if (value.strokes.length > 0) {
+                  setPendingView(view);
+                  return;
+                }
                 onChange({ view, strokes: [] });
               }}
             >

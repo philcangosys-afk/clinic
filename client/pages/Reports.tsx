@@ -440,6 +440,16 @@ function SalesTab({ organizationId }: { organizationId: string | undefined }) {
       <Card>
         <CardHeader>
           <CardTitle>إجماليات العروض</CardTitle>
+          {/*
+            العمود يعرض **حصّة العرض** وحدها منذ 0144: `v_offers_totals` كانت
+            تجمع `discount_amount` أي خصم الفاتورة كاملًا، ففاتورة عليها خصم
+            يدوي 200 ومرتبطة بعرضٍ خصمه 50 تُضيف 200 إلى حصيلة العرض — رقمٌ
+            يُبنى عليه قرار إيقاف عرضٍ أو تمديده. صار المنظور يحسب
+            `subtotal_amount × offer_percent` ويستثني الملغاة والمؤقّتة.
+          */}
+          <CardDescription>
+            «خصم العرض» حصّة العرض وحدها — لا يشمل أي خصم يدوي على الفاتورة، ولا الفواتير الملغاة ولا عروض الأسعار
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -447,7 +457,7 @@ function SalesTab({ organizationId }: { organizationId: string | undefined }) {
               <TableRow>
                 <TableHead>العرض</TableHead>
                 <TableHead>عدد الفواتير المطبَّق عليها</TableHead>
-                <TableHead>إجمالي الخصم</TableHead>
+                <TableHead>إجمالي خصم العرض</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -574,16 +584,25 @@ function VatReturnsTab({ organizationId, from, to }: { organizationId: string | 
       return data ?? [];
     },
   });
+  /**
+   * كشف المرتجعات **يتبع مرشّح الفترة** مثل جدول الضريبة فوقه.
+   *
+   * كان يقرأ آخر 30 سطرًا من كل التاريخ بلا `from/to`: يغيّر المستخدم الفترة
+   * فيتحرّك الجدول الأعلى ولا يتحرّك الأسفل، فتُقرأ مرتجعات شهرٍ آخر كأنها
+   * مرتجعات المدى المعروض — وتُطرح من ضريبة مدى لا تنتمي إليه. و`return_date`
+   * من نوع `date` فالمقارنة بنصّ تاريخ صحيحة هنا (لا يوجد وقت يُقتطع).
+   */
   const returns = useQuery({
-    queryKey: ["v-returns-items", organizationId],
+    queryKey: ["v-returns-items", organizationId, from, to],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_returns_statement_items")
         .select("*")
         .eq("organization_id", organizationId)
-        .order("return_date", { ascending: false })
-        .limit(30);
+        .gte("return_date", from)
+        .lte("return_date", to)
+        .order("return_date", { ascending: false });
       if (error) throw error;
       return data ?? [];
     },
@@ -639,6 +658,7 @@ function VatReturnsTab({ organizationId, from, to }: { organizationId: string | 
       <Card>
         <CardHeader>
           <CardTitle>كشف المرتجعات</CardTitle>
+          <CardDescription>في المدى المحدد أعلى الشاشة — نفس مدى جدول الضريبة</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -664,7 +684,7 @@ function VatReturnsTab({ organizationId, from, to }: { organizationId: string | 
               {(returns.data ?? []).length === 0 && (
                 <TableRow>
                   <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
-                    لا توجد مرتجعات مسجّلة بعد.
+                    لا توجد مرتجعات في هذا المدى.
                   </TableCell>
                 </TableRow>
               )}
@@ -875,6 +895,9 @@ type PatientFinancialRow = {
   last_invoice_at: string;
 };
 
+/** سقف صفوف جدول إحصائيات المرضى — معلن في الشاشة لا مخفيًّا في الكود. */
+const PATIENT_ROW_LIMIT = 200;
+
 const FINANCIAL_SORTS = [
   { value: "total_remaining", label: "الأعلى مديونية" },
   { value: "total_work", label: "الأعلى أعمالًا" },
@@ -895,18 +918,26 @@ function usePatientFinancials(
     queryFn: async () => {
       // عند اختيار طبيب نقرأ من العرض المقسَّم حسب الطبيب (0041)؛ وبدونه من
       // العرض المجمَّع على المريض حتى لا يتكرر المريض الذي عالجه أكثر من طبيب.
+      //
+      // `count: "exact"` يُعيد عدد الصفوف المطابقة **قبل** السقف، فيُعرَف هل
+      // بلغ الجدول حدّه: بلا هذا العدد كان سطر «الإجمالي» أسفل الجدول مجموع
+      // أعلى 200 مريض ويُقرأ كإجمالي مديونية العيادة، بلا أي إشارة إلى أنه
+      // مسقوف — وهو رقم يُنقل إلى تقرير التحصيل.
       let query = supabase
         .from(doctorId ? "v_patient_financials_by_doctor" : "v_patient_financials")
-        .select("*")
+        .select("*", { count: "exact" })
         .eq("organization_id", organizationId)
         .order(sortBy, { ascending: false })
-        .limit(200);
+        .limit(PATIENT_ROW_LIMIT);
       if (doctorId) query = query.eq("doctor_id", doctorId);
       if (debtorsOnly) query = query.gt("total_remaining", 0);
       if (search.trim()) query = query.ilike("patient_name", `%${search.trim()}%`);
-      const { data, error } = await query;
+      const { data, error, count } = await query;
       if (error) throw error;
-      return (data ?? []) as PatientFinancialRow[];
+      return {
+        rows: (data ?? []) as PatientFinancialRow[],
+        matchedCount: count ?? (data ?? []).length,
+      };
     },
   });
 }
@@ -932,7 +963,9 @@ function PatientFinancialsTab({ organizationId }: { organizationId: string | und
     },
   });
 
-  const list = rows.data ?? [];
+  const list = rows.data?.rows ?? [];
+  const matchedCount = rows.data?.matchedCount ?? 0;
+  const isCapped = matchedCount > list.length;
   // إجماليات الصفوف المعروضة — تُحسب هنا لا في العرض لأنها تتبع الفلترة الحالية
   const totals = list.reduce(
     (acc, row) => ({
@@ -998,6 +1031,14 @@ function PatientFinancialsTab({ organizationId }: { organizationId: string | und
       </CardHeader>
       <CardContent>
         {rows.isLoading && <Skeleton className="h-40 w-full" />}
+        {/* بلوغ السقف يُعلن قبل الجدول لا بعده: الرقم في سطر الإجمالي أدناه
+            مجموع المعروض فقط، ومن لا يرى هذا السطر يقرؤه إجمالي العيادة. */}
+        {!rows.isLoading && isCapped && (
+          <p className="mb-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            بلغ الجدول حدّه: معروض {list.length} من {matchedCount} مريض مطابق. سطر «الإجمالي» أدناه مجموع
+            المعروض فقط لا مجموع كل المرضى — ضيّق البحث أو اختر «المدينون فقط» لقراءة إجمالي أدقّ.
+          </p>
+        )}
         {!rows.isLoading && (
           <Table>
             <TableHeader>
@@ -1046,7 +1087,11 @@ function PatientFinancialsTab({ organizationId }: { organizationId: string | und
               )}
               {list.length > 0 && (
                 <TableRow className="border-t-2 bg-muted/40 font-semibold">
-                  <TableCell colSpan={5}>الإجمالي ({list.length} مريض)</TableCell>
+                  <TableCell colSpan={5}>
+                    {isCapped
+                      ? `إجمالي المعروض فقط (${list.length} من ${matchedCount} مريض)`
+                      : `الإجمالي (${list.length} مريض)`}
+                  </TableCell>
                   <TableCell className="tabular-nums">{totals.work.toFixed(2)}</TableCell>
                   <TableCell className="tabular-nums text-emerald-700">{totals.paid.toFixed(2)}</TableCell>
                   <TableCell className="tabular-nums text-destructive">

@@ -26,6 +26,15 @@ const MEASURE_LABEL: Record<string, string> = Object.fromEntries(
   VITAL_MEASURES.map((m) => [m.key, m.label]),
 );
 
+/**
+ * رتبة الأولوية للترتيب.
+ *
+ * `priority` عمود نصّي (`routine | urgent`)، والترتيب الأبجدي التصاعدي يضع
+ * `routine` أوّلًا و`urgent` آخرًا — أي أن الطلب العاجل يقع في ذيل الطابور
+ * تحت لافتةٍ حمراء تقول إنه عاجل. الرتبة الصريحة تصحّح الترتيب.
+ */
+const PRIORITY_RANK: Record<string, number> = { urgent: 0, routine: 1 };
+
 type QueueRow = {
   request_id: string;
   patient_id: string;
@@ -67,10 +76,13 @@ export default function VitalSigns() {
         .from("v_vital_sign_queue")
         .select("*")
         .eq("organization_id", organization!.id)
-        .order("priority", { ascending: true })
         .order("requested_at", { ascending: true });
       if (error) throw error;
-      return (data ?? []) as QueueRow[];
+      return [...((data ?? []) as QueueRow[])].sort(
+        (a, b) =>
+          (PRIORITY_RANK[a.priority] ?? 9) - (PRIORITY_RANK[b.priority] ?? 9) ||
+          String(a.requested_at ?? "").localeCompare(String(b.requested_at ?? "")),
+      );
     },
   });
 
@@ -88,7 +100,26 @@ export default function VitalSigns() {
         .order("recorded_at", { ascending: false })
         .limit(100);
       if (error) throw error;
-      return (data ?? []) as any[];
+      const rows = (data ?? []) as any[];
+
+      // اسم المريض لا يحمله المنظور (`v_patient_vitals` لا يضمّ `patients`)،
+      // فوُضع نصّ ثابت «عرض الملف» مكان الاسم — وتبويب «قياسات اليوم» صار صفوفًا
+      // متطابقة لا يُعرف صاحب أيٍّ منها إلّا بفتحه، وهو نقيض الغرض منه.
+      const ids = Array.from(new Set(rows.map((row) => row.patient_id).filter(Boolean)));
+      if (ids.length > 0) {
+        const { data: people, error: peopleError } = await supabase
+          .from("patients")
+          .select("id, name_ar, id_number")
+          .in("id", ids);
+        if (peopleError) throw peopleError;
+        const byId = new Map(((people ?? []) as any[]).map((row) => [row.id, row]));
+        for (const row of rows) {
+          const person = byId.get(row.patient_id);
+          row.patient_name = person?.name_ar ?? null;
+          row.patient_id_number = person?.id_number ?? null;
+        }
+      }
+      return rows;
     },
   });
 
@@ -150,7 +181,16 @@ export default function VitalSigns() {
 
         <TabsContent value="queue" className="mt-4 flex flex-col gap-3">
           {queue.isLoading && <Skeleton className="h-56 w-full" />}
-          {!queue.isLoading && rows.length === 0 && (
+          {/* الفشل يُعرض فشلًا: «لا طلبات معلّقة» على استعلامٍ سقط يقرأه
+              المستخدم طابورًا فارغًا فيمضي، والطلبات معلّقة فعلًا. */}
+          {queue.isError && (
+            <Card className="border-destructive">
+              <CardContent className="py-6 text-center text-sm text-destructive">
+                تعذّر تحميل الطابور: {(queue.error as any)?.message ?? "خطأ غير معروف"}
+              </CardContent>
+            </Card>
+          )}
+          {!queue.isLoading && !queue.isError && rows.length === 0 && (
             <Card>
               <CardContent className="grid place-items-center gap-2 py-12 text-center">
                 <CheckCircle2 className="h-10 w-10 text-emerald-600" />
@@ -258,7 +298,14 @@ export default function VitalSigns() {
 
         <TabsContent value="today" className="mt-4">
           {today.isLoading && <Skeleton className="h-48 w-full" />}
-          {!today.isLoading && (today.data ?? []).length === 0 && (
+          {today.isError && (
+            <Card className="border-destructive">
+              <CardContent className="py-10 text-center text-sm text-destructive">
+                تعذّر تحميل قياسات اليوم: {(today.error as any)?.message ?? "خطأ غير معروف"}
+              </CardContent>
+            </Card>
+          )}
+          {!today.isLoading && !today.isError && (today.data ?? []).length === 0 && (
             <Card>
               <CardContent className="py-10 text-center text-sm text-muted-foreground">
                 لا قياسات اليوم
@@ -273,8 +320,13 @@ export default function VitalSigns() {
                     to={`/patients/${v.patient_id}`}
                     className="font-semibold underline-offset-4 hover:underline"
                   >
-                    عرض الملف
+                    {v.patient_name ?? "عرض الملف"}
                   </Link>
+                  {v.patient_id_number && (
+                    <span className="ms-2 text-xs text-muted-foreground tabular-nums">
+                      {v.patient_id_number}
+                    </span>
+                  )}
                   <p className="mt-0.5 text-sm tabular-nums">
                     {v.blood_pressure_systolic && v.blood_pressure_diastolic
                       ? `ضغط ${v.blood_pressure_systolic}/${v.blood_pressure_diastolic} · `
@@ -344,9 +396,13 @@ function DirectRecordPanel() {
     <Card>
       <CardHeader className="pb-3">
         <CardTitle className="text-base">تسجيل قياس مباشر</CardTitle>
+        {/* الوعد القديم («اختيار الطبيب يجعل القياس يصل لوحته») لا يتحقّق:
+            صندوق الطبيب يقرأ `v_doctor_vitals_inbox` المبنيّ على **طلب** مُغلق،
+            والقياس المباشر لا يُنشئ طلبًا — فلا صلة تربطه بالطبيب. تصحيح النصّ
+            حتى لا يظنّ الاستقبال أنه أرسل قياسًا لم يصل أحدًا. */}
         <CardDescription>
-          للمريض الذي يصل بلا طلب — قياس الاستقبال عند الدخول. اختيار الطبيب
-          يجعل القياس يصل لوحته.
+          للمريض الذي يصل بلا طلب — قياس الاستقبال عند الدخول. القياس يُحفظ في ملف
+          المريض؛ ولإيصاله إلى لوحة الطبيب اطلبه من لوحته حتى يُسجَّل على طلب.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">

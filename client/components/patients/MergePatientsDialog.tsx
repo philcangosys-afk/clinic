@@ -59,6 +59,14 @@ export default function MergePatientsDialog({
         supabase.from("sales_invoices").select("id", { count: "exact", head: true }).eq("patient_id", duplicate!.id),
         supabase.from("patient_documents").select("id", { count: "exact", head: true }).eq("patient_id", duplicate!.id),
       ]);
+      /**
+       * خطأ أي عدّ يُرمى ولا يُبتلع: `count` تكون `null` عند الفشل فتصير `0`
+       * بـ`?? 0`، فتقول اللوحة «0 موعد، 0 زيارة، 0 فاتورة، 0 مستند» قبل عملية
+       * لا رجعة فيها — فيمضي الموظف وهو يظن الملف المكرَّر خاليًا.
+       */
+      for (const result of [appointments, visits, invoices, documents]) {
+        if (result.error) throw result.error;
+      }
       return {
         appointments: appointments.count ?? 0,
         visits: visits.count ?? 0,
@@ -134,6 +142,17 @@ export default function MergePatientsDialog({
               />
             )}
           </div>
+
+          {duplicate && preview.isError && (
+            <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-xs">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <span>
+                تعذّر حساب المعاينة:{" "}
+                {preview.error instanceof Error ? preview.error.message : "خطأ غير متوقع"} — لا
+                تعتمد على أرقام غائبة قبل الدمج.
+              </span>
+            </div>
+          )}
 
           {duplicate && preview.data && (
             <div className="rounded-lg border bg-muted/30 p-3 text-sm">

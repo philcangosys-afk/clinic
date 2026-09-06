@@ -45,6 +45,31 @@ const STATUS_LABELS_AR: Record<DentalLabOrderStatus, string> = {
   cancelled: "ملغاة",
 };
 
+/**
+ * الانتقالات المشروعة لحالة الطلبية.
+ *
+ * كانت القائمة تعرض الحالات الأربع دائمًا، فطلبية «تم التسليم» تُعاد إلى «قيد
+ * الانتظار» بضغطة واحدة — وتاريخ الاستلام يبقى مكتوبًا فيها من التسليم
+ * السابق، فيصير في السجل تاريخُ استلامٍ لطلبية لم تُستلَم. والإلغاء كان متاحًا
+ * لطلبية سُدّد عليها سندات صرف، فتبقى المبالغ مصروفةً على مستند ملغى.
+ *
+ * «ملغاة» نهاية لا رجوع منها من هذه الشاشة: الرجوع عنها قرار مالي يحتاج
+ * معالجة السندات أوّلًا.
+ */
+const ALLOWED_STATUS_MOVES: Record<DentalLabOrderStatus, DentalLabOrderStatus[]> = {
+  pending: ["in_progress", "delivered", "cancelled"],
+  in_progress: ["pending", "delivered", "cancelled"],
+  delivered: ["in_progress"],
+  cancelled: [],
+};
+
+/**
+ * قوائم اختيار المعمل — النشط غير المؤرشف فقط.
+ *
+ * كان المرشِّح على `is_disabled` وحده، و«المؤرشف» في هذا النظام يعني أُخرِج من
+ * التعامل نهائيًّا لا أُخفي مؤقّتًا: فكان معملٌ مؤرشف يظهر خيارًا عاديًّا في
+ * «طلبية جديدة» و«أصناف المعامل» فتُصدَر إليه تركيبة ويُفتح له حساب من جديد.
+ */
 function useDentalLabs(organizationId: string | undefined) {
   return useQuery({
     queryKey: ["dental-labs", organizationId],
@@ -56,9 +81,52 @@ function useDentalLabs(organizationId: string | undefined) {
         .eq("organization_id", organizationId)
         .eq("is_dental_lab", true)
         .eq("is_disabled", false)
+        .eq("is_archived", false)
         .order("name_ar");
       if (error) throw error;
       return (data ?? []) as Pick<DistributorRow, "id" | "name_ar">[];
+    },
+  });
+}
+
+/**
+ * سندات الصرف **الملغاة** المرتبطة بطلبيات المعامل.
+ *
+ * **لماذا يلزم هذا الاستعلام**: `app_recalc_dental_lab_order_paid` في القاعدة
+ * تجمع `sum(amount)` من `financial_vouchers` لكل سندات المصروف المرتبطة
+ * بالطلبية **بلا استثناء `is_void = true`**. فسندٌ أُلغي عبر
+ * `app_void_financial_voucher` يظلّ محسوبًا في `paid_amount` المخزَّن (وفي
+ * `remaining_amount` المولَّد منه، وفي عرض `dental_lab_balances` الذي يجمعه) —
+ * أي أن الشاشة تقول إن المنشأة سدّدت للمعمل مبلغًا أُلغيت دفعته، فيبدو المتبقّي
+ * أقلّ من الحقيقة.
+ *
+ * إصلاح الجذر هجرةٌ في القاعدة (مذكورة في التقرير). وحتى ذلك، تخصم الشاشة
+ * الملغى من المخزَّن فلا تعرض رقمًا تعرف أنه خطأ.
+ */
+function useVoidedLabVouchers(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["dental-lab-voided-vouchers", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("financial_vouchers")
+        .select("id, amount, dental_lab_order_id, dental_lab_order:dental_lab_orders(distributor_id)")
+        .eq("organization_id", organizationId)
+        .eq("voucher_type", "expense")
+        .eq("is_void", true)
+        .not("dental_lab_order_id", "is", null);
+      if (error) throw error;
+      const byOrder = new Map<string, number>();
+      const byLab = new Map<string, number>();
+      for (const row of (data ?? []) as any[]) {
+        const amount = Number(row.amount ?? 0);
+        if (row.dental_lab_order_id)
+          byOrder.set(row.dental_lab_order_id, (byOrder.get(row.dental_lab_order_id) ?? 0) + amount);
+        const order = Array.isArray(row.dental_lab_order) ? row.dental_lab_order[0] : row.dental_lab_order;
+        if (order?.distributor_id)
+          byLab.set(order.distributor_id, (byLab.get(order.distributor_id) ?? 0) + amount);
+      }
+      return { byOrder, byLab };
     },
   });
 }
@@ -136,24 +204,53 @@ function OrdersTab({
   labs: Pick<DistributorRow, "id" | "name_ar">[];
 }) {
   const orders = useDentalLabOrders(organizationId);
+  const voided = useVoidedLabVouchers(organizationId);
   const [createOpen, setCreateOpen] = useState(false);
   const [expenseFor, setExpenseFor] = useState<{ id: string; remaining: number } | null>(null);
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
   const updateStatus = useMutation({
-    mutationFn: async ({ id, status }: { id: string; status: DentalLabOrderStatus }) => {
+    mutationFn: async ({
+      id,
+      status,
+      currentStatus,
+      paidAmount,
+    }: {
+      id: string;
+      status: DentalLabOrderStatus;
+      currentStatus: DentalLabOrderStatus;
+      paidAmount: number;
+    }) => {
+      // الحارس مكرَّر هنا لا في القائمة وحدها: القائمة تمنع الاختيار الخاطئ،
+      // وهذا يمنع تنفيذه لو تغيّرت حالة الطلبية من مستخدم آخر بعد آخر تحميل.
+      if (!ALLOWED_STATUS_MOVES[currentStatus]?.includes(status))
+        throw new Error(
+          `انتقال غير مشروع: من «${STATUS_LABELS_AR[currentStatus]}» إلى «${STATUS_LABELS_AR[status]}»`,
+        );
+      if (status === "cancelled" && paidAmount > 0)
+        throw new Error("الطلبية سُدّد عليها مبلغ — ألغِ سندات صرفها أولًا ثم ألغِ الطلبية");
+
       const patch: Record<string, unknown> = { status };
-      if (status === "delivered") patch.received_date = new Date().toISOString().slice(0, 10);
+      // تاريخ الاستلام يُمسح عند الخروج من «تم التسليم»: تركه كان يُنتج طلبية
+      // «قيد التنفيذ» ولها تاريخ استلام — سطرٌ يكذّب نفسه في السجل.
+      patch.received_date = status === "delivered" ? new Date().toISOString().slice(0, 10) : null;
       const { data, error } = await supabase
         .from("dental_lab_orders")
         .update(patch)
         .eq("id", id)
+        // شرط الحالة الحالية يجعل التحديث فاشلًا (صفر صفوف) إن سبقك غيرك إليها
+        .eq("status", currentStatus)
         .select("id");
       if (error) throw error;
-      if (!data || data.length === 0) throw new Error("لم يُحفظ التغيير — راجع صلاحيتك");
+      if (!data || data.length === 0)
+        throw new Error("لم يُحفظ التغيير — تغيّرت حالة الطلبية أو لا تسمح صلاحيتك");
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["dental-lab-orders", organizationId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["dental-lab-orders", organizationId] });
+      // عرض الأرصدة يُجمَّع من الطلبيات، فإلغاء طلبية يغيّر إجمالي المعمل
+      queryClient.invalidateQueries({ queryKey: ["dental-lab-balances", organizationId] });
+    },
     onError: (error: unknown) =>
       toast({
         variant: "destructive",
@@ -193,7 +290,12 @@ function OrdersTab({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(orders.data ?? []).map((order: any) => (
+              {(orders.data ?? []).map((order: any) => {
+                // المخزَّن يشمل السندات الملغاة (انظر useVoidedLabVouchers)
+                const voidedAmount = voided.data?.byOrder.get(order.id) ?? 0;
+                const paid = Number(order.paid_amount ?? 0) - voidedAmount;
+                const remaining = Number(order.total_amount ?? 0) - paid;
+                return (
                 <TableRow key={order.id}>
                   <TableCell className="font-mono text-xs">#{order.order_number}</TableCell>
                   <TableCell className="font-medium">{order.distributor?.name_ar ?? "—"}</TableCell>
@@ -203,33 +305,54 @@ function OrdersTab({
                   <TableCell>{order.doctor?.name_ar ? `د. ${order.doctor.name_ar}` : "—"}</TableCell>
                   <TableCell>{new Date(order.order_date).toLocaleDateString("ar-SA")}</TableCell>
                   <TableCell>{Number(order.total_amount).toLocaleString("ar-SA")}</TableCell>
-                  <TableCell className="text-emerald-700">{Number(order.paid_amount).toLocaleString("ar-SA")}</TableCell>
-                  <TableCell className={Number(order.remaining_amount) > 0 ? "text-rose-600" : ""}>
-                    {Number(order.remaining_amount).toLocaleString("ar-SA")}
+                  <TableCell className="text-emerald-700">
+                    {paid.toLocaleString("ar-SA")}
+                    {voidedAmount > 0 && (
+                      <span className="block text-[10px] text-muted-foreground">
+                        بعد استثناء {voidedAmount.toLocaleString("ar-SA")} من سندات ملغاة
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className={remaining > 0 ? "text-rose-600" : ""}>
+                    {remaining.toLocaleString("ar-SA")}
                   </TableCell>
                   <TableCell>
                     <Select
                       value={order.status}
-                      onValueChange={(value) => updateStatus.mutate({ id: order.id, status: value as DentalLabOrderStatus })}
+                      disabled={
+                        (ALLOWED_STATUS_MOVES[order.status as DentalLabOrderStatus] ?? []).length === 0
+                      }
+                      onValueChange={(value) =>
+                        updateStatus.mutate({
+                          id: order.id,
+                          status: value as DentalLabOrderStatus,
+                          currentStatus: order.status as DentalLabOrderStatus,
+                          paidAmount: paid,
+                        })
+                      }
                     >
                       <SelectTrigger className="h-8 w-36">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        {Object.entries(STATUS_LABELS_AR).map(([key, label]) => (
-                          <SelectItem key={key} value={key}>
-                            {label}
+                        {/* الحالة الحالية معروضة لتُقرأ، ومعطَّلة لأنها ليست انتقالًا */}
+                        <SelectItem value={order.status} disabled>
+                          {STATUS_LABELS_AR[order.status as DentalLabOrderStatus] ?? order.status}
+                        </SelectItem>
+                        {(ALLOWED_STATUS_MOVES[order.status as DentalLabOrderStatus] ?? []).map((next) => (
+                          <SelectItem key={next} value={next}>
+                            {STATUS_LABELS_AR[next]}
                           </SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
                   </TableCell>
                   <TableCell>
-                    {Number(order.remaining_amount) > 0 && (
+                    {remaining > 0 && (
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() => setExpenseFor({ id: order.id, remaining: Number(order.remaining_amount) })}
+                        onClick={() => setExpenseFor({ id: order.id, remaining })}
                       >
                         <Wallet className="h-3.5 w-3.5" />
                         تسجيل مصروف
@@ -237,7 +360,8 @@ function OrdersTab({
                     )}
                   </TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
               {(orders.data ?? []).length === 0 && (
                 <TableRow>
                   <TableCell colSpan={10} className="py-8 text-center text-sm text-muted-foreground">
@@ -724,6 +848,15 @@ function ItemsTab({
       setNameEn("");
       setPrice("0");
     },
+    // كانت بلا onError إطلاقًا: رفض RLS أو قيد فريد على (المعمل، الاسم) كان
+    // يُلتقط داخل react-query فلا يظهر شيء — لا صنف جديد ولا رسالة، فيعيد
+    // المستخدم المحاولة بلا أن يعرف ما المانع.
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذرت الإضافة",
+        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      }),
   });
 
   const toggleDisabled = useMutation({
@@ -842,6 +975,7 @@ function ItemsTab({
 // الأرصدة
 // ---------------------------------------------------------------------------
 function BalancesTab({ organizationId }: { organizationId: string | undefined }) {
+  const voided = useVoidedLabVouchers(organizationId);
   const balances = useQuery({
     queryKey: ["dental-lab-balances", organizationId],
     enabled: Boolean(organizationId),
@@ -856,11 +990,24 @@ function BalancesTab({ organizationId }: { organizationId: string | undefined })
     },
   });
 
-  const totals = (balances.data ?? []).reduce(
+  // العرض `dental_lab_balances` يجمع `paid_amount` من الطلبيات فيَرِث خطأ
+  // احتساب السندات الملغاة — فيُخصم هنا كما في جدول الطلبيات.
+  const rows = (balances.data ?? []).map((row) => {
+    const voidedAmount = voided.data?.byLab.get(row.distributor_id) ?? 0;
+    const totalPaid = Number(row.total_paid ?? 0) - voidedAmount;
+    return {
+      ...row,
+      voidedAmount,
+      totalPaid,
+      balanceDue: Number(row.total_orders ?? 0) - totalPaid,
+    };
+  });
+
+  const totals = rows.reduce(
     (acc, row) => ({
       total_orders: acc.total_orders + Number(row.total_orders),
-      total_paid: acc.total_paid + Number(row.total_paid),
-      balance_due: acc.balance_due + Number(row.balance_due),
+      total_paid: acc.total_paid + row.totalPaid,
+      balance_due: acc.balance_due + row.balanceDue,
     }),
     { total_orders: 0, total_paid: 0, balance_due: 0 },
   );
@@ -884,17 +1031,24 @@ function BalancesTab({ organizationId }: { organizationId: string | undefined })
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(balances.data ?? []).map((row) => (
+              {rows.map((row) => (
                 <TableRow key={row.distributor_id}>
                   <TableCell className="font-medium">{row.name_ar}</TableCell>
                   <TableCell>{Number(row.total_orders).toLocaleString("ar-SA")}</TableCell>
-                  <TableCell className="text-emerald-700">{Number(row.total_paid).toLocaleString("ar-SA")}</TableCell>
-                  <TableCell className={Number(row.balance_due) > 0 ? "text-rose-600" : ""}>
-                    {Number(row.balance_due).toLocaleString("ar-SA")}
+                  <TableCell className="text-emerald-700">
+                    {row.totalPaid.toLocaleString("ar-SA")}
+                    {row.voidedAmount > 0 && (
+                      <span className="block text-[10px] text-muted-foreground">
+                        بعد استثناء {row.voidedAmount.toLocaleString("ar-SA")} من سندات ملغاة
+                      </span>
+                    )}
+                  </TableCell>
+                  <TableCell className={row.balanceDue > 0 ? "text-rose-600" : ""}>
+                    {row.balanceDue.toLocaleString("ar-SA")}
                   </TableCell>
                 </TableRow>
               ))}
-              {(balances.data ?? []).length === 0 && (
+              {rows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={4} className="py-8 text-center text-sm text-muted-foreground">
                     لا توجد بيانات بعد.
@@ -902,7 +1056,7 @@ function BalancesTab({ organizationId }: { organizationId: string | undefined })
                 </TableRow>
               )}
             </TableBody>
-            {(balances.data ?? []).length > 0 && (
+            {rows.length > 0 && (
               <TableBody>
                 <TableRow className="font-semibold">
                   <TableCell>الإجمالي</TableCell>

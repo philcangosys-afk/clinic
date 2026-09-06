@@ -13,7 +13,7 @@ import {
   Stethoscope,
   UserX,
 } from "lucide-react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
@@ -65,7 +65,18 @@ type ReceptionAppointment = AppointmentWithRelations & {
   }) | null;
 };
 
-type ReceptionAction = "arrive" | "check_in" | "call" | "start" | "finish" | "no_show";
+type ReceptionAction = "confirm" | "arrive" | "check_in" | "call" | "start" | "finish" | "no_show";
+
+/**
+ * حالات موعد اليوم التي لم تصل بعد إلى الطابور.
+ *
+ * `v_reception_queue` — ومنه لوحة الاستقبال — يقصر الطابور على
+ * `confirmed/arrived/checked_in/called/in_progress/walk_in/waiting`، والإنشاء
+ * في هذا النظام يكتب `scheduled`. فكان موعد اليوم المحجوز من شاشة المواعيد أو
+ * من الموقع لا يظهر في اللوحة إطلاقًا: يحضر المريض فلا يجد الموظف صفَّه
+ * ليضغط «وصول»، ولا زرًّا لتسجيل «لم يحضر» بعد انتهاء الوقت.
+ */
+const PRE_QUEUE_STATUSES: AppointmentStatus[] = ["new", "scheduled", "unconfirmed"];
 
 const PRIORITY_ORDER: Record<ReceptionAppointment["priority"], number> = {
   emergency: 0,
@@ -142,6 +153,15 @@ function useDoctorsList(organizationId: string | undefined) {
 export default function Reception() {
   const { organization, membership, legacyMode } = useOrganizationAccess();
   const navigate = useNavigate();
+  /**
+   * `?appointmentId=` يأتي من شاشة المواعيد ومن رحلة المريض.
+   *
+   * كانت الشاشة لا تقرأ معاملات الرابط إطلاقًا، فيضغط الموظف «الاستقبال» أمام
+   * موعد بعينه فتُفتح شاشة الطابور بلا أي إشارة إليه — ويبقى يبحث عن الصفّ
+   * بعينه بين صفوف اليوم.
+   */
+  const [searchParams] = useSearchParams();
+  const highlightAppointmentId = searchParams.get("appointmentId");
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [doctorFilter, setDoctorFilter] = useState("all");
@@ -181,8 +201,17 @@ export default function Reception() {
       (a.queue_number ?? Number.MAX_SAFE_INTEGER) - (b.queue_number ?? Number.MAX_SAFE_INTEGER) ||
       new Date(a.scheduled_start).getTime() - new Date(b.scheduled_start).getTime());
     const done = rows.filter((row) => !ACTIVE_STATUSES.includes(row.status));
-    return { active, done };
+    const preQueue = active.filter((row) => PRE_QUEUE_STATUSES.includes(row.status));
+    return { active, done, preQueue };
   }, [queue.data]);
+
+  // الموعد المطلوب قد لا يكون في طابور اليوم (موعد يوم آخر أو حالة منتهية):
+  // قول ذلك صريحًا أفضل من شاشة تبدو كأنها تجاهلت الرابط.
+  const highlightMissing = Boolean(
+    highlightAppointmentId &&
+      queue.isSuccess &&
+      !(queue.data ?? []).some((row) => row.id === highlightAppointmentId),
+  );
 
   const updateStatus = useMutation({
     mutationFn: async ({ id, action, reason }: { id: string; action: ReceptionAction; reason?: string }) => {
@@ -197,6 +226,10 @@ export default function Reception() {
     onSuccess: ({ id, action }) => {
       queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
       queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
+      // اللوحة استعلام مستقلّ: بلا إبطاله يبقى الموعد الذي أُكِّد للتوّ غائبًا
+      // عن الطابور حتى الجلب الدوري التالي.
+      queryClient.invalidateQueries({ queryKey: ["reception-board"] });
+      queryClient.invalidateQueries({ queryKey: ["calendar-appointments"] });
       if (action === "start" && canEditClinical) navigate(`/medical-records?appointmentId=${id}`);
     },
     onError: (error: unknown) =>
@@ -255,12 +288,69 @@ export default function Reception() {
           تحت قوائم الانتظار حتى يسأل عنه الطبيب. */}
       <DoctorRequests />
 
+      {highlightMissing && (
+        <Card className="border-amber-300 bg-amber-50/60">
+          <CardContent className="p-3 text-sm text-amber-900">
+            الموعد المطلوب ليس في طابور اليوم — راجعه من شاشة المواعيد في تاريخه.
+          </CardContent>
+        </Card>
+      )}
+
+      {/* مواعيد اليوم التي لم تدخل الطابور بعد.
+          العرض `v_reception_queue` يستبعد `new/scheduled/unconfirmed` ولا
+          يُعدَّل من هنا، فتُعرض هذه المواعيد في قسم خاص بأزرار «تأكيد» و«حضر»
+          و«لم يحضر» — كلّها عبر `app_reception_transition` التي تدعمها. */}
+      {mode === "board" && grouped.preQueue.length > 0 && (
+        <Card className="border-amber-200">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">مواعيد اليوم غير المؤكّدة ({grouped.preQueue.length})</CardTitle>
+            <CardDescription>
+              لا تظهر في لوحة الطابور إلا بعد التأكيد أو تسجيل الوصول.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            {grouped.preQueue.map((appointment) => (
+              <div
+                key={appointment.id}
+                className={`flex flex-wrap items-center gap-3 rounded-lg border px-3 py-2 ${appointment.id === highlightAppointmentId ? "ring-2 ring-primary" : ""}`}
+              >
+                <div className="flex min-w-[6rem] items-center gap-2 text-sm text-muted-foreground">
+                  <CalendarClock className="h-4 w-4" />
+                  {new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
+                </div>
+                <button type="button" className="min-w-[10rem] flex-1 text-start" onClick={() => navigate(`/patients/${appointment.patient_id}`)}>
+                  <p className="text-sm font-semibold hover:text-primary">{appointment.patient?.name_ar ?? "—"}</p>
+                  <p className="text-xs text-muted-foreground">#{appointment.patient?.file_number} · {appointment.patient?.mobile_number ?? "—"}</p>
+                </button>
+                <div className="min-w-[8rem] text-sm text-muted-foreground">د. {appointment.doctor?.name_ar ?? "—"}</div>
+                <Badge className={statusBadgeClass(appointment.status)}>{statusLabel(appointment.status)}</Badge>
+                {canManageQueue && (
+                  <div className="flex flex-wrap items-center gap-1">
+                    <Button size="sm" variant="outline" disabled={updateStatus.isPending} onClick={() => updateStatus.mutate({ id: appointment.id, action: "confirm" })}>
+                      <CheckCircle2 className="h-3.5 w-3.5" />تأكيد
+                    </Button>
+                    <Button size="sm" variant="outline" disabled={updateStatus.isPending} onClick={() => updateStatus.mutate({ id: appointment.id, action: "arrive" })}>
+                      <LogIn className="h-3.5 w-3.5" />حضر
+                    </Button>
+                    <Button size="sm" variant="ghost" className="text-destructive" onClick={() => setNoShowTarget(appointment)}>
+                      <UserX className="h-3.5 w-3.5" />لم يحضر
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {mode === "board" && (
         <ReceptionBoard
           organizationId={organization?.id}
           organizationName={organization?.name ?? ""}
           doctors={doctors.data ?? []}
           clinics={clinicList.data ?? []}
+          doctorFilter={doctorFilter}
+          highlightAppointmentId={highlightAppointmentId}
         />
       )}
 
@@ -280,6 +370,7 @@ export default function Reception() {
             <QueueRow
               key={appointment.id}
               appointment={appointment}
+              highlighted={appointment.id === highlightAppointmentId}
               onUpdate={(action) => action === "no_show"
                 ? setNoShowTarget(appointment)
                 : updateStatus.mutate({ id: appointment.id, action })}
@@ -302,6 +393,7 @@ export default function Reception() {
               <QueueRow
                 key={appointment.id}
                 appointment={appointment}
+                highlighted={appointment.id === highlightAppointmentId}
                 onUpdate={(action) => action === "no_show"
                 ? setNoShowTarget(appointment)
                 : updateStatus.mutate({ id: appointment.id, action })}
@@ -395,6 +487,7 @@ function QueueRow({
   onVisit,
   onInvoice,
   readOnly,
+  highlighted,
 }: {
   appointment: ReceptionAppointment;
   onUpdate: (action: ReceptionAction) => void;
@@ -402,6 +495,7 @@ function QueueRow({
   onVisit: () => void;
   onInvoice: () => void;
   readOnly?: boolean;
+  highlighted?: boolean;
 }) {
   const time = new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", {
     hour: "2-digit",
@@ -409,7 +503,7 @@ function QueueRow({
   });
 
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-lg border px-3 py-3">
+    <div className={`flex flex-wrap items-center gap-3 rounded-lg border px-3 py-3 ${highlighted ? "ring-2 ring-primary" : ""}`}>
       <div className="flex min-w-[7rem] items-center gap-2 text-sm text-muted-foreground">
         <CalendarClock className="h-4 w-4" />
         {time}
