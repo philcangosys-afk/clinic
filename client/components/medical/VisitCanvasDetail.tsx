@@ -293,7 +293,7 @@ export default function VisitCanvasDetail({ visitId }: { visitId: string }) {
       const { data, error } = await supabase
         .from("prescriptions")
         .select(
-          "id, status, is_billed, notes, prescription_items(id, dosage_instructions, frequency, duration_days, quantity_prescribed, dispensed_quantity, is_substitutable, drug:items(name_ar))",
+          "id, status, is_billed, notes, prescription_items(id, dosage_instructions, frequency, duration_days, quantity_prescribed, dispensed_quantity, is_substitutable, drug:items!prescription_items_drug_item_id_fkey(name_ar))",
         )
         .eq("visit_id", visitId);
       if (error) throw error;

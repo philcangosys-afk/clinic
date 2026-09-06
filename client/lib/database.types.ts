@@ -1194,7 +1194,19 @@ export interface PurchaseInvoiceItemRow {
 }
 
 export type StockTransferType = "transfer" | "purchase_requisition" | "disbursement";
-export type StockTransferStatus = "pending" | "approved" | "rejected" | "completed";
+/**
+ * حالات المناقلة كما في قيد `stock_transfers_status_check` بعد 0098. كانت
+ * معرَّفة هنا `pending | approved | rejected | completed` — وهي لغة ما قبل
+ * 0098 — فبقيت الشاشة تتكلّم لغةً ترفضها القاعدة.
+ */
+export type StockTransferStatus =
+  | "draft"
+  | "requested"
+  | "approved"
+  | "rejected"
+  | "shipped"
+  | "received"
+  | "cancelled";
 export type StockTransferPriority = "low" | "normal" | "high" | "urgent";
 
 export interface StockTransferRow {
@@ -2007,5 +2019,12 @@ export interface AppointmentWaitlistRow {
 
 /** سجل التدقيق مع اسم المستخدم — العرض v_audit_log_detail. */
 export interface AuditLogDetailView extends AuditLogRow {
-  user_name: string | null;
+  /**
+   * هويّة المنفِّذ. الاسم تغيّر في تاريخ الهجرات: 0037 و0044 سمّياه
+   * `user_email`، و0062 أعاد تسميته `user_name`. القاعدة تحمل أحدهما لا
+   * كليهما، فالحقلان اختياريان هنا و`actorOf` في شاشة التدقيق هي التي تقرأ
+   * الموجود. الشاشة لا تنكسر لأجل اسم عمود.
+   */
+  user_name?: string | null;
+  user_email?: string | null;
 }

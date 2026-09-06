@@ -38,7 +38,7 @@ function useDashboardStats(organizationId: string | undefined) {
        * تجمع أرقام العيادتين معًا — عدد المرضى وإجمالي المديونية وطابور
        * اليوم — بلا أي إشارة إلى أن الأرقام ليست لهذه العيادة وحدها.
        */
-      const [patients, doctors, todayAppointments, unpaidInvoices, alerts] = await Promise.all([
+      const [patients, doctors, todayAppointments, todayCount, unpaidInvoices, alerts] = await Promise.all([
         supabase
           .from("patients")
           .select("id", { count: "exact", head: true })
@@ -56,6 +56,16 @@ function useDashboardStats(organizationId: string | undefined) {
           .lte("scheduled_start", endOfTodayIso())
           .order("scheduled_start", { ascending: true })
           .limit(8),
+        // عدّاد «مواعيد اليوم» استعلامٌ مستقلّ، لأن القائمة أعلاه مسقوفة
+        // بثمانية للعرض. كان العدّاد يقرأ طول القائمة المسقوفة، فعيادة فيها
+        // أربعون موعدًا اليوم ترى الرقم 8 — رقمٌ يبدو حقيقيًّا تمامًا لأنه
+        // يتحرّك بين صفر وثمانية، ويقرأ منه المدير حجم يومه.
+        supabase
+          .from("appointments")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .gte("scheduled_start", startOfTodayIso())
+          .lte("scheduled_start", endOfTodayIso()),
         supabase
           .from("sales_invoices")
           .select("remaining_amount")
@@ -76,6 +86,7 @@ function useDashboardStats(organizationId: string | undefined) {
         patientsCount: patients.count ?? 0,
         doctorsCount: doctors.count ?? 0,
         todayAppointments: todayAppointments.data ?? [],
+        todayAppointmentsCount: todayCount.count ?? 0,
         unpaidTotal,
         alertsCount: alerts.count ?? 0,
       };
@@ -146,7 +157,7 @@ export default function Index() {
         <KpiCard
           icon={CalendarDays}
           label="مواعيد اليوم"
-          value={stats.data?.todayAppointments.length}
+          value={stats.data?.todayAppointmentsCount}
           loading={stats.isLoading}
         />
         <KpiCard
@@ -193,6 +204,14 @@ export default function Index() {
                 <Badge variant="secondary">{appointment.status}</Badge>
               </div>
             ))}
+            {/* البطاقة تعرض أقرب ثمانية. قول ذلك صريحًا يمنع قراءة القائمة
+                كأنها كل مواعيد اليوم. */}
+            {(stats.data?.todayAppointmentsCount ?? 0) > (stats.data?.todayAppointments.length ?? 0) && (
+              <p className="pt-1 text-center text-xs text-muted-foreground">
+                معروض {stats.data?.todayAppointments.length} من {stats.data?.todayAppointmentsCount} موعدًا اليوم —
+                افتح «عرض الكل» لبقيّتها.
+              </p>
+            )}
           </CardContent>
         </Card>
 

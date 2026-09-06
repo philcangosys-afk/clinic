@@ -52,13 +52,20 @@ function useMonthHistory(organizationId: string | undefined, month: string) {
     queryKey: ["attendance-history", organizationId, month],
     enabled: Boolean(organizationId),
     queryFn: async () => {
+      // نهاية الشهر تُحسب لا تُفترض: كان الحدّ `${month}-31` فترفضه القاعدة
+      // في فبراير وأبريل ويونيو وسبتمبر ونوفمبر بخطأ «date/time field value
+      // out of range»، فيفشل الاستعلام كلّه ويظهر سجلّ الشهر فارغًا في خمسة
+      // أشهر من كل سنة.
       const start = `${month}-01`;
+      const [year, monthIndex] = month.split("-").map(Number);
+      const end = new Date(year, monthIndex, 0);
+      const endIso = `${month}-${String(end.getDate()).padStart(2, "0")}`;
       const { data, error } = await supabase
         .from("attendance_records")
         .select("*, employees(name_ar)")
         .eq("organization_id", organizationId)
         .gte("work_date", start)
-        .lte("work_date", `${month}-31`)
+        .lte("work_date", endIso)
         .order("work_date", { ascending: false });
       if (error) throw error;
       return data ?? [];
@@ -90,6 +97,9 @@ export default function Attendance() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["today-attendance", organization?.id] });
+      // سجلّ الشهر يقرأ من نفس الجدول بمفتاح آخر: بلا إبطاله يحفظ المستخدم
+      // حضورًا ولا يراه في الجدول أسفل الشاشة حتى يُحدِّث الصفحة.
+      queryClient.invalidateQueries({ queryKey: ["attendance-history", organization?.id] });
       toast({ title: "تم تسجيل الحضور" });
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
@@ -111,27 +121,42 @@ export default function Attendance() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["today-attendance", organization?.id] });
+      // سجلّ الشهر يقرأ من نفس الجدول بمفتاح آخر: بلا إبطاله يحفظ المستخدم
+      // حضورًا ولا يراه في الجدول أسفل الشاشة حتى يُحدِّث الصفحة.
+      queryClient.invalidateQueries({ queryKey: ["attendance-history", organization?.id] });
       toast({ title: "تم تسجيل الانصراف" });
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
   });
 
   const saveNote = useMutation({
+    /**
+     * الملاحظة **تُحدِّث** صفّ اليوم ولا تُنشئه.
+     *
+     * كانت `upsert`: فكتابة ملاحظة على موظّف لم يسجّل حضوره تُنشئ صفًّا بلا
+     * توقيت حضور، ومحفِّز `app_calc_attendance_status` يحوّل هذا الصفّ إلى
+     * «غائب» — فيُخصم من راتب موظّف حاضر لأن أحدهم كتب ملاحظة على اسمه.
+     * تحقّقت من ذلك في القاعدة: صفٌّ بلا `check_in_at` وحالته الافتراضية
+     * `pending` يصير `absent`.
+     */
     mutationFn: async ({ employeeId, note }: { employeeId: string; note: string }) => {
       if (!organization?.id) throw new Error("لا توجد مؤسسة");
-      const { error } = await supabase.from("attendance_records").upsert(
-        {
-          organization_id: organization.id,
-          employee_id: employeeId,
-          work_date: new Date().toISOString().slice(0, 10),
-          note: note.trim() || null,
-        },
-        { onConflict: "employee_id,work_date" },
-      );
+      const { data: affectedRows, error } = await supabase
+        .from("attendance_records")
+        .update({ note: note.trim() || null })
+        .eq("organization_id", organization.id)
+        .eq("employee_id", employeeId)
+        .eq("work_date", new Date().toISOString().slice(0, 10))
+        .select("id");
       if (error) throw error;
+      if (!affectedRows || affectedRows.length === 0)
+        throw new Error("سجّل الحضور أو حدّد حالة اليوم أولًا، ثم اكتب الملاحظة عليها");
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["today-attendance", organization?.id] });
+      // سجلّ الشهر يقرأ من نفس الجدول بمفتاح آخر: بلا إبطاله يحفظ المستخدم
+      // حضورًا ولا يراه في الجدول أسفل الشاشة حتى يُحدِّث الصفحة.
+      queryClient.invalidateQueries({ queryKey: ["attendance-history", organization?.id] });
       toast({ title: "تم حفظ الملاحظة" });
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),
@@ -153,6 +178,9 @@ export default function Attendance() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["today-attendance", organization?.id] });
+      // سجلّ الشهر يقرأ من نفس الجدول بمفتاح آخر: بلا إبطاله يحفظ المستخدم
+      // حضورًا ولا يراه في الجدول أسفل الشاشة حتى يُحدِّث الصفحة.
+      queryClient.invalidateQueries({ queryKey: ["attendance-history", organization?.id] });
       toast({ title: "تم تحديث الحالة" });
     },
     onError: (error: Error) => toast({ title: "خطأ", description: error.message, variant: "destructive" }),

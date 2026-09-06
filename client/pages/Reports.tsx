@@ -225,42 +225,54 @@ function useDailyRevenue(organizationId: string | undefined, from: string, to: s
   });
 }
 
-function useRevenueByDoctor(organizationId: string | undefined) {
+/**
+ * الإيراد حسب الطبيب وحسب العيادة — **بالفترة**.
+ *
+ * كانا يقرآن من `v_revenue_by_doctor` و`v_revenue_by_clinic`، والمنظورَان بلا
+ * عمود تاريخ أصلًا: أي أن الجدولين كانا يعرضان إيراد كل التاريخ تحت مرشّح
+ * «من/إلى». يغيّر المستخدم الفترة فيتحرّك الرسم أعلاه ولا يتحرّك الجدولان،
+ * فتُقارَن إنتاجية طبيب أو تُحسب عمولته على رقم لا يمثّل الفترة. والأسوأ أن
+ * المنظورَين كانا يجمعان الفواتير الملغاة وعروض الأسعار المؤقّتة.
+ *
+ * دالّتا 0143 تأخذان المدى وتستثنيان الملغاة والمؤقّتة، وتعدّان مواعيد العيادة
+ * في نفس المدى لا في كل التاريخ.
+ */
+function useRevenueByDoctor(organizationId: string | undefined, from: string, to: string) {
   return useQuery({
-    queryKey: ["v-revenue-doctor", organizationId],
+    queryKey: ["revenue-doctor", organizationId, from, to],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("v_revenue_by_doctor")
-        .select("*")
-        .eq("organization_id", organizationId)
-        .order("net_amount", { ascending: false });
+      const { data, error } = await supabase.rpc("app_revenue_by_doctor", {
+        p_organization_id: organizationId,
+        p_from: from,
+        p_to: to,
+      });
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []) as any[];
     },
   });
 }
 
-function useRevenueByClinic(organizationId: string | undefined) {
+function useRevenueByClinic(organizationId: string | undefined, from: string, to: string) {
   return useQuery({
-    queryKey: ["v-revenue-clinic", organizationId],
+    queryKey: ["revenue-clinic", organizationId, from, to],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("v_revenue_by_clinic")
-        .select("*")
-        .eq("organization_id", organizationId)
-        .order("net_amount", { ascending: false });
+      const { data, error } = await supabase.rpc("app_revenue_by_clinic", {
+        p_organization_id: organizationId,
+        p_from: from,
+        p_to: to,
+      });
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []) as any[];
     },
   });
 }
 
 function RevenueTab({ organizationId, from, to }: { organizationId: string | undefined; from: string; to: string }) {
   const daily = useDailyRevenue(organizationId, from, to);
-  const byDoctor = useRevenueByDoctor(organizationId);
-  const byClinic = useRevenueByClinic(organizationId);
+  const byDoctor = useRevenueByDoctor(organizationId, from, to);
+  const byClinic = useRevenueByClinic(organizationId, from, to);
 
   const chartData = (daily.data ?? []).map((row) => ({
     date: new Date(row.revenue_date).toLocaleDateString("ar-SA", { day: "2-digit", month: "2-digit" }),

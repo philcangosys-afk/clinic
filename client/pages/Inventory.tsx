@@ -52,11 +52,18 @@ const MOVEMENT_TYPE_LABELS: Record<InventoryMovementType, string> = {
 };
 const IN_TYPES: InventoryMovementType[] = ["purchase_in", "return_in", "transfer_in", "adjustment_in"];
 
+// حالات المناقلة كما يقبلها قيد القاعدة (0098). كانت هذه الخريطة تحمل
+// `pending` و`completed` ولا وجود لهما في القيد، فكانت شارة الحالة تظهر فارغة
+// لخمس حالات من سبع، وكان زرّ التنفيذ يحاول ختم المناقلة بحالة يرفضها القيد
+// **بعد** أن نقل المخزون فعلًا — فتبقى معروضة كمعلَّقة وتُنفَّذ ثانيةً.
 const TRANSFER_STATUS_LABELS: Record<StockTransferStatus, string> = {
-  pending: "قيد الانتظار",
+  draft: "مسوّدة",
+  requested: "طلب مُرسَل",
   approved: "مُعتمَدة",
   rejected: "مرفوضة",
-  completed: "مكتملة",
+  shipped: "أُرسلت",
+  received: "استُلمت",
+  cancelled: "ملغاة",
 };
 const PRIORITY_LABELS: Record<StockTransferPriority, string> = {
   low: "منخفضة",
@@ -476,7 +483,7 @@ function useInventoryLots(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("inventory_lots")
         .select(
-          "id, lot_number, qty_remaining, reserved_quantity, status, expiry_date, unit_cost, selling_price, item:items(name_ar), warehouse:warehouses(name)",
+          "id, lot_number, qty_remaining, reserved_quantity, status, expiry_date, unit_cost, selling_price, item:items!inventory_lots_item_id_fkey(name_ar), warehouse:warehouses!inventory_lots_warehouse_id_fkey(name)",
         )
         .eq("organization_id", organizationId)
         .gt("qty_remaining", 0)
@@ -988,7 +995,9 @@ function TransfersTab() {
 
       const { data: completedTransfer, error: statusError } = await supabase
         .from("stock_transfers")
-        .update({ status: "completed" })
+        // «استُلمت» هي نهاية دورة المناقلة في القاعدة. كانت `completed` وهي
+        // قيمة يرفضها القيد، فيفشل الختم بعد أن تحرّك المخزون.
+        .update({ status: "received" })
         .eq("id", transfer.id)
         .select("id");
       if (statusError) throw statusError;
@@ -1061,7 +1070,13 @@ function TransfersTab() {
                       </Badge>
                       <Badge
                         variant={
-                          t.status === "completed" ? "success" : t.status === "rejected" ? "destructive" : t.status === "approved" ? "default" : "secondary"
+                          t.status === "received"
+                            ? "success"
+                            : t.status === "rejected" || t.status === "cancelled"
+                              ? "destructive"
+                              : t.status === "approved" || t.status === "shipped"
+                                ? "default"
+                                : "secondary"
                         }
                       >
                         {TRANSFER_STATUS_LABELS[t.status as StockTransferStatus]}
@@ -1088,7 +1103,7 @@ function TransfersTab() {
                     <span>{new Date(t.created_at).toLocaleString("ar-SA")}</span>
                   </div>
                   <div className="mt-2 flex gap-2">
-                    {t.status === "pending" && (
+                    {(t.status === "requested" || t.status === "draft") && (
                       <>
                         <Button size="sm" variant="outline" onClick={() => updateStatus.mutate({ id: t.id, status: "approved" })}>
                           اعتماد
@@ -1098,7 +1113,7 @@ function TransfersTab() {
                         </Button>
                       </>
                     )}
-                    {t.status === "approved" && (
+                    {(t.status === "approved" || t.status === "shipped") && (
                       <Button
                         size="sm"
                         disabled={completeTransfer.isPending}
@@ -1170,6 +1185,9 @@ function NewTransferDialog({
           from_warehouse_id: fromWarehouseId || null,
           to_warehouse_id: toWarehouseId || null,
           note: note.trim() || null,
+          // الطلب يبدأ «مُرسَلًا» لا مسوّدة: هذه الشاشة تُنشئ طلبًا لينظر فيه
+          // المعتمِد، والمسوّدة حالة لا تعرضها الواجهة ولا تُصعّدها.
+          status: "requested",
           // requested_by كان يُترك فارغًا دائمًا رغم وجود العمود منذ 0003 —
           // فكانت المناقلة بلا صاحب طلب معروف، وهو أهم عمود رقابي فيها.
           requested_by: session?.user.id ?? null,

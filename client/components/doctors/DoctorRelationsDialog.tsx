@@ -399,7 +399,7 @@ function ServicesTab({
       const { data, error } = await supabase
         .from("doctor_services")
         .select(
-          "id, item_id, branch_id, duration_minutes, price_override, is_active, item:items!doctor_services_item_id_fkey(name_ar, price), branch:branches(name)",
+          "id, item_id, branch_id, duration_minutes, price_override, is_active, item:items!doctor_services_item_id_fkey(name_ar, price), branch:branches!doctor_services_branch_id_fkey(name)",
         )
         .eq("doctor_id", doctorId)
         .order("created_at");

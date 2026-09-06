@@ -56,7 +56,7 @@ export default function PriceLists() {
       const { data, error } = await supabase
         .from("price_lists")
         .select(
-          "id, name, list_kind, priority, effective_from, effective_to, is_active, note, branch_id, insurance_company_id, external_client_id, branch:branches(name), company:insurance_companies(name_ar), client:external_clients(name)",
+          "id, name, list_kind, priority, effective_from, effective_to, is_active, note, branch_id, insurance_company_id, external_client_id, branch:branches!price_lists_branch_id_fkey(name), company:insurance_companies!price_lists_insurance_company_id_fkey(name_ar), client:external_clients!price_lists_external_client_id_fkey(name)",
         )
         .eq("organization_id", organizationId)
         .order("list_kind")

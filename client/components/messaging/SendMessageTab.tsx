@@ -60,7 +60,13 @@ function SingleSend() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["message-log"] });
-      toast({ title: "تم وضع الرسالة في طابور الإرسال" });
+      // القول الصادق: الرسالة سُجّلت، ولم تُرسَل. قناة الرسائل النصّية غير
+      // مفعّلة في هذا النظام بقرار مالكه، فالطابور لا يُصرَف. رسالة نجاح توحي
+      // بوصولها إلى جوّال المريض تجعل الموظّف يظنّ أنه أبلغ من لم يُبلَّغ.
+      toast({
+        title: "سُجّلت الرسالة في الطابور",
+        description: "لن تصل جوّال المريض حتى تُفعَّل قناة الرسائل النصّية — أبلِغه هاتفيًّا إن كان الأمر عاجلًا.",
+      });
       setText("");
       setPatient(null);
     },
@@ -79,7 +85,10 @@ function SingleSend() {
           <User className="h-4 w-4" />
           رسالة لمريض واحد
         </CardTitle>
-        <CardDescription>تُضاف الرسالة لطابور الإرسال ويتولّى المزوّد إرسالها</CardDescription>
+        <CardDescription>
+          تُسجَّل الرسالة في سجلّ الرسائل. قناة الرسائل النصّية غير مفعّلة حاليًّا، فما
+          يُسجَّل هنا لا يصل جوّال المريض بعد.
+        </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-col gap-1.5">
@@ -193,7 +202,10 @@ function BulkSend() {
     },
     onSuccess: (count) => {
       queryClient.invalidateQueries({ queryKey: ["message-log"] });
-      toast({ title: `تم وضع ${count} رسالة في طابور الإرسال` });
+      toast({
+        title: `سُجّلت ${count} رسالة في الطابور`,
+        description: "لن تصل أجهزة المرضى حتى تُفعَّل قناة الرسائل النصّية.",
+      });
       setText("");
     },
     onError: (error: unknown) =>
@@ -212,7 +224,8 @@ function BulkSend() {
           رسالة جماعية
         </CardTitle>
         <CardDescription>
-          حدّد شريحة المرضى بالفلاتر ثم راجع عدد المستلمين قبل الإرسال
+          حدّد شريحة المرضى بالفلاتر ثم راجع عدد المستلمين. قناة الرسائل النصّية غير
+          مفعّلة حاليًّا، فما يُسجَّل هنا لا يصل أجهزة المرضى بعد.
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">

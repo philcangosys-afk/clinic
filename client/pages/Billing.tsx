@@ -2301,7 +2301,7 @@ function useInvoicePayments(invoiceId: string | undefined) {
       const { data, error } = await supabase
         .from("voucher_invoice_allocations")
         .select(
-          "id, amount, voucher:financial_vouchers(id, voucher_number, voucher_type, voucher_date, is_void, void_reason, description, refund_of_voucher_id, method:lookup_values(name_ar))",
+          "id, amount, voucher:financial_vouchers(id, voucher_number, voucher_type, voucher_date, is_void, void_reason, description, refund_of_voucher_id, method:lookup_values!financial_vouchers_payment_method_value_id_fkey(name_ar))",
         )
         .eq("sales_invoice_id", invoiceId);
       if (error) throw error;

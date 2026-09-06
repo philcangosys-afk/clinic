@@ -268,7 +268,7 @@ export default function ServiceEditorDialog({
     queryFn: async () => {
       const { data, error } = await supabase
         .from("item_claim_codes")
-        .select("id, code, code_system, description, is_primary, insurance_company_id, company:insurance_companies(name_ar)")
+        .select("id, code, code_system, description, is_primary, insurance_company_id, company:insurance_companies!item_claim_codes_insurance_company_id_fkey(name_ar)")
         .eq("item_id", itemId)
         .order("created_at");
       if (error) throw error;

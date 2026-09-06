@@ -369,6 +369,13 @@ function NewRadiologyExamDialog({
   const createExam = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
+      // صنف الفوترة إلزامي في القاعدة (`billing_item_id not null` منذ 0083/0084)
+      // ولا يمكن أن يكون فارغًا: بلا ربطه لا يُفوتَر الفحص من الزيارة. كان
+      // النموذج يمرّر `null` فيفشل الحفظ دائمًا برسالة قاعدة غير مفهومة، وهذا
+      // يمنع إضافة فحص واحد إلى الكتالوج. الفحص هنا يقول للمستخدم ما ينقص.
+      if (!nameAr.trim()) throw new Error("اسم الفحص مطلوب");
+      if (!billingItem?.id)
+        throw new Error("اربط الفحص بصنف فوترة — بدونه لا يظهر الفحص في فاتورة الزيارة");
       const { error } = await supabase.from("radiology_exams").insert({
         organization_id: organizationId,
         name_ar: nameAr.trim(),
@@ -377,7 +384,7 @@ function NewRadiologyExamDialog({
         body_part: bodyPart.trim() || null,
         requires_contrast: requiresContrast,
         preparation_instructions: prep.trim() || null,
-        billing_item_id: billingItem?.id ?? null,
+        billing_item_id: billingItem.id,
       });
       if (error) throw error;
     },

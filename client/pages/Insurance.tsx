@@ -1213,7 +1213,7 @@ function usePreauths(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("insurance_preauthorizations")
         .select(
-          "id, service_description, requested_amount, approved_amount, status, requested_at, responded_at, approval_number, rejection_reason, valid_from, valid_to, consumed_at, note, item_id, item:items(id, name_ar), patient:patients(name_ar), doctor:doctors(name_ar), clinic:clinics(name)",
+          "id, service_description, requested_amount, approved_amount, status, requested_at, responded_at, approval_number, rejection_reason, valid_from, valid_to, consumed_at, note, item_id, item:items!insurance_preauthorizations_item_id_fkey(id, name_ar), patient:patients(name_ar), doctor:doctors(name_ar), clinic:clinics(name)",
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
         .eq("organization_id", organizationId)
@@ -1883,7 +1883,7 @@ function BatchItemsDialog({
     queryFn: async () => {
       const { data, error } = await supabase
         .from("insurance_claim_batch_items")
-        .select("*, sales_invoices(invoice_number, net_amount, patient:patients(name_ar))")
+        .select("*, sales_invoices(invoice_number, net_amount, patient:patients!sales_invoices_patient_id_fkey(name_ar))")
         .eq("batch_id", batch!.id);
       if (error) throw error;
       return data ?? [];

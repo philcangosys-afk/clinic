@@ -650,7 +650,7 @@ function usePrescriptionsList(organizationId: string | undefined, statusFilter: 
       let query = supabase
         .from("prescriptions")
         .select(
-          "id, status, issued_at, notes, insurance_company_name, insurance_policy_number, is_billed, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug:items(name_ar, price))",
+          "id, status, issued_at, notes, insurance_company_name, insurance_policy_number, is_billed, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug:items!prescription_items_drug_item_id_fkey(name_ar, price))",
         )
         .eq("organization_id", organizationId)
         .order("issued_at", { ascending: false })
@@ -1229,7 +1229,7 @@ function usePrescriptionDetails(prescriptionId: string | null) {
       const { data, error } = await supabase
         .from("prescription_items")
         .select(
-          "id, drug_item_id, quantity_prescribed, dispensed_quantity, dosage_instructions, frequency, duration_days, drug:items(id, name_ar)",
+          "id, drug_item_id, quantity_prescribed, dispensed_quantity, dosage_instructions, frequency, duration_days, drug:items!prescription_items_drug_item_id_fkey(id, name_ar)",
         )
         .eq("prescription_id", prescriptionId);
       if (error) throw error;

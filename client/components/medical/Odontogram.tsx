@@ -203,6 +203,10 @@ export default function Odontogram({ patientId }: { patientId: string }) {
 
       {selected && (
         <ToothPanel
+          // المفتاح هو رقم السنّ: بدونه يبقى المكوّن نفسه حين ينتقل المستخدم
+          // من سنّ إلى سنّ، فتبقى الأسطح المختارة والخدمة والملاحظة من السنّ
+          // السابق — فتُسجَّل أسطح سنٍّ على سنٍّ آخر.
+          key={selected}
           patientId={patientId}
           organizationId={organization?.id}
           branchId={branch?.id ?? null}
@@ -246,7 +250,10 @@ export default function Odontogram({ patientId }: { patientId: string }) {
               onChanged={() => {
                 queryClient.invalidateQueries({ queryKey: ["odontogram", patientId] });
                 queryClient.invalidateQueries({ queryKey: ["tooth-plan", patientId] });
-                queryClient.invalidateQueries({ queryKey: ["patient-visit-services"] });
+                // المفتاح الصحيح لقائمة زيارات المريض وخدماتها. كان
+                // `["patient-visit-services"]` ولا استعلام يحمله، فالإجراء
+                // المُتمّ لا يظهر في الزيارة حتى يُحدِّث المستخدم الصفحة.
+                queryClient.invalidateQueries({ queryKey: ["patient-visits-context", patientId] });
               }}
             />
           ))}
@@ -290,6 +297,8 @@ function ToothPanel({
         .select("id, name_ar, price, dental_procedure_kind")
         .eq("organization_id", organizationId!)
         .not("dental_procedure_kind", "is", null)
+        // المؤرشف لا يُقدَّم للمريض: قائمة الاختيار تعرض النشط وحده.
+        .eq("is_archived", false)
         .order("name_ar")
         .limit(60);
       if (search.trim()) q = q.ilike("name_ar", `%${search.trim()}%`);

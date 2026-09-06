@@ -191,7 +191,7 @@ export function PatientPrescriptionsTab({ patientId }: { patientId: string }) {
       const { data, error } = await supabase
         .from("prescriptions")
         .select(
-          "id, status, issued_at, is_billed, insurance_company_name, doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug:items(name_ar))",
+          "id, status, issued_at, is_billed, insurance_company_name, doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug:items!prescription_items_drug_item_id_fkey(name_ar))",
         )
         .eq("patient_id", patientId)
         .order("issued_at", { ascending: false })

@@ -148,10 +148,30 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
   });
 
   const decide = useMutation({
+    /**
+     * الاعتماد يمرّ بـ`app_approve_leave_request` لا بتحديث مباشر.
+     *
+     * التحديث المباشر كان يتخطّى ثلاثة أمور تفعلها الدالّة: فحص صلاحية
+     * `hr.leave_approve`، وفحص تعارض الإجازة مع جدول الطبيب ومواعيده
+     * المحجوزة، وكتابة من اعتمد ومتى في سجلّ التدقيق. أي أن أيّ عضو تسمح له
+     * سياسة الجدول بالتحديث كان يعتمد إجازة طبيبٍ عليه مواعيد مؤكَّدة غدًا.
+     *
+     * وحين يوجد تعارض ترفض الدالّة الاعتماد إلّا بقرار مكتوب — والحقل النصّي
+     * في الصفّ هو موضع كتابته (وهو نفسه سبب الرفض عند الرفض).
+     */
     mutationFn: async ({ id, status }: { id: string; status: "approved" | "rejected" }) => {
+      const note = rejectionReasons[id]?.trim() || null;
+      if (status === "approved") {
+        const { error } = await supabase.rpc("app_approve_leave_request", {
+          p_request_id: id,
+          p_conflict_note: note,
+        });
+        if (error) throw error;
+        return;
+      }
       const { data: affectedRows, error } = await supabase
         .from("leave_requests")
-        .update({ status, rejection_reason: status === "rejected" ? rejectionReasons[id]?.trim() || null : null })
+        .update({ status, rejection_reason: note })
         .eq("id", id)
         .select("id");
       if (error) throw error;
@@ -267,7 +287,7 @@ function RequestsTab({ organizationId }: { organizationId: string | undefined })
                     <div className="flex items-center gap-1.5">
                       <Input
                         className="h-8 w-32"
-                        placeholder="سبب الرفض"
+                        placeholder="سبب الرفض / قرار التعارض"
                         value={rejectionReasons[r.id] ?? ""}
                         onChange={(e) => setRejectionReasons((prev) => ({ ...prev, [r.id]: e.target.value }))}
                       />

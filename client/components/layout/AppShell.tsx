@@ -7,12 +7,14 @@ import {
   Search,
   Settings2,
   Globe2,
+  LockKeyhole,
   UserRound,
   ExternalLink,
   type LucideIcon,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
 import SectionGuideButton from "./SectionGuideButton";
+import { guideKeyForPath } from "@/lib/section-guides";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { useLiveBadgeCounts, formatBadgeNumber } from "@/hooks/use-live-badges";
 import { demoRoleAllowsModule, demoRoleLabel } from "@/lib/demo-role";
@@ -250,11 +252,44 @@ function SidebarLink({
   );
 }
 
+/**
+ * بوّابة الشاشة: هل يجوز لهذا العضو فتح المسار الحالي؟
+ *
+ * ترشيح القائمة الجانبية يُخفي الشاشة ولا يمنعها: من يكتب `/payroll` في شريط
+ * العنوان تُفتح له الشاشة كاملة. القاعدة تحمي البيانات (سياسات الصفوف وفحوص
+ * الدوالّ قائمة بصرف النظر عن الواجهة)، لكن شاشةً تُفتح لمن لا يخصّه إمّا تعرض
+ * جداول فارغة فيظنّ النظام معطوبًا، وإمّا تكشف تسميات وأعمدة لا شأن له بها.
+ * فالمنع يُقال صريحًا هنا.
+ *
+ * ملفّ المريض يُقاس بصلاحية شاشة المرضى، والشاشة الرئيسية لا تُحجب أبدًا حتى
+ * لا يبقى العضو بلا وجهة.
+ */
+function useCurrentModuleAccess() {
+  const location = useLocation();
+  const { canAccess } = useOrganizationAccess();
+  const { role } = useDemoRole();
+
+  return useMemo(() => {
+    const key = guideKeyForPath(location.pathname);
+    if (!key || key === "dashboard") return { allowed: true, label: null as string | null };
+    const moduleId = key === "patient-profile" ? "patients" : key;
+    const item =
+      moduleId === settingsModule.id
+        ? settingsModule
+        : moduleRegistry.find((entry) => entry.id === moduleId);
+    // مسار لا يقابله موديول (مثل شاشة غير مسجَّلة) لا يُحجب من هنا.
+    if (!item) return { allowed: true, label: null };
+    const allowed = canAccess(item.featureKey, item.requiredPermission) && demoRoleAllowsModule(role, item.id);
+    return { allowed, label: item.label };
+  }, [canAccess, location.pathname, role]);
+}
+
 export default function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
   const { organization, membership, signOut } = useOrganizationAccess();
   const { role, name, clear } = useDemoRole();
+  const moduleAccess = useCurrentModuleAccess();
 
   const handleSignOut = async () => {
     await signOut();
@@ -361,7 +396,23 @@ export default function AppShell() {
         </header>
 
         <main dir="rtl" className="flex-1 overflow-y-auto text-start">
-          <Outlet />
+          {moduleAccess.allowed ? (
+            <Outlet />
+          ) : (
+            <div className="mx-auto flex max-w-lg flex-col items-center gap-3 p-10 text-center">
+              <LockKeyhole className="h-10 w-10 text-muted-foreground" />
+              <h2 className="text-lg font-bold">لا تملك صلاحية فتح هذه الشاشة</h2>
+              <p className="text-sm text-muted-foreground">
+                {moduleAccess.label
+                  ? `شاشة «${moduleAccess.label}» غير متاحة لصفتك الحالية.`
+                  : "هذه الشاشة غير متاحة لصفتك الحالية."}{" "}
+                راجع مدير المنشأة إن كنت تحتاجها في عملك.
+              </p>
+              <Button variant="outline" onClick={() => navigate("/", { replace: true })}>
+                العودة إلى الرئيسية
+              </Button>
+            </div>
+          )}
         </main>
       </div>
 

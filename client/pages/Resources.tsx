@@ -67,7 +67,7 @@ export default function Resources() {
       let query = supabase
         .from("resources")
         .select(
-          "id, resource_type, code, name_ar, name_en, capacity, is_active, note, branch_id, clinic_id, branch:branches(name), clinic:clinics(name)",
+          "id, resource_type, code, name_ar, name_en, capacity, is_active, note, branch_id, clinic_id, branch:branches!resources_branch_id_fkey(name), clinic:clinics!resources_clinic_id_fkey(name)",
         )
         .eq("organization_id", organizationId)
         .order("name_ar");

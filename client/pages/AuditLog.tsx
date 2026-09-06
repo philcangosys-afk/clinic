@@ -62,12 +62,15 @@ function useAuditLog(
       // والعميل لا يستطيع قراءة auth.users مباشرة (0037).
       let query = supabase
         .from("v_audit_log_detail")
-        .select(
-          // العمود في `v_audit_log_detail` اسمه `user_email` لا `user_name`.
-          // طلب عمود غير موجود يجعل PostgREST يرفض الاستعلام كلّه، فكانت
-          // شاشة التدقيق لا تفتح أصلًا — لا صفوف ولا رسالة مفهومة.
-          "id, organization_id, occurred_at, user_id, user_email, device_name, action_type, module, entity_id, entity_title, details, reason",
-        )
+        // `*` مقصود هنا، وهو الموضع الوحيد في المشروع الذي يستحقّه: عمود
+        // هويّة المستخدم في هذا المنظور تغيّر اسمه في تاريخ الهجرات — 0037
+        // و0044 سمّياه `user_email`، و0062 أعاد تسميته `user_name` — فبقيت
+        // قواعد قائمة على أيٍّ من الشكلين. وطلب عمود غير موجود يجعل PostgREST
+        // يرفض الاستعلام كلّه، فتُصبح شاشة التدقيق لا تفتح أصلًا: لا صفوف ولا
+        // رسالة مفهومة، وهي أسوأ حالة يمكن أن يكون عليها سجل تدقيق. باختيار
+        // كل الأعمدة يعمل الاستعلام على الشكلين، وتُقرأ الهويّة عبر
+        // `actorOf` أدناه.
+        .select("*")
         .eq("organization_id", organizationId)
         .order("occurred_at", { ascending: false })
         .limit(500);
@@ -78,11 +81,13 @@ function useAuditLog(
       const bounds = localDayRange(dateFrom, dateTo);
       if (bounds.from) query = query.gte("occurred_at", bounds.from);
       if (bounds.to) query = query.lte("occurred_at", bounds.to);
-      if (userFilter !== "all") query = query.eq("user_email", userFilter);
       if (deviceFilter !== "all") query = query.eq("device_name", deviceFilter);
       const { data, error } = await query;
       if (error) throw error;
-      return (data ?? []) as AuditLogDetailView[];
+      const rows = (data ?? []) as AuditLogDetailView[];
+      // تصفية المستخدم في المتصفّح لا في الاستعلام، لأن اسم العمود غير مضمون
+      // (انظر التعليق على `select`). الصفوف مسقوفة بـ500 أصلًا فالكلفة معدومة.
+      return userFilter === "all" ? rows : rows.filter((row) => actorOf(row) === userFilter);
     },
   });
 }
@@ -138,6 +143,19 @@ function formatAuditDetails(raw: string | null): string {
   return changes.map((change) => `${change.field}: ${change.old} ← ${change.next}`).join(" | ");
 }
 
+/**
+ * هويّة من نفّذ العملية.
+ *
+ * المنظور يحملها في `user_name` أو في `user_email` بحسب آخر هجرة أُنشئ بها —
+ * والشاشة لا يجوز أن تنكسر لأجل اسم عمود. ما لا يوجد يُعرض شرطة، ولا يُعرض
+ * معرّف المستخدم الخام لأنه لا يقول شيئًا لقارئ السجل.
+ */
+function actorOf(row: AuditLogDetailView): string {
+  const anyRow = row as unknown as Record<string, unknown>;
+  const value = anyRow.user_name ?? anyRow.user_email;
+  return typeof value === "string" && value.trim() ? value : "";
+}
+
 /** تصدير السجل المعروض كملف CSV (لقطة 81 — "تصدير كامل/دفعات"). */
 function exportCsv(rows: AuditLogDetailView[]) {
   const headers = ["التاريخ", "المستخدم", "الجهاز", "العملية", "الموديول", "العنصر", "التفاصيل", "السبب"];
@@ -147,7 +165,7 @@ function exportCsv(rows: AuditLogDetailView[]) {
     ...rows.map((row) =>
       [
         new Date(row.occurred_at).toLocaleString("ar-SA"),
-        row.user_email,
+        actorOf(row),
         row.device_name,
         ACTION_LABELS[row.action_type as AuditActionType] ?? row.action_type,
         row.module,
@@ -201,14 +219,15 @@ export default function AuditLog() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_audit_log_detail")
-        .select("user_email, device_name")
+        .select("*")
         .eq("organization_id", organization?.id)
         .limit(1000);
       if (error) throw error;
       const users = new Set<string>();
       const devices = new Set<string>();
-      (data ?? []).forEach((row: { user_email: string | null; device_name: string | null }) => {
-        if (row.user_email) users.add(row.user_email);
+      (data ?? []).forEach((row: AuditLogDetailView) => {
+        const actor = actorOf(row);
+        if (actor) users.add(actor);
         if (row.device_name) devices.add(row.device_name);
       });
       return { users: [...users].sort(), devices: [...devices].sort() };
@@ -330,7 +349,7 @@ export default function AuditLog() {
                 {(log.data ?? []).map((entry) => (
                   <TableRow key={entry.id}>
                     <TableCell className="text-xs text-muted-foreground">{new Date(entry.occurred_at).toLocaleString("ar-SA")}</TableCell>
-                    <TableCell className="text-sm">{entry.user_email ?? "—"}</TableCell>
+                    <TableCell className="text-sm">{actorOf(entry) || "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{entry.device_name ?? "—"}</TableCell>
                     <TableCell>
                       <span className="flex items-center gap-1.5">
@@ -348,7 +367,16 @@ export default function AuditLog() {
                     <TableCell className="max-w-[12rem] truncate text-sm text-muted-foreground">{entry.reason ?? "—"}</TableCell>
                   </TableRow>
                 ))}
-                {(log.data ?? []).length === 0 && (
+                {/* الفشل يُقال صريحًا. سجل تدقيق يقول «لا توجد عمليات» وهو
+                    عاجز عن القراءة يُطمئن مراجعًا في غير موضع الطمأنينة. */}
+                {log.isError && (
+                  <TableRow>
+                    <TableCell colSpan={8} className="py-8 text-center text-sm text-destructive">
+                      تعذّر قراءة سجل التدقيق: {(log.error as any)?.message ?? "خطأ غير معروف"}
+                    </TableCell>
+                  </TableRow>
+                )}
+                {!log.isError && (log.data ?? []).length === 0 && (
                   <TableRow>
                     <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
                       لا توجد عمليات مسجَّلة بعد.
