@@ -12,6 +12,7 @@ import RequiredLabel, {
 } from "@/components/shared/RequiredLabel";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { errorMessage } from "@/lib/error-message";
 import {
   Dialog,
   DialogContent,
@@ -399,7 +400,7 @@ export default function NewPatientDialog({
       toast({
         variant: "destructive",
         title: "تعذر حفظ المريض",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

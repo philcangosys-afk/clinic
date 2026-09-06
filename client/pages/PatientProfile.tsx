@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, Receipt, Save, Stethoscope, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { errorMessage } from "@/lib/error-message";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import type { HealthConditionRow, PatientHealthConditionRow, PatientNoteRow, PatientRow } from "@/lib/database.types";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
@@ -616,7 +617,7 @@ function OverviewTab({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1037,7 +1038,7 @@ function MedicalHistoryTab({ patientId }: { patientId: string }) {
       toast({
         variant: "destructive",
         title: "تعذر حفظ السوابق الصحية",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1146,7 +1147,7 @@ function NotesTab({ patientId }: { patientId: string }) {
       toast({
         variant: "destructive",
         title: "تعذر الحذف",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1267,7 +1268,7 @@ function HealthConditionsTab({ patientId }: { patientId: string }) {
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1293,7 +1294,7 @@ function HealthConditionsTab({ patientId }: { patientId: string }) {
       toast({
         variant: "destructive",
         title: "تعذر حفظ الملاحظة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1389,7 +1390,7 @@ function BlockingTab({ patient }: { patient: PatientRow }) {
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

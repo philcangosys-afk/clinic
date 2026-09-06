@@ -4,6 +4,7 @@ import { Plus, Printer, Receipt, WalletCards, Undo2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { errorMessage } from "@/lib/error-message";
 import { formatAmount, formatDate, formatDateTime, formatTime, useLocaleSettings } from "@/lib/locale";
 import NewInvoiceDialog, {
   type BillingAppointmentContext,
@@ -289,7 +290,7 @@ export default function Billing() {
       toast({
         variant: "destructive",
         title: "تعذر التحويل",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -297,7 +298,7 @@ export default function Billing() {
     toast({
       variant: "destructive",
       title,
-      description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      description: errorMessage(error),
     });
 
   /**
@@ -622,7 +623,7 @@ export default function Billing() {
                             toast({
                               variant: "destructive",
                               title: "تعذر تجهيز الفاتورة للطباعة",
-                              description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+                              description: errorMessage(error),
                             }),
                           )
                         }
@@ -1067,7 +1068,7 @@ function ReturnInvoiceDialog({
       toast({
         variant: "destructive",
         title: "تعذر إنشاء المرتجع",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1307,7 +1308,7 @@ function RecordPaymentDialog({
     toast({
       variant: "destructive",
       title,
-      description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      description: errorMessage(error),
     });
 
   const reset = () => {
@@ -1644,7 +1645,7 @@ function CashShiftsPanel({ organizationId }: { organizationId: string | undefine
     toast({
       variant: "destructive",
       title,
-      description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      description: errorMessage(error),
     });
 
   const openShift = useMutation({
@@ -2269,7 +2270,7 @@ function UnbilledDispensedPanel({ organizationId }: { organizationId: string | u
       toast({
         variant: "destructive",
         title: "تعذر إصدار فاتورة الأدوية",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

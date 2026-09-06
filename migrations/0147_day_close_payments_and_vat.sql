@@ -890,3 +890,17 @@ drop trigger if exists trg_stamp_voucher_business_day on financial_vouchers;
 create trigger trg_stamp_voucher_business_day
   before insert on financial_vouchers
   for each row execute function app_stamp_voucher_business_day();
+
+-- ---------------------------------------------------------------------------
+-- إعادة تحميل ذاكرة المخطّط في PostgREST — **سطرٌ لا يجوز نسيانه**.
+--
+-- هذه الترقية أسقطت `app_create_sales_invoice` وأعادت إنشاءها بتوقيع جديد
+-- (معامل `p_payments`). وPostgREST يحتفظ بتواقيع الدوال في ذاكرته ولا يعيد
+-- قراءتها إلّا بإشعار: فيبقى يعرف التوقيع القديم، وحين يرسل المتصفّح
+-- `p_payments` لا يجد دالّة تطابق الطلب فيردّ بـ400 (PGRST202) — والفاتورة
+-- لا تُحفظ من الواجهة أبدًا بينما تنجح من محرّر SQL.
+--
+-- وقد وقع هذا فعلًا: نجحت الفاتورة في القاعدة وفشلت في الشاشة، حتى أُرسل
+-- هذا الإشعار.
+-- ---------------------------------------------------------------------------
+notify pgrst, 'reload schema';

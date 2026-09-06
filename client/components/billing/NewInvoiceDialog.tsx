@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Receipt } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { errorMessage } from "@/lib/error-message";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import { formatAmount } from "@/lib/locale";
 import { useInsuranceSettings } from "@/lib/insurance-settings";
@@ -902,7 +903,7 @@ export default function NewInvoiceDialog({
       toast({
         variant: "destructive",
         title: "تعذر إنشاء الفاتورة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1316,7 +1317,9 @@ export default function NewInvoiceDialog({
           {!isQuote && (
             <div className="flex flex-col gap-2 rounded-lg border p-3">
               <div className="flex items-center justify-between">
-                <Label>الدفع (اختياري — يمكن التحصيل لاحقًا)</Label>
+                <Label>
+                  الدفع (اختياري — يمكن التحصيل لاحقًا)
+                </Label>
                 <Button
                   type="button"
                   size="sm"
@@ -1327,10 +1330,14 @@ export default function NewInvoiceDialog({
                       {
                         key: `pay-${Date.now()}-${prev.length}`,
                         methodId: "",
-                        amount:
-                          prev.length === 0
-                            ? Math.max(totals.net - paymentsTotal, 0).toFixed(2)
-                            : "",
+                        /**
+                         * كل سطر جديد يُملأ بالمتبقّي لا الأوّل وحده.
+                         *
+                         * الدفع المجزّأ هكذا يقع فعلًا: «عشرة نقدًا والباقي
+                         * شبكة» — فالسطر الثاني مبلغه معروف سلفًا، وحسابه
+                         * ذهنيًّا مع كل فاتورة مصدر أخطاء.
+                         */
+                        amount: Math.max(totals.net - paymentsTotal, 0).toFixed(2),
                         registerId: NONE,
                       },
                     ])
@@ -1367,22 +1374,44 @@ export default function NewInvoiceDialog({
                         </SelectContent>
                       </Select>
                     </div>
-                    <div className="flex w-28 flex-col gap-1">
+                    <div className="flex w-32 flex-col gap-1">
                       <Label className="text-xs">المبلغ</Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        step="0.01"
-                        dir="ltr"
-                        value={row.amount}
-                        onChange={(e) =>
-                          setPayments((prev) =>
-                            prev.map((p) =>
-                              p.key === row.key ? { ...p, amount: e.target.value } : p,
-                            ),
-                          )
-                        }
-                      />
+                      <div className="flex items-center gap-1">
+                        <Input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          dir="ltr"
+                          value={row.amount}
+                          onChange={(e) =>
+                            setPayments((prev) =>
+                              prev.map((p) =>
+                                p.key === row.key ? { ...p, amount: e.target.value } : p,
+                              ),
+                            )
+                          }
+                        />
+                        {/* «الباقي» يملأ هذا السطر بما لم تغطّه بقيّة السطور */}
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          title="املأ بالمبلغ المتبقّي"
+                          onClick={() =>
+                            setPayments((prev) => {
+                              const others = prev
+                                .filter((p) => p.key !== row.key)
+                                .reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+                              const rest = Math.max(totals.net - others, 0).toFixed(2);
+                              return prev.map((p) =>
+                                p.key === row.key ? { ...p, amount: rest } : p,
+                              );
+                            })
+                          }
+                        >
+                          الباقي
+                        </Button>
+                      </div>
                     </div>
                     {/* الصندوق يظهر للنقد وحده: القاعدة تشترط مناوبة مفتوحة
                         للقبض النقديّ ولا تشترطها للشبكة والتحويل. */}
@@ -1432,6 +1461,13 @@ export default function NewInvoiceDialog({
                     المدفوع: {paymentsTotal.toFixed(2)} · المتبقّي:{" "}
                     {Math.max(totals.net - paymentsTotal, 0).toFixed(2)} ر.س
                   </span>
+                  {/* الدفع الجزئيّ لا يمنع الحفظ: الفاتورة تُحفظ بحالة «مدفوعة
+                      جزئيًا» والباقي يُحصَّل لاحقًا من شاشة الفواتير. */}
+                  {paymentsTotal > 0 && paymentsTotal < totals.net - 0.009 && (
+                    <span className="text-xs text-muted-foreground">
+                      ستُحفظ الفاتورة مدفوعةً جزئيًا، والباقي يبقى مستحقًّا على المريض.
+                    </span>
+                  )}
                   {paymentsTotal > totals.net + 0.009 && (
                     <span className="text-xs text-destructive">
                       المدفوع يتجاوز صافي الفاتورة — صحّح المبالغ قبل الحفظ.

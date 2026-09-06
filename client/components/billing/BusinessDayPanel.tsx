@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarCheck, Lock } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { errorMessage } from "@/lib/error-message";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { formatAmount, formatDateTime, useLocaleSettings } from "@/lib/locale";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -155,7 +156,7 @@ export default function BusinessDayPanel() {
       toast({
         variant: "destructive",
         title: "تعذر إغلاق اليومية",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

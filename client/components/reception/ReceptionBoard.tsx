@@ -14,6 +14,8 @@ import {
   UserX,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { errorMessage } from "@/lib/error-message";
+import { formatAmount, formatDateTime, formatTime } from "@/lib/locale";
 import { usePermissions } from "@/lib/permissions";
 import { printHtml } from "@/lib/document-merge";
 import { Badge } from "@/components/ui/badge";
@@ -181,7 +183,7 @@ export default function ReceptionBoard({
       toast({
         variant: "destructive",
         title: "تعذّر تنفيذ الإجراء",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -199,7 +201,7 @@ export default function ReceptionBoard({
          <p style="margin:2px 0">${shortName}</p>
          <p style="margin:2px 0;font-size:12px">${row.doctor_name}${row.clinic_name ? ` · ${row.clinic_name}` : ""}</p>
          <p style="margin:2px 0;font-size:12px">
-           وقت التسجيل: ${new Date(row.arrived_at ?? Date.now()).toLocaleString("ar-SA")}
+           وقت التسجيل: ${formatDateTime(row.arrived_at ?? Date.now())}
          </p>
        </div>`,
       "thermal_80mm",
@@ -232,17 +234,21 @@ export default function ReceptionBoard({
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-12">الدور</TableHead>
-                <TableHead>المريض</TableHead>
-                <TableHead>الطبيب / العيادة</TableHead>
-                <TableHead>الموعد</TableHead>
-                <TableHead>الوصول</TableHead>
-                <TableHead>الانتظار</TableHead>
-                <TableHead>الأولوية</TableHead>
-                <TableHead>الحالة</TableHead>
-                <TableHead>التأمين</TableHead>
-                <TableHead>الفاتورة</TableHead>
-                <TableHead className="min-w-[16rem]">الإجراءات</TableHead>
+                {/* أحد عشر عمودًا وخلية إجراءات فيها ستّة أزرار: بلا منع الالتفاف
+                    تنكسر العناوين في منتصف الكلمة («الدو/ر»، «الفاتو/رة»)
+                    ويصير الجدول غير مقروء. والأعمدة الثانوية تُخفى على الشاشات
+                    الضيّقة بدل أن تسحق المريض والحالة. */}
+                <TableHead className="w-12 whitespace-nowrap">الدور</TableHead>
+                <TableHead className="min-w-[10rem]">المريض</TableHead>
+                <TableHead className="min-w-[9rem]">الطبيب / العيادة</TableHead>
+                <TableHead className="whitespace-nowrap">الموعد</TableHead>
+                <TableHead className="hidden whitespace-nowrap lg:table-cell">الوصول</TableHead>
+                <TableHead className="whitespace-nowrap">الانتظار</TableHead>
+                <TableHead className="whitespace-nowrap">الأولوية</TableHead>
+                <TableHead className="whitespace-nowrap">الحالة</TableHead>
+                <TableHead className="hidden whitespace-nowrap xl:table-cell">التأمين</TableHead>
+                <TableHead className="hidden whitespace-nowrap xl:table-cell">الفاتورة</TableHead>
+                <TableHead className="min-w-[16rem] whitespace-nowrap">الإجراءات</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -287,31 +293,23 @@ export default function ReceptionBoard({
                     <div className="text-xs text-muted-foreground">{row.clinic_name ?? "—"}</div>
                   </TableCell>
                   <TableCell className="text-xs tabular-nums">
-                    {new Date(row.scheduled_start).toLocaleTimeString("ar-SA", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
+                    {formatTime(row.scheduled_start)}
                   </TableCell>
-                  <TableCell className="text-xs tabular-nums">
-                    {row.arrived_at
-                      ? new Date(row.arrived_at).toLocaleTimeString("ar-SA", {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })
-                      : "—"}
+                  <TableCell className="hidden whitespace-nowrap text-xs tabular-nums lg:table-cell">
+                    {formatTime(row.arrived_at)}
                   </TableCell>
-                  <TableCell className={`tabular-nums ${WAITING_STYLES[row.waiting_state]}`}>
+                  <TableCell className={`whitespace-nowrap tabular-nums ${WAITING_STYLES[row.waiting_state]}`}>
                     {row.waiting_minutes === null ? "—" : `${row.waiting_minutes} د`}
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="whitespace-nowrap">
                     <Badge variant={row.priority === "normal" ? "outline" : "destructive"}>
                       {PRIORITY_LABELS[row.priority] ?? row.priority}
                     </Badge>
                   </TableCell>
-                  <TableCell>
+                  <TableCell className="whitespace-nowrap">
                     <Badge variant="secondary">{STATUS_LABELS[row.status] ?? row.status}</Badge>
                   </TableCell>
-                  <TableCell className="text-xs">
+                  <TableCell className="hidden whitespace-nowrap text-xs xl:table-cell">
                     {row.insurance_company_name ? (
                       <Badge variant={row.insurance_valid ? "success" : "destructive"}>
                         {row.insurance_valid ? row.insurance_company_name : "بطاقة منتهية"}
@@ -320,10 +318,10 @@ export default function ReceptionBoard({
                       <span className="text-muted-foreground">نقدي</span>
                     )}
                   </TableCell>
-                  <TableCell className="text-xs">
+                  <TableCell className="hidden whitespace-nowrap text-xs xl:table-cell">
                     {row.invoice_id ? (
                       <span className={Number(row.remaining_amount) > 0 ? "text-rose-600" : "text-emerald-700"}>
-                        متبقٍ {Number(row.remaining_amount ?? 0).toLocaleString("ar-SA")}
+                        متبقٍ {formatAmount(row.remaining_amount ?? 0)}
                       </span>
                     ) : (
                       <span className="text-muted-foreground">لا فاتورة</span>
@@ -512,7 +510,7 @@ function TransferDialog({
       toast({
         variant: "destructive",
         title: "تعذّر النقل",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -605,7 +603,7 @@ function PriorityDialog({ row, onClose }: { row: QueueRow | null; onClose: () =>
       toast({
         variant: "destructive",
         title: "تعذّر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -667,7 +665,7 @@ function NoShowDialog({
         <DialogHeader>
           <DialogTitle>تسجيل عدم الحضور</DialogTitle>
           <DialogDescription>
-            {row?.patient_name} — موعد {row ? new Date(row.scheduled_start).toLocaleString("ar-SA") : ""}.
+            {row?.patient_name} — موعد {row ? formatDateTime(row.scheduled_start) : ""}.
             <br />
             السبب إلزامي وتفرضه القاعدة: «لم يحضر» بلا سبب يمنع أي متابعة لاحقة للمريض،
             ولا يفرّق بين من لم يُتصل به ومن اعتذر.

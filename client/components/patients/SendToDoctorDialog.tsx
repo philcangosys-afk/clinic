@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase";
+import { errorMessage } from "@/lib/error-message";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import {
   Dialog,
@@ -117,7 +118,7 @@ export default function SendToDoctorDialog({
       toast({
         variant: "destructive",
         title: "تعذر الإرسال إلى الطبيب",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
