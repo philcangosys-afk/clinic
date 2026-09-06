@@ -171,6 +171,7 @@ export default function AppointmentCalendar({
   statusFilter,
   onCreateAt,
   onOpenAppointment,
+  onViewChange,
 }: {
   organizationId: string | undefined;
   selectedDay: string;
@@ -188,9 +189,26 @@ export default function AppointmentCalendar({
   statusFilter?: string;
   onCreateAt: (start: Date, doctorId: string | null, clinicId: string | null) => void;
   onOpenAppointment: (appointmentId: string) => void;
+  /**
+   * يُبلِّغ الشاشة بنمط العرض الحالي.
+   *
+   * الشاشة تملك أسهم التاريخ في ترويستها، وكانت تتحرّك **يومًا واحدًا دائمًا**
+   * مهما كان العرض. ففي العرض الشهري يقفز التاريخ يومًا واحدًا، ويعيد التقويم
+   * ضبط مرساته عليه — فيبقى الشهر نفسه معروضًا مهما ضُغط السهم، ولا يُبلَغ
+   * الشهر التالي إلّا بثلاثين ضغطة. فتتبع الشاشة نمط العرض وتتحرّك بوحدته:
+   * يومًا، أو أسبوعًا، أو شهرًا.
+   */
+  onViewChange?: (view: CalendarView) => void;
 }) {
   const { can } = usePermissions();
   const [view, setView] = useState<CalendarView>("day");
+
+  useEffect(() => {
+    onViewChange?.(view);
+    // `onViewChange` خارج الاعتماديات عمدًا: الشاشة تُمرّره دالّةً جديدة مع كل
+    // رسم، فإدراجه يجعل الأثر يعمل بلا انقطاع.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
   const [groupBy, setGroupBy] = useState<GroupBy>("doctor");
   const [anchor, setAnchor] = useState(() => startOfDay(new Date()));
   const [doctorFilter, setDoctorFilter] = useState<string>("all");

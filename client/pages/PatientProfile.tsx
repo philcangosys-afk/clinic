@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
+import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, Receipt, Save, Stethoscope, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -33,7 +33,13 @@ import DocumentsTab from "@/components/patients/DocumentsTab";
 import RadiologyImagesTab from "@/components/patients/RadiologyImagesTab";
 import Odontogram from "@/components/medical/Odontogram";
 import SendToDoctorDialog from "@/components/patients/SendToDoctorDialog";
-import RequiredLabel, { requiredInputClass } from "@/components/shared/RequiredLabel";
+import NewInvoiceDialog from "@/components/billing/NewInvoiceDialog";
+import RequiredLabel, {
+  DigitCounter,
+  digitsOnly,
+  hasDigits,
+  requiredInputClass,
+} from "@/components/shared/RequiredLabel";
 import {
   ageFromBirthDate,
   ageMonthsFromBirthDate,
@@ -383,9 +389,9 @@ function isFormDirty(draft: PatientFormState, patient: PatientRow): boolean {
  * الزيارة غير المفوتَرة، ونسخةٌ مصغَّرة منها كانت ستُصدر فواتير بقواعد أقلّ.
  */
 function PatientQuickActions({ patient }: { patient: PatientRow }) {
-  const navigate = useNavigate();
-  const { membership, legacyMode } = useOrganizationAccess();
+  const { organization, membership, legacyMode } = useOrganizationAccess();
   const [sendOpen, setSendOpen] = useState(false);
+  const [invoiceOpen, setInvoiceOpen] = useState(false);
 
   /**
    * الصفات هنا **نفس** الصفات التي تفرضها القاعدة، لا مفاتيح صلاحية جديدة.
@@ -408,11 +414,7 @@ function PatientQuickActions({ patient }: { patient: PatientRow }) {
   return (
     <>
       {canBill && !patient.block_invoices && !patient.block_file && (
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => navigate(`/billing?patientId=${patient.id}`)}
-        >
+        <Button size="sm" variant="outline" onClick={() => setInvoiceOpen(true)}>
           <Receipt className="h-3.5 w-3.5" />
           إصدار فاتورة
         </Button>
@@ -422,6 +424,40 @@ function PatientQuickActions({ patient }: { patient: PatientRow }) {
           <Stethoscope className="h-3.5 w-3.5" />
           إرسال إلى الطبيب
         </Button>
+      )}
+      {/**
+        * الفاتورة تُفتح **فوق ملفّ المريض** لا بالانتقال إلى شاشة الفواتير.
+        *
+        * الانتقال كان يُخرج الموظف من الملفّ ثم يطلب منه البحث عن المريض الذي
+        * هو واقف في ملفّه — والأسوأ أنه يفقد سياق ما كان يفعله. والنافذة هنا
+        * هي **نفسها** نافذة شاشة الفواتير بكل قواعدها، والمريض مُدرَج فيها
+        * سلفًا ببياناته التأمينية.
+        *
+        * `invoiceOpen &&` شرطٌ للتركيب لا للعرض: النافذة تجلب الأطباء والعيادات
+        * والمخازن والمجموعات السريعة وبنود الاتفاقيات، وتحميل ذلك كلّه مع كل
+        * فتح لملفّ مريض هدرٌ لا يستفيد منه من لا يُفوتر.
+        */}
+      {invoiceOpen && organization?.id && (
+        <NewInvoiceDialog
+          open={invoiceOpen}
+          onOpenChange={setInvoiceOpen}
+          organizationId={organization.id}
+          vatRate={organization.default_vat_rate ?? 15}
+          appointment={{
+            id: null,
+            patient_id: patient.id,
+            doctor_id: patient.treating_doctor_id,
+            clinic_id: null,
+            patient: {
+              id: patient.id,
+              name_ar: patient.name_ar,
+              insurance_company_name: patient.insurance_company_name,
+              insurance_policy_number: patient.insurance_policy_number,
+              insurance_policy_category: patient.insurance_policy_category,
+              insurance_membership_number: patient.insurance_membership_number,
+            },
+          }}
+        />
       )}
       {sendOpen && (
         <SendToDoctorDialog
@@ -470,8 +506,9 @@ function OverviewTab({
 
   const missing = {
     name_ar: !form.name_ar.trim(),
-    id_number: !patient.is_newborn && !form.id_number.trim(),
-    mobile_number: !form.mobile_number.trim(),
+    // الطول شرطٌ لا الوجود — والقاعدة ترفض الناقص كذلك (0147)
+    id_number: !patient.is_newborn && !hasDigits(form.id_number),
+    mobile_number: !hasDigits(form.mobile_number),
     age: !form.age_years.trim() && !form.age_months.trim(),
     nationality_value_id: !form.nationality_value_id,
   };
@@ -654,12 +691,17 @@ function OverviewTab({
         </div>
         <div className="flex flex-col gap-1.5">
           <RequiredLabel missing={missing.mobile_number}>رقم الجوال</RequiredLabel>
-          <Input
-            value={form.mobile_number}
-            onChange={(e) => set("mobile_number", e.target.value)}
-            className={requiredInputClass(missing.mobile_number)}
-            inputMode="tel"
-          />
+          <div className="flex items-center gap-2">
+            <Input
+              value={form.mobile_number}
+              onChange={(e) => set("mobile_number", digitsOnly(e.target.value))}
+              className={requiredInputClass(missing.mobile_number)}
+              inputMode="numeric"
+              dir="ltr"
+              placeholder="05XXXXXXXX"
+            />
+            <DigitCounter value={form.mobile_number} />
+          </div>
         </div>
         <div className="flex flex-col gap-1.5">
           <Label>هاتف إضافي</Label>
@@ -667,12 +709,17 @@ function OverviewTab({
         </div>
         <div className="flex flex-col gap-1.5">
           <RequiredLabel missing={missing.id_number}>رقم الهوية/الإقامة</RequiredLabel>
-          <Input
-            value={form.id_number}
-            dir="ltr"
-            onChange={(e) => set("id_number", e.target.value)}
-            className={requiredInputClass(missing.id_number)}
-          />
+          <div className="flex items-center gap-2">
+            <Input
+              value={form.id_number}
+              dir="ltr"
+              inputMode="numeric"
+              placeholder="١٠ أرقام"
+              onChange={(e) => set("id_number", digitsOnly(e.target.value))}
+              className={requiredInputClass(missing.id_number)}
+            />
+            <DigitCounter value={form.id_number} />
+          </div>
         </div>
         <div className="flex flex-col gap-1.5">
           <RequiredLabel missing={missing.age}>العمر</RequiredLabel>

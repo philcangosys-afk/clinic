@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import AppointmentCalendar from "@/components/appointments/AppointmentCalendar";
+import AppointmentCalendar, {
+  type CalendarView,
+} from "@/components/appointments/AppointmentCalendar";
 import AppointmentMessages from "@/components/appointments/AppointmentMessages";
 import { CalendarX, Check, ChevronLeft, ChevronRight, Edit3, ExternalLink, Plus, Search } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -148,6 +150,8 @@ export default function Appointments() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [day, setDay] = useState(() => toDateInputValue(new Date()));
+  /** نمط عرض التقويم — تتبعه أسهم التاريخ في الترويسة. */
+  const [calendarView, setCalendarView] = useState<CalendarView>("day");
   const [createOpen, setCreateOpen] = useState(false);
   const [managedAppointment, setManagedAppointment] = useState<AppointmentWithRelations | null>(null);
   const [search, setSearch] = useState("");
@@ -337,9 +341,35 @@ export default function Appointments() {
     return map;
   }, [doctors.data, filteredAppointments]);
 
+  /**
+   * التنقّل بوحدة العرض المعروض لا باليوم دائمًا.
+   *
+   * السهم كان يتقدّم يومًا واحدًا مهما كان العرض، والتقويم يعيد ضبط مرساته
+   * على اليوم الجديد — فالعرض الشهري يبقى على شهره مهما ضُغط السهم، ولا
+   * يُبلَغ الشهر التالي إلّا بثلاثين ضغطة. والآن: يوم في العرض اليومي،
+   * وأسبوع في الأسبوعي، وشهر في الشهري.
+   *
+   * واليوم داخل الشهر يُقصَر على طول الشهر الهدف: ٣١ أغسطس + شهر يفيض إلى
+   * أكتوبر ويقفز سبتمبر كلّه.
+   */
   const shiftDay = (delta: number) => {
-    const next = new Date(`${day}T00:00:00`);
-    next.setDate(next.getDate() + delta);
+    const current = new Date(`${day}T00:00:00`);
+    let next: Date;
+    if (calendarView === "month") {
+      const anchor = new Date(current.getFullYear(), current.getMonth() + delta, 1);
+      const daysInMonth = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0).getDate();
+      next = new Date(
+        anchor.getFullYear(),
+        anchor.getMonth(),
+        Math.min(current.getDate(), daysInMonth),
+      );
+    } else if (calendarView === "week") {
+      next = new Date(current);
+      next.setDate(next.getDate() + 7 * delta);
+    } else {
+      next = new Date(current);
+      next.setDate(next.getDate() + delta);
+    }
     setDay(toDateInputValue(next));
   };
 
@@ -516,6 +546,7 @@ export default function Appointments() {
         <AppointmentCalendar
           organizationId={organization?.id}
           selectedDay={day}
+          onViewChange={setCalendarView}
           doctors={doctors.data ?? []}
           clinics={clinicList.data ?? []}
           search={search}

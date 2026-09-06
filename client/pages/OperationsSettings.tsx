@@ -616,6 +616,10 @@ function VatSettingsTab({ organizationId, readOnly }: { organizationId: string |
         {toggle("block_invoice_without_nationality_or_id", "منع إصدار الفاتورة بلا جنسية/هوية للمريض")}
         {toggle("vat_exemption_disabled_for_customer_types", "تعطيل إعفاء الضريبة حسب نوع العميل")}
         {toggle("vat_exemption_disabled_for_items", "تعطيل إعفاء الضريبة حسب الصنف")}
+        {toggle(
+          "vat_exempt_requires_id",
+          "اشتراط رقم الهوية لإعفاء الجنسية من الضريبة",
+        )}
         <Separator />
         <ExemptNationalitiesPicker
           selected={value.vat_exempt_nationality_value_ids ?? []}
@@ -647,6 +651,7 @@ const defaultVatSettings: OrganizationVatSettingsRow = {
   block_invoice_without_nationality_or_id: false,
   vat_exemption_disabled_for_customer_types: false,
   vat_exemption_disabled_for_items: false,
+  vat_exempt_requires_id: true,
   vat_exempt_nationality_value_ids: [],
   updated_at: "",
 };

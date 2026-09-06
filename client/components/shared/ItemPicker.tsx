@@ -43,16 +43,36 @@ export default function ItemPicker({ onSelect }: { onSelect: (item: ItemSearchRe
     const handle = setTimeout(async () => {
       // التقييد بالمؤسسة النشطة: RLS يسمح بكل مؤسسة ينتمي إليها المستخدم،
       // فبدونه كان صنف مؤسسة أخرى يُضاف كبند في فاتورة هذه المؤسسة.
-      const pattern = quoteOrPattern(term.trim());
-      const { data, error } = await supabase
-        .from("items")
-        .select("id, code, name_ar, name_en, price, is_vat_exempt")
-        .eq("organization_id", organization.id)
-        .eq("is_disabled", false)
-        .eq("is_archived", false)
-        // البحث يشمل الاسم الإنجليزي: من يعمل بالإنجليزية يبحث بها
-        .or(`name_ar.ilike.${pattern},name_en.ilike.${pattern},code.ilike.${pattern},barcode.ilike.${pattern}`)
-        .limit(8);
+      const raw = term.trim();
+      const pattern = quoteOrPattern(raw);
+      /**
+       * الكود أوّلًا، ثم البحث العامّ.
+       *
+       * البحث العامّ يُرجع ثمانية صفوف بلا ترتيب، فكتابة كود قصير مثل «12»
+       * كانت تُرجع كل صنف يحوي «12» في اسمه أو باركوده — وقد لا يكون الصنف
+       * صاحب الكود بينها أصلًا. والاستقبال يبحث بالكود عند الفوترة، فمطابقته
+       * الحرفية تُقدَّم على كل شيء بدل أن تضيع في القائمة.
+       */
+      const [exact, { data, error }] = await Promise.all([
+        supabase
+          .from("items")
+          .select("id, code, name_ar, name_en, price, is_vat_exempt")
+          .eq("organization_id", organization.id)
+          .eq("is_disabled", false)
+          .eq("is_archived", false)
+          .eq("code", raw)
+          .limit(3),
+        supabase
+          .from("items")
+          .select("id, code, name_ar, name_en, price, is_vat_exempt")
+          .eq("organization_id", organization.id)
+          .eq("is_disabled", false)
+          .eq("is_archived", false)
+          // البحث يشمل الاسم الإنجليزي: من يعمل بالإنجليزية يبحث بها
+          .or(`name_ar.ilike.${pattern},name_en.ilike.${pattern},code.ilike.${pattern},barcode.ilike.${pattern}`)
+          .order("code")
+          .limit(12),
+      ]);
       /**
        * فشل الاستعلام كان مكتومًا تمامًا: `error` مُهمَل والقائمة تظهر فارغة،
        * فيستنتج الموظّف أن الصنف غير موجود — فيُنشئ صنفًا مكرَّرًا أو يترك العرض
@@ -65,7 +85,11 @@ export default function ItemPicker({ onSelect }: { onSelect: (item: ItemSearchRe
         return;
       }
       setSearchError(null);
-      setResults((data as ItemSearchResult[]) ?? []);
+      const exactRows = (exact.data as ItemSearchResult[]) ?? [];
+      const rest = ((data as ItemSearchResult[]) ?? []).filter(
+        (row) => !exactRows.some((hit) => hit.id === row.id),
+      );
+      setResults([...exactRows, ...rest].slice(0, 12));
     }, 250);
     return () => clearTimeout(handle);
   }, [term, organization?.id]);

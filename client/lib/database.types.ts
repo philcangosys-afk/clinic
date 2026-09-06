@@ -556,6 +556,8 @@ export interface OrganizationVatSettingsRow {
   vat_exemption_disabled_for_customer_types: boolean;
   vat_exemption_disabled_for_items: boolean;
   vat_exempt_nationality_value_ids: UUID[];
+  /** الإعفاء بالجنسية يشترط رقم هوية (0147). */
+  vat_exempt_requires_id: boolean;
   updated_at: string;
 }
 

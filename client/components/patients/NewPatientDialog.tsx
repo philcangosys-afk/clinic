@@ -4,7 +4,12 @@ import { useNavigate } from "react-router-dom";
 import { TriangleAlert } from "lucide-react";
 import { birthDateFromAge, nameWordCount, transliterateArabicName } from "@/lib/arabic-name";
 import { useDirtyDialogClose } from "@/hooks/use-unsaved-guard";
-import RequiredLabel, { requiredInputClass } from "@/components/shared/RequiredLabel";
+import RequiredLabel, {
+  DigitCounter,
+  digitsOnly,
+  hasDigits,
+  requiredInputClass,
+} from "@/components/shared/RequiredLabel";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import {
@@ -143,9 +148,15 @@ export default function NewPatientDialog({
 
   const missing = {
     name_ar: !form.name_ar.trim(),
-    // المولود الجديد لا هوية له بعد — طلبها منه يمنع تسجيله أصلًا
-    id_number: !form.is_newborn && !form.id_number.trim(),
-    mobile_number: !form.mobile_number.trim(),
+    /**
+     * الطول شرطٌ لا الوجود: رقم هوية بتسع خانات أسوأ من غيابه — يمرّ في
+     * الملفّ ويُرفض في المطالبة التأمينية بعد شهر. والقاعدة ترفضه كذلك
+     * (0147)، فالمنع هنا يُظهر السبب قبل الحفظ لا بعده.
+     *
+     * المولود الجديد مستثنى من الهوية: طلبها منه يمنع تسجيله أصلًا.
+     */
+    id_number: !form.is_newborn && !hasDigits(form.id_number),
+    mobile_number: !hasDigits(form.mobile_number),
     age: !form.age_years.trim() && !form.age_months.trim(),
     nationality_value_id: !form.nationality_value_id,
   };
@@ -280,7 +291,9 @@ export default function NewPatientDialog({
        * إكماله الآن.
        */
       if (missingCount > 0) {
-        throw new Error("أكمل الحقول الأساسية المعلَّمة بالأحمر: الاسم الرباعي والهوية والجوال والعمر والجنسية");
+        throw new Error(
+          "أكمل الحقول الأساسية المعلَّمة بالأحمر: الاسم الرباعي، والهوية والجوال (١٠ أرقام لكلٍّ منهما)، والعمر، والجنسية",
+        );
       }
 
       // الهوية المكرَّرة تمنع الحفظ — لا تُنبِّه فقط
@@ -439,12 +452,22 @@ export default function NewPatientDialog({
             />
           </Field>
           <Field labelNode={<RequiredLabel missing={missing.mobile_number}>رقم الجوال</RequiredLabel>}>
-            <Input
-              value={form.mobile_number}
-              onChange={(e) => set("mobile_number", e.target.value)}
-              className={requiredInputClass(missing.mobile_number)}
-              inputMode="tel"
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                value={form.mobile_number}
+                onChange={(e) => set("mobile_number", digitsOnly(e.target.value))}
+                className={requiredInputClass(missing.mobile_number)}
+                inputMode="numeric"
+                dir="ltr"
+                placeholder="05XXXXXXXX"
+              />
+              <DigitCounter value={form.mobile_number} />
+            </div>
+            {form.mobile_number.length === 10 && !form.mobile_number.startsWith("05") && (
+              <span className="text-xs text-amber-700">
+                جوّال السعودية يبدأ بـ05 — تأكّد من الرقم.
+              </span>
+            )}
           </Field>
           <Field label="الجنس">
             <Select value={form.gender} onValueChange={(value) => set("gender", value as "male" | "female")}>
@@ -490,12 +513,17 @@ export default function NewPatientDialog({
           <Field
             labelNode={<RequiredLabel missing={missing.id_number}>رقم الهوية/الإقامة</RequiredLabel>}
           >
-            <Input
-              value={form.id_number}
-              onChange={(e) => set("id_number", e.target.value)}
-              className={requiredInputClass(missing.id_number)}
-              dir="ltr"
-            />
+            <div className="flex items-center gap-2">
+              <Input
+                value={form.id_number}
+                onChange={(e) => set("id_number", digitsOnly(e.target.value))}
+                className={requiredInputClass(missing.id_number)}
+                inputMode="numeric"
+                dir="ltr"
+                placeholder="١٠ أرقام"
+              />
+              <DigitCounter value={form.id_number} />
+            </div>
             {existingIdFile && (
               <button
                 type="button"
