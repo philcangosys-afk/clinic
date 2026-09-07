@@ -22,6 +22,7 @@ import PurchaseCycle from "@/components/purchasing/PurchaseCycle";
 import { useToast } from "@/hooks/use-toast";
 import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDialog";
 import LookupSelect from "@/components/shared/LookupSelect";
+import { errorMessage } from "@/lib/error-message";
 
 /** حقول المورد التي يقرأها/يكتبها النموذج (إنشاء وتعديل). */
 export type DistributorEditRow = {
@@ -161,7 +162,7 @@ function DistributorsTab() {
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -467,7 +468,7 @@ function NewDistributorDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

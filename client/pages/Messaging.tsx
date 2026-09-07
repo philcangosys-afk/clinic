@@ -32,6 +32,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import SendMessageTab from "@/components/messaging/SendMessageTab";
+import { errorMessage } from "@/lib/error-message";
 
 const CHANNEL_ICON: Record<MessageChannel, typeof Mail> = { sms: Smartphone, email: Mail, internal: MessageSquare };
 const CHANNEL_LABELS: Record<MessageChannel, string> = { sms: "رسالة نصية", email: "بريد إلكتروني", internal: "داخلي" };
@@ -299,7 +300,7 @@ function TemplatesTab() {
       toast({
         variant: "destructive",
         title: "تعذر الحفظ — التعديل مقيَّد بصفة مدير المؤسسة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -433,7 +434,7 @@ function NewTemplateDialog({
       toast({
         variant: "destructive",
         title: "تعذر إنشاء القالب",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -641,7 +642,7 @@ function NewCannedTextDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -763,7 +764,7 @@ function SmsLedgerTab() {
       toast({ title: "تم حفظ حد التنبيه" });
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الحفظ", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   const topUp = useMutation({
@@ -787,7 +788,7 @@ function SmsLedgerTab() {
       toast({
         variant: "destructive",
         title: "تعذرت التعبئة — مقيَّدة بصفة مدير المؤسسة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1310,7 +1311,7 @@ function ChatSettingsTab() {
       toast({ title: "تم حفظ إعدادات الدردشة" });
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الحفظ", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   return (

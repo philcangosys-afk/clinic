@@ -30,6 +30,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * نماذج CBAHI للجودة وسلامة المريض (لقطة 119).
@@ -156,7 +157,7 @@ function CbahiFormDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

@@ -28,6 +28,7 @@ import ServiceEditorDialog, {
   ITEM_TYPE_LABELS,
   MEDICAL_SERVICE_TYPES,
 } from "@/components/catalog/ServiceEditorDialog";
+import { errorMessage } from "@/lib/error-message";
 
 const ITEMS_CAP = 200;
 
@@ -262,7 +263,7 @@ export default function Services() {
       toast({
         variant: "destructive",
         title: "تعذر إعادة الترقيم",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -584,7 +585,7 @@ function ArchiveDialog({ item, onClose }: { item: any | null; onClose: () => voi
       toast({
         variant: "destructive",
         title: isArchived ? "تعذرت الاستعادة" : "تعذرت الأرشفة",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

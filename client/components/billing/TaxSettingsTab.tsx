@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * الإعدادات الضريبية للمنشأة — المرحلة ١٢.
@@ -146,7 +147,7 @@ export default function TaxSettingsTab() {
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -435,7 +436,7 @@ export function EInvoicePanel() {
       toast({
         variant: "destructive",
         title: "تعذر التوليد",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -465,7 +466,7 @@ export function EInvoicePanel() {
       toast({
         variant: "destructive",
         title: "تعذر التسجيل",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

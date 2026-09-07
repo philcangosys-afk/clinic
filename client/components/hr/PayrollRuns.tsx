@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger,
 } from "@/components/ui/dialog";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * مسيّرات الرواتب — المرحلة 20.
@@ -155,7 +156,7 @@ function RunsPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const createRun = useMutation({
@@ -619,7 +620,7 @@ function ComponentsPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const createComponent = useMutation({
@@ -876,7 +877,7 @@ function LoansPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر التسجيل",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1204,7 +1205,7 @@ function AttendancePanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const approveOvertime = useMutation({

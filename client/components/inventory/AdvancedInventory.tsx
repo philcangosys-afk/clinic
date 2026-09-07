@@ -16,6 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * المخزون المتقدم — المرحلة 18.
@@ -107,7 +108,7 @@ function TransfersPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const approve = useMutation({
@@ -334,7 +335,7 @@ function CountsPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const start = useMutation({
@@ -708,7 +709,7 @@ function ReorderPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -905,7 +906,7 @@ function AgingPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["stock-on-hand", organization?.id] });
@@ -1176,7 +1177,7 @@ function LocationsPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

@@ -17,6 +17,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BodyDiagramReadOnly, VIEW_LABELS, type BodyDiagramData } from "@/components/medical/BodyDiagram";
+import { errorMessage } from "@/lib/error-message";
 
 /** دورة حياة الخدمة (0073) — نفس القيم المسموحة في القاعدة. */
 const SERVICE_STATUS_LABELS: Record<string, string> = {
@@ -247,7 +248,7 @@ export default function VisitCanvasDetail({ visitId }: { visitId: string }) {
       toast({
         variant: "destructive",
         title: "تعذر الإلغاء",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

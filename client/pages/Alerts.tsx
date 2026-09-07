@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePermissions } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * التنبيهات الموحّدة (لقطة 80).
@@ -312,7 +313,7 @@ function NotificationInbox() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const markRead = useMutation({
@@ -552,7 +553,7 @@ function RoutingRules() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

@@ -23,6 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import LookupSelect from "@/components/shared/LookupSelect";
 import ServicePriceLists from "./ServicePriceLists";
+import { errorMessage } from "@/lib/error-message";
 
 export const ITEM_TYPE_LABELS: Record<string, string> = {
   service: "خدمة طبية",
@@ -377,7 +378,7 @@ export default function ServiceEditorDialog({
         variant: "destructive",
         title: "تعذر الحفظ",
         description:
-          error instanceof Error ? error.message : "حدث خطأ غير متوقع (تأكد من عدم تكرار الكود)",
+          errorMessage(error, "حدث خطأ غير متوقع (تأكد من عدم تكرار الكود)"),
       }),
   });
 
@@ -1051,11 +1052,9 @@ function ClaimCodesEditor({
         variant: "destructive",
         title: "تعذر الإضافة",
         description:
-          error instanceof Error && error.message.includes("uq_item_claim_codes")
+          errorMessage(error).includes("uq_item_claim_codes")
             ? "يوجد كود رئيسي لهذه الخدمة بنفس النطاق"
-            : error instanceof Error
-              ? error.message
-              : "خطأ غير متوقع",
+            : errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1073,7 +1072,7 @@ function ClaimCodesEditor({
       toast({
         variant: "destructive",
         title: "تعذر الحذف",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

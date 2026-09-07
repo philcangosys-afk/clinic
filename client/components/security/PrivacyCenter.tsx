@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * مركز الخصوصية — الموافقات وسجل الاطّلاع وسياسات الاحتفاظ (المرحلة 15).
@@ -166,7 +167,7 @@ function ConsentsPanel() {
       toast({
         variant: "destructive",
         title: "تعذر التسجيل",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -186,7 +187,7 @@ function ConsentsPanel() {
       toast({
         variant: "destructive",
         title: "تعذر السحب",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -581,7 +582,7 @@ function RetentionPanel() {
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -611,7 +612,7 @@ function RetentionPanel() {
       toast({
         variant: "destructive",
         title: "تعذر الحساب",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -631,7 +632,7 @@ function RetentionPanel() {
       toast({
         variant: "destructive",
         title: "تعذر التعديل",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

@@ -26,6 +26,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
 import LookupSelect from "@/components/shared/LookupSelect";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * قوائم الانتظار (لقطة 102).
@@ -175,7 +176,7 @@ function AddToWaitlistDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -279,7 +280,7 @@ export default function Waitlist() {
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -473,7 +474,7 @@ function ConvertWaitlistDialog({
       toast({ title: "تم إنشاء الموعد وربطه بطلب الانتظار" });
       onOpenChange(false);
     },
-    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر إنشاء الموعد", description: error instanceof Error ? error.message : "حدث خطأ" }),
+    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر إنشاء الموعد", description: errorMessage(error, "حدث خطأ") }),
   });
 
   return <Dialog open={Boolean(target)} onOpenChange={onOpenChange}>

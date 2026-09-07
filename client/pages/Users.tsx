@@ -23,6 +23,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * بيانات المستخدمين والصلاحيات (لقطة 6).
@@ -301,7 +302,7 @@ function PermissionsDialog({
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -334,7 +335,7 @@ function PermissionsDialog({
         {catalog.isError && (
           <div className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm">
             تعذّر قراءة كتالوج الصلاحيات:{" "}
-            {catalog.error instanceof Error ? catalog.error.message : "خطأ غير متوقع"}
+            {errorMessage(catalog.error, "خطأ غير متوقع")}
           </div>
         )}
 
@@ -624,7 +625,7 @@ export default function Users() {
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

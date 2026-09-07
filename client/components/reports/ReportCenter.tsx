@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * مركز التقارير — مشغّل واحد لكل تقارير المرحلة 14.
@@ -939,7 +940,7 @@ export default function ReportCenter() {
           {rows.isError && (
             <p className="py-6 text-center text-sm text-destructive">
               تعذّر تحميل التقرير:{" "}
-              {rows.error instanceof Error ? rows.error.message : "خطأ غير متوقع"}
+              {errorMessage(rows.error, "خطأ غير متوقع")}
             </p>
           )}
           {!rows.isLoading && !rows.isError && (

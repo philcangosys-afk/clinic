@@ -24,6 +24,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { errorMessage } from "@/lib/error-message";
 
 const STATUS_LABELS: Record<LeaveRequestStatus, string> = {
   pending: "قيد المراجعة",
@@ -472,7 +473,7 @@ function BalancesTab({ organizationId }: { organizationId: string | undefined })
       toast({
         variant: "destructive",
         title: "تعذر التوليد",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -521,7 +522,7 @@ function BalancesTab({ organizationId }: { organizationId: string | undefined })
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * إعدادات الجهاز والنسخ الاحتياطي (لقطتا 79 و80).
@@ -144,7 +145,7 @@ export default function DeviceSettings() {
       toast({
         variant: "destructive",
         title: `تعذر تصدير "${label}"`,
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       });
     } finally {
       setExporting(null);

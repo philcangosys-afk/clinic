@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * تقويم المواعيد.
@@ -1004,7 +1005,7 @@ function RescheduleDialog({
       toast({
         variant: "destructive",
         title: "تعذّرت إعادة الجدولة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

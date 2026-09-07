@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * جهات الاتصال والمرافقون (0066).
@@ -96,7 +97,7 @@ export default function PatientContactsTab({ patientId }: { patientId: string })
       toast({
         variant: "destructive",
         title: "تعذّر الحذف",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -254,7 +255,7 @@ function AddContactDialog({
       toast({
         variant: "destructive",
         title: "تعذّرت الإضافة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

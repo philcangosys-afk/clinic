@@ -20,6 +20,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * مساحة عمل الطبيب — المرحلة 25.
@@ -148,7 +149,7 @@ function CriticalPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const acknowledge = useMutation({

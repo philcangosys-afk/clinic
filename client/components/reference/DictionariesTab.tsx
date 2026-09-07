@@ -22,6 +22,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDialog";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * القواميس المرجعية — المرحلة السادسة.
@@ -145,7 +146,7 @@ export default function DictionariesTab({ readOnly }: { readOnly: boolean }) {
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -168,7 +169,7 @@ export default function DictionariesTab({ readOnly }: { readOnly: boolean }) {
       toast({
         variant: "destructive",
         title: "تعذر التعديل",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

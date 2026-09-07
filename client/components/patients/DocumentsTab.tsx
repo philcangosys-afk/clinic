@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * مستندات المريض وموافقاته — المرحلة 22.
@@ -225,7 +226,7 @@ function UploadDialog({
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر رفع المستند",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -397,7 +398,7 @@ function GenerateDialog({
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر التوليد",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -533,7 +534,7 @@ function SignDialog({
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر التوقيع",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -675,7 +676,7 @@ function ArchiveDialog({
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذرت الأرشفة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -727,7 +728,7 @@ export default function DocumentsTab({ patientId }: { patientId: string }) {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر فتح المستند",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

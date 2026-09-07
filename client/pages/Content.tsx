@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * المحتوى — نصوص الشريط الأخباري وشاشات الدور (لقطة 77).
@@ -72,7 +73,7 @@ const todayIso = () => {
  * فالجدولان غير موجودين في القاعدة. ذكر السبب صراحةً يوفّر ساعة بحث.
  */
 function QueryError({ error }: { error: unknown }) {
-  const message = error instanceof Error ? error.message : "خطأ غير متوقع";
+  const message = errorMessage(error, "خطأ غير متوقع");
   const missingTable = /does not exist|schema cache|PGRST205/i.test(message);
   return (
     <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
@@ -162,7 +163,7 @@ function TickerDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -248,7 +249,7 @@ function TickersTab({ organizationId }: { organizationId: string | undefined }) 
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -287,7 +288,7 @@ function TickersTab({ organizationId }: { organizationId: string | undefined }) 
       toast({
         variant: "destructive",
         title: "تعذر تغيير الترتيب",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -309,7 +310,7 @@ function TickersTab({ organizationId }: { organizationId: string | undefined }) 
       toast({
         variant: "destructive",
         title: "تعذر الحذف",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -523,7 +524,7 @@ function ScreensTab({ organizationId }: { organizationId: string | undefined }) 
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -542,7 +543,7 @@ function ScreensTab({ organizationId }: { organizationId: string | undefined }) 
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -564,7 +565,7 @@ function ScreensTab({ organizationId }: { organizationId: string | undefined }) 
       toast({
         variant: "destructive",
         title: "تعذر الحذف",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/dialog";
 import ItemPicker from "@/components/shared/ItemPicker";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * لائحة العروض والخصومات (لقطة 11).
@@ -204,7 +205,7 @@ function OfferFormDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -379,7 +380,7 @@ export default function Offers() {
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

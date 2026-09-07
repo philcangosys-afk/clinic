@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import PayrollRuns from "@/components/hr/PayrollRuns";
+import { errorMessage } from "@/lib/error-message";
 
 function currentMonthLabel() {
   return new Date().toLocaleDateString("ar-SA", { year: "numeric", month: "long" });
@@ -162,7 +163,7 @@ export default function Payroll() {
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <span>
                 تعذّر قراءة بنود المسيّرات:{" "}
-                {items.error instanceof Error ? items.error.message : "خطأ غير متوقع"}
+                {errorMessage(items.error, "خطأ غير متوقع")}
               </span>
             </div>
           )}
@@ -348,7 +349,7 @@ function PayPayrollItemDialog({
       toast({
         variant: "destructive",
         title: "تعذر صرف الراتب",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

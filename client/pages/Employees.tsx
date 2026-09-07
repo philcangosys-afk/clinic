@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 function useEmployees(organizationId: string | undefined) {
   return useQuery({
@@ -275,7 +276,7 @@ function NewEmployeeDialog({
       toast({
         variant: "destructive",
         title: "تعذر حفظ الموظف",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -430,7 +431,7 @@ function EmployeeDocumentsDialog({
       setNote("");
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الحفظ", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   return (

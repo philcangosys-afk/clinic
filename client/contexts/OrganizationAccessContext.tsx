@@ -22,6 +22,7 @@ import {
   resolveOrganizationAccessConfiguration,
   resolvePermissions,
 } from "@/lib/organization-access";
+import { errorMessage } from "@/lib/error-message";
 
 type OrganizationAccessContextValue = {
   loading: boolean;
@@ -121,7 +122,7 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
       setExplicitPermissions((permissionsResult.data as MembershipPermission[]) ?? []);
     } catch (loadError) {
       clearOrganization();
-      setError(loadError instanceof Error ? loadError.message : "تعذر تحميل صلاحيات المنظمة");
+      setError(errorMessage(loadError, "تعذر تحميل صلاحيات المنظمة"));
     } finally {
       setLoading(false);
     }

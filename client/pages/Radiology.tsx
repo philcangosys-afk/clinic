@@ -36,6 +36,7 @@ import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
 import ItemPicker from "@/components/shared/ItemPicker";
 import BillingItemLink from "@/components/shared/BillingItemLink";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * دورة حياة طلب الأشعة (0084) — تسع حالات واثنتان استثنائيتان.
@@ -481,7 +482,7 @@ function NewRadiologyExamDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -648,7 +649,7 @@ function NewRadiologyOrderDialog({
       toast({
         variant: "destructive",
         title: "تعذر إنشاء الطلب",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -815,7 +816,7 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
       toast({
         variant: "destructive",
         title: "تعذر تسجيل التنفيذ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -837,7 +838,7 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
       toast({
         variant: "destructive",
         title: "تعذر حفظ التقرير",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -856,7 +857,7 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
       toast({
         variant: "destructive",
         title: "تعذر تعديل علامة الموجودة العاجلة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -892,7 +893,7 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
       toast({
         variant: "destructive",
         title: "تعذر تحديث الحالة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -917,7 +918,7 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
       toast({
         variant: "destructive",
         title: "تعذر التسجيل",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

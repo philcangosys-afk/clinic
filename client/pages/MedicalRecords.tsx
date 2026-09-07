@@ -47,6 +47,7 @@ import VisitOrders, {
   hasAnyOrder,
   type VisitOrdersValue,
 } from "@/components/medical/VisitOrders";
+import { errorMessage } from "@/lib/error-message";
 
 const EXAM_PURPOSE_LABELS: Record<OccupationalExamPurpose, string> = {
   pre_employment: "ما قبل التوظيف",
@@ -931,7 +932,7 @@ function NewVisitDialog({
       toast({
         variant: "destructive",
         title: "تعذر حفظ الزيارة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

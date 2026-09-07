@@ -36,6 +36,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import LedgerWorkspace from "@/components/accounting/LedgerWorkspace";
 import { usePermissions } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   asset: "أصول",
@@ -362,7 +363,7 @@ function NewVoucherDialog({
       toast({
         variant: "destructive",
         title: "تعذر إنشاء السند",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -747,7 +748,7 @@ function AgreementsTab() {
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1044,7 +1045,7 @@ function NewAgreementDialog({
       toast({
         variant: "destructive",
         title: "تعذر إنشاء الاتفاقية",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1219,7 +1220,7 @@ function ChartOfAccountsTab() {
       toast({
         variant: "destructive",
         title: "تعذر الزرع",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1323,7 +1324,7 @@ function NewAccountDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع (تأكد من عدم تكرار الكود)",
+        description: errorMessage(error, "حدث خطأ غير متوقع (تأكد من عدم تكرار الكود)"),
       }),
   });
 
@@ -1435,7 +1436,7 @@ function JournalEntriesTab() {
       toast({
         variant: "destructive",
         title: "تعذر الترحيل",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1596,7 +1597,7 @@ function NewJournalEntryDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

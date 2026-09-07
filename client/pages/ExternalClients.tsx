@@ -21,6 +21,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * قائمة العملاء الخارجيين — من المواصفة الأصلية: جهات ليست مرضى (شركات/جهات
@@ -98,7 +99,7 @@ function ClientFormDialog({
       onOpenChange(false);
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الحفظ", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   return (
@@ -212,7 +213,7 @@ function BulkSmsDialog({
       onOpenChange(false);
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الإرسال", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الإرسال", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   return (
@@ -268,7 +269,7 @@ export default function ExternalClients() {
       queryClient.invalidateQueries({ queryKey: ["external-clients", organization?.id] });
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر التحديث", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر التحديث", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   // «تحديد الكل» يحدّد النشطين وحدهم: تحديد المعطَّلين كان يُدرِج لهم رسائل.

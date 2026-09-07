@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * مرفقات نتائج المختبر وصور الأشعة (لقطتا 121 و122).
@@ -108,7 +109,7 @@ export default function ResultAttachments({
       toast({
         variant: "destructive",
         title: "تعذر الرفع",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -126,7 +127,7 @@ export default function ResultAttachments({
       toast({
         variant: "destructive",
         title: "تعذر فتح الملف",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       });
     } finally {
       setBusy(false);
@@ -158,7 +159,7 @@ export default function ResultAttachments({
       toast({
         variant: "destructive",
         title: "تعذر الحذف",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

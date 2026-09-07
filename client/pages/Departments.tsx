@@ -34,6 +34,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import LookupSelect from "@/components/shared/LookupSelect";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * الأقسام والعيادات — المرحلة الأولى.
@@ -663,7 +664,7 @@ function DepartmentDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -910,7 +911,7 @@ function ClinicDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1200,7 +1201,7 @@ function ClinicToggleDialog({ clinic, onClose }: { clinic: any | null; onClose: 
       toast({
         variant: "destructive",
         title: "تعذّر التنفيذ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

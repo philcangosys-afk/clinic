@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * دفتر الأستاذ — المرحلة 19.
@@ -113,7 +114,7 @@ function PeriodsPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   /**
@@ -394,7 +395,7 @@ function EntriesPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const totals = useMemo(() => {
@@ -956,7 +957,7 @@ function CostCentersPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1169,7 +1170,7 @@ function BankPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الإنشاء",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1191,7 +1192,7 @@ function BankPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "التسوية لم تتوازن",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1337,7 +1338,7 @@ function RulesPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر التسجيل",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1356,7 +1357,7 @@ function RulesPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

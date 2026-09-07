@@ -27,6 +27,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
 import { printHtml } from "@/lib/document-merge";
+import { errorMessage } from "@/lib/error-message";
 
 const DOSAGE_FORM_LABELS: Record<DrugDosageForm, string> = {
   tablet: "حبوب",
@@ -415,7 +416,7 @@ function DrugDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -878,7 +879,7 @@ function PrescriptionsTab() {
       toast({
         variant: "destructive",
         title: "تعذر الإلغاء",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1154,7 +1155,7 @@ function NewPrescriptionDialog({
       toast({
         variant: "destructive",
         title: "تعذر إصدار الوصفة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1551,7 +1552,7 @@ function DispenseDialog({
     toast({
       variant: "destructive",
       title,
-      description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+      description: errorMessage(error),
     });
 
   const reserve = useMutation({

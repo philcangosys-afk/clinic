@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/dialog";
 import PatientPicker from "@/components/shared/PatientPicker";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * دمج ملف مكرَّر في هذا الملف (0066).
@@ -101,7 +102,7 @@ export default function MergePatientsDialog({
       toast({
         variant: "destructive",
         title: "تعذّر الدمج",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -148,7 +149,7 @@ export default function MergePatientsDialog({
               <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
               <span>
                 تعذّر حساب المعاينة:{" "}
-                {preview.error instanceof Error ? preview.error.message : "خطأ غير متوقع"} — لا
+                {errorMessage(preview.error, "خطأ غير متوقع")} — لا
                 تعتمد على أرقام غائبة قبل الدمج.
               </span>
             </div>

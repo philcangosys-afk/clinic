@@ -22,6 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
 import DoctorRelationsDialog from "@/components/doctors/DoctorRelationsDialog";
+import { errorMessage } from "@/lib/error-message";
 
 /** الحقول التي يقرأها/يكتبها نموذج الطبيب (إنشاء وتعديل). */
 export type DoctorFormRow = {
@@ -115,7 +116,7 @@ export default function Doctors() {
       toast({
         variant: "destructive",
         title: "تعذر تحديث حالة الطبيب",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -387,7 +388,7 @@ function NewDoctorDialog({
       toast({
         variant: "destructive",
         title: "تعذر حفظ الطبيب",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

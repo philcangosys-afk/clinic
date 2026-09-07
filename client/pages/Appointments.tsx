@@ -44,6 +44,7 @@ import QuickAddPatientDialog from "@/components/shared/QuickAddPatientDialog";
 /** Radix Select يرفض قيمة فارغة، فيُستخدم رمز صريح لـ"بدون". */
 const NONE_VALUE = "__none__";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * تنسيق تاريخ لحقل `<input type="date">` **بالتقويم المحلي** لا بـ UTC.
@@ -289,7 +290,7 @@ export default function Appointments() {
       setManagedAppointment(found);
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر فتح الموعد", description: error instanceof Error ? error.message : "حدث خطأ" }),
+      toast({ variant: "destructive", title: "تعذر فتح الموعد", description: errorMessage(error, "حدث خطأ") }),
   });
 
   /**
@@ -327,7 +328,7 @@ export default function Appointments() {
       queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
       toast({ title: "تم تأكيد الموعد" });
     },
-    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر التأكيد", description: error instanceof Error ? error.message : "حدث خطأ" }),
+    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر التأكيد", description: errorMessage(error, "حدث خطأ") }),
   });
 
   const byDoctor = useMemo(() => {
@@ -485,7 +486,7 @@ export default function Appointments() {
       {requestId && followUpRequest.isError && (
         <Card className="border-destructive/40 bg-destructive/5">
           <CardContent className="p-3 text-sm text-destructive">
-            تعذر قراءة طلب المتابعة: {followUpRequest.error instanceof Error ? followUpRequest.error.message : "خطأ غير متوقع"}
+            تعذر قراءة طلب المتابعة: {errorMessage(followUpRequest.error, "خطأ غير متوقع")}
           </CardContent>
         </Card>
       )}
@@ -771,7 +772,7 @@ function ManageAppointmentDialog({
       toast({ title: result?.rescheduled ? "تمت إعادة جدولة الموعد وتسجيل السبب" : "تم تحديث الموعد" });
       onOpenChange(false);
     },
-    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر التحديث", description: error instanceof Error ? error.message : "حدث خطأ" }),
+    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر التحديث", description: errorMessage(error, "حدث خطأ") }),
   });
 
   /**
@@ -798,7 +799,7 @@ function ManageAppointmentDialog({
       toast({ title: "تم تأكيد الموعد" });
       onOpenChange(false);
     },
-    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر التأكيد", description: error instanceof Error ? error.message : "حدث خطأ" }),
+    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر التأكيد", description: errorMessage(error, "حدث خطأ") }),
   });
 
   const cancel = useMutation({
@@ -817,7 +818,7 @@ function ManageAppointmentDialog({
       toast({ title: "تم إلغاء الموعد وتسجيل السبب" });
       onOpenChange(false);
     },
-    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر الإلغاء", description: error instanceof Error ? error.message : "حدث خطأ" }),
+    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر الإلغاء", description: errorMessage(error, "حدث خطأ") }),
   });
 
   return <Dialog open={Boolean(appointment)} onOpenChange={onOpenChange}>
@@ -1131,7 +1132,7 @@ function CreateAppointmentDialog({
       toast({
         variant: "destructive",
         title: "تعذر حجز الموعد",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

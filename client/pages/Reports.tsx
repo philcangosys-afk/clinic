@@ -21,6 +21,7 @@ import ReportCenter from "@/components/reports/ReportCenter";
 import UnbilledServices from "@/components/reports/UnbilledServices";
 import PendingConsents from "@/components/reports/PendingConsents";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 const EXAM_PURPOSE_LABELS: Record<OccupationalExamPurpose, string> = {
   pre_employment: "ما قبل التوظيف",
@@ -867,7 +868,7 @@ function FitnessCertificateButton({ row, organizationId }: { row: OccupationalEx
       printHtml(title, merged);
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر إصدار الشهادة", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر إصدار الشهادة", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   return (

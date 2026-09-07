@@ -26,6 +26,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import NewPatientDialog from "@/components/patients/NewPatientDialog";
 import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDialog";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * شاشة المرضى مع البحث المتقدم (لقطة 29 — "مستعرض العيادة السريع").
@@ -323,7 +324,7 @@ export default function Patients() {
       toast({
         variant: "destructive",
         title: "تعذر الإرسال",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

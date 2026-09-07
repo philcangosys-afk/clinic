@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * الجودة وسلامة المرضى — المرحلة 26.
@@ -139,7 +140,7 @@ function Scorecard() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر القياس",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -369,7 +370,7 @@ function Incidents() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const report = useMutation({

@@ -22,6 +22,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * نموذج "فتح ملف سريع" لمريض جديد بأقل الحقول اللازمة (الاسم والجوال والجنس)،
@@ -74,7 +75,7 @@ export default function QuickAddPatientDialog({
       toast({
         variant: "destructive",
         title: "تعذر حفظ المريض",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       });
     },
   });

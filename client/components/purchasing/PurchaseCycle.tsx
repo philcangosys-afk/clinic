@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * دورة الشراء — المرحلة 17.
@@ -196,7 +197,7 @@ function RequestsPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const submit = useMutation({
@@ -485,7 +486,7 @@ function NewRequestDialog({
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -645,7 +646,7 @@ function OrdersPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر إنشاء الفاتورة",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -854,7 +855,7 @@ function DraftReceiptsCard() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الإلغاء",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1129,7 +1130,7 @@ function ReceiveDialog({ order, onClose }: { order: any | null; onClose: () => v
       queryClient.invalidateQueries({ queryKey: ["goods-receipts-draft", organization?.id] });
       toast({
         variant: "destructive", title: "تعذر الاستلام",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       });
     },
   });
@@ -1549,7 +1550,7 @@ function PaySupplierDialog({ invoice, onClose }: { invoice: any | null; onClose:
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر السداد",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1678,7 +1679,7 @@ function ReturnsAndCostsPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const postReturn = useMutation({
@@ -2002,7 +2003,7 @@ function NewPurchaseReturnDialog({
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر حفظ المرتجع",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -2156,7 +2157,7 @@ function NewPurchaseExpenseDialog({
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر حفظ المصروف",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

@@ -16,6 +16,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * استيراد سجلات من ملف CSV/إكسل (لقطة 96 وما يماثلها في شاشات الكتالوج).
@@ -153,7 +154,7 @@ export default function CsvImportDialog({
         } catch (parseError) {
           error =
             error ??
-            `العمود "${col.header}": ${parseError instanceof Error ? parseError.message : "قيمة غير صالحة"}`;
+            `العمود "${col.header}": ${errorMessage(parseError, "قيمة غير صالحة")}`;
         }
       }
       return { index: entry.line, values, error };
@@ -192,7 +193,7 @@ export default function CsvImportDialog({
       toast({
         variant: "destructive",
         title: "تعذر الاستيراد",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

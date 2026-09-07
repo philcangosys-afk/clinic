@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/dialog";
 import PatientPicker from "@/components/shared/PatientPicker";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * معامل الأسنان — موديول كانت قاعدة بياناته جاهزة بالكامل (dental_lab_items/
@@ -255,7 +256,7 @@ function OrdersTab({
       toast({
         variant: "destructive",
         title: "تعذر تحديث الحالة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -579,7 +580,7 @@ function NewDentalLabOrderDialog({
       toast({
         variant: "destructive",
         title: "تعذر إنشاء الطلبية",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -773,7 +774,7 @@ function RegisterExpenseDialog({
       toast({
         variant: "destructive",
         title: "تعذر تسجيل المصروف",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -855,7 +856,7 @@ function ItemsTab({
       toast({
         variant: "destructive",
         title: "تعذرت الإضافة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -875,7 +876,7 @@ function ItemsTab({
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * حالة تذكيرات الموعد وسجل رسائله (0069).
@@ -111,7 +112,7 @@ export default function AppointmentMessages({ appointmentId }: { appointmentId: 
       toast({
         variant: "destructive",
         title: "تعذّرت إعادة الإرسال",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -130,7 +131,7 @@ export default function AppointmentMessages({ appointmentId }: { appointmentId: 
       toast({
         variant: "destructive",
         title: "تعذّر إرسال التأكيد",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

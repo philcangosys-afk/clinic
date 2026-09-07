@@ -30,6 +30,7 @@ import {
 } from "@/components/ui/select";
 import PatientPicker from "@/components/shared/PatientPicker";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * الجهات المحجوبة.
@@ -382,7 +383,7 @@ function CreateBlockDialog({
       toast({
         variant: "destructive",
         title: "تعذر تسجيل الحظر",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -528,7 +529,7 @@ function LiftBlockDialog({ target, onClose }: { target: BlockRow | null; onClose
       toast({
         variant: "destructive",
         title: "تعذر رفع الحظر",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

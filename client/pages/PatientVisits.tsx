@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * سجل زيارات المرضى — المرحلة السابعة.
@@ -618,7 +619,7 @@ function VisitTable({ rows, onOpen }: { rows: any[]; onOpen: (row: any) => void 
       toast({
         variant: "destructive",
         title: "تعذر إنشاء الفاتورة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -651,7 +652,7 @@ function VisitTable({ rows, onOpen }: { rows: any[]; onOpen: (row: any) => void 
       toast({
         variant: "destructive",
         title: "تعذر إنشاء المطالبة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -829,7 +830,7 @@ function VisitActionsDialog({ visit, onClose }: { visit: any | null; onClose: ()
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

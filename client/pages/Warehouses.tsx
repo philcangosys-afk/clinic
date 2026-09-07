@@ -22,6 +22,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * إدارة المستودعات (لقطة 67 من النظام القديم).
@@ -125,11 +126,9 @@ function WarehouseFormDialog({
         variant: "destructive",
         title: "تعذر الحفظ",
         description:
-          error instanceof Error
-            ? error.message.includes("duplicate") || error.message.includes("unique")
-              ? "كود المستودع مستخدم بالفعل — اختر كودًا مختلفًا"
-              : error.message
-            : "حدث خطأ غير متوقع",
+          /duplicate|unique/i.test(errorMessage(error))
+            ? "كود المستودع مستخدم بالفعل — اختر كودًا مختلفًا"
+            : errorMessage(error),
       }),
   });
 
@@ -219,7 +218,7 @@ export default function Warehouses() {
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

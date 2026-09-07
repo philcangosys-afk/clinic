@@ -35,6 +35,7 @@ import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
 import ItemPicker from "@/components/shared/ItemPicker";
 import BillingItemLink from "@/components/shared/BillingItemLink";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * دورة حياة طلب المختبر (0083) — تسع حالات وثلاث استثنائية.
@@ -428,7 +429,7 @@ function NewLabTestDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -584,7 +585,7 @@ function NewLabOrderDialog({
       toast({
         variant: "destructive",
         title: "تعذر إنشاء الطلب",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -769,7 +770,7 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
       toast({
         variant: "destructive",
         title: "تعذر حفظ النتيجة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       });
     },
   });
@@ -808,7 +809,7 @@ function LabOrderDetailsDialog({ orderId, onOpenChange }: { orderId: string | nu
       toast({
         variant: "destructive",
         title: "تعذر تحديث الحالة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

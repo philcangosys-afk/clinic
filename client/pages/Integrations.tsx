@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * التكاملات — المرحلة 30.
@@ -124,7 +125,7 @@ function HealthPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الفحص",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -253,7 +254,7 @@ function DeadLettersPanel() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذرت الإعادة",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -372,7 +373,7 @@ function EndpointsPanel() {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const add = useMutation({

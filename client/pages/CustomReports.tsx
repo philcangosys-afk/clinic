@@ -27,6 +27,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 const RESULT_ROW_CAP = 500;
 
@@ -244,7 +245,7 @@ export default function CustomReports() {
       return rows.length;
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر تشغيل التقرير", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر تشغيل التقرير", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   const saveReport = useMutation({
@@ -283,7 +284,7 @@ export default function CustomReports() {
       if (!loadedReportId) setReportName("");
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الحفظ", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   const deleteReport = useMutation({

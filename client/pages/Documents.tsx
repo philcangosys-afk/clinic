@@ -18,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * مركز المستندات — المرحلة 22.
@@ -127,7 +128,7 @@ function AllDocuments() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر فتح المستند",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -350,7 +351,7 @@ function EntityUploadDialog({
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الرفع",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

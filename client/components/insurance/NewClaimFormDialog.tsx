@@ -28,6 +28,7 @@ import {
 import PatientPicker from "@/components/shared/PatientPicker";
 import ItemPicker from "@/components/shared/ItemPicker";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 const FORM_TYPE_LABELS: Record<InsuranceClaimFormType, string> = {
   ucaf: "UCAF — نموذج عام",
@@ -432,7 +433,7 @@ export default function NewClaimFormDialog({
       toast({
         variant: "destructive",
         title: "تعذر إنشاء المطالبة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -531,9 +532,7 @@ export default function NewClaimFormDialog({
             {linkableInvoices.isError && (
               <p className="text-xs text-destructive">
                 تعذّر تحميل فواتير التأمين:{" "}
-                {linkableInvoices.error instanceof Error
-                  ? linkableInvoices.error.message
-                  : "حدث خطأ غير متوقع"}
+                {errorMessage(linkableInvoices.error)}
               </p>
             )}
 

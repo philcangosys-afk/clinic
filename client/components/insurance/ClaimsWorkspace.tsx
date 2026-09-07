@@ -23,6 +23,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { CLAIM_STATUS_LABELS, CLAIM_STATUS_TONE } from "@/components/insurance/claim-status";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * مساحة عمل المطالبات — المرحلة ١٣.
@@ -114,7 +115,7 @@ export default function ClaimsWorkspace() {
       toast({
         variant: "destructive",
         title: "تعذر التجهيز",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -351,7 +352,7 @@ function ClaimItemsDialog({ claim, onClose }: { claim: any | null; onClose: () =
       toast({
         variant: "destructive",
         title: "تعذر التسجيل",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -600,7 +601,7 @@ function SettlementDialog({
       toast({
         variant: "destructive",
         title: "تعذرت التسوية",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -771,7 +772,7 @@ function NphiesQueuePanel({ organizationId }: { organizationId: string | undefin
       toast({
         variant: "destructive",
         title: "تعذر الإدراج",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -795,7 +796,7 @@ function NphiesQueuePanel({ organizationId }: { organizationId: string | undefin
       toast({
         variant: "destructive",
         title: "تعذر التسجيل",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

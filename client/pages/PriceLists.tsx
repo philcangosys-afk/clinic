@@ -24,6 +24,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import ItemPicker from "@/components/shared/ItemPicker";
+import { errorMessage } from "@/lib/error-message";
 
 const LIST_KINDS: Record<string, string> = {
   base: "قائمة أساس",
@@ -83,7 +84,7 @@ export default function PriceLists() {
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -346,7 +347,7 @@ function CreateListDialog({
       toast({
         variant: "destructive",
         title: "تعذر الإنشاء",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -487,7 +488,7 @@ function EditListDialog({ list, onClose }: { list: any; onClose: () => void }) {
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -604,7 +605,7 @@ function ListItemsDialog({
       toast({
         variant: "destructive",
         title: "تعذر التسجيل",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

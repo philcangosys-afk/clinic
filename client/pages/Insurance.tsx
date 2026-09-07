@@ -45,6 +45,7 @@ import {
   claimValidationErrorsText,
 } from "@/components/insurance/claim-status";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 const FORM_TYPE_LABELS: Record<InsuranceClaimFormType, string> = { ucaf: "UCAF", dcaf: "DCAF", ocaf: "OCAF" };
 const PREAUTH_STATUS_LABELS: Record<PreauthorizationStatus, string> = {
@@ -379,7 +380,7 @@ function NphiesLinkDialog({ company, onClose }: { company: any | null; onClose: 
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -480,7 +481,7 @@ function NewCompanyDialog({
       onOpenChange(false);
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الحفظ", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   return (
@@ -638,7 +639,7 @@ function NewPolicyDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع (تأكد من عدم تكرار اسم البوليصة لنفس الفئة)",
+        description: errorMessage(error, "خطأ غير متوقع (تأكد من عدم تكرار اسم البوليصة لنفس الفئة)"),
       }),
   });
 
@@ -759,7 +760,7 @@ function AddMembershipDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع (تأكد من عدم تكرار رقم العضوية)",
+        description: errorMessage(error, "خطأ غير متوقع (تأكد من عدم تكرار رقم العضوية)"),
       }),
   });
 
@@ -962,7 +963,7 @@ function ClaimsTab() {
     toast({
       variant: "destructive",
       title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   /**
@@ -1262,7 +1263,7 @@ function PreauthTab() {
       toast({
         variant: "destructive",
         title: "تعذر التسجيل",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1507,7 +1508,7 @@ function NewPreauthDialog({
       onOpenChange(false);
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الحفظ", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   return (
@@ -1725,7 +1726,7 @@ function ClaimBatchesTab() {
       toast({
         variant: "destructive",
         title: "تعذر تحديث حالة الدفعة",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1841,7 +1842,7 @@ function NewBatchDialog({
       onOpenChange(false);
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الحفظ", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   return (
@@ -2012,7 +2013,7 @@ function BatchItemsDialog({
       setInvoiceSearch("");
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذرت الإضافة", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذرت الإضافة", description: errorMessage(error, "خطأ غير متوقع") }),
     // التبطيل في كل الحالات: البند قد يكون أُدرِج ثم فشلت إعادة حساب الإجمالي،
     // فالقائمة والإجمالي المعروضان يجب أن يعودا من القاعدة لا من الذاكرة.
     onSettled: invalidate,
@@ -2033,7 +2034,7 @@ function BatchItemsDialog({
     },
     // بلا هذا كان فشل الحذف أو فشل إعادة حساب الإجمالي صامتًا تمامًا
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحذف", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الحذف", description: errorMessage(error, "خطأ غير متوقع") }),
     onSettled: invalidate,
   });
 
@@ -2051,7 +2052,7 @@ function BatchItemsDialog({
     },
     onSuccess: invalidate,
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر تحديث حالة البند", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر تحديث حالة البند", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   return (
@@ -2475,7 +2476,7 @@ function ContractDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -2754,7 +2755,7 @@ function CoverageRulesDialog({
       toast({
         variant: "destructive",
         title: "تعذرت الإضافة",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

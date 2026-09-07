@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import DictionariesTab from "@/components/reference/DictionariesTab";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * البيانات المرجعية الطبية (لقطتا 16 و17).
@@ -121,7 +122,7 @@ function ConditionFormDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -189,11 +190,9 @@ function HealthConditionsTab({ readOnly }: { readOnly: boolean }) {
         variant: "destructive",
         title: "تعذر الحذف",
         description:
-          error instanceof Error
-            ? error.message.includes("foreign key") || error.message.includes("violates")
-              ? "لا يمكن حذف حالة مرتبطة بملفات مرضى — أزل ارتباطها أولًا"
-              : error.message
-            : "حدث خطأ غير متوقع",
+          /foreign key|violates/i.test(errorMessage(error))
+            ? "لا يمكن حذف حالة مرتبطة بملفات مرضى — أزل ارتباطها أولًا"
+            : errorMessage(error),
       }),
   });
 

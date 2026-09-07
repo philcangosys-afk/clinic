@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import ItemPicker from "@/components/shared/ItemPicker";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * ربط فحص مخبري أو فحص أشعة بصنف الفوترة.
@@ -68,7 +69,7 @@ export default function BillingItemLink({
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

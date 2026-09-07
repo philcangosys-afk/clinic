@@ -2282,7 +2282,7 @@ function UnbilledDispensedPanel({ organizationId }: { organizationId: string | u
           <CardTitle className="text-base">أدوية مصروفة غير مفوترة</CardTitle>
           <CardDescription className="text-destructive">
             تعذّر تحميل القائمة:{" "}
-            {rows.error instanceof Error ? rows.error.message : "حدث خطأ غير متوقع"}
+            {errorMessage(rows.error)}
           </CardDescription>
         </CardHeader>
       </Card>

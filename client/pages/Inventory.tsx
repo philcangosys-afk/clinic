@@ -38,6 +38,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AdvancedInventory from "@/components/inventory/AdvancedInventory";
 import { useToast } from "@/hooks/use-toast";
 import ItemPicker from "@/components/shared/ItemPicker";
+import { errorMessage } from "@/lib/error-message";
 
 const MOVEMENT_TYPE_LABELS: Record<InventoryMovementType, string> = {
   purchase_in: "استلام شراء",
@@ -451,7 +452,7 @@ function AdjustmentDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -760,7 +761,7 @@ function LotAdjustDialog({
       toast({
         variant: "destructive",
         title: "تعذرت التسوية",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1035,7 +1036,7 @@ function TransfersTab() {
       toast({
         variant: "destructive",
         title: "تعذر الاعتماد",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1055,7 +1056,7 @@ function TransfersTab() {
       toast({
         variant: "destructive",
         title: "تعذر الرفض",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1139,7 +1140,7 @@ function TransfersTab() {
       toast({
         variant: "destructive",
         title: "تعذر تنفيذ المناقلة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1378,7 +1379,7 @@ function NewTransferDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

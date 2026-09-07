@@ -16,6 +16,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import PatientPicker from "@/components/shared/PatientPicker";
 import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * الإرسال اليدوي للرسائل (لقطة 90).
@@ -119,7 +120,7 @@ function SingleSend() {
       toast({
         variant: "destructive",
         title: "تعذر الإرسال",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -172,7 +173,7 @@ function SingleSend() {
           {blocked.isError && (
             <p className="text-xs text-destructive">
               تعذّر التحقّق من حجب المريض:{" "}
-              {blocked.error instanceof Error ? blocked.error.message : "خطأ غير متوقع"}
+              {errorMessage(blocked.error, "خطأ غير متوقع")}
             </p>
           )}
         </div>
@@ -281,7 +282,7 @@ function BulkSend() {
       toast({
         variant: "destructive",
         title: "تعذر الإرسال",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

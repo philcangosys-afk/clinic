@@ -42,6 +42,7 @@ import {
   type ExamTemplateSchema,
   type NormalizedExamField,
 } from "@/lib/exam-template-fields";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * مصمّم نماذج الفحص السريري — المرحلة الخامسة.
@@ -168,7 +169,7 @@ export default function ExamTemplates() {
       toast({
         variant: "destructive",
         title: "تعذّر نسخ القالب",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -211,11 +212,9 @@ export default function ExamTemplates() {
         variant: "destructive",
         title: "تعذّر تغيير الحالة",
         description:
-          error instanceof Error && error.message.includes("uq_exam_template_active_specialty")
+          errorMessage(error).includes("uq_exam_template_active_specialty")
             ? "يوجد قالب مفعَّل آخر لنفس التخصص — عطّله أولًا ثم فعّل هذا"
-            : error instanceof Error
-              ? error.message
-              : "خطأ غير متوقع",
+            : errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -485,11 +484,9 @@ function NewTemplateDialog({
         variant: "destructive",
         title: "تعذر الإنشاء",
         description:
-          error instanceof Error && error.message.includes("uq_exam_template_active_specialty")
+          errorMessage(error).includes("uq_exam_template_active_specialty")
             ? "يوجد نموذج مفعَّل لهذا التخصص — عطّله أو اختر تخصصًا آخر"
-            : error instanceof Error
-              ? error.message
-              : "خطأ غير متوقع",
+            : errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -706,7 +703,7 @@ function TemplateBuilderDialog({
     toast({
       variant: "destructive",
       title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const usage = Number(detail.data?.template?.usage_count ?? 0);

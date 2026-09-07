@@ -43,6 +43,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * رحلة المريض — خط زمني موحَّد (0067).
@@ -442,7 +443,7 @@ function RecordDialog({
         {/* الخطأ يُعرض ولا يُخفى: نافذة فارغة تُفهم كسجل بلا بيانات. */}
         {active?.isError && (
           <p className="text-sm text-destructive">
-            {active.error instanceof Error ? active.error.message : "تعذر قراءة السجل"}
+            {errorMessage(active.error, "تعذر قراءة السجل")}
           </p>
         )}
         {active && !active.isLoading && !active.isError && !active.data && (

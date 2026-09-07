@@ -43,6 +43,7 @@ import {
 import PatientPicker from "@/components/shared/PatientPicker";
 import QuickAddPatientDialog from "@/components/shared/QuickAddPatientDialog";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 function startOfTodayIso() {
   const date = new Date();
@@ -236,7 +237,7 @@ export default function Reception() {
       toast({
         variant: "destructive",
         title: "تعذر تحديث الحالة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -615,7 +616,7 @@ function AddToQueueDialog({
       toast({
         variant: "destructive",
         title: "تعذر الإضافة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

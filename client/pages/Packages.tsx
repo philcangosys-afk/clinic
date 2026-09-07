@@ -25,6 +25,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import SubscriptionsPanel from "@/components/packages/SubscriptionsPanel";
 import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
+import { errorMessage } from "@/lib/error-message";
 
 function useItemsList(organizationId: string | undefined) {
   return useQuery({
@@ -368,7 +369,7 @@ function NewPackageDialog({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -636,7 +637,7 @@ function SubscribePatientDialog({
       toast({
         variant: "destructive",
         title: "تعذر الاشتراك",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -746,7 +747,7 @@ function PatientSubscriptionsTab({ organizationId }: { organizationId: string | 
       toast({
         variant: "destructive",
         title: "تعذر تسجيل الاستهلاك",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

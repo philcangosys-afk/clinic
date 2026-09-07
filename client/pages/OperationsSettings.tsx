@@ -54,6 +54,7 @@ import {
 import LookupSelect, { useLookupValues } from "@/components/shared/LookupSelect";
 import { usePermissions } from "@/lib/permissions";
 import ItemPicker from "@/components/shared/ItemPicker";
+import { errorMessage } from "@/lib/error-message";
 
 const ROLE_LABELS_AR: Record<string, string> = {
   owner: "المالك",
@@ -109,7 +110,7 @@ function useOrgSettingsRow<T>(
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -263,7 +264,7 @@ function QuickInvoiceGroupsTab({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -328,7 +329,7 @@ function QuickInvoiceGroupsTab({
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -810,7 +811,7 @@ function CategoryVatRates({
       toast({
         variant: "destructive",
         title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -981,7 +982,7 @@ function DiscountLimitsList({ organizationId, readOnly }: { organizationId: stri
       toast({
         variant: "destructive",
         title: "تعذر الإضافة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1270,7 +1271,7 @@ function ConsultationRulesList({
       toast({
         variant: "destructive",
         title: "تعذر الإضافة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -1865,7 +1866,7 @@ function LookupsTab({ organizationId, readOnly }: { organizationId: string | und
       toast({
         variant: "destructive",
         title: "تعذر الإضافة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -2100,7 +2101,7 @@ function LookupValuesEditor({
       toast({
         variant: "destructive",
         title: "تعذر الإضافة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -2122,7 +2123,7 @@ function LookupValuesEditor({
       toast({
         variant: "destructive",
         title: "تعذر التحديث",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 
@@ -2144,9 +2145,7 @@ function LookupValuesEditor({
         variant: "destructive",
         title: "تعذر الحذف",
         description:
-          error instanceof Error
-            ? error.message
-            : "قد تكون هذه القيمة مستخدَمة في سجلات موجودة — جرّب تعطيلها بدلًا من حذفها",
+          errorMessage(error, "قد تكون هذه القيمة مستخدَمة في سجلات موجودة — جرّب تعطيلها بدلًا من حذفها"),
       }),
   });
 
@@ -2418,7 +2417,7 @@ function PoliciesTab({ organizationId }: { organizationId: string | undefined })
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const save = useMutation({
@@ -2790,7 +2789,7 @@ function LocaleTab({ organizationId }: { organizationId: string | undefined }) {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

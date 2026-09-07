@@ -25,6 +25,7 @@ import {
 import LookupSelect from "@/components/shared/LookupSelect";
 import PatientPicker from "@/components/shared/PatientPicker";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 const APPLIES_TO_LABELS: Record<DocumentTemplateAppliesTo, string> = {
   patient: "مريض",
@@ -157,7 +158,7 @@ function TemplateFormDialog({
       onOpenChange(false);
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر الحفظ", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر الحفظ", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   const palette = [...KNOWN_PLACEHOLDERS[appliesTo], ...ALWAYS_AVAILABLE_PLACEHOLDERS];
@@ -342,7 +343,7 @@ function GenerateDocumentDialog({
       onOpenChange();
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر التوليد", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر التوليد", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   return (
@@ -436,7 +437,7 @@ function TemplatesTab({ organizationId, currentUserId }: { organizationId: strin
       toast({ title: "تم تحديث حالة القالب" });
     },
     onError: (error: unknown) =>
-      toast({ variant: "destructive", title: "تعذر التحديث", description: error instanceof Error ? error.message : "خطأ غير متوقع" }),
+      toast({ variant: "destructive", title: "تعذر التحديث", description: errorMessage(error, "خطأ غير متوقع") }),
   });
 
   /*

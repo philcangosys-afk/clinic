@@ -17,6 +17,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import PatientPicker from "@/components/shared/PatientPicker";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * إدارة اشتراكات المرضى — التجميد والاستئناف والإلغاء والاسترداد والتجديد
@@ -104,7 +105,7 @@ export default function SubscriptionsPanel() {
     toast({
       variant: "destructive",
       title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const freeze = useMutation({
@@ -603,7 +604,7 @@ function UsageLogPanel() {
       toast({
         variant: "destructive",
         title: "تعذر العكس",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

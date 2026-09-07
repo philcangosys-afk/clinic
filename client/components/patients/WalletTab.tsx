@@ -26,6 +26,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * محفظة المريض (لقطة 131).
@@ -149,7 +150,7 @@ function NewTransactionDialog({
       toast({
         variant: "destructive",
         title: "تعذر تسجيل الحركة",
-        description: error instanceof Error ? error.message : "حدث خطأ غير متوقع",
+        description: errorMessage(error),
       }),
   });
 

@@ -25,6 +25,7 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import ItemPicker from "@/components/shared/ItemPicker";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * علاقات الطبيب وجداوله — المرحلة الثانية.
@@ -206,7 +207,7 @@ function PlacesTab({
     toast({
       variant: "destructive",
       title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const toggleClinic = useMutation({
@@ -432,7 +433,7 @@ function ServicesTab({
       toast({
         variant: "destructive",
         title: "تعذّرت الإضافة",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -447,7 +448,7 @@ function ServicesTab({
       toast({
         variant: "destructive",
         title: "تعذّر الحذف",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -646,7 +647,7 @@ function ScheduleTab({
       toast({
         variant: "destructive",
         title: "تعذّرت الإضافة",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -661,7 +662,7 @@ function ScheduleTab({
       toast({
         variant: "destructive",
         title: "تعذّر الحذف",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -907,7 +908,7 @@ function ExceptionsTab({
       toast({
         variant: "destructive",
         title: "تعذّر التسجيل",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -926,7 +927,7 @@ function ExceptionsTab({
       toast({
         variant: "destructive",
         title: "تعذّر الحذف",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -1112,7 +1113,7 @@ function LicenseTab({ doctorId, canManage }: { doctorId: string; canManage: bool
       toast({
         variant: "destructive",
         title: "تعذّر الحفظ",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 

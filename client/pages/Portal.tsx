@@ -15,6 +15,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { errorMessage } from "@/lib/error-message";
 
 /**
  * بوابة المريض — المرحلة 24 (جانب المريض).
@@ -182,7 +183,7 @@ function PortalAppointments({ orgId }: { orgId: string }) {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر الإلغاء",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -438,7 +439,7 @@ function PortalDocuments() {
     onError: (error: unknown) =>
       toast({
         variant: "destructive", title: "تعذر فتح المستند",
-        description: error instanceof Error ? error.message : "خطأ غير متوقع",
+        description: errorMessage(error, "خطأ غير متوقع"),
       }),
   });
 
@@ -542,7 +543,7 @@ function PortalRequests({ orgId }: { orgId: string }) {
   const fail = (title: string) => (error: unknown) =>
     toast({
       variant: "destructive", title,
-      description: error instanceof Error ? error.message : "خطأ غير متوقع",
+      description: errorMessage(error, "خطأ غير متوقع"),
     });
 
   const requestAppointment = useMutation({
