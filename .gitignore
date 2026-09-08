@@ -34,3 +34,6 @@ _to_delete/
 
 # نسخ الملفّات التي يُنزلها تطبيق كلود — الأصل في migrations/ وdocs/
 Claude outputs/
+
+# ناتج مولّد المخطط — يُعاد بناؤه بـ python scripts/schema-doc.py
+docs/schema.json

@@ -1,144 +1,155 @@
-# حالة العمل — ما جاهز وما ينتظرك
+# حالة العمل — ZainCare
 
-## الخلاصة في سطرين
+**آخر تحديث: 2026-09-08.**
 
-كل ما طلبته مبنيّ ومفحوص ومسلَّم إلى `D:\fusion-starter-108`. المتبقّي كله
-**عليك**: تشغيل الهجرات، ثم الدفع والنشر، ثم تسجيل الدخول.
+> النسخة السابقة من هذا الملفّ كانت متجمّدة عند عصر الترقية `0076` — تطلب تشغيل
+> ترقيات نُفِّذت قبل 72 ترقية — فأُرشفت في
+> [`archive/STATUS-2026-08-30.md`](archive/STATUS-2026-08-30.md). لا تُقرأ كحالة راهنة.
+
+| للتفصيل | الملفّ |
+| --- | --- |
+| ما نُفِّذ على الإنتاج وما ينتظر | [`HANDOVER.md`](HANDOVER.md) |
+| مرجع المخطط | [`SCHEMA.md`](SCHEMA.md) · [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md) |
+| ما بُني وما بقي في الواجهة | [`تدقيق-اللقطات-133-محدّث.md`](تدقيق-اللقطات-133-محدّث.md) |
+| قواعد العمل للوكيل | [`../AGENTS.md`](../AGENTS.md) |
 
 ---
 
-## ما ينتظرك — بالترتيب
+## الحالة الآن
 
-### ١) تشغيل الهجرات في Supabase
+- الترقيات `0001` → `0148` كلّها منفَّذة على الإنتاج (و`0066` أُعيد تنفيذها بعد
+  أن تبيّن أنّها كانت جزئية: الجداول موجودة والدوالّ غائبة).
+- آخر التزام مدفوع: `610687a`.
+- مشكلة «الفاتورة لا تُحفظ من الشاشة» **حُلَّت**: لم تكن في القاعدة، بل رسالة
+  خطأ مكتومة في طبقة العرض زالت مع النشر.
+- `errorMessage()` معمَّم على المشروع كلّه — لا `instanceof Error` في `client/`.
+- مرجع المخطط وُلِّد لأوّل مرّة (`scripts/schema-doc.py`).
 
-بالترتيب، واحدة واحدة، في محرّر SQL:
-
-```
-0062_permissions_and_branch_isolation.sql
-0063_contact_blocks.sql
-0064_reschedule_and_availability.sql
-0065_reception_board.sql
-0066_patient_profile_and_merge.sql
-0067_patient_timeline.sql
-0068_reception_reports.sql
-0069_reminder_ui_and_language.sql
-0070_reminder_schedule_headers_fix.sql
-0071_service_catalog_core.sql
-0072_price_lists.sql
-0073_service_clinical_and_lifecycle.sql
-0074_appointment_service_link.sql
-0075_package_usage_guards.sql
-0076_catalog_followups.sql
-```
-
-الترتيب ليس تفضيلًا: `0072` تعتمد على أعمدة `0071`، و`0074` تعيد تعريف دالة
-من `0073`، و`0075` تستدعي دالة `0074`.
-
-### ٢) الدفع والنشر
+## ما ينتظر المالك
 
 ```bash
 cd D:\fusion-starter-108
+pnpm test
+pnpm build
 git add -A
-git commit -m "كتالوج الخدمات: البيانات والأسعار والمتطلّبات ودورة الحياة"
+git status
+git commit -F _to_delete/commit-msg.txt
 git push
 ```
 
-Netlify يبني تلقائيًا بعد الدفع.
+---
 
-### ٣) بعد النشر — خطوة واحدة لازمة
+## أولويات الواجهة (من التدقيق المستقلّ)
 
-أنشئ **قائمة أساس** واحدة من شاشة «قوائم الأسعار». بدونها لا يتعطّل شيء:
-كل خدمة تُفوتَر بسعرها المسجَّل عليها كما هو الحال اليوم. لكن قوائم الفروع
-والتأمين لا معنى لها بلا أساس تُقاس عليه.
+| الأولوية | البند | لماذا |
+| --- | --- | --- |
+| **عالية** | شاشة تفعيل/تعطيل الموديولات | `organization_features` **يُقرأ ولا يُكتب إليه من أيّ موضع في الشيفرة** — فالتحكّم بالموديولات لكل منشأة غير ممكن أصلًا رغم جاهزية البنية |
+| **عالية** | شاشة شركات زاتكا | `zatca_companies` تُقرأ في `Warehouses` و`Departments` عبر قوائم منسدلة، ولا شاشة تُنشئ شركة — فالقوائم فارغة أبدًا |
+| **عالية** | تعديل الموردين والموظفين | `Procurement` و`Employees`: إنشاء بلا تعديل ولا تعطيل |
+| متوسطة | `checked_in_2_at` (استقبال 2) | في `appointments` منذ `0002`، لا زرّ له في `Reception` |
+| متوسطة | `lab_technician_name` / `_mobile` | في `distributors` منذ `0003`، لا حقل — فلا يُسجَّل فنّي معمل الأسنان |
+| متوسطة | إدارة الأمراض وأكواد ICD10 | تُقرأ ولا تُدار |
+| متوسطة | تجميعات حركات المستودع | حسب الصنف/المستودع/الطبيب |
+| منخفضة | استيراد Excel/CSV، الطباعة الحرارية، نظام الترقيم، النسخ الاحتياطي | غائبة |
 
-### ٤) تسجيل الدخول
-
-ثم أخبرني، فأبدأ الفحص على الواجهة الحيّة — وهو الشيء الوحيد الذي لا أستطيع
-فعله بنفسي، لأنني لا أتعامل مع كلمات المرور.
+وجدول واحد ما زال بلا واجهة: `insurance_form_field_requirements`.
 
 ---
 
-## ما بُني في هذه الجولة
+## نتائج المراجعة الشاملة (2026-09-08)
 
-| الهجرة | المحتوى |
-|---|---|
-| 0071 | بيانات الخدمة، الفروع، الأرشفة، صلاحيات الكتالوج |
-| 0072 | قوائم الأسعار والتاريخ وحسم السعر |
-| 0073 | المتطلّبات السريرية، الموارد، أكواد المطالبات، دورة الحياة |
-| 0074 | ربط الموعد بالخدمة، ومنظور غير المفوتر |
-| 0075 | حراس استهلاك الباقات |
-| 0076 | إغلاق السطح الميت |
+الدليل الخام مُولَّد في [`AUDIT-COMPLETENESS.md`](AUDIT-COMPLETENESS.md)
+(`python scripts/completeness-audit.py`). ما يلي حُكمٌ عليه، مرتَّبًا بالخطورة.
 
-| الشاشة | الملف |
-|---|---|
-| كتالوج الخدمات | `client/pages/Services.tsx` |
-| قوائم الأسعار | `client/pages/PriceLists.tsx` |
-| الموارد | `client/pages/Resources.tsx` |
-| محرّر الخدمة | `client/components/catalog/ServiceEditorDialog.tsx` |
-| أسعار خدمة | `client/components/catalog/ServicePriceLists.tsx` |
-| غير المفوتر | `client/components/reports/UnbilledServices.tsx` |
-| الإقرارات المعلّقة | `client/components/reports/PendingConsents.tsx` |
+### ✅ 1. ستّة كائنات تعمل في الإنتاج ولا يُنشئها أيّ ملفّ — عولجت بـ`0149`
 
-وشاشات عُدِّلت لتستعمل ما بُني: `MedicalRecords` (فحص الملاءمة وحسم السعر)،
-`Appointments` (الخدمة تضبط المدة والعيادة)، `Packages` (الاستهلاك عبر الدالة)،
-`VisitCanvasDetail` (حالة كل خدمة وزرّ الإلغاء)، `Reports` (تبويب المعلّقات).
+| الكائن | تعتمد عليه |
+| --- | --- |
+| `custom_reports` | `CustomReports.tsx` |
+| `document_templates` | `DocumentTemplates.tsx`، `DocumentsTab.tsx`، `Reports.tsx` |
+| `generated_documents` | نفسها |
+| `external_clients` | `ExternalClients.tsx`، `PriceLists.tsx` |
+| `v_occupational_exam_report` (منظور) | `Reports.tsx` |
 
----
+فُحصت **160 ملفّ SQL** في `migrations/` و`supabase/migrations/` بما فيها الحزم
+المجمّعة: لا `create table` ولا `create view` لأيٍّ منها. ومع ذلك تشير إليها
+ترقيات قائمة: `0072` فيها `references external_clients(id)` داخل `create table`،
+و`0102` تُضيف أعمدة تشير إلى `document_templates` و`generated_documents` وتقرؤهما
+في دوالّها، و`0051` تُنفّذ `alter view v_occupational_exam_report`، و`0148` تُضيف
+لها مفاتيح ربط.
 
-## الفحص الأخير — أُجري كاملًا من قاعدة فارغة
+**الأثر:** `migrations/` **لا تستطيع إعادة بناء القاعدة من الصفر** — البناء
+النظيف يتوقّف عند `0072`. وإن فُقد أحد هذه الكائنات من الإنتاج فلا مصدر يُستعاد
+منه. أُنشئت خارج الترقيات (محرّر Supabase على الأرجح).
 
-| الفحص | النتيجة |
-|---|---|
-| السلسلة `0001 → 0076` من قاعدة فارغة | نظيفة |
-| `e2e/sql/db-guards.test.sql` (٨ فحوص) | نجحت |
-| `e2e/sql/catalog-guards.test.sql` (١٦ فحصًا) | نجحت |
-| `scripts/schema-check.py` على **كل** ملفات العميل | صفر مخالفات |
-| `tsc` على كل ملف مسّته هذه الجولة | نظيف |
+وسادسها `occupational_exam_results` — الجدول الذي يقرؤه المنظور، تُدرج فيه `0061`.
 
-الملفان الاختباريان يعملان داخل معاملة تُلغى، فلا يتركان صفًا واحدًا، وشُغِّلا
-مرتين متتاليتين على القاعدة نفسها. ومُختبَران **بالطفرة**: تعطيل حارس دورة
-الحياة أسقط الاختبار كما يجب.
+**الإصلاح:** `migrations/0149_adopt_orphan_objects.sql` — التعريفات منسوخة حرفيًّا
+من الإنتاج، وكلّها محروسة بـ`if not exists` فلا تغيّر شيئًا على قاعدةٍ قائمة.
+مُختبَرة على PostgreSQL 16 (نُفِّذت مرّتين متتاليتين) وقُورن ناتجها بالإنتاج قيدًا
+قيدًا وفهرسًا فهرسًا وسياسةً سياسة فتطابق. **بعدها صار عدد الجداول 232 والمنظورات
+175 — مطابقًا لفحص الإنتاج بالضبط**، وهو دليل على أنّ قائمة الأيتام اكتملت.
 
----
+> على بناءٍ نظيف من الصفر يجب تنفيذ `0149` **قبل** `0051` و`0061` و`0072` و`0102`.
 
-## أدوات الفحص
+### 🟠 2. دوالّ حفظ ذرّية مبنيّة ولا يستدعيها أحد
 
-```bash
-# تطابق الاستعلامات مع المخطط
-psql -Atc "select table_name||'|'||column_name from information_schema.columns
-           where table_schema='public'" > cols.txt
-psql -Atc "select proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-           where n.nspname='public'" > fns.txt
-python3 scripts/schema-check.py cols.txt fns.txt client
+`app_save_lab_test` و`app_save_radiology_exam` و`app_schedule_radiology_order`
+موجودة في القاعدة ولا `.rpc()` واحد في العميل يناديها. شاشة المختبر تكتب
+`lab_tests` مباشرةً بـ`.insert()` (سطر 404). أي أنّ ما تضمنه هذه الدوالّ من
+تحقّق وذرّية **مُتجاوَز** — وهو خرق مباشر لقاعدة «العمليات متعدّدة الخطوات داخل
+RPC ذرّية».
 
-# سطحٌ ميت: دوال ومناظير وأعمدة لا يستعملها أحد
-psql -Atc "select table_name from information_schema.views
-           where table_schema='public'" > views.txt
-python3 scripts/dead-surface.py cols.txt fns.txt views.txt migrations client
-```
+### 🟠 3. طبقة تقارير موازية غير موصولة
 
----
+**20 منظورًا** باسم `v_report_*` لا يقرؤها العميل ولا القاعدة، بينما `Reports.tsx`
+يقرأ مجموعة أخرى تمامًا (`v_daily_revenue`، `v_sales_by_item`، `app_revenue_by_doctor`…).
+فللإيراد تعريفان: `v_revenue_by_doctor` (لا يقرؤه أحد) و`app_revenue_by_doctor`
+(المستعمَل). تعريفان يفترقان مع الوقت، وأحدهما يُصدَّق يومًا ما وهو خطأ.
 
-## متروك عمدًا — للمراجعة لا للتنفيذ الآن
+### 🟡 4. ثلاثة جداول تُقرأ وتبقى فارغة أبدًا
 
-هذه كشفها فحص «السطح الميت» وهي **سابقة لعملي**، فلم ألمسها:
+لا العميل يكتب إليها، ولا دالّة، ولا بذرة في أيّ ترقية:
+
+- `procedure_codes` — `ReferenceData.tsx` (الشاشة نفسها تقول «لا أكواد محمَّلة بعد»)
+- `tooth_shades` و`tooth_shade_guides` — `DentalLab.tsx`: منتقي درجة اللون فارغ دائمًا
+
+### 🟡 5. جدولان يُكتب إليهما ولا يقرؤهما أحد
+
+- `consultation_fee_settings` — يُحفظ من إعدادات التشغيل ولا يقرؤه شيء (نفس
+  عائلة `vat_responsibility`: إعداد يُضبط ولا يُطبَّق).
+- `dental_lab_order_items` — بنود أوامر معمل الأسنان تُسجَّل ولا تُعرض.
+
+### ⚪ 6. سطح ميت تمامًا
+
+أربعة جداول لا يمسّها أحد لا من الواجهة ولا من القاعدة ولا ببذرة:
+`bank_reconciliation_lines`، `lab_result_attachments`، `purchase_approval_rules`،
+`reception_settings`. ومعها **15 دالّة** و**36 منظورًا** بلا مستدعٍ.
+
+## سطح ميت — للمراجعة لا للتنفيذ الآن
+
+بُني في القاعدة ولا تستعمله شاشة. تركه يعني تعريفَين يفترقان مع الوقت:
 
 - `app_resolve_vat_rate` و`app_discount_within_limits` — دالّتان لا يستدعيهما
-  العميل، والشاشات تحسب الضريبة والخصم بنفسها. تعريفان يفترقان مع الوقت.
+  العميل، والشاشات تحسب الضريبة والخصم بنفسها.
 - أعمدة الأطباء: `signature_url`، `stamp_url`، `order_stamp_url`،
   `use_default_signature`، `use_default_stamp`، `medical_record_sections`،
-  `allowed_booking_user_ids`، `consultation_fee_service_codes` — لا شاشة
-  تكتبها.
-- `insurance_settings.notify_roles_on_doctor_edits` وأخواتها — إشعارات
-  تعديلات التأمين لم تُبنَ.
+  `allowed_booking_user_ids`، `consultation_fee_service_codes`.
+- `insurance_settings.notify_roles_on_doctor_edits` وأخواتها — إشعارات تعديلات
+  التأمين لم تُبنَ.
 - `blocked_external_contacts.phone_number` و`lifted_by`.
 - `items.track_expiry` و`items.vat_rate_override`.
 
-قل لي أيّها تريد وأبدأ به.
+---
 
-## قرارات ما زالت لك
+## قرارات ما زالت للمالك
 
-- دلالة `vat_responsibility`.
-- تغيير Builder.io في `doctor-availability.ts` (fail-closed) — أُبقيه أم يُعدَّل.
-- ربط العروض بالفواتير (`applied_offer_id` / `offer_percent`).
-- `lab_order_items.unit_override`.
+| القرار | الوضع المُثبَت اليوم |
+| --- | --- |
+| دلالة `vat_responsibility` | `insurance_settings.vat_responsibility` موجود منذ `0005` بلا قيد `check`، ولا يقرؤه أيّ حساب. الشاشة تعرضه داخل صندوق «تُحفظ ولا تُطبَّق». وأنواعه متضاربة: `patient\|insurance_company\|by_item_category` في `database.types.ts` مقابل `patient\|company` في `insurance-settings.ts` |
+| دوام الطبيب: تحذير أم منع | `checkDoctorAvailability` تُعيد `outside` حين يقع جزء من الموعد خارج الدوام. `Appointments` **يحذّر** ويسمح بالتجاوز (`allowOutsideHours`)، و`Waitlist` **يمنع**. وحين لا دوام مُسجَّل إطلاقًا تُعيد `unknown` فيمرّ الحجز (fail-open مقصود) |
+| ربط العروض بالفواتير | `app_resolve_discount` تقرأ `offers` وتُستدعى في `Billing.addLine`، لكن `sales_invoices.applied_offer_id` و`offer_percent` **لا يكتبهما أحد** — فلا يُعرف بعد الفوترة أيّ عرض طُبِّق، وتقرير الخصم في `Reports` يحسب `subtotal × offer_percent` وهو صفر دائمًا |
+| `lab_order_items.unit_override` | موجود منذ `0013`، لا يقرؤه ولا يكتبه شيء |
+
+> ملاحظة: البند القديم «تغيير Builder.io في `doctor-availability.ts`» **سقط**:
+> الملفّ لا يذكر Builder.io بحرف، والسؤال الحيّ هو تحذير/منع أعلاه.

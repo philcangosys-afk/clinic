@@ -1,164 +1,180 @@
-# Fusion Starter
+# ZainCare — تعليمات المشروع للوكيل
 
-A production-ready full-stack React application template with integrated Express server, featuring React Router 6 SPA mode, TypeScript, Vitest, Zod and modern tooling.
+نظام إدارة عيادات عربيّ (RTL) **يعمل اليوم على مرضى حقيقيين**. لا يُبنى شيء هنا
+على التخمين: كل خلل تصفه للمالك يجب أن يكون مُثبَتًا بفحص، وكل ادّعاء بالإنجاز
+يجب أن يكون قابلًا للتحقّق.
 
-While the starter comes with a express server, only create endpoint when strictly neccesary, for example to encapsulate logic that must leave in the server, such as private keys handling, or certain DB operations, db...
+اقرأ قبل أن تكتب سطرًا:
 
-## Tech Stack
+| الملفّ | فيه |
+| --- | --- |
+| `docs/HANDOVER.md` | حالة العمل، ما نُفِّذ على الإنتاج، وما ينتظر |
+| `docs/SCHEMA.md` | **مرجع المخطط** — 227 جدولًا بأعمدتها وقيودها ومفاتيحها، و174 منظورًا |
+| `docs/SCHEMA-FUNCTIONS.md` | 421 دالّة بتوقيعاتها |
+| `docs/OWNER-RULES.md` | **قواعد المالك بنصّه**، وقرارات بأسبابها، وعيوب قائمة، وطرق مسدودة |
+| `docs/تدقيق-اللقطات-133-محدّث.md` | ما بُني وما بقي، بفحص مستقلّ |
+| `docs/audit-0143/` | تدقيق تفصيليّ لكل موديول (فوترة، مخزون، تأمين، …) |
 
-- **PNPM**: Prefer pnpm
-- **Frontend**: React 18 + React Router 6 (spa) + TypeScript + Vite + TailwindCSS 3
-- **Backend**: Express server integrated with Vite dev server
-- **Testing**: Vitest
-- **UI**: Radix UI + TailwindCSS 3 + Lucide React icons
+---
 
-## Project Structure
+## ١) قواعد ثابتة — لا تُنقَض
 
-```
-client/                   # React SPA frontend
-├── pages/                # Route components (Index.tsx = home)
-├── components/ui/        # Pre-built UI component library
-├── App.tsx                # App entry point and with SPA routing setup
-└── global.css            # TailwindCSS 3 theming and global styles
+- **لا شيء يخصّ الرسائل النصّية (SMS)** ولا إضافة تكامل لها حتى إشعار آخر.
+- استخدم الجداول القائمة؛ **لا تُنشئ جدولًا مكرّرًا لغرضٍ له جدول**. ابحث في
+  `docs/SCHEMA.md` أوّلًا.
+- RLS وعزل المنشآت والفروع في كل جدول جديد.
+- **مفاتيح ربط مركّبة** عند ارتباط جدولين تابعين لمنشأة.
+- **العمليات متعدّدة الخطوات تُنفَّذ داخل RPC ذرّية** (معاملة واحدة) — لا سلسلة
+  نداءات من المتصفّح تنكسر في منتصفها فتترك القاعدة نصف مكتملة.
+- **لا حذف نهائيّ** لبيانات طبية أو مالية — تعطيل أو أرشفة.
+- **لا بيانات وهمية ولا أزرار غير فعّالة.** إن لم يكن للزرّ مسار كتابة حقيقيّ،
+  لا تضعه.
+- كل قائمة اختيار تعرض السجلّات **النشطة غير المؤرشفة** فقط.
+- عربي وإنجليزي وRTL، والحقول ثنائية اللغة تبقى ثنائية.
+- **لا مفاتيح ربط في الواجهة**، ولا إرسال بيانات مرضى من المتصفّح إلى طرف ثالث.
 
-server/                   # Express API backend
-├── index.ts              # Main server setup (express config + routes)
-└── routes/               # API handlers
+### معيار الاكتمال
 
-shared/                   # Types used by both client & server
-└── api.ts                # Example of how to share api interfaces
-```
+**لا تُعدّ المرحلة مكتملة لمجرّد ظهور الشاشة.** المرحلة مكتملة حين: تعمل
+الأزرار، وتُحفظ البيانات فعليًّا، وتُطبَّق الصلاحيات، وتظهر العملية في رحلة
+المريض وسجلّ التدقيق.
 
-## Key Features
+> الخطأ الأكثر تكرارًا في هذا المشروع: إضافة عمود إلى شاشة العرض دون بناء مسار
+> الكتابة. النتيجة عمود يعرض «—» إلى الأبد. تحقّق من مسار الكتابة قبل العرض.
 
-## SPA Routing System
+---
 
-The routing system is powered by React Router 6:
+## ٢) التزامات تجاه جهاز المالك
 
-- `client/pages/Index.tsx` represents the home page.
-- Routes are defined in `client/App.tsx` using the `react-router-dom` import
-- Route files are located in the `client/pages/` directory
+1. **لا تُنفِّذ أيّ أمر git على جهاز المالك إطلاقًا.** المالك ينفّذ بنفسه،
+   وأنت تزوّده بالأوامر. (`git status` من وكيل ترك `.git/index.lock` عالقًا
+   مرّتين.) لقراءة حالة المستودع اقرأ ملفّات `.git` نصًّا:
+   `refs/heads/main`، `refs/remotes/origin/main`، `COMMIT_EDITMSG`، `logs/HEAD`.
+2. **`e2e/sql/*.test.sql` اختبارات — لا تُنفَّذ على قاعدة الإنتاج أبدًا.**
+   المنفَّذ على Supabase هو `migrations/` وحدها بترتيبها الرقميّ.
+3. **لا تمرّ الأسرار عبر الوكيل**، ولا تُكتب في ترقية، ولا تُرفع إلى git.
+4. **الحفاظ على أطراف الأسطر:** المستودع **مختلط CRLF/LF**. أيّ تعديل يجب ألّا
+   يقلبها. تحقّق ملفًّا ملفًّا: عدد `\r` يساوي عدد `\r\n` يساوي عدد `\n` في
+   ملفّ CRLF، وصفر في ملفّ LF.
+5. `node_modules` مبنيّة بـpnpm لويندوز وTypeScript فيها 7.x أصليّة: **لا يعمل
+   `tsc` ولا `vitest` من جلسة لينكس على المجلّد المربوط.** التحقّق النحويّ يجري
+   في الحاوية السحابية (`ts.createSourceFile`)، و`pnpm test` و`pnpm build`
+   ينفّذهما المالك.
 
-For example, routes can be defined with:
+---
 
-```typescript
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+## ٣) مصادر الحقيقة
 
-<Routes>
-  <Route path="/" element={<Index />} />
-  {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-  <Route path="*" element={<NotFound />} />
-</Routes>;
-```
+| السؤال | المصدر |
+| --- | --- |
+| ما شكل الجدول اليوم؟ | `docs/SCHEMA.md` — **لا** `client/lib/database.types.ts` |
+| ما توقيع الدالّة؟ | `docs/SCHEMA-FUNCTIONS.md` |
+| ما الذي يجري فعلًا في الإنتاج؟ | فحص SQL ينفّذه المالك ويلصق ناتجه |
 
-### Styling System
+⚠️ **`client/lib/database.types.ts` قديم:** ترويسته تعترف أنّه مكتوب يدويًّا
+لترقيات `0001–0010` فقط، من أصل `0148`. لا يعرف `business_days` ولا
+`app_create_sales_invoice` ولا طرق الدفع. لا تعتمد عليه في أسماء الجداول
+والأعمدة.
 
-- **Primary**: TailwindCSS 3 utility classes
-- **Theme and design tokens**: Configure in `client/global.css` 
-- **UI components**: Pre-built library in `client/components/ui/`
-- **Utility**: `cn()` function combines `clsx` + `tailwind-merge` for conditional classes
-
-```typescript
-// cn utility usage
-className={cn(
-  "base-classes",
-  { "conditional-class": condition },
-  props.className  // User overrides
-)}
-```
-
-### Express Server Integration
-
-- **Development**: Single port (8080) for both frontend/backend
-- **Hot reload**: Both client and server code
-- **API endpoints**: Prefixed with `/api/`
-
-#### Example API Routes
-- `GET /api/ping` - Simple ping api
-- `GET /api/demo` - Demo endpoint  
-
-### Shared Types
-Import consistent types in both client and server:
-```typescript
-import { DemoResponse } from '@shared/api';
-```
-
-Path aliases:
-- `@shared/*` - Shared folder
-- `@/*` - Client folder
-
-## Development Commands
+`docs/SCHEMA*.md` **مُولَّدة**، لا تُحرَّر يدويًّا:
 
 ```bash
-pnpm dev        # Start dev server (client + server)
-pnpm build      # Production build
-pnpm start      # Start production server
-pnpm typecheck  # TypeScript validation
-pnpm test          # Run Vitest tests
+python scripts/schema-doc.py    # بعد كل ترقية جديدة
 ```
 
-## Adding Features
+يقرأ 146 ملفّ ترقية بترتيبها ويحاكي أثرها تراكميًّا، ويدخل أجسام `do $$ … $$`.
 
-### Add new colors to the theme
+---
 
-Open `client/global.css` and `tailwind.config.ts` and add new tailwind colors.
+## ٤) الأخطاء — قاعدة صارمة
 
-### New API Route
-1. **Optional**: Create a shared interface in `shared/api.ts`:
-```typescript
-export interface MyRouteResponse {
-  message: string;
-  // Add other response properties here
-}
+أخطاء Supabase **ليست من نوع `Error`**؛ هي كائنات `{ message, details, hint, code }`.
+لذلك هذا النمط يبتلع رسالة القاعدة دائمًا:
+
+```ts
+// ❌ ممنوع — الشرط يفشل على كل خطأ قاعدة
+error instanceof Error ? error.message : "حدث خطأ غير متوقع"
 ```
 
-2. Create a new route handler in `server/routes/my-route.ts`:
-```typescript
-import { RequestHandler } from "express";
-import { MyRouteResponse } from "@shared/api"; // Optional: for type safety
-
-export const handleMyRoute: RequestHandler = (req, res) => {
-  const response: MyRouteResponse = {
-    message: 'Hello from my endpoint!'
-  };
-  res.json(response);
-};
+```ts
+// ✅
+import { errorMessage } from "@/lib/error-message";
+description: errorMessage(error)                    // النصّ العامّ الافتراضي
+description: errorMessage(error, "نصّ خاصّ بالحالة")  // حين يختلف
 ```
 
-3. Register the route in `server/index.ts`:
-```typescript
-import { handleMyRoute } from "./routes/my-route";
+`errorMessage()` يُلحق رمز الخطأ حين لا تكون الرسالة عربية، لأنّ `42883`
+و`PGRST202` و`PGRST201` تعني نقصًا في ترقيات القاعدة لا خطأً من المستخدم.
+**لا يوجد اليوم أيّ `instanceof Error` في `client/` — لا تُعِده.**
 
-// Add to the createServer function:
-app.get("/api/my-endpoint", handleMyRoute);
+---
+
+## ٥) البنية والتقنيات
+
+React 18 + React Router 6 (SPA) + TypeScript + Vite + TailwindCSS 3 +
+Radix/shadcn + react-query v5 + Supabase (PostgREST + RLS) + Express (نادرًا) +
+pnpm + vitest.
+
+```
+client/          # الواجهة
+├── pages/       # شاشة لكل مسار، تُسجَّل في client/App.tsx
+├── components/  # مكوّنات مشتركة (ui/ مكتبة جاهزة — لا تُعدَّل)
+├── lib/         # supabase، error-message، locale، arabic-name، …
+└── hooks/
+server/          # Express — لا تُنشئ نقطة نهاية إلّا لما يجب أن يبقى في الخادم
+shared/          # أنواع مشتركة
+migrations/      # 0013…0148 — تُنفَّذ على Supabase بالترتيب
+supabase/migrations/  # 0001…0012 — الأساس
+e2e/sql/         # 44 حزمة اختبار للقاعدة (لا تُنفَّذ على الإنتاج)
+scripts/         # schema-doc.py، schema-check.py، embed-check.py، dead-surface.py
+docs/            # المرجع والتدقيق والتسليم
 ```
 
-4. Use in React components with type safety:
-```typescript
-import { MyRouteResponse } from '@shared/api'; // Optional: for type safety
+مسارات مختصرة: `@/*` → `client/`، `@shared/*` → `shared/`.
 
-const response = await fetch('/api/my-endpoint');
-const data: MyRouteResponse = await response.json();
+```bash
+pnpm dev        pnpm build      pnpm start
+pnpm typecheck  pnpm test
 ```
 
-### New Page Route
-1. Create component in `client/pages/MyPage.tsx`
-2. Add route in `client/App.tsx`:
-```typescript
-<Route path="/my-page" element={<MyPage />} />
-```
+---
 
-## Production Deployment
+## ٦) التنسيق والعرض
 
-- **Standard**: `pnpm build`
-- **Binary**: Self-contained executables (Linux, macOS, Windows)
-- **Cloud Deployment**: Use either Netlify or Vercel via their MCP integrations for easy deployment. Both providers work well with this starter template.
+- **`client/lib/locale.ts` إلزاميّ للأرقام والتواريخ.** `ar-SA` وحده يُنتج
+  أرقامًا عربية-هندية وتواريخ هجرية في كروم رغم إعداد «ميلادي»، فالأرقام
+  اللاتينية والتقويم الميلادي **مُصرَّحان** فيه.
+- الجوال والهوية عشرة أرقام، بعدّاد خانات بجانب الحقل، ومنع في القاعدة.
 
-## Architecture Notes
+---
 
-- Single-port development with Vite + Express integration
-- TypeScript throughout (client, server, shared)
-- Full hot reload for rapid development
-- Production-ready with multiple deployment options
-- Comprehensive UI component library included
-- Type-safe API communication via shared interfaces
+## ٧) مزالق تكرّر ظهورها
+
+- **`create table if not exists T (... references R ...)` لا تُضيف المفاتيح إن
+  كان الجدول موجودًا.** هذا سبب كل مفاتيح الربط الناقصة التي أصلحتها `0148`.
+  لإضافة مفتاح إلى جدول قائم استعمل `alter table … add constraint` بحارس.
+- **PGRST201 (تضمين غامض):** المفاتيح المركّبة للمنشأة تُنشئ علاقتين، فحدِّد
+  القيد صراحةً: `drug:items!prescription_items_drug_item_id_fkey(...)`.
+- **تغيير توقيع دالّة** يستوجب `notify pgrst, 'reload schema';` في نهاية
+  الترقية، و`drop function` للتوقيعَين عند إضافة معامل (وإلّا نشأ حِمل زائد).
+- `create or replace view` لا يُسقط عمودًا ولا يُدرج عمودًا في الوسط — يُلحَق
+  في الآخر.
+- **محرّر SQL في Supabase:** لا يعرض `NOTICE`، وينفّذ كل عبارة في اتصال مستقلّ
+  (فلا جداول مؤقّتة بينها)، و`auth.uid()` فيه فارغة — تُنتحَل الجلسة بـ
+  `set_config('request.jwt.claims', json_build_object('sub', <uid>)::text, true)`.
+- **لا أنواع `enum` في هذا المشروع.** القيم المحصورة تُفرض بـ
+  `text ... check (col in (...))`.
+
+---
+
+## ٨) إضافة ميزة
+
+1. ابحث في `docs/SCHEMA.md`: هل الجدول موجود؟ هل العمود موجود؟ (كثير من
+   «الناقص» موجود في القاعدة وينقصه مسار كتابة في الواجهة.)
+2. إن لزمت ترقية: أنشئ `migrations/NNNN_اسم_واضح.sql` بالرقم التالي، بحارس
+   `if not exists`، مع RLS وصلاحيات، و`notify pgrst` إن تغيّر توقيع دالّة.
+3. اكتب العملية متعدّدة الخطوات كـRPC ذرّية.
+4. ابنِ الشاشة، واستعمل `errorMessage()` و`locale.ts`.
+5. أضف حزمة في `e2e/sql/` تُثبت الحارس (تعمل داخل معاملة تُلغى).
+6. أعد توليد `python scripts/schema-doc.py`.
+7. سلّم للمالك: ترقية يُنفّذها، وأوامر git ينفّذها هو.
