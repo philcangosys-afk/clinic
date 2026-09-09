@@ -18,6 +18,8 @@ import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import type { AppointmentStatus, AppointmentWithRelations } from "@/lib/database.types";
+import { PatientSearchInput } from "@/components/shared/PatientSearchInput";
+import { matchesPatientSearch, type PatientSearchScope } from "@/lib/patient-search";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -61,6 +63,7 @@ type ReceptionAppointment = AppointmentWithRelations & {
   queue_number: number | null;
   invoices?: { id: string; status: string; remaining_amount: number; is_temporary: boolean }[];
   patient?: (NonNullable<AppointmentWithRelations["patient"]> & {
+    phone_1: string | null;
     insurance_company_name: string | null;
     insurance_policy_number: string | null;
   }) | null;
@@ -117,7 +120,7 @@ function useTodayQueue(organizationId: string | undefined, doctorFilter: string)
       let query = supabase
         .from("appointments")
         .select(
-          "id, organization_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, clinic_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, insurance_company_name, insurance_policy_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name), invoices:sales_invoices!sales_invoices_appointment_tenant_fk(id, status, remaining_amount, is_temporary)",
+          "id, organization_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, clinic_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number, phone_1, insurance_company_name, insurance_policy_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name), invoices:sales_invoices!sales_invoices_appointment_tenant_fk(id, status, remaining_amount, is_temporary)",
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
         // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
@@ -166,6 +169,8 @@ export default function Reception() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [doctorFilter, setDoctorFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [noShowTarget, setNoShowTarget] = useState<ReceptionAppointment | null>(null);
   const [noShowReason, setNoShowReason] = useState("");
@@ -196,7 +201,8 @@ export default function Reception() {
   const doctors = useDoctorsList(organization?.id);
 
   const grouped = useMemo(() => {
-    const rows = queue.data ?? [];
+    // البحث يرشّح الطابور المحمَّل لا يعيد الاستعلام: الطابور صغير ويتحدّث كل 30 ثانية
+    const rows = (queue.data ?? []).filter((row) => matchesPatientSearch(row.patient, search, searchScopes));
     const active = rows.filter((row) => ACTIVE_STATUSES.includes(row.status)).sort((a, b) =>
       PRIORITY_ORDER[a.priority ?? "normal"] - PRIORITY_ORDER[b.priority ?? "normal"] ||
       (a.queue_number ?? Number.MAX_SAFE_INTEGER) - (b.queue_number ?? Number.MAX_SAFE_INTEGER) ||
@@ -204,7 +210,7 @@ export default function Reception() {
     const done = rows.filter((row) => !ACTIVE_STATUSES.includes(row.status));
     const preQueue = active.filter((row) => PRE_QUEUE_STATUSES.includes(row.status));
     return { active, done, preQueue };
-  }, [queue.data]);
+  }, [queue.data, search, searchScopes]);
 
   // الموعد المطلوب قد لا يكون في طابور اليوم (موعد يوم آخر أو حالة منتهية):
   // قول ذلك صريحًا أفضل من شاشة تبدو كأنها تجاهلت الرابط.
@@ -248,7 +254,15 @@ export default function Reception() {
           <h1 className="text-2xl font-bold">الاستقبال والانتظار</h1>
           <p className="text-sm text-muted-foreground">طابور اليوم الحي — يتحدّث تلقائيًا كل 30 ثانية.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <PatientSearchInput
+            value={search}
+            onChange={setSearch}
+            scopes={searchScopes}
+            onScopesChange={setSearchScopes}
+            className="w-full sm:w-auto"
+            inputClassName="sm:w-64"
+          />
           <Select value={doctorFilter} onValueChange={setDoctorFilter}>
             <SelectTrigger className="w-44">
               <SelectValue placeholder="كل الأطباء" />

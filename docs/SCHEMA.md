@@ -5,8 +5,8 @@
 
 ## كيف قُرئ
 
-قُرئت 147 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
-`migrations/0013…0149` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
+قُرئت 150 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
+`migrations/0013…0152` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
 وكل `alter table` تعدّل، وكل `drop` تحذف. فما تراه هنا هو المخطط **بعد آخر
 ترقية**، لا كما كان يوم إنشائه. ودخل المولّد إلى أجسام `do $$ … $$` لأنّ
 معظم قيود المفاتيح تُضاف داخلها بحارس `if not exists`.
@@ -16,7 +16,7 @@
 | | من الترقيات (هنا) | من فحص الإنتاج (`docs/deep-gap-probe.sql`) |
 | --- | ---: | ---: |
 | جداول | 232 | 232 |
-| دوالّ | 421 | 420 |
+| دوالّ | 422 | 420 |
 | منظورات | 175 | 175 |
 | مفاتيح ربط | 1047 | 1076 |
 | فهارس | 383 | — |
@@ -6768,7 +6768,7 @@
 | `v_document_expiry_alerts` | منظور | `0102` |
 | `v_document_signatures` | منظور | `0102` |
 | `v_documents` | منظور | `0102` |
-| `v_drug_catalog` | منظور | `0088` |
+| `v_drug_catalog` | منظور | `0088`، `0151` |
 | `v_duplicate_patient_id_numbers` | منظور | `0146` |
 | `v_duty_conflicts` | منظور | `0108` |
 | `v_einvoice_status` | منظور | `0092` |
@@ -6813,7 +6813,7 @@
 | `v_package_catalog` | منظور | `0096` |
 | `v_package_usage_log` | منظور | `0096` |
 | `v_patient_balance` | منظور | `0091`، `0144` |
-| `v_patient_directory` | منظور | `0095` |
+| `v_patient_directory` | منظور | `0095`، `0150` |
 | `v_patient_financials` | منظور | `0039` |
 | `v_patient_financials_by_doctor` | منظور | `0041` |
 | `v_patient_insurance_status` | منظور | `0089` |
@@ -6905,4 +6905,4 @@
 
 ## الدوالّ
 
-توقيعات الدوالّ الـ421 في ملفّ مستقلّ: [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md).
+توقيعات الدوالّ الـ422 في ملفّ مستقلّ: [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md).

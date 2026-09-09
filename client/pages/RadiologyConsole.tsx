@@ -12,6 +12,13 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
+import {
+  buildPatientSearchOr,
+  patientSearchPlaceholder,
+  PATIENTS_SEARCH_COLUMNS,
+  type PatientSearchScope,
+} from "@/lib/patient-search";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -269,6 +276,7 @@ function UploadPanel({
   const [files, setFiles] = useState<File[]>([]);
   const [allPatients, setAllPatients] = useState(false);
   const [search, setSearch] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [busy, setBusy] = useState(false);
 
   // الطلب المختار من القائمة يملأ الحقول مرة واحدة.
@@ -292,19 +300,19 @@ function UploadPanel({
   });
 
   const patients = useQuery({
-    queryKey: ["rad-upload-patients", organizationId, effectiveDoctor, allPatients, search],
+    queryKey: ["rad-upload-patients", organizationId, effectiveDoctor, allPatients, search, searchScopes.join("+")],
     enabled: Boolean(organizationId) && (allPatients || Boolean(effectiveDoctor)),
     queryFn: async () => {
       if (allPatients) {
         let q = supabase
           .from("patients")
-          .select("id, name_ar, id_number")
+          .select("id, name_ar, id_number, mobile_number, phone_1, file_number")
           .eq("organization_id", organizationId!)
           .order("name_ar")
           .limit(50);
-        if (search.trim()) {
-          q = q.or(`name_ar.ilike.%${search.trim()}%,id_number.ilike.%${search.trim()}%`);
-        }
+        // البحث الموحَّد: الاسم والجوال والهوية — أو ما تحصره أزرار النطاق
+        const searchFilter = buildPatientSearchOr(search, searchScopes, PATIENTS_SEARCH_COLUMNS);
+        if (searchFilter) q = q.or(searchFilter);
         const { data, error } = await q;
         if (error) throw error;
         return (data ?? []) as { id: string; name_ar: string; id_number: string | null }[];
@@ -546,11 +554,18 @@ function UploadPanel({
                 </button>
               </div>
               {allPatients && (
+                <PatientSearchScopeChips
+                  scopes={searchScopes}
+                  onScopesChange={setSearchScopes}
+                  className="mb-1"
+                />
+              )}
+              {allPatients && (
                 <Input
                   dir="rtl"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="اسم أو رقم هوية"
+                  placeholder={patientSearchPlaceholder(searchScopes)}
                   className="mb-1"
                 />
               )}

@@ -1,7 +1,33 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Plus, Receipt, Save, Stethoscope, Trash2 } from "lucide-react";
+import {
+  Activity,
+  ArrowRight,
+  Ban,
+  CalendarClock,
+  CalendarDays,
+  ClipboardList,
+  Contact2,
+  Eye,
+  FileSignature,
+  FileStack,
+  HeartPulse,
+  Image as ImageIcon,
+  Pencil,
+  Pill,
+  Plus,
+  RefreshCw,
+  Receipt,
+  Save,
+  ShieldCheck,
+  Smile,
+  Sparkles,
+  Stethoscope,
+  StickyNote,
+  UserRound,
+  Wallet,
+} from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
@@ -14,7 +40,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
 import PatientContactsTab from "@/components/patients/PatientContactsTab";
 import MergePatientsDialog from "@/components/patients/MergePatientsDialog";
 import { usePermissions } from "@/lib/permissions";
@@ -34,7 +61,17 @@ import DocumentsTab from "@/components/patients/DocumentsTab";
 import RadiologyImagesTab from "@/components/patients/RadiologyImagesTab";
 import Odontogram from "@/components/medical/Odontogram";
 import SendToDoctorDialog from "@/components/patients/SendToDoctorDialog";
+import {
+  PatientFileShell,
+  type FileSectionGroup,
+  type IdentityField,
+} from "@/components/patients/PatientFileShell";
 import NewInvoiceDialog from "@/components/billing/NewInvoiceDialog";
+import InvoiceDetailsDialog from "@/components/billing/InvoiceDetailsDialog";
+import { RecordPaymentDialog } from "@/components/billing/RecordPaymentDialog";
+import { INVOICE_STATUS_BADGE, INVOICE_STATUS_LABELS, invoiceAcceptsPayment } from "@/lib/invoice-status";
+import { formatAmount, formatDateTime, useLocaleSettings } from "@/lib/locale";
+import type { SalesInvoiceStatus, SalesInvoiceWithPatient } from "@/lib/database.types";
 import RequiredLabel, {
   DigitCounter,
   digitsOnly,
@@ -111,6 +148,45 @@ export default function PatientProfile() {
     };
   }, [id]);
 
+  /**
+   * القسم المعروض. الافتراضيّ «الحالة الصحية» لا «المعلومات الشخصية»: من يفتح
+   * ملفًّا طبيًّا يفتحه ليقرأ حالة المريض، والبيانات الشخصية يعرفها من الشريط.
+   */
+  const [section, setSection] = useState("conditions");
+
+  /** عدد الحالات الصحية المؤشَّرة — يظهر في شريط الهوية */
+  const chronicCount = useQuery({
+    queryKey: ["patient-chronic-count", id],
+    enabled: Boolean(id),
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("patient_health_conditions")
+        .select("condition_id", { count: "exact", head: true })
+        .eq("patient_id", id)
+        .eq("is_checked", true);
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+
+  /**
+   * متبقّي حساب المريض — مجموع المتبقّي على فواتيره غير الملغاة.
+   * يُقرأ في الشريط لأنّ من يُنهي زيارة يحتاج أن يعرف قبل خروج المريض لا بعده.
+   */
+  const accountBalance = useQuery({
+    queryKey: ["patient-balance", id],
+    enabled: Boolean(id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("sales_invoices")
+        .select("remaining_amount")
+        .eq("patient_id", id)
+        .neq("status", "void");
+      if (error) throw error;
+      return (data ?? []).reduce((sum, row: any) => sum + Number(row.remaining_amount ?? 0), 0);
+    },
+  });
+
   if (patient.isLoading) {
     return (
       <div className="mx-auto flex max-w-5xl flex-col gap-4 p-6">
@@ -126,173 +202,136 @@ export default function PatientProfile() {
     );
   }
 
+  const age = ageFromBirthDate(patient.data.birth_date);
+  const genderLabel =
+    patient.data.gender === "male" ? "ذكر" : patient.data.gender === "female" ? "أنثى" : null;
+  const chronicLabel =
+    chronicCount.data === undefined
+      ? null
+      : chronicCount.data > 0
+        ? `${formatAmount(chronicCount.data)} حالة مسجَّلة`
+        : "لا يملك أمراضًا مزمنة";
+  const balance = accountBalance.data ?? 0;
+
+  /**
+   * شريط الهوية: ما يحتاجه من يعمل على الملفّ وهو داخل أيّ قسم.
+   * الأمراض المزمنة والمتبقّي بالأحمر لأنّهما يغيّران القرار: الأول يغيّر ما
+   * يُوصف، والثاني يغيّر ما يُقبض قبل الخروج.
+   */
+  const identity: IdentityField[] = [
+    { label: "رقم الملف", value: patient.data.file_number },
+    { label: "اسم المريض", value: patient.data.name_ar },
+    { label: "الاسم الإنجليزي", value: patient.data.name_en },
+    { label: "رقم الهوية", value: patient.data.id_number },
+    { label: "الجوال", value: patient.data.mobile_number },
+    { label: "العمر", value: age !== null ? `${formatAmount(age)} سنة` : null },
+    { label: "الجنس", value: genderLabel },
+    { label: "الأمراض المزمنة", value: chronicLabel, alert: (chronicCount.data ?? 0) > 0 },
+    { label: "التأمين", value: patient.data.insurance_company_name || "لا يوجد" },
+    { label: "متبقّي الحساب", value: `${formatAmount(balance)} ر.س`, alert: balance > 0 },
+  ];
+
+  const groups: FileSectionGroup[] = [
+    {
+      key: "medical",
+      label: "الملفّ الطبي",
+      items: [
+        { key: "conditions", label: "الحالة الصحية", icon: HeartPulse },
+        { key: "odontogram", label: "عيادة الأسنان", icon: Smile },
+        { key: "aesthetic", label: "عيادة الجلدية", icon: Sparkles },
+        { key: "visits", label: "الزيارات والفحوصات", icon: ClipboardList },
+        { key: "vitals", label: "المؤشرات الحيوية", icon: Activity },
+        { key: "prescriptions", label: "الوصفات الطبية", icon: Pill },
+        { key: "radiology", label: "صور الأشعة", icon: ImageIcon },
+        { key: "cbahi", label: "الجودة والسلامة (CBAHI)", icon: ShieldCheck },
+        { key: "documents", label: "المستندات", icon: FileStack },
+      ],
+    },
+    {
+      key: "financial",
+      label: "المالي",
+      items: [
+        { key: "invoices", label: "فواتير المريض", icon: Receipt },
+        { key: "agreements", label: "الاتفاقيات", icon: FileSignature },
+        { key: "sessions", label: "الجلسات", icon: CalendarClock },
+        { key: "wallet", label: "المحفظة", icon: Wallet },
+      ],
+    },
+    {
+      key: "file",
+      label: "الملفّ الشخصي",
+      items: [
+        { key: "overview", label: "المعلومات الشخصية", icon: UserRound, badge: overviewDirty ? "•" : null },
+        { key: "appointments", label: "عرض المواعيد", icon: CalendarDays },
+        { key: "contacts", label: "المرافقون", icon: Contact2 },
+        { key: "notes", label: "الملاحظات", icon: StickyNote },
+        { key: "blocking", label: "الحجب", icon: Ban },
+      ],
+    },
+  ];
+
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" asChild>
-            <Link to="/patients">
-              <ArrowRight className="h-5 w-5" />
-            </Link>
-          </Button>
-          <div>
-            <h1 className="text-xl font-bold">{patient.data.name_ar}</h1>
-            <p className="text-sm text-muted-foreground">
-              ملف رقم #{patient.data.file_number} · {patient.data.mobile_number ?? "بلا جوال"}
-              {ageFromBirthDate(patient.data.birth_date) !== null && (
-                <> · {ageFromBirthDate(patient.data.birth_date)} سنة</>
-              )}
-            </p>
+    <PatientFileShell
+      identity={identity}
+      groups={groups}
+      active={section}
+      onActiveChange={setSection}
+      header={
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="icon" asChild>
+              <Link to="/patients">
+                <ArrowRight className="h-5 w-5" />
+              </Link>
+            </Button>
+            <h1 className="text-lg font-bold">{patient.data.name_ar}</h1>
+            {/* الملف المدموج يجب أن يُعرف من أول نظرة: من يفتحه يظن أنه ينظر
+                إلى سجل كامل، وهو سجل نُقل عنه كل شيء. */}
+            {(patient.data as any).merged_into_id && (
+              <Badge variant="destructive">ملف مدموج — استخدم الملف الأصلي</Badge>
+            )}
+            {patient.data.block_file && <Badge variant="destructive">الملف محجوب بالكامل</Badge>}
+            {patient.data.block_appointments && <Badge variant="destructive">محجوب عن المواعيد</Badge>}
+            {patient.data.block_invoices && <Badge variant="destructive">محجوب عن الفوترة</Badge>}
+            {patient.data.block_sms && <Badge variant="secondary">محجوب عن SMS</Badge>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <PatientQuickActions patient={patient.data} />
+            <MergeButton patientId={patient.data.id} patientName={patient.data.name_ar} />
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {/* الملف المدموج يجب أن يُعرف من أول نظرة: من يفتحه يظن أنه ينظر
-              إلى سجل كامل، وهو سجل نُقل عنه كل شيء. */}
-          {(patient.data as any).merged_into_id && (
-            <Badge variant="destructive">
-              ملف مدموج — استخدم الملف الأصلي
-            </Badge>
-          )}
-          <PatientQuickActions patient={patient.data} />
-          <MergeButton patientId={patient.data.id} patientName={patient.data.name_ar} />
-          {patient.data.block_file && <Badge variant="destructive">الملف محجوب بالكامل</Badge>}
-          {patient.data.block_appointments && <Badge variant="destructive">محجوب عن المواعيد</Badge>}
-          {patient.data.block_invoices && <Badge variant="destructive">محجوب عن الفوترة</Badge>}
-          {patient.data.block_sms && <Badge variant="secondary">محجوب عن SMS</Badge>}
+      }
+    >
+      {section === "overview" && (
+        <OverviewTab patient={patient.data} draft={overviewDraft} setDraft={setOverviewDraft} />
+      )}
+      {section === "conditions" && (
+        <div className="flex flex-col gap-4">
+          <HealthConditionsTab patientId={patient.data.id} />
+          <MedicalHistoryTab patientId={patient.data.id} />
         </div>
-      </div>
-
-      {/**
-        * تبويبات على مستويين بدل 12 تبويبًا مسطَّحًا.
-        *
-        * المواصفة تطلب أن يرى الموظف الفحص والوصفات والاتفاقيات **في سياق
-        * المريض**، وإضافتها مسطَّحةً كانت ستجعلها 15 تبويبًا في صف واحد يلتفّ
-        * على ثلاثة أسطر — فيصعب العثور على أي منها. التجميع في أربع مجموعات
-        * يجعل كل تبويب على بُعد نقرتين بدل مسح بصري لصفٍّ طويل.
-        */}
-      <Tabs defaultValue="file">
-        <TabsList className="flex h-auto flex-wrap justify-start gap-1">
-          {/* علامة «غير محفوظ» على التبويب نفسه: المسوّدة تبقى محفوظة عند
-              الانتقال، لكن من انتقل يجب أن يعرف أن عليه العودة والحفظ. */}
-          <TabsTrigger value="file">
-            الملف
-            {overviewDirty && <span className="ms-1 text-amber-600" title="تعديلات غير محفوظة">•</span>}
-          </TabsTrigger>
-          <TabsTrigger value="medical">الطبي</TabsTrigger>
-          <TabsTrigger value="financial">المالي</TabsTrigger>
-          <TabsTrigger value="admin">المواعيد والمستندات</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="file" className="mt-4">
-          <Tabs defaultValue="overview">
-            <TabsList className="flex h-auto flex-wrap justify-start gap-1">
-              <TabsTrigger value="overview">نظرة عامة</TabsTrigger>
-              <TabsTrigger value="conditions">الحالة الصحية</TabsTrigger>
-              <TabsTrigger value="history">السوابق الصحية</TabsTrigger>
-              <TabsTrigger value="contacts">المرافقون</TabsTrigger>
-              <TabsTrigger value="notes">الملاحظات</TabsTrigger>
-              <TabsTrigger value="blocking">الحجب</TabsTrigger>
-            </TabsList>
-            <TabsContent value="overview" className="mt-4">
-              <OverviewTab
-                patient={patient.data}
-                draft={overviewDraft}
-                setDraft={setOverviewDraft}
-              />
-            </TabsContent>
-            <TabsContent value="conditions" className="mt-4">
-              <HealthConditionsTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="history" className="mt-4">
-              <MedicalHistoryTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="contacts" className="mt-4">
-              <PatientContactsTab patientId={id!} />
-            </TabsContent>
-            <TabsContent value="notes" className="mt-4">
-              <NotesTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="blocking" className="mt-4">
-              <BlockingTab patient={patient.data} />
-            </TabsContent>
-          </Tabs>
-        </TabsContent>
-
-        <TabsContent value="medical" className="mt-4">
-          <Tabs defaultValue="visits">
-            <TabsList className="flex h-auto flex-wrap justify-start gap-1">
-              <TabsTrigger value="visits">الزيارات والفحوصات</TabsTrigger>
-              <TabsTrigger value="vitals">المؤشرات الحيوية</TabsTrigger>
-              <TabsTrigger value="prescriptions">الوصفات</TabsTrigger>
-              <TabsTrigger value="sessions">الجلسات</TabsTrigger>
-              <TabsTrigger value="cbahi">الجودة والسلامة</TabsTrigger>
-            </TabsList>
-            <TabsContent value="visits" className="mt-4">
-              <PatientVisitsTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="vitals" className="mt-4">
-              <VitalsTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="prescriptions" className="mt-4">
-              <PatientPrescriptionsTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="sessions" className="mt-4 flex flex-col gap-4">
-              {/* لوحان لا واحد: `SessionsPanel` هو الجانب السريري (الجهاز
-                  والمنطقة والإعدادات والأعراض وصور قبل/بعد)، و`SessionsTab`
-                  هو الجانب التعاقدي (جلسات اتفاقية العلاج وكمّها المتفَق
-                  عليه). دمجُهما في لوح واحد يخلط قرار الطبيب بحساب المال. */}
-              <SessionsPanel patientId={patient.data.id} />
-              <SessionsTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="cbahi" className="mt-4">
-              <CbahiTab patientId={patient.data.id} />
-            </TabsContent>
-          </Tabs>
-        </TabsContent>
-
-        <TabsContent value="financial" className="mt-4">
-          <Tabs defaultValue="invoices">
-            <TabsList className="flex h-auto flex-wrap justify-start gap-1">
-              <TabsTrigger value="invoices">الفواتير</TabsTrigger>
-              <TabsTrigger value="agreements">الاتفاقيات</TabsTrigger>
-              <TabsTrigger value="wallet">المحفظة</TabsTrigger>
-            </TabsList>
-            <TabsContent value="invoices" className="mt-4">
-              <InvoicesTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="agreements" className="mt-4">
-              <PatientAgreementsTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="wallet" className="mt-4">
-              <WalletTab patientId={patient.data.id} />
-            </TabsContent>
-          </Tabs>
-        </TabsContent>
-
-        <TabsContent value="admin" className="mt-4">
-          <Tabs defaultValue="appointments">
-            <TabsList className="flex h-auto flex-wrap justify-start gap-1">
-              <TabsTrigger value="appointments">المواعيد</TabsTrigger>
-              <TabsTrigger value="documents">المستندات</TabsTrigger>
-              <TabsTrigger value="radiology-images">صور الأشعة</TabsTrigger>
-              <TabsTrigger value="odontogram">مخطّط الأسنان</TabsTrigger>
-            </TabsList>
-            <TabsContent value="appointments" className="mt-4">
-              <AppointmentsTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="documents" className="mt-4">
-              <DocumentsTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="radiology-images" className="mt-4">
-              <RadiologyImagesTab patientId={patient.data.id} />
-            </TabsContent>
-            <TabsContent value="odontogram" className="mt-4">
-              <Odontogram patientId={patient.data.id} />
-            </TabsContent>
-          </Tabs>
-        </TabsContent>
-      </Tabs>
-    </div>
+      )}
+      {section === "contacts" && <PatientContactsTab patientId={id!} />}
+      {section === "notes" && <NotesTab patientId={patient.data.id} />}
+      {section === "blocking" && <BlockingTab patient={patient.data} />}
+      {section === "visits" && <PatientVisitsTab patientId={patient.data.id} />}
+      {section === "vitals" && <VitalsTab patientId={patient.data.id} />}
+      {section === "prescriptions" && <PatientPrescriptionsTab patientId={patient.data.id} />}
+      {/* لوحان لا واحد: `SessionsPanel` هو الجانب السريري (الجهاز والمنطقة
+          والإعدادات والأعراض وصور قبل/بعد)، و`SessionsTab` هو الجانب التعاقدي
+          (جلسات اتفاقية العلاج وكمّها المتفَق عليه). دمجُهما يخلط قرار الطبيب
+          بحساب المال. */}
+      {section === "aesthetic" && <SessionsPanel patientId={patient.data.id} />}
+      {section === "sessions" && <SessionsTab patientId={patient.data.id} />}
+      {section === "cbahi" && <CbahiTab patientId={patient.data.id} />}
+      {section === "invoices" && <InvoicesTab patientId={patient.data.id} />}
+      {section === "agreements" && <PatientAgreementsTab patientId={patient.data.id} />}
+      {section === "wallet" && <WalletTab patientId={patient.data.id} />}
+      {section === "appointments" && <AppointmentsTab patientId={patient.data.id} />}
+      {section === "documents" && <DocumentsTab patientId={patient.data.id} />}
+      {section === "radiology" && <RadiologyImagesTab patientId={patient.data.id} />}
+      {section === "odontogram" && <Odontogram patientId={patient.data.id} />}
+    </PatientFileShell>
   );
 }
 
@@ -1082,11 +1121,58 @@ function MedicalHistoryTab({ patientId }: { patientId: string }) {
   );
 }
 
+/**
+ * أسماء أعضاء المنشأة — لعرض كاتب الملاحظة بدل معرّف مستخدم.
+ *
+ * `patient_notes.created_by` يشير إلى `auth.users`، وPostgREST لا يصل إلى
+ * ذلك المخطّط، فالاسم يأتي من `v_organization_members_directory` (0026).
+ */
+function useMemberNames() {
+  const { organization } = useOrganizationAccess();
+  return useQuery({
+    queryKey: ["members-directory-names", organization?.id],
+    enabled: Boolean(organization?.id),
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_organization_members_directory")
+        .select("user_id, display_name")
+        .eq("organization_id", organization!.id);
+      if (error) throw error;
+      const map: Record<string, string> = {};
+      for (const row of (data ?? []) as { user_id: string; display_name: string }[]) {
+        map[row.user_id] = row.display_name;
+      }
+      return map;
+    },
+  });
+}
+
+/**
+ * ملاحظات المريض — شبكةٌ فوق ولوحُ تحريرٍ تحت، بنمط بقيّة الشاشات.
+ *
+ * كانت الملاحظات بطاقاتٍ متتالية بحقل إضافةٍ دائم فوقها: مريضٌ له عشرون
+ * ملاحظة يصير عمودًا لا يُمسح بالعين، ولا يُعرف من كتب ملاحظةً ولا متى بلا
+ * قراءة كل بطاقة. الشبكة تُظهر التاريخ والعنوان والكاتب في صفٍّ واحد،
+ * واللوح تحتها يعرض نصّ المختارة كاملًا.
+ *
+ * **لا حذف نهائيّ:** الملاحظة بيانٌ طبيّ، وقاعدة المشروع تمنع محوه — كان
+ * زرّ سلّة يمحو الصفّ من `patient_notes` بلا رجعة ولا سجلّ. صار «تعطيل»:
+ * الملاحظة تخرج من العرض الافتراضيّ ويبقى نصّها وكاتبها وتاريخها.
+ */
 function NotesTab({ patientId }: { patientId: string }) {
+  const { calendarDisplay } = useLocaleSettings();
+  const { session } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [newTitle, setNewTitle] = useState("");
-  const [newNote, setNewNote] = useState("");
+  const memberNames = useMemberNames();
+
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [mode, setMode] = useState<"idle" | "new" | "edit">("idle");
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftBody, setDraftBody] = useState("");
+  const [showDisabled, setShowDisabled] = useState(false);
+
   const notes = useQuery({
     queryKey: ["patient-notes", patientId],
     queryFn: async () => {
@@ -1100,20 +1186,53 @@ function NotesTab({ patientId }: { patientId: string }) {
     },
   });
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["patient-notes", patientId] });
+  const all = notes.data ?? [];
+  const rows = showDisabled ? all : all.filter((note) => !note.is_disabled);
+  const selected = all.find((note) => note.id === selectedId) ?? null;
 
-  const addNote = useMutation({
+  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["patient-notes", patientId] });
+  const fail = (title: string) => (error: unknown) =>
+    toast({ variant: "destructive", title, description: errorMessage(error) });
+
+  const closeEditor = () => {
+    setMode("idle");
+    setDraftTitle("");
+    setDraftBody("");
+  };
+
+  const saveNote = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase
+      const title = draftTitle.trim() || null;
+      const body = draftBody.trim();
+      if (!body) throw new Error("نصّ الملاحظة مطلوب");
+      if (mode === "edit") {
+        if (!selected) throw new Error("لم تُختَر ملاحظة");
+        const { data: affectedRows, error } = await supabase
+          .from("patient_notes")
+          .update({ title, body })
+          .eq("id", selected.id)
+          .select("id");
+        if (error) throw error;
+        if (!affectedRows || affectedRows.length === 0)
+          throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
+        return selected.id;
+      }
+      const { data, error } = await supabase
         .from("patient_notes")
-        .insert({ patient_id: patientId, title: newTitle.trim() || null, body: newNote.trim() });
+        // الكاتب يُسجَّل هنا: العمود موجود منذ 0002 وكان يُترك فارغًا، فلا
+        // يُعرف من كتب ملاحظةً في ملفٍّ يشترك فيه الاستقبال والطبيب.
+        .insert({ patient_id: patientId, title, body, created_by: session?.user.id ?? null })
+        .select("id")
+        .single();
       if (error) throw error;
+      return (data as { id: string }).id;
     },
-    onSuccess: () => {
-      setNewTitle("");
-      setNewNote("");
+    onSuccess: (id) => {
+      closeEditor();
+      setSelectedId(id);
       invalidate();
     },
+    onError: fail("تعذّر حفظ الملاحظة"),
   });
 
   const toggleDisabled = useMutation({
@@ -1130,73 +1249,186 @@ function NotesTab({ patientId }: { patientId: string }) {
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: invalidate,
+    onError: fail("تعذّر تغيير حالة الملاحظة"),
   });
 
-  const removeNote = useMutation({
-    mutationFn: async (id: string) => {
-      const { data: affectedRows, error } = await supabase.from("patient_notes").delete().eq("id", id)
-        .select("id");
-      if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
-    },
-    onSuccess: invalidate,
-    onError: (error: unknown) =>
-      toast({
-        variant: "destructive",
-        title: "تعذر الحذف",
-        description: errorMessage(error),
-      }),
-  });
+  const editing = mode !== "idle";
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>الملاحظات</CardTitle>
-        <CardDescription>سجل زمني للملاحظات والمتابعة، بعنوان ونص وإمكانية تعطيل أو حذف كل ملاحظة</CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-3">
-        <div className="flex flex-col gap-2 rounded-lg border p-3">
-          <Input value={newTitle} onChange={(e) => setNewTitle(e.target.value)} placeholder="عنوان الملاحظة (اختياري)" />
-          <div className="flex gap-2">
-            <Textarea value={newNote} onChange={(e) => setNewNote(e.target.value)} placeholder="أضف ملاحظة جديدة..." />
-            <Button disabled={!newNote.trim() || addNote.isPending} onClick={() => addNote.mutate()}>
-              <Plus className="h-4 w-4" />
-              إضافة
-            </Button>
-          </div>
-        </div>
-        <div className="flex flex-col gap-2">
-          {(notes.data ?? []).map((note) => (
-            <div key={note.id} className="rounded-lg border px-3 py-2">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  {note.title && <p className="text-sm font-semibold">{note.title}</p>}
-                  <p className="text-sm">{note.body}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {new Date(note.created_at).toLocaleString("ar-SA")}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  {note.is_disabled && <Badge variant="secondary">معطّلة</Badge>}
-                  <Button size="sm" variant="outline" onClick={() => toggleDisabled.mutate(note)}>
-                    {note.is_disabled ? "تفعيل" : "تعطيل"}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => removeNote.mutate(note.id)}>
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
-                </div>
-              </div>
-            </div>
-          ))}
-          {(notes.data ?? []).length === 0 && (
-            <p className="py-6 text-center text-sm text-muted-foreground">لا توجد ملاحظات بعد.</p>
+    <div className="flex flex-col gap-3">
+      <ScreenToolbar
+        items={[
+          {
+            key: "new",
+            label: "ملاحظة جديدة",
+            icon: Plus,
+            disabled: editing,
+            onClick: () => {
+              setDraftTitle("");
+              setDraftBody("");
+              setMode("new");
+            },
+          },
+          {
+            key: "edit",
+            label: "تعديل",
+            icon: Pencil,
+            disabled: !selected || editing,
+            title: selected ? "تعديل الملاحظة المختارة" : "اختر ملاحظة من الجدول أوّلًا",
+            onClick: () => {
+              if (!selected) return;
+              setDraftTitle(selected.title ?? "");
+              setDraftBody(selected.body);
+              setMode("edit");
+            },
+          },
+          {
+            key: "toggle",
+            label: selected?.is_disabled ? "تفعيل" : "تعطيل",
+            icon: Ban,
+            disabled: !selected || editing || toggleDisabled.isPending,
+            title: "الملاحظة بيانٌ طبيّ لا يُمحى — التعطيل يُخفيها ويُبقي نصّها",
+            onClick: () => selected && toggleDisabled.mutate(selected),
+          },
+          { key: "sep1", separator: true },
+          {
+            key: "refresh",
+            label: "تحديث",
+            icon: RefreshCw,
+            onClick: () => void notes.refetch(),
+          },
+          {
+            key: "showDisabled",
+            label: showDisabled ? "إخفاء المعطّلة" : "إظهار المعطّلة",
+            icon: Eye,
+            onClick: () => setShowDisabled((prev) => !prev),
+          },
+        ]}
+      />
+
+      <Card>
+        <CardHeader>
+          <CardTitle>الملاحظات</CardTitle>
+          <CardDescription>
+            سجلّ زمنيّ لملاحظات المتابعة — اختر صفًّا ليظهر نصّه كاملًا تحت الجدول
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {notes.isLoading && <Skeleton className="h-32 w-full" />}
+          {notes.isError && (
+            <p className="py-6 text-center text-sm text-destructive">
+              تعذّر تحميل الملاحظات: {errorMessage(notes.error)}
+            </p>
           )}
-        </div>
-      </CardContent>
-    </Card>
+          {!notes.isLoading && !notes.isError && (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>التاريخ</TableHead>
+                  <TableHead>العنوان</TableHead>
+                  <TableHead>الملاحظة</TableHead>
+                  <TableHead>بواسطة</TableHead>
+                  <TableHead>الحالة</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((note) => (
+                  <TableRow
+                    key={note.id}
+                    onClick={() => {
+                      if (editing) return;
+                      setSelectedId(note.id);
+                    }}
+                    aria-selected={note.id === selectedId}
+                    className={
+                      note.id === selectedId
+                        ? "cursor-pointer bg-accent"
+                        : "cursor-pointer hover:bg-accent/50"
+                    }
+                  >
+                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                      {formatDateTime(note.created_at, calendarDisplay)}
+                    </TableCell>
+                    <TableCell className="font-medium">{note.title ?? "—"}</TableCell>
+                    <TableCell className="max-w-[24rem] truncate">{note.body}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {note.created_by ? memberNames.data?.[note.created_by] ?? "—" : "—"}
+                    </TableCell>
+                    <TableCell>
+                      {note.is_disabled ? (
+                        <Badge variant="secondary">معطّلة</Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">نشطة</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {rows.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                      {all.length > 0 ? "كل الملاحظات معطّلة — اضغط «إظهار المعطّلة»." : "لا توجد ملاحظات بعد."}
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+        {!notes.isLoading && !notes.isError && <GridFooterCount count={rows.length} />}
+      </Card>
+
+      {editing && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">
+              {mode === "new" ? "ملاحظة جديدة" : "تعديل الملاحظة"}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            <Input
+              value={draftTitle}
+              onChange={(e) => setDraftTitle(e.target.value)}
+              placeholder="عنوان الملاحظة (اختياري)"
+            />
+            <Textarea
+              value={draftBody}
+              onChange={(e) => setDraftBody(e.target.value)}
+              rows={5}
+              placeholder="نصّ الملاحظة..."
+            />
+            <div className="flex items-center gap-2">
+              <Button
+                disabled={!draftBody.trim() || saveNote.isPending}
+                onClick={() => saveNote.mutate()}
+              >
+                <Save className="h-4 w-4" />
+                {saveNote.isPending ? "جارٍ الحفظ..." : "حفظ"}
+              </Button>
+              <Button variant="outline" onClick={closeEditor} disabled={saveNote.isPending}>
+                إلغاء
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {!editing && selected && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">{selected.title ?? "ملاحظة"}</CardTitle>
+            <CardDescription>
+              {formatDateTime(selected.created_at, calendarDisplay)}
+              {selected.created_by && memberNames.data?.[selected.created_by]
+                ? ` · ${memberNames.data[selected.created_by]}`
+                : ""}
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="whitespace-pre-wrap text-sm">{selected.body}</p>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
 
@@ -1433,6 +1665,7 @@ function BlockingTab({ patient }: { patient: PatientRow }) {
 }
 
 function AppointmentsTab({ patientId }: { patientId: string }) {
+  const { calendarDisplay } = useLocaleSettings();
   const appointments = useQuery({
     queryKey: ["patient-appointments", patientId],
     queryFn: async () => {
@@ -1458,7 +1691,7 @@ function AppointmentsTab({ patientId }: { patientId: string }) {
             <div>
               <p className="text-sm font-medium">د. {appointment.doctor?.name_ar ?? "—"}</p>
               <p className="text-xs text-muted-foreground">
-                {new Date(appointment.scheduled_start).toLocaleString("ar-SA")}
+                {formatDateTime(appointment.scheduled_start, calendarDisplay)}
               </p>
             </div>
             <Badge className={statusBadgeClass(appointment.status)}>{statusLabel(appointment.status)}</Badge>
@@ -1472,13 +1705,31 @@ function AppointmentsTab({ patientId }: { patientId: string }) {
   );
 }
 
+/**
+ * سجلّ فواتير المريض — قابل للفتح والسداد.
+ *
+ * كان صفوفًا جامدة: يرى الموظّف «متبقّي 28.75» ولا يعرف ممّ تتكوّن الفاتورة
+ * ولا يستطيع قبض المتبقّي، فيغادر الملفّ إلى شاشة الفواتير ويبحث من جديد.
+ * والمبالغ كانت تُنسَّق بـ`toLocaleString("ar-SA")` فتخرج بأرقام عربية-هندية
+ * وتاريخٍ هجريّ مخالفًا لبقيّة النظام — و`lib/locale` موجودة لهذا بالضبط.
+ */
 function InvoicesTab({ patientId }: { patientId: string }) {
+  const { organization } = useOrganizationAccess();
+  const { can } = usePermissions();
+  const { calendarDisplay } = useLocaleSettings();
+  const [detailsId, setDetailsId] = useState<string | null>(null);
+  const [payTarget, setPayTarget] = useState<SalesInvoiceWithPatient | null>(null);
+
+  const canReceive = can("cashier.receive");
+
   const invoices = useQuery({
     queryKey: ["patient-invoices", patientId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("sales_invoices")
-        .select("id, invoice_number, created_at, status, net_amount, remaining_amount")
+        .select(
+          "id, invoice_number, created_at, status, is_temporary, net_amount, paid_amount, remaining_amount",
+        )
         .eq("patient_id", patientId)
         .order("created_at", { ascending: false })
         .limit(30);
@@ -1491,26 +1742,73 @@ function InvoicesTab({ patientId }: { patientId: string }) {
     <Card>
       <CardHeader>
         <CardTitle>سجل الفواتير</CardTitle>
+        <CardDescription>اضغط الفاتورة لعرض بنودها ودفعاتها</CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
-        {(invoices.data ?? []).map((invoice: any) => (
-          <div key={invoice.id} className="flex items-center justify-between rounded-lg border px-3 py-2">
-            <div>
-              <p className="text-sm font-medium">فاتورة #{invoice.invoice_number}</p>
-              <p className="text-xs text-muted-foreground">{new Date(invoice.created_at).toLocaleString("ar-SA")}</p>
-            </div>
-            <div className="text-end">
-              <p className="text-sm font-semibold">{Number(invoice.net_amount).toLocaleString("ar-SA")} ر.س</p>
-              {Number(invoice.remaining_amount) > 0 && (
-                <p className="text-xs text-rose-600">متبقي {Number(invoice.remaining_amount).toLocaleString("ar-SA")}</p>
+        {invoices.isLoading && <Skeleton className="h-24 w-full" />}
+        {invoices.isError && (
+          <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            تعذّر تحميل الفواتير: {errorMessage(invoices.error)}
+          </p>
+        )}
+        {(invoices.data ?? []).map((invoice: any) => {
+          const remaining = Number(invoice.remaining_amount ?? 0);
+          const status = invoice.status as SalesInvoiceStatus;
+          const payable = invoiceAcceptsPayment(status, remaining);
+          return (
+            <div
+              key={invoice.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2"
+            >
+              <button
+                type="button"
+                onClick={() => setDetailsId(invoice.id)}
+                className="flex flex-1 flex-wrap items-center justify-between gap-2 text-start hover:opacity-80"
+              >
+                <div>
+                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
+                    فاتورة #{invoice.invoice_number}
+                    <Badge className={INVOICE_STATUS_BADGE[status]}>{INVOICE_STATUS_LABELS[status]}</Badge>
+                    {invoice.is_temporary && <Badge variant="outline">مؤقّتة</Badge>}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatDateTime(invoice.created_at, calendarDisplay)}
+                  </p>
+                </div>
+                <div className="text-end">
+                  <p className="text-sm font-semibold">{formatAmount(invoice.net_amount)} ر.س</p>
+                  {remaining > 0 && (
+                    <p className="text-xs text-rose-600">متبقي {formatAmount(remaining)}</p>
+                  )}
+                </div>
+              </button>
+              {payable && canReceive && (
+                <Button size="sm" onClick={() => setPayTarget(invoice as SalesInvoiceWithPatient)}>
+                  سداد
+                </Button>
               )}
             </div>
-          </div>
-        ))}
-        {(invoices.data ?? []).length === 0 && (
+          );
+        })}
+        {!invoices.isLoading && (invoices.data ?? []).length === 0 && (
           <p className="py-6 text-center text-sm text-muted-foreground">لا توجد فواتير سابقة.</p>
         )}
       </CardContent>
+
+      <InvoiceDetailsDialog
+        invoiceId={detailsId}
+        onOpenChange={() => setDetailsId(null)}
+        canPay={canReceive}
+        onPay={(invoice) => {
+          setDetailsId(null);
+          setPayTarget(invoice);
+        }}
+      />
+      <RecordPaymentDialog
+        invoice={payTarget}
+        onOpenChange={() => setPayTarget(null)}
+        organizationId={organization?.id}
+      />
     </Card>
   );
 }

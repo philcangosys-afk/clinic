@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Pill, Plus, Printer, RotateCcw, X } from "lucide-react";
+import { AlertTriangle, Archive, Pill, Plus, Printer, RefreshCw, RotateCcw, X } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { usePermissions } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
@@ -28,6 +28,17 @@ import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
 import { printHtml } from "@/lib/document-merge";
 import { errorMessage } from "@/lib/error-message";
+import {
+  formatAmount,
+  formatCount,
+  formatDate,
+  formatDateTime,
+  useLocaleSettings,
+  type CalendarDisplay,
+} from "@/lib/locale";
+import { LookupTree, useCategorySubtree } from "@/components/shared/LookupTree";
+import { TreeGridLayout } from "@/components/shell/TreeGridLayout";
+import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
 
 const DOSAGE_FORM_LABELS: Record<DrugDosageForm, string> = {
   tablet: "حبوب",
@@ -150,6 +161,9 @@ type DrugCatalogRow = {
   default_dosage_instructions: string | null;
   stock_on_hand: number;
   stock_reserved: number;
+  /* مُضافان في الترقية 0151 — بدونهما لا تستطيع الشجرة أن تُرشِّح */
+  category_value_id: string | null;
+  category_name: string | null;
 };
 
 const CONTROLLED_CLASS_LABELS: Record<string, string> = {
@@ -182,126 +196,204 @@ function useDrugCatalog(organizationId: string | undefined, includeArchived: boo
 function DrugCatalogTab() {
   const { organization } = useOrganizationAccess();
   const { can } = usePermissions();
-  const drugs = useDrugCatalog(organization?.id, false);
+  const [showArchived, setShowArchived] = useState(false);
+  const drugs = useDrugCatalog(organization?.id, showArchived);
   const [editing, setEditing] = useState<DrugCatalogRow | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [search, setSearch] = useState("");
-
-  const rows = useMemo(() => {
-    const needle = search.trim().toLowerCase();
-    if (!needle) return drugs.data ?? [];
-    return (drugs.data ?? []).filter((d) =>
-      [d.name_ar, d.name_en, d.code, d.generic_name, d.brand_name]
-        .some((v) => (v ?? "").toLowerCase().includes(needle)),
-    );
-  }, [drugs.data, search]);
+  const [categoryId, setCategoryId] = useState("");
 
   const canManage = can("pharmacy.manage_drugs");
+  const all = useMemo(() => drugs.data ?? [], [drugs.data]);
+
+  /* عدد الأدوية تحت كل فئة يُحسب من الصفوف المحمَّلة نفسها لا باستعلامٍ ثانٍ:
+     الكتالوج كلّه محمَّل في هذه الشاشة أصلًا، فالعدّ في المتصفّح مطابقٌ لما
+     يراه الموظّف — ورقمٌ من استعلامٍ آخر قد يخالف ما في الشبكة أمامه. */
+  const counts = useMemo(() => {
+    const map: Record<string, number> = {};
+    for (const drug of all) {
+      if (!drug.category_value_id) continue;
+      map[drug.category_value_id] = (map[drug.category_value_id] ?? 0) + 1;
+    }
+    return map;
+  }, [all]);
+
+  const categorySubtree = useCategorySubtree("item_categories");
+  const rows = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    const scope = categoryId ? new Set(categorySubtree(categoryId)) : null;
+    return all.filter((drug) => {
+      if (scope && !(drug.category_value_id && scope.has(drug.category_value_id))) return false;
+      if (!needle) return true;
+      return [drug.name_ar, drug.name_en, drug.code, drug.generic_name, drug.brand_name].some((v) =>
+        (v ?? "").toLowerCase().includes(needle),
+      );
+    });
+  }, [all, search, categoryId, categorySubtree]);
 
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between gap-3">
-        <div>
-          <CardTitle>كتالوج الأدوية</CardTitle>
-          <CardDescription>
-            الدواء صنف من نوع «drug» في الكتالوج الموحّد، بتفاصيل دوائية ورصيد مخزون
-          </CardDescription>
-        </div>
-        <div className="flex items-center gap-2">
+    /* الشجرة تحلّ محلّ قائمةٍ منسدلة لم تكن موجودة أصلًا: كتالوج الأدوية عند
+       المالك بمئات الأصناف، والبحث بالاسم وحده لا يُعين من يريد تصفّح فئة. */
+    <TreeGridLayout
+      treeTitle="فئات الأدوية"
+      tree={
+        <LookupTree
+          categoryKey="item_categories"
+          value={categoryId}
+          onChange={setCategoryId}
+          allLabel="كل الأدوية"
+          counts={counts}
+          totalCount={all.length}
+        />
+      }
+    >
+      <div className="flex flex-col gap-3">
+        <ScreenToolbar
+          items={[
+            {
+              key: "new",
+              label: "دواء جديد",
+              icon: Plus,
+              hidden: !canManage,
+              onClick: () => setCreateOpen(true),
+            },
+            { key: "sep1", separator: true },
+            {
+              key: "refresh",
+              label: "تحديث",
+              icon: RefreshCw,
+              onClick: () => void drugs.refetch(),
+            },
+            {
+              key: "archived",
+              label: showArchived ? "إخفاء المؤرشف" : "إظهار المؤرشف",
+              icon: Archive,
+              title: "الأرشفة ليست حذفًا — الدواء يختفي من الصرف ويبقى تاريخه",
+              onClick: () => setShowArchived((prev) => !prev),
+            },
+          ]}
+        >
           <Input
-            className="w-56"
+            className="w-60"
             placeholder="بحث بالاسم أو الكود أو العلمي"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          {canManage && (
-            <Button size="sm" variant="outline" onClick={() => setCreateOpen(true)}>
-              <Plus className="h-4 w-4" />
-              دواء جديد
-            </Button>
-          )}
-        </div>
-      </CardHeader>
-      <CardContent>
-        {drugs.isLoading && <Skeleton className="h-40 w-full" />}
-        {!drugs.isLoading && (
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>الاسم</TableHead>
-                <TableHead>الاسم العلمي</TableHead>
-                <TableHead>الشكل والتركيز</TableHead>
-                <TableHead>الرصيد</TableHead>
-                <TableHead>الصرف</TableHead>
-                <TableHead>السعر</TableHead>
-                {canManage && <TableHead />}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((drug) => {
-                const onHand = Number(drug.stock_on_hand ?? 0);
-                const reserved = Number(drug.stock_reserved ?? 0);
-                const reorder = Number(drug.reorder_level ?? 0);
-                return (
-                  <TableRow key={drug.item_id}>
-                    <TableCell className="font-medium">
-                      <div className="flex items-center gap-2">
-                        <Pill className="h-4 w-4 text-muted-foreground" />
-                        <span>{drug.name_ar}</span>
-                        {drug.is_controlled_substance && (
-                          <Badge variant="destructive">
-                            {CONTROLLED_CLASS_LABELS[drug.controlled_drug_class ?? ""] ?? "خاضع للرقابة"}
-                          </Badge>
-                        )}
-                        {drug.is_disabled && <Badge variant="secondary">معطَّل</Badge>}
-                      </div>
-                      {drug.code && <span className="text-xs text-muted-foreground">{drug.code}</span>}
-                    </TableCell>
-                    <TableCell>{drug.generic_name ?? "—"}</TableCell>
-                    <TableCell>
-                      {drug.dosage_form ? DOSAGE_FORM_LABELS[drug.dosage_form as DrugDosageForm] : "—"}
-                      {drug.strength_text ? ` — ${drug.strength_text}` : ""}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <span>{onHand.toLocaleString("ar-SA")}</span>
-                        {reserved > 0 && (
-                          <span className="text-xs text-muted-foreground">({reserved} محجوز)</span>
-                        )}
-                        {reorder > 0 && onHand <= reorder && (
-                          <Badge variant="warning">دون حدّ الطلب</Badge>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {drug.requires_prescription === false ? (
-                        <Badge variant="secondary">بلا وصفة</Badge>
-                      ) : (
-                        <Badge variant="warning">بوصفة</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>{Number(drug.price ?? 0).toLocaleString("ar-SA")} ر.س</TableCell>
-                    {canManage && (
-                      <TableCell>
-                        <Button size="sm" variant="ghost" onClick={() => setEditing(drug)}>
-                          تعديل
-                        </Button>
-                      </TableCell>
-                    )}
+        </ScreenToolbar>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>كتالوج الأدوية</CardTitle>
+            <CardDescription>
+              الدواء صنف من نوع «drug» في الكتالوج الموحّد، بتفاصيل دوائية ورصيد مخزون
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {drugs.isLoading && <Skeleton className="h-40 w-full" />}
+            {drugs.isError && (
+              <p className="py-6 text-center text-sm text-destructive">
+                تعذّر تحميل الكتالوج: {errorMessage(drugs.error)}
+              </p>
+            )}
+            {!drugs.isLoading && !drugs.isError && (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>الاسم</TableHead>
+                    <TableHead>الفئة</TableHead>
+                    <TableHead>الاسم العلمي</TableHead>
+                    <TableHead>الشكل والتركيز</TableHead>
+                    <TableHead>الرصيد</TableHead>
+                    <TableHead>الصرف</TableHead>
+                    <TableHead>السعر</TableHead>
+                    {canManage && <TableHead />}
                   </TableRow>
-                );
-              })}
-              {rows.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={canManage ? 7 : 6} className="py-8 text-center text-sm text-muted-foreground">
-                    {search ? "لا نتائج مطابقة." : "لا توجد أدوية في الكتالوج بعد."}
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        )}
-      </CardContent>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((drug) => {
+                    const onHand = Number(drug.stock_on_hand ?? 0);
+                    const reserved = Number(drug.stock_reserved ?? 0);
+                    const reorder = Number(drug.reorder_level ?? 0);
+                    return (
+                      <TableRow key={drug.item_id}>
+                        <TableCell className="font-medium">
+                          <div className="flex items-center gap-2">
+                            <Pill className="h-4 w-4 text-muted-foreground" />
+                            <span>{drug.name_ar}</span>
+                            {drug.is_controlled_substance && (
+                              <Badge variant="destructive">
+                                {CONTROLLED_CLASS_LABELS[drug.controlled_drug_class ?? ""] ??
+                                  "خاضع للرقابة"}
+                              </Badge>
+                            )}
+                            {drug.is_disabled && <Badge variant="secondary">معطَّل</Badge>}
+                            {drug.is_archived && <Badge variant="secondary">مؤرشف</Badge>}
+                          </div>
+                          {drug.code && (
+                            <span className="text-xs text-muted-foreground">{drug.code}</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">
+                          {drug.category_name ?? "—"}
+                        </TableCell>
+                        <TableCell>{drug.generic_name ?? "—"}</TableCell>
+                        <TableCell>
+                          {drug.dosage_form
+                            ? DOSAGE_FORM_LABELS[drug.dosage_form as DrugDosageForm]
+                            : "—"}
+                          {drug.strength_text ? ` — ${drug.strength_text}` : ""}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            <span>{formatCount(onHand)}</span>
+                            {reserved > 0 && (
+                              <span className="text-xs text-muted-foreground">
+                                ({formatCount(reserved)} محجوز)
+                              </span>
+                            )}
+                            {reorder > 0 && onHand <= reorder && (
+                              <Badge variant="warning">دون حدّ الطلب</Badge>
+                            )}
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          {drug.requires_prescription === false ? (
+                            <Badge variant="secondary">بلا وصفة</Badge>
+                          ) : (
+                            <Badge variant="warning">بوصفة</Badge>
+                          )}
+                        </TableCell>
+                        <TableCell>{formatAmount(drug.price)} ر.س</TableCell>
+                        {canManage && (
+                          <TableCell>
+                            <Button size="sm" variant="ghost" onClick={() => setEditing(drug)}>
+                              تعديل
+                            </Button>
+                          </TableCell>
+                        )}
+                      </TableRow>
+                    );
+                  })}
+                  {rows.length === 0 && (
+                    <TableRow>
+                      <TableCell
+                        colSpan={canManage ? 8 : 7}
+                        className="py-8 text-center text-sm text-muted-foreground"
+                      >
+                        {search || categoryId
+                          ? "لا نتائج مطابقة."
+                          : "لا توجد أدوية في الكتالوج بعد."}
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+          {!drugs.isLoading && !drugs.isError && <GridFooterCount count={rows.length} />}
+        </Card>
+      </div>
+
       <DrugDialog
         open={createOpen || Boolean(editing)}
         drug={editing}
@@ -313,7 +405,7 @@ function DrugCatalogTab() {
         }}
         organizationId={organization?.id}
       />
-    </Card>
+    </TreeGridLayout>
   );
 }
 
@@ -779,7 +871,11 @@ function escapeHtml(value: string) {
   );
 }
 
-function printPrescriptions(rows: PrescriptionListRow[], organizationName: string) {
+function printPrescriptions(
+  rows: PrescriptionListRow[],
+  organizationName: string,
+  calendar: CalendarDisplay,
+) {
   const body = rows
     .map((row) => {
       const dispensed = dispensedByLine(row);
@@ -801,7 +897,7 @@ function printPrescriptions(rows: PrescriptionListRow[], organizationName: strin
         )}</h3>
         <p style="margin:0 0 6px;font-size:13px">
           الطبيب: ${escapeHtml(row.doctor?.name_ar ?? "—")} ·
-          التاريخ: ${new Date(row.issued_at).toLocaleDateString("ar-SA")} ·
+          التاريخ: ${formatDate(row.issued_at, calendar)} ·
           الحالة: ${escapeHtml(PRESCRIPTION_STATUS_LABELS[row.status] ?? row.status)}
           ${row.is_billed ? " · تمت الفوترة" : ""}
         </p>
@@ -839,6 +935,7 @@ function printPrescriptions(rows: PrescriptionListRow[], organizationName: strin
 }
 
 function PrescriptionsTab() {
+  const { calendarDisplay } = useLocaleSettings();
   const { organization } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -927,7 +1024,7 @@ function PrescriptionsTab() {
             size="sm"
             variant="outline"
             disabled={rows.length === 0}
-            onClick={() => printPrescriptions(rows, organization?.name ?? "")}
+            onClick={() => printPrescriptions(rows, organization?.name ?? "", calendarDisplay)}
           >
             <Printer className="h-4 w-4" />
             طباعة القائمة
@@ -964,7 +1061,7 @@ function PrescriptionsTab() {
                 return (
                   <TableRow key={row.id}>
                     <TableCell className="text-xs text-muted-foreground">
-                      {new Date(row.issued_at).toLocaleDateString("ar-SA")}
+                      {formatDate(row.issued_at, calendarDisplay)}
                     </TableCell>
                     <TableCell className="font-medium">{patient?.name_ar ?? "—"}</TableCell>
                     <TableCell>{doctor?.name_ar ?? "—"}</TableCell>
@@ -1462,7 +1559,7 @@ function DispensingTab() {
                     {pr.lines_done} / {pr.lines_count}
                   </TableCell>
                   <TableCell>
-                    {Number(pr.qty_pending ?? 0).toLocaleString("ar-SA")}
+                    {formatCount(pr.qty_pending)}
                     {Number(pr.qty_reserved ?? 0) > 0 && (
                       <span className="text-xs text-muted-foreground"> ({pr.qty_reserved} محجوز)</span>
                     )}
@@ -1528,6 +1625,7 @@ function DispenseDialog({
 }) {
   const details = usePrescriptionDetails(prescriptionId);
   const history = useDispensingHistory(prescriptionId);
+  const { calendarDisplay } = useLocaleSettings();
   const warehouses = useWarehousesList(organizationId);
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -1777,7 +1875,7 @@ function DispenseDialog({
                 <div key={rec.id} className="rounded-md border p-3 text-sm">
                   <div className="flex items-center justify-between">
                     <span>
-                      {new Date(rec.dispensed_at).toLocaleString("ar-SA")}
+                      {formatDateTime(rec.dispensed_at, calendarDisplay)}
                       {rec.status === "cancelled" && (
                         <Badge variant="secondary" className="mr-2">
                           ملغى
@@ -1795,7 +1893,7 @@ function DispenseDialog({
                     {(rec.dispensing_items ?? []).map((it) => (
                       <li key={it.id}>
                         {it.drug?.name_ar ?? "دواء"} — {it.quantity_dispensed} ×{" "}
-                        {Number(it.unit_price).toLocaleString("ar-SA")} ر.س
+                        {formatAmount(it.unit_price)} ر.س
                       </li>
                     ))}
                   </ul>

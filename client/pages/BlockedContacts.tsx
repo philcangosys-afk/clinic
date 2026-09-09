@@ -5,6 +5,12 @@ import { ExternalLink, Info, Plus, ShieldBan, ShieldCheck } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { usePermissions } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
+import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
+import {
+  matchesPatientSearch,
+  patientSearchPlaceholder,
+  type PatientSearchScope,
+} from "@/lib/patient-search";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -114,6 +120,7 @@ export default function BlockedContacts() {
   const rows = useBlockedContacts(organizationId);
 
   const [term, setTerm] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [typeFilter, setTypeFilter] = useState<BlockRow["block_type"] | "all_types">("all_types");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("in_effect");
   const [createOpen, setCreateOpen] = useState(false);
@@ -132,11 +139,21 @@ export default function BlockedContacts() {
         return false;
       if (statusFilter === "lifted" && row.is_active) return false;
       if (!needle) return true;
-      return [row.patient_name, row.patient_file_number, row.mobile_number, row.full_name, row.id_number]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(needle));
+      // البحث الموحَّد نفسه المستعمَل في بقيّة الشاشات — والاسم هنا قد يكون
+      // اسم مريض مسجَّل أو اسم جهة خارجية بلا ملفّ.
+      return matchesPatientSearch(
+        {
+          name_ar: row.patient_name ?? row.full_name,
+          name_en: row.full_name,
+          mobile_number: row.mobile_number,
+          id_number: row.id_number,
+          file_number: row.patient_file_number,
+        },
+        term,
+        searchScopes,
+      );
     });
-  }, [rows.data, term, typeFilter, statusFilter]);
+  }, [rows.data, term, searchScopes, typeFilter, statusFilter]);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
@@ -171,10 +188,11 @@ export default function BlockedContacts() {
           <div className="flex flex-wrap items-center gap-2">
             <Input
               className="h-9 max-w-xs"
-              placeholder="بحث بالاسم أو رقم الملف أو الجوال أو الهوية..."
+              placeholder={patientSearchPlaceholder(searchScopes)}
               value={term}
               onChange={(event) => setTerm(event.target.value)}
             />
+            <PatientSearchScopeChips scopes={searchScopes} onScopesChange={setSearchScopes} />
             <Select value={typeFilter} onValueChange={(value) => setTypeFilter(value as typeof typeFilter)}>
               <SelectTrigger className="h-9 w-40">
                 <SelectValue />

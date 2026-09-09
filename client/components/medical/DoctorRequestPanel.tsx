@@ -16,6 +16,13 @@ import {
   UserRoundSearch,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
+import {
+  buildPatientSearchOr,
+  patientSearchPlaceholder,
+  PATIENTS_SEARCH_COLUMNS,
+  type PatientSearchScope,
+} from "@/lib/patient-search";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { VITAL_MEASURES } from "@/components/medical/VitalSignsForm";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -72,6 +79,7 @@ export default function DoctorRequestPanel({
   const [kind, setKind] = useState<RequestKind>("radiology");
   const [patientId, setPatientId] = useState("");
   const [search, setSearch] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [examIds, setExamIds] = useState<string[]>([]);
   const [testIds, setTestIds] = useState<string[]>([]);
   const [priority, setPriority] = useState("routine");
@@ -85,18 +93,18 @@ export default function DoctorRequestPanel({
   const [vitalsPicked, setVitalsPicked] = useState<string[]>([]);
 
   const patients = useQuery({
-    queryKey: ["dr-req-patients", organization?.id, doctorId, search],
+    queryKey: ["dr-req-patients", organization?.id, doctorId, search, searchScopes.join("+")],
     enabled: Boolean(organization?.id),
     queryFn: async () => {
       let q = supabase
         .from("patients")
-        .select("id, name_ar, id_number")
+        .select("id, name_ar, id_number, mobile_number, phone_1, file_number")
         .eq("organization_id", organization!.id)
         .order("name_ar")
         .limit(50);
-      if (search.trim()) {
-        q = q.or(`name_ar.ilike.%${search.trim()}%,id_number.ilike.%${search.trim()}%`);
-      }
+      // البحث الموحَّد: الاسم والجوال والهوية — أو ما تحصره أزرار النطاق
+      const searchFilter = buildPatientSearchOr(search, searchScopes, PATIENTS_SEARCH_COLUMNS);
+      if (searchFilter) q = q.or(searchFilter);
       const { data, error } = await q;
       if (error) throw error;
       return (data ?? []) as { id: string; name_ar: string; id_number: string | null }[];
@@ -314,8 +322,9 @@ export default function DoctorRequestPanel({
             dir="rtl"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="ابحث بالاسم أو رقم الهوية"
+            placeholder={patientSearchPlaceholder(searchScopes)}
           />
+          <PatientSearchScopeChips scopes={searchScopes} onScopesChange={setSearchScopes} />
           <select
             id="dr-patient"
             dir="rtl"

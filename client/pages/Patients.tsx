@@ -1,10 +1,28 @@
 import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Plus, Search, UserRound, SlidersHorizontal, Download, Upload, X, MessageSquareShare } from "lucide-react";
+import {
+  Download,
+  MessageSquareShare,
+  Plus,
+  RefreshCw,
+  Search,
+  SlidersHorizontal,
+  Upload,
+  UserRound,
+  X,
+} from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type { PatientRow } from "@/lib/database.types";
+import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
+import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
+import {
+  buildPatientSearchOr,
+  patientSearchPlaceholder,
+  PATIENTS_SEARCH_COLUMNS,
+  type PatientSearchScope,
+} from "@/lib/patient-search";
 import { Card, CardContent, CardHeader, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +45,7 @@ import { useToast } from "@/hooks/use-toast";
 import NewPatientDialog from "@/components/patients/NewPatientDialog";
 import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDialog";
 import { errorMessage } from "@/lib/error-message";
+import { formatDate, useLocaleSettings } from "@/lib/locale";
 
 /**
  * شاشة المرضى مع البحث المتقدم (لقطة 29 — "مستعرض العيادة السريع").
@@ -100,9 +119,14 @@ const EMPTY_FILTERS: Filters = {
   blockedOnly: false,
 };
 
-function usePatientsList(organizationId: string | undefined, search: string, filters: Filters) {
+function usePatientsList(
+  organizationId: string | undefined,
+  search: string,
+  searchScopes: PatientSearchScope[],
+  filters: Filters,
+) {
   return useQuery({
-    queryKey: ["patients-list", organizationId, search, filters],
+    queryKey: ["patients-list", organizationId, search, searchScopes.join("+"), filters],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       let query = supabase
@@ -122,13 +146,9 @@ function usePatientsList(organizationId: string | undefined, search: string, fil
         .order("created_at", { ascending: false })
         .limit(RESULT_CAP);
 
-      const term = search.trim();
-      if (term) {
-        const isNumeric = /^\d+$/.test(term);
-        query = isNumeric
-          ? query.or(`mobile_number.ilike.%${term}%,file_number.eq.${term},id_number.ilike.%${term}%`)
-          : query.ilike("name_ar", `%${term}%`);
-      }
+      // البحث الموحَّد: الاسم والجوال والهوية — أو ما تحصره أزرار النطاق
+      const searchFilter = buildPatientSearchOr(search, searchScopes, PATIENTS_SEARCH_COLUMNS);
+      if (searchFilter) query = query.or(searchFilter);
 
       if (filters.gender !== "all") query = query.eq("gender", filters.gender);
       if (filters.sourceValueId) query = query.eq("source_value_id", filters.sourceValueId);
@@ -182,7 +202,7 @@ function exportCsv(rows: PatientListRow[]) {
         row.id_number,
         row.gender === "male" ? "ذكر" : row.gender === "female" ? "أنثى" : "",
         row.birth_date,
-        row.file_date ? new Date(row.file_date).toLocaleDateString("ar-SA") : "",
+        formatDate(row.file_date) === "—" ? "" : formatDate(row.file_date),
         row.insurance_company_name ?? "نقدي",
       ]
         .map(escape)
@@ -237,16 +257,18 @@ const PATIENT_IMPORT_COLUMNS: CsvColumn[] = [
 ];
 
 export default function Patients() {
+  const { calendarDisplay } = useLocaleSettings();
   const { organization, session } = useOrganizationAccess();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [smsOpen, setSmsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [smsText, setSmsText] = useState("");
-  const patients = usePatientsList(organization?.id, search, filters);
+  const patients = usePatientsList(organization?.id, search, searchScopes, filters);
   const doctors = useQuery({
     queryKey: ["doctors-for-patient-filter", organization?.id],
     enabled: Boolean(organization?.id),
@@ -335,11 +357,37 @@ export default function Patients() {
           <h1 className="text-2xl font-bold">المرضى</h1>
           <p className="text-sm text-muted-foreground">بحث وفتح ملفات المرضى</p>
         </div>
-        <Button onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" />
-          مريض جديد
-        </Button>
       </div>
+
+      <ScreenToolbar
+        items={[
+          { key: "new", label: "مريض جديد", icon: Plus, onClick: () => setCreateOpen(true) },
+          { key: "sep1", separator: true },
+          {
+            key: "advanced",
+            label: activeFilterCount > 0 ? `بحث متقدم (${activeFilterCount})` : "بحث متقدم",
+            icon: SlidersHorizontal,
+            onClick: () => setShowAdvanced((prev) => !prev),
+          },
+          { key: "refresh", label: "تحديث", icon: RefreshCw, onClick: () => void patients.refetch() },
+          { key: "sep2", separator: true },
+          {
+            key: "export",
+            label: "تصدير",
+            icon: Download,
+            disabled: list.length === 0,
+            onClick: () => exportCsv(list),
+          },
+          { key: "import", label: "استيراد", icon: Upload, onClick: () => setImportOpen(true) },
+          {
+            key: "sms",
+            label: `رسالة جماعية (${smsRecipients.length})`,
+            icon: MessageSquareShare,
+            disabled: smsRecipients.length === 0,
+            onClick: () => setSmsOpen(true),
+          },
+        ]}
+      />
 
       <Card>
         <CardHeader className="gap-3">
@@ -349,31 +397,11 @@ export default function Patients() {
               <Input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="ابحث بالاسم أو الجوال أو رقم الملف أو الهوية..."
+                placeholder={patientSearchPlaceholder(searchScopes)}
                 className="h-7 border-0 bg-transparent p-0 shadow-none focus-visible:ring-0"
               />
+              <PatientSearchScopeChips scopes={searchScopes} onScopesChange={setSearchScopes} />
             </div>
-            <Button variant="outline" onClick={() => setShowAdvanced((prev) => !prev)}>
-              <SlidersHorizontal className="h-4 w-4" />
-              بحث متقدم
-              {activeFilterCount > 0 && (
-                <Badge variant="default" className="ms-1 px-1.5">
-                  {activeFilterCount}
-                </Badge>
-              )}
-            </Button>
-            <Button variant="outline" onClick={() => exportCsv(list)} disabled={list.length === 0}>
-              <Download className="h-4 w-4" />
-              تصدير
-            </Button>
-            <Button variant="outline" onClick={() => setImportOpen(true)}>
-              <Upload className="h-4 w-4" />
-              استيراد
-            </Button>
-            <Button variant="outline" onClick={() => setSmsOpen(true)} disabled={smsRecipients.length === 0}>
-              <MessageSquareShare className="h-4 w-4" />
-              رسالة جماعية ({smsRecipients.length})
-            </Button>
           </div>
 
           {showAdvanced && (
@@ -621,7 +649,7 @@ export default function Patients() {
                       {patient.gender === "male" ? "ذكر" : patient.gender === "female" ? "أنثى" : "—"}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {patient.file_date ? new Date(patient.file_date).toLocaleDateString("ar-SA") : "—"}
+                      {formatDate(patient.file_date, calendarDisplay)}
                     </TableCell>
                     <TableCell>{patient.insurance_company_name ?? "نقدي"}</TableCell>
                     <TableCell>
@@ -654,6 +682,7 @@ export default function Patients() {
             </Table>
           )}
         </CardContent>
+        {!patients.isLoading && !patients.isError && <GridFooterCount count={list.length} />}
       </Card>
 
       <CsvImportDialog

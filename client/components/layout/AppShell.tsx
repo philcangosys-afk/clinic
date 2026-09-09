@@ -17,6 +17,13 @@ import SectionGuideButton from "./SectionGuideButton";
 import { guideKeyForPath } from "@/lib/section-guides";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
+import {
+  buildPatientSearchOr,
+  patientSearchPlaceholder,
+  PATIENT_DIRECTORY_SEARCH_COLUMNS,
+  type PatientSearchScope,
+} from "@/lib/patient-search";
 import { useLiveBadgeCounts, formatBadgeNumber } from "@/hooks/use-live-badges";
 import { demoRoleAllowsModule, demoRoleLabel } from "@/lib/demo-role";
 import { useDemoRole } from "@/contexts/DemoRoleContext";
@@ -301,6 +308,8 @@ type HeaderSearchResult = {
   name_ar: string;
   file_number: number | null;
   phone_1: string | null;
+  mobile_number: string | null;
+  id_number: string | null;
 };
 
 function HeaderSearch() {
@@ -308,6 +317,7 @@ function HeaderSearch() {
   const { organization, canAccess } = useOrganizationAccess();
   const allowed = canAccess("patients", "patients.view");
   const [term, setTerm] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [results, setResults] = useState<HeaderSearchResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -321,17 +331,15 @@ function HeaderSearch() {
     }
     const handle = setTimeout(async () => {
       setLoading(true);
-      const value = term.trim();
-      const numeric = /^\d+$/.test(value);
       const query = supabase
         .from("v_patient_directory")
-        .select("id, name_ar, file_number, phone_1")
+        .select("id, name_ar, file_number, phone_1, mobile_number, id_number")
         // التقييد بالمنشأة النشطة: RLS يسمح بكل منشأة ينتمي إليها المستخدم.
         .eq("organization_id", organization.id)
         .limit(8);
-      const { data, error: queryError } = numeric
-        ? await query.or(`file_number.eq.${value},phone_1.ilike.%${value}%`)
-        : await query.ilike("name_ar", `%${value}%`);
+      // البحث الموحَّد: الاسم والجوال والهوية — والمنظور يُقنِّع ما لا يُصرَّح برؤيته
+      const searchFilter = buildPatientSearchOr(term, searchScopes, PATIENT_DIRECTORY_SEARCH_COLUMNS);
+      const { data, error: queryError } = await (searchFilter ? query.or(searchFilter) : query);
       // نفيُ وجود المريض عند فشل الاستعلام أخطر من رسالة خطأ: يدفع الموظّف إلى
       // فتح ملفّ ثانٍ لمريض موجود.
       setError(queryError ? queryError.message : null);
@@ -339,7 +347,7 @@ function HeaderSearch() {
       setLoading(false);
     }, 300);
     return () => clearTimeout(handle);
-  }, [term, organization?.id, allowed]);
+  }, [term, searchScopes, organization?.id, allowed]);
 
   if (!allowed) return <div className="hidden flex-1 sm:block" />;
 
@@ -367,9 +375,10 @@ function HeaderSearch() {
             // Enter يفتح أول نتيجة: الضغط عليه كان بلا أثر إطلاقًا.
             if (event.key === "Enter" && results[0]) goTo(results[0].id);
           }}
-          placeholder="بحث عن مريض بالاسم أو رقم الجوال أو رقم الملف..."
+          placeholder={patientSearchPlaceholder(searchScopes)}
           className="flex-1 bg-transparent text-start text-sm outline-none placeholder:text-muted-foreground"
         />
+        <PatientSearchScopeChips scopes={searchScopes} onScopesChange={setSearchScopes} />
       </div>
 
       {open && term.trim().length >= 2 && (

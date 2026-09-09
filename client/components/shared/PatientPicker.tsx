@@ -5,8 +5,18 @@ import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import type { PatientRow } from "@/lib/database.types";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
+import {
+  buildPatientSearchOr,
+  patientSearchPlaceholder,
+  PATIENTS_SEARCH_COLUMNS,
+  type PatientSearchScope,
+} from "@/lib/patient-search";
 
-type PatientSearchResult = Pick<PatientRow, "id" | "name_ar" | "name_en" | "mobile_number" | "file_number">;
+type PatientSearchResult = Pick<
+  PatientRow,
+  "id" | "name_ar" | "name_en" | "mobile_number" | "file_number" | "id_number"
+>;
 
 /**
  * حقل بحث عن مريض موجود بالاسم أو رقم الجوال أو رقم الملف — يُستخدم في الاستقبال
@@ -14,12 +24,13 @@ type PatientSearchResult = Pick<PatientRow, "id" | "name_ar" | "name_en" | "mobi
  */
 export default function PatientPicker({
   onSelect,
-  placeholder = "البحث بالاسم أو رقم الجوال أو رقم الملف...",
+  placeholder,
 }: {
   onSelect: (patient: PatientSearchResult) => void;
   placeholder?: string;
 }) {
   const [term, setTerm] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [results, setResults] = useState<PatientSearchResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -35,7 +46,7 @@ export default function PatientPicker({
     }
     const handle = setTimeout(async () => {
       setLoading(true);
-      const isNumeric = /^\d+$/.test(term.trim());
+
       /**
        * التقييد بالمؤسسة النشطة إلزامي: سياسة RLS تسمح بكل مؤسسة **ينتمي
        * إليها** المستخدم لا بالنشطة وحدها. بدونه كان طبيب عضو في عيادتين
@@ -44,12 +55,12 @@ export default function PatientPicker({
        */
       const query = supabase
         .from("patients")
-        .select("id, name_ar, name_en, mobile_number, file_number")
+        .select("id, name_ar, name_en, mobile_number, file_number, id_number, phone_1, phone_2")
         .eq("organization_id", organization?.id)
         .limit(8);
-      const { data, error } = isNumeric
-        ? await query.or(`mobile_number.ilike.%${term.trim()}%,file_number.eq.${term.trim()}`)
-        : await query.ilike("name_ar", `%${term.trim()}%`);
+      // البحث الموحَّد: الاسم والجوال والهوية — أو ما تحصره أزرار النطاق
+      const searchFilter = buildPatientSearchOr(term, searchScopes, PATIENTS_SEARCH_COLUMNS);
+      const { data, error } = await (searchFilter ? query.or(searchFilter) : query);
       /**
        * `error` كان مُهمَلًا فتُعرض «لا توجد نتائج مطابقة.» على فشلٍ لم يُبلَّغ عنه
        * (رفض RLS أو انقطاع) — نفيُ وجود المريض أخطر من رسالة خطأ: يدفع الموظّف
@@ -60,7 +71,7 @@ export default function PatientPicker({
       setLoading(false);
     }, 300);
     return () => clearTimeout(handle);
-  }, [term, organization?.id]);
+  }, [term, searchScopes, organization?.id]);
 
   return (
     <div className="relative">
@@ -73,9 +84,10 @@ export default function PatientPicker({
             setOpen(true);
           }}
           onFocus={() => setOpen(true)}
-          placeholder={placeholder}
+          placeholder={placeholder ?? patientSearchPlaceholder(searchScopes)}
           className="h-7 border-0 p-0 shadow-none focus-visible:ring-0"
         />
+        <PatientSearchScopeChips scopes={searchScopes} onScopesChange={setSearchScopes} />
       </div>
       {open && term.trim().length >= 2 && (
         <div className="absolute z-20 mt-1 w-full rounded-md border bg-popover shadow-lg">

@@ -1,4 +1,4 @@
-# دوالّ قاعدة ZainCare (421)
+# دوالّ قاعدة ZainCare (422)
 
 > **مُولَّد آليًّا — لا يُحرَّر يدويًّا:** `python scripts/schema-doc.py`
 
@@ -1087,7 +1087,7 @@ app_create_radiology_order(
 
 ### app_create_sales_invoice(22)
 
-عُرِّفت في: `0147`
+عُرِّفت في: `0147`، `0152`
 
 ```sql
 app_create_sales_invoice(
@@ -3583,7 +3583,7 @@ app_reserve_prescription(
 
 ### app_resolve_discount(4)
 
-عُرِّفت في: `0004`
+عُرِّفت في: `0004`، `0152`
 
 ```sql
 app_resolve_discount(
@@ -3592,6 +3592,19 @@ app_resolve_discount(
   p_item_id uuid,
   p_as_of date default current_date
 ) returns numeric
+```
+
+### app_resolve_discount_detail(4)
+
+عُرِّفت في: `0152`
+
+```sql
+app_resolve_discount_detail(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_item_id uuid,
+  p_as_of date default current_date
+) returns table (discount_percent numeric, discount_source text, offer_id uuid)
 ```
 
 ### app_resolve_item_price(6)

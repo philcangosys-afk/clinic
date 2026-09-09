@@ -1772,7 +1772,7 @@ export interface PatientWithDoctor extends PatientRow {
 }
 
 export interface AppointmentWithRelations extends AppointmentRow {
-  patient?: Pick<PatientRow, "id" | "name_ar" | "mobile_number" | "file_number"> | null;
+  patient?: Pick<PatientRow, "id" | "name_ar" | "mobile_number" | "file_number" | "id_number"> | null;
   doctor?: Pick<DoctorRow, "id" | "name_ar"> | null;
   clinic?: Pick<ClinicRow, "id" | "name"> | null;
 }

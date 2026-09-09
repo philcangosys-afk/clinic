@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { TicketPercent, Plus, Pencil, Trash2 } from "lucide-react";
+import { TicketPercent, Plus, Pencil, RefreshCw, Search, Trash2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -23,6 +23,7 @@ import {
 import ItemPicker from "@/components/shared/ItemPicker";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
+import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
 
 /**
  * لائحة العروض والخصومات (لقطة 11).
@@ -358,6 +359,8 @@ export default function Offers() {
   const offers = useOffers(organization?.id);
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<OfferRow | null>(null);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
 
   const toggleDisabled = useMutation({
     mutationFn: async (row: OfferRow) => {
@@ -384,6 +387,21 @@ export default function Offers() {
       }),
   });
 
+  /**
+   * الترشيح محلّيّ: العروض عشرات لا آلاف، وإعادة الاستعلام مع كل حرف تُثقل
+   * القاعدة بلا فائدة. و«المنتهية» تُحسب من التاريخ لا من عمود حالة — لأنّ
+   * لا عمود لها، والعرض ينتهي بنفسه بمرور تاريخه.
+   */
+  const needle = search.trim().toLowerCase();
+  const visibleOffers = (offers.data ?? []).filter((row) => {
+    if (needle && ![row.title, row.classification].some((v) => (v ?? "").toLowerCase().includes(needle)))
+      return false;
+    if (statusFilter === "disabled") return row.is_disabled;
+    if (statusFilter === "active") return isActiveNow(row);
+    if (statusFilter === "expired") return !row.is_disabled && !isActiveNow(row);
+    return true;
+  });
+
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -393,16 +411,44 @@ export default function Offers() {
             عروض ترويجية تُطبَّق تلقائيًا عند الفوترة ضمن ترتيب أولوية الخصومات
           </p>
         </div>
-        <Button
-          onClick={() => {
-            setEditing(null);
-            setFormOpen(true);
-          }}
-        >
-          <Plus className="h-4 w-4" />
-          عرض جديد
-        </Button>
       </div>
+
+      <ScreenToolbar
+        items={[
+          {
+            key: "new",
+            label: "عرض جديد",
+            icon: Plus,
+            onClick: () => {
+              setEditing(null);
+              setFormOpen(true);
+            },
+          },
+          { key: "sep1", separator: true },
+          { key: "refresh", label: "تحديث", icon: RefreshCw, onClick: () => void offers.refetch() },
+        ]}
+      >
+        <div className="relative">
+          <Search className="absolute right-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="بحث بالعنوان أو التصنيف..."
+            className="h-8 w-56 pr-8 text-xs"
+          />
+        </div>
+        <Select value={statusFilter} onValueChange={setStatusFilter}>
+          <SelectTrigger className="h-8 w-44 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">كل العروض</SelectItem>
+            <SelectItem value="active">العروض المفعَّلة</SelectItem>
+            <SelectItem value="disabled">المعطَّلة</SelectItem>
+            <SelectItem value="expired">المنتهية</SelectItem>
+          </SelectContent>
+        </Select>
+      </ScreenToolbar>
 
       <div className="rounded-lg border border-dashed px-4 py-3 text-sm text-muted-foreground">
         ترتيب أولوية الخصم عند الفوترة: خصم المريض الخاص ← الخصم العام للمنشأة ← <strong>العروض</strong> ←
@@ -434,7 +480,7 @@ export default function Offers() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(offers.data ?? []).map((row) => {
+                {visibleOffers.map((row) => {
                   const active = isActiveNow(row);
                   return (
                     <TableRow key={row.id}>
@@ -493,6 +539,7 @@ export default function Offers() {
             </Table>
           )}
         </CardContent>
+        {!offers.isLoading && <GridFooterCount count={visibleOffers.length} />}
       </Card>
 
       {formOpen && (

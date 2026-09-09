@@ -10,6 +10,8 @@ import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import { checkDoctorAvailability } from "@/lib/doctor-availability";
+import { PatientSearchInput } from "@/components/shared/PatientSearchInput";
+import { matchesPatientSearch, type PatientSearchScope } from "@/lib/patient-search";
 import type { AppointmentStatus, AppointmentWithRelations } from "@/lib/database.types";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { localDayRange } from "@/lib/date-range";
@@ -88,7 +90,7 @@ function useUpcomingWebsiteAppointments(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("appointments")
         .select(
-          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
+          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
         )
         .eq("organization_id", organizationId)
         .ilike("note", "حجز من الموقع الإلكتروني%")
@@ -125,7 +127,7 @@ function useRangeAppointments(organizationId: string | undefined, from: string, 
       const { data, error, count } = await supabase
         .from("appointments")
         .select(
-          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
+          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
           { count: "exact" },
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
@@ -156,6 +158,7 @@ export default function Appointments() {
   const [createOpen, setCreateOpen] = useState(false);
   const [managedAppointment, setManagedAppointment] = useState<AppointmentWithRelations | null>(null);
   const [search, setSearch] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [statusFilter, setStatusFilter] = useState("all");
   /**
    * نمط العرض. التقويم هو الافتراضي لأنه ما يُطلب في الاستقبال، والقائمة
@@ -276,7 +279,7 @@ export default function Appointments() {
       const { data, error } = await supabase
         .from("appointments")
         .select(
-          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
+          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
         )
         .eq("id", appointmentId)
         .eq("organization_id", organization.id)
@@ -302,12 +305,9 @@ export default function Appointments() {
     : statusFilter === "all" ? [] : [statusFilter];
 
   const filteredAppointments = useMemo(() => appointmentRows.filter((appointment) => {
-    const matchesSearch = !search.trim() ||
-      appointment.patient?.name_ar?.includes(search.trim()) ||
-      String(appointment.patient?.file_number ?? "").includes(search.trim()) ||
-      appointment.patient?.mobile_number?.includes(search.trim());
+    const matchesSearch = matchesPatientSearch(appointment.patient, search, searchScopes);
     return matchesSearch && (activeStatuses.length === 0 || activeStatuses.includes(appointment.status));
-  }), [appointmentRows, search, activeStatuses.join(",")]);
+  }), [appointmentRows, search, searchScopes, activeStatuses.join(",")]);
 
   const confirmAppointment = useMutation({
     mutationFn: async (appointment: AppointmentWithRelations) => {
@@ -406,10 +406,13 @@ export default function Appointments() {
 
       <Card>
         <CardContent className="flex flex-wrap items-center gap-2 p-3">
-          <div className="relative min-w-56 flex-1">
-            <Search className="absolute right-3 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="بحث باسم المريض أو الملف أو الجوال" className="pr-9" />
-          </div>
+          <PatientSearchInput
+            value={search}
+            onChange={setSearch}
+            scopes={searchScopes}
+            onScopesChange={setSearchScopes}
+            className="min-w-56 flex-1"
+          />
           {/* قائمة الحالة تُخفى حين يأتي المرشّح من العنوان: قائمة تعرض «كل
               الحالات» بينما المطبَّق «ملغاة» تكذب على من يقرأها. */}
           {!urlFilterActive && (

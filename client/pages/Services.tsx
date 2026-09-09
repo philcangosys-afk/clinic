@@ -1,6 +1,17 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, ArchiveRestore, Clock, Download, Package, Pencil, Plus, Upload } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  Clock,
+  Download,
+  ListOrdered,
+  Package,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Upload,
+} from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { usePermissions } from "@/lib/permissions";
 import { supabase } from "@/lib/supabase";
@@ -23,19 +34,22 @@ import {
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDialog";
-import LookupSelect from "@/components/shared/LookupSelect";
+import { LookupTree, useCategorySubtree } from "@/components/shared/LookupTree";
+import { TreeGridLayout } from "@/components/shell/TreeGridLayout";
+import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
 import ServiceEditorDialog, {
   ITEM_TYPE_LABELS,
   MEDICAL_SERVICE_TYPES,
 } from "@/components/catalog/ServiceEditorDialog";
 import { errorMessage } from "@/lib/error-message";
+import { formatAmount } from "@/lib/locale";
 
 const ITEMS_CAP = 200;
 
 function useItems(
   organizationId: string | undefined,
   search: string,
-  categoryId: string,
+  categoryIds: string[],
   typeFilter: string,
   statusFilter: string,
   serviceTypeFilter: string,
@@ -46,7 +60,7 @@ function useItems(
       "items-catalog",
       organizationId,
       search,
-      categoryId,
+      categoryIds.join(","),
       typeFilter,
       statusFilter,
       serviceTypeFilter,
@@ -68,7 +82,8 @@ function useItems(
         .limit(ITEMS_CAP);
       const term = search.trim();
       if (term) query = query.or(`name_ar.ilike.%${term}%,code.ilike.%${term}%,barcode.ilike.%${term}%`);
-      if (categoryId) query = query.eq("category_value_id", categoryId);
+      // الفئة الرئيسية تشمل فروعها — `in` لا `eq`، وإلّا بدت الفئة الأمّ فارغة
+      if (categoryIds.length > 0) query = query.in("category_value_id", categoryIds);
       if (typeFilter !== "all") query = query.eq("item_type", typeFilter);
       if (serviceTypeFilter !== "all") query = query.eq("medical_service_type", serviceTypeFilter);
       if (statusFilter !== "all") query = query.eq("is_disabled", statusFilter === "disabled");
@@ -267,10 +282,12 @@ export default function Services() {
       }),
   });
 
+  const categorySubtree = useCategorySubtree("item_categories");
+  const categoryIds = useMemo(() => categorySubtree(categoryId), [categorySubtree, categoryId]);
   const items = useItems(
     organization?.id,
     search,
-    categoryId,
+    categoryIds,
     typeFilter,
     statusFilter,
     serviceTypeFilter,
@@ -282,56 +299,88 @@ export default function Services() {
     <div className="mx-auto flex max-w-7xl flex-col gap-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">الخدمات والكتالوج الطبي</h1>
+          <h1 className="text-2xl font-bold">أصناف المركز والخدمات</h1>
           <p className="text-sm text-muted-foreground">
             الخدمات والمنتجات والأدوية القابلة للفوترة، بمتطلّباتها السريرية وأسعارها
           </p>
         </div>
-        <div className="flex gap-2">
-          <Button
-            variant={showArchived ? "default" : "outline"}
-            onClick={() => setShowArchived((prev) => !prev)}
-          >
-            <Archive className="h-4 w-4" />
-            {showArchived ? "عرض النشط" : "الأرشيف"}
-          </Button>
-          {canManage && (
-            <>
-              {/* الترقيم الجماعيّ لمسؤول المنشأة وحده — والقاعدة تفرض ذلك
-                  أيضًا، فالزرّ لا يُظهر ما تَرفضه الدالّة. */}
-              {(legacyMode ||
-                ["owner", "organization_admin"].includes(membership?.role_key ?? "")) && (
-                <Button
-                  variant="outline"
-                  disabled={renumber.isPending}
-                  title="إعطاء كل خدمة كودًا من رقمين أو ثلاثة ليسهل حفظه"
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        "سيُعاد ترقيم أكواد الخدمات بأرقام قصيرة، ويُحفظ الكود القديم للرجوع إليه. المنتجات والأدوية لا تتغيّر. متابعة؟",
-                      )
-                    )
-                      renumber.mutate();
-                  }}
-                >
-                  {renumber.isPending ? "جارٍ الترقيم..." : "أكواد قصيرة للخدمات"}
-                </Button>
-              )}
-              <Button variant="outline" onClick={() => setImportOpen(true)}>
-                <Upload className="h-4 w-4" />
-                استيراد
-              </Button>
-              <Button onClick={() => setEditorFor({ open: true, itemId: null })}>
-                <Plus className="h-4 w-4" />
-                صنف/خدمة جديدة
-              </Button>
-            </>
-          )}
-        </div>
       </div>
 
+      <ScreenToolbar
+        items={[
+          {
+            key: "new",
+            label: "صنف/خدمة جديدة",
+            icon: Plus,
+            hidden: !canManage,
+            onClick: () => setEditorFor({ open: true, itemId: null }),
+          },
+          { key: "sep1", separator: true },
+          {
+            key: "import",
+            label: "استيراد",
+            icon: Upload,
+            hidden: !canManage,
+            onClick: () => setImportOpen(true),
+          },
+          {
+            key: "export",
+            label: "تصدير",
+            icon: Download,
+            disabled: (items.data ?? []).length === 0,
+            onClick: () => exportItemsCsv(items.data ?? []),
+          },
+          { key: "sep2", separator: true },
+          {
+            key: "refresh",
+            label: "تحديث",
+            icon: RefreshCw,
+            onClick: () => void items.refetch(),
+          },
+          {
+            key: "archive",
+            label: showArchived ? "عرض النشط" : "الأرشيف",
+            icon: Archive,
+            title: "الأرشفة ليست حذفًا — الصنف يختفي من الفوترة ويبقى تاريخه",
+            onClick: () => setShowArchived((prev) => !prev),
+          },
+          { key: "sep3", separator: true },
+          {
+            /* الترقيم الجماعيّ لمسؤول المنشأة وحده — والقاعدة تفرض ذلك أيضًا،
+               فالزرّ لا يُظهر ما تَرفضه الدالّة. */
+            key: "renumber",
+            label: renumber.isPending ? "جارٍ الترقيم..." : "أكواد قصيرة للخدمات",
+            icon: ListOrdered,
+            disabled: renumber.isPending,
+            hidden: !(legacyMode || ["owner", "organization_admin"].includes(membership?.role_key ?? "")),
+            title: "إعطاء كل خدمة كودًا من رقمين أو ثلاثة ليسهل حفظه",
+            onClick: () => {
+              if (
+                window.confirm(
+                  "سيُعاد ترقيم أكواد الخدمات بأرقام قصيرة، ويُحفظ الكود القديم للرجوع إليه. المنتجات والأدوية لا تتغيّر. متابعة؟",
+                )
+              )
+                renumber.mutate();
+            },
+          },
+        ]}
+      />
+
+      {/* الشجرة تحلّ محلّ قائمة الفئات المنسدلة: تُبقي البنية معروضة، والانتقال
+          بين فئتين ضغطةٌ واحدة لا ثلاث. */}
+      <TreeGridLayout
+        treeTitle="فئات الأصناف"
+        tree={
+          <LookupTree
+            categoryKey="item_categories"
+            value={categoryId}
+            onChange={setCategoryId}
+            allLabel="كل الأصناف"
+          />
+        }
+      >
       <Card>
-        <CardHeader>
+        <CardHeader className="gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <Input
               value={search}
@@ -339,16 +388,6 @@ export default function Services() {
               placeholder="بحث بالاسم أو الكود أو الباركود..."
               className="max-w-xs"
             />
-            <div className="w-48">
-              <LookupSelect
-                categoryKey="item_categories"
-                value={categoryId}
-                onChange={setCategoryId}
-                placeholder="كل الفئات"
-                allowClear
-                clearLabel="كل الفئات"
-              />
-            </div>
             <Select value={typeFilter} onValueChange={setTypeFilter}>
               <SelectTrigger className="w-40">
                 <SelectValue />
@@ -385,21 +424,8 @@ export default function Services() {
                 <SelectItem value="disabled">المعطّل</SelectItem>
               </SelectContent>
             </Select>
-            <Button
-              variant="outline"
-              onClick={() => exportItemsCsv(items.data ?? [])}
-              disabled={(items.data ?? []).length === 0}
-            >
-              <Download className="h-4 w-4" />
-              تصدير
-            </Button>
           </div>
-          <CardDescription>
-            {showArchived && "الأرشيف — "}
-            {(items.data ?? []).length >= ITEMS_CAP
-              ? `يُعرض أول ${ITEMS_CAP} صنف — ضيّق البحث`
-              : `${(items.data ?? []).length} صنف`}
-          </CardDescription>
+          <CardDescription>{showArchived ? "الأرشيف" : "الأصناف النشطة"}</CardDescription>
         </CardHeader>
         <CardContent>
           {items.isLoading && (
@@ -463,7 +489,7 @@ export default function Services() {
                           "—"
                         )}
                       </TableCell>
-                      <TableCell>{Number(item.price).toLocaleString("ar-SA")} ر.س</TableCell>
+                      <TableCell>{formatAmount(item.price)} ر.س</TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
                           {item.requires_preauthorization && <Badge variant="outline">موافقة مسبقة</Badge>}
@@ -516,7 +542,14 @@ export default function Services() {
             </Table>
           )}
         </CardContent>
+        {!items.isLoading && !items.isError && (
+          <GridFooterCount
+            count={(items.data ?? []).length}
+            capped={(items.data ?? []).length >= ITEMS_CAP}
+          />
+        )}
       </Card>
+      </TreeGridLayout>
 
       <CsvImportDialog
         open={importOpen}

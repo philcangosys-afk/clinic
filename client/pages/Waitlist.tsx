@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, Plus, Check, X } from "lucide-react";
+import { CalendarClock, Plus, Check, RefreshCw, X } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { checkDoctorAvailability } from "@/lib/doctor-availability";
 import type { AppointmentWaitlistRow, WaitlistStatus } from "@/lib/database.types";
+import { PatientSearchInput } from "@/components/shared/PatientSearchInput";
+import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
+import { matchesPatientSearch, type PatientSearchScope } from "@/lib/patient-search";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -27,6 +30,7 @@ import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
 import LookupSelect from "@/components/shared/LookupSelect";
 import { errorMessage } from "@/lib/error-message";
+import { formatDate, useLocaleSettings } from "@/lib/locale";
 
 /**
  * قوائم الانتظار (لقطة 102).
@@ -85,7 +89,7 @@ function useWaitlist(organizationId: string | undefined, status: string) {
       let query = supabase
         .from("appointment_waitlist")
         .select(
-          "*, patient:patients!waitlist_patient_tenant_fk(id, name_ar, file_number, mobile_number), doctor:doctors!waitlist_doctor_tenant_fk(id, name_ar)",
+          "*, patient:patients!waitlist_patient_tenant_fk(id, name_ar, file_number, mobile_number, id_number, phone_1), doctor:doctors!waitlist_doctor_tenant_fk(id, name_ar)",
         )
         .eq("organization_id", organizationId)
         .order("created_at", { ascending: true });
@@ -253,10 +257,13 @@ function AddToWaitlistDialog({
 }
 
 export default function Waitlist() {
+  const { calendarDisplay } = useLocaleSettings();
   const { organization, membership, legacyMode } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [status, setStatus] = useState("waiting");
+  const [search, setSearch] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [convertTarget, setConvertTarget] = useState<WaitlistRowJoined | null>(null);
   const canManageWaitlist = legacyMode || ["owner", "organization_admin", "branch_manager", "receptionist"].includes(membership?.role_key ?? "");
@@ -284,6 +291,11 @@ export default function Waitlist() {
       }),
   });
 
+  // الترشيح مرّة واحدة: الشبكة والعدّاد يقرآن القائمة نفسها فلا يختلفان
+  const visibleWaitlist = (list.data ?? []).filter((row) =>
+    matchesPatientSearch(row.patient, search, searchScopes),
+  );
+
   return (
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -293,20 +305,40 @@ export default function Waitlist() {
             مرضى بانتظار شاغر — يُحوَّلون إلى مواعيد عند توفر وقت لدى الطبيب
           </p>
         </div>
-        {canManageWaitlist && <Button onClick={() => setAddOpen(true)}>
-          <Plus className="h-4 w-4" />
-          إضافة للانتظار
-        </Button>}
       </div>
 
-      <Tabs value={status} onValueChange={setStatus}>
-        <TabsList>
-          <TabsTrigger value="waiting">بالانتظار</TabsTrigger>
-          <TabsTrigger value="booked">تم الحجز</TabsTrigger>
-          <TabsTrigger value="cancelled">ملغاة</TabsTrigger>
-          <TabsTrigger value="all">الكل</TabsTrigger>
-        </TabsList>
-      </Tabs>
+      <ScreenToolbar
+        items={[
+          {
+            key: "new",
+            label: "إضافة للانتظار",
+            icon: Plus,
+            hidden: !canManageWaitlist,
+            onClick: () => setAddOpen(true),
+          },
+          { key: "sep1", separator: true },
+          { key: "refresh", label: "تحديث", icon: RefreshCw, onClick: () => void list.refetch() },
+        ]}
+      />
+
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Tabs value={status} onValueChange={setStatus}>
+          <TabsList>
+            <TabsTrigger value="waiting">بالانتظار</TabsTrigger>
+            <TabsTrigger value="booked">تم الحجز</TabsTrigger>
+            <TabsTrigger value="cancelled">ملغاة</TabsTrigger>
+            <TabsTrigger value="all">الكل</TabsTrigger>
+          </TabsList>
+        </Tabs>
+        <PatientSearchInput
+          value={search}
+          onChange={setSearch}
+          scopes={searchScopes}
+          onScopesChange={setSearchScopes}
+          className="w-full sm:w-auto"
+          inputClassName="sm:w-64"
+        />
+      </div>
 
       <Card>
         <CardHeader>
@@ -335,7 +367,7 @@ export default function Waitlist() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(list.data ?? []).map((row) => (
+                {visibleWaitlist.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell className="font-medium">{row.patient?.name_ar ?? "—"}</TableCell>
                     <TableCell className="font-mono text-xs">{row.patient?.file_number ?? "—"}</TableCell>
@@ -355,10 +387,10 @@ export default function Waitlist() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-xs tabular-nums">
-                      {row.desired_date ? new Date(row.desired_date).toLocaleDateString("ar-SA") : "—"}
+                      {formatDate(row.desired_date, calendarDisplay)}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {new Date(row.created_at).toLocaleDateString("ar-SA")}
+                      {formatDate(row.created_at, calendarDisplay)}
                     </TableCell>
                     <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
                       {row.registration_note ?? "—"}
@@ -401,6 +433,7 @@ export default function Waitlist() {
             </Table>
           )}
         </CardContent>
+        {!list.isLoading && <GridFooterCount count={visibleWaitlist.length} />}
       </Card>
 
       {addOpen && (
@@ -430,6 +463,9 @@ function ConvertWaitlistDialog({
   const [clinicId, setClinicId] = useState("none");
   const [visitTypeId, setVisitTypeId] = useState("");
   const [note, setNote] = useState("");
+  /* التجاوز يُعاد إلى مغلق مع كل طلب: خيارٌ يبقى مفعَّلًا من تحويلٍ سابق
+     يتجاوز الدوام في التالي بلا أن ينتبه أحد. */
+  const [allowOutsideHours, setAllowOutsideHours] = useState(false);
 
   const clinics = useQuery({
     queryKey: ["waitlist-clinics", organizationId],
@@ -447,6 +483,7 @@ function ConvertWaitlistDialog({
     setDoctorId(target.doctor_id ?? "");
     setDate(target.desired_date ?? new Date().toLocaleDateString("en-CA"));
     setNote(target.registration_note ?? "");
+    setAllowOutsideHours(false);
   }, [target]);
 
   const convert = useMutation({
@@ -456,7 +493,13 @@ function ConvertWaitlistDialog({
       const end = new Date(start.getTime() + Number(duration) * 60_000);
       const availability = await checkDoctorAvailability(doctorId, start, end);
       if (availability.status === "blocked") throw new Error(availability.message ?? "الطبيب غير متاح");
-      if (availability.status === "outside") throw new Error(availability.message ?? "الموعد خارج دوام الطبيب");
+      /* الخروج عن الدوام تحذيرٌ يُتجاوَز صراحةً، كما في شاشة المواعيد.
+         كانت هذه الشاشة تمنع منعًا، فالشاشتان تحكمان على الحالة نفسها
+         حكمَين مختلفَين: يُحجَز الموعد من المواعيد ويُرفض من الانتظار. */
+      if (availability.status === "outside" && !allowOutsideHours)
+        throw new Error(
+          `${availability.message ?? "الموعد خارج دوام الطبيب"} — فعّل "حجز خارج الدوام" إن كنت متأكدًا`,
+        );
       const { error } = await supabase.rpc("app_convert_waitlist_to_appointment", {
         p_waitlist_id: target.id,
         p_doctor_id: doctorId,
@@ -485,6 +528,20 @@ function ConvertWaitlistDialog({
         <div className="grid grid-cols-3 gap-2"><div><Label>التاريخ</Label><Input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></div><div><Label>الوقت</Label><Input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></div><div><Label>المدة</Label><Input type="number" min={5} step={5} value={duration} onChange={(event) => setDuration(event.target.value)} /></div></div>
         <div className="grid gap-3 sm:grid-cols-2"><div><Label>العيادة</Label><Select value={clinicId} onValueChange={setClinicId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="none">بدون</SelectItem>{(clinics.data ?? []).map((clinic) => <SelectItem key={clinic.id} value={clinic.id}>{clinic.name}</SelectItem>)}</SelectContent></Select></div><div><Label>نوع الزيارة</Label><LookupSelect categoryKey="visit_types" value={visitTypeId} onChange={setVisitTypeId} placeholder="بدون" /></div></div>
         <div><Label>ملاحظة الموعد</Label><Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} /></div>
+        <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2.5 text-sm">
+          <input
+            type="checkbox"
+            className="mt-0.5 h-4 w-4"
+            checked={allowOutsideHours}
+            onChange={(event) => setAllowOutsideHours(event.target.checked)}
+          />
+          <span className="flex flex-col gap-0.5">
+            <span>حجز خارج فترات دوام الطبيب</span>
+            <span className="text-xs text-muted-foreground">
+              فترات الحجب (إجازة أو عملية) تبقى ممنوعة ولا يتجاوزها هذا الخيار.
+            </span>
+          </span>
+        </label>
       </div>
       <DialogFooter><Button disabled={convert.isPending || !doctorId || !date} onClick={() => convert.mutate()}>{convert.isPending ? "جارٍ إنشاء الموعد..." : "إنشاء الموعد"}</Button></DialogFooter>
     </DialogContent>

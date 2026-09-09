@@ -3,6 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarClock, LinkIcon, UserCog } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
+import {
+  buildPatientSearchOr,
+  patientSearchPlaceholder,
+  PATIENTS_SEARCH_COLUMNS,
+  type PatientSearchScope,
+} from "@/lib/patient-search";
 import { usePermissions } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -357,6 +364,7 @@ function AccountsPanel() {
   const [revoking, setRevoking] = useState<any | null>(null);
   const [reason, setReason] = useState("");
   const [search, setSearch] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
 
   const accounts = useQuery({
     queryKey: ["portal-accounts", organization?.id],
@@ -373,17 +381,19 @@ function AccountsPanel() {
   });
 
   const patients = useQuery({
-    queryKey: ["portal-patient-search", organization?.id, search],
+    queryKey: ["portal-patient-search", organization?.id, search, searchScopes.join("+")],
     enabled: Boolean(organization?.id) && search.trim().length >= 2,
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("patients").select("id, name_ar, file_number")
+      const query = supabase
+        .from("patients").select("id, name_ar, file_number, id_number, mobile_number, phone_1")
         .eq("organization_id", organization!.id)
         // الملف المدموج ملف ميّت: ربط حساب بوابة به يُري المريض ملفًا فارغًا،
         // و`app_link_patient_portal_account` لا تفحص `merged_into_id`.
         .is("merged_into_id", null)
-        .ilike("name_ar", `%${search.trim()}%`)
         .limit(20);
+      // البحث الموحَّد: الاسم والجوال والهوية — أو ما تحصره أزرار النطاق
+      const searchFilter = buildPatientSearchOr(search, searchScopes, PATIENTS_SEARCH_COLUMNS);
+      const { data, error } = await (searchFilter ? query.or(searchFilter) : query);
       if (error) throw error;
       return (data ?? []) as any[];
     },
@@ -530,7 +540,8 @@ function AccountsPanel() {
             <div className="flex flex-col gap-1.5">
               <Label>ابحث عن المريض</Label>
               <Input value={search} onChange={(e) => setSearch(e.target.value)}
-                     placeholder="اسم المريض" />
+                     placeholder={patientSearchPlaceholder(searchScopes)} />
+              <PatientSearchScopeChips scopes={searchScopes} onScopesChange={setSearchScopes} />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>المريض *</Label>

@@ -3,6 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, FileLock2, ShieldCheck, Trash2, UserSearch } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
+import {
+  buildPatientSearchOr,
+  patientSearchPlaceholder,
+  PATIENT_DIRECTORY_SEARCH_COLUMNS,
+  type PatientSearchScope,
+} from "@/lib/patient-search";
 import { usePermissions } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -102,6 +109,7 @@ function ConsentsPanel() {
   const { can } = usePermissions();
 
   const [search, setSearch] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [patient, setPatient] = useState<any | null>(null);
   const [consentType, setConsentType] = useState("treatment");
   const [purpose, setPurpose] = useState("");
@@ -116,15 +124,17 @@ function ConsentsPanel() {
    * المطوّر.
    */
   const patients = useQuery({
-    queryKey: ["privacy-patients", organization?.id, search],
+    queryKey: ["privacy-patients", organization?.id, search, searchScopes.join("+")],
     enabled: Boolean(organization?.id) && search.trim().length >= 2,
     queryFn: async () => {
-      const { data, error } = await supabase
+      const query = supabase
         .from("v_patient_directory")
-        .select("id, name_ar, file_number, id_number, phone_1, age_years, identity_visible")
+        .select("id, name_ar, file_number, id_number, phone_1, mobile_number, age_years, identity_visible")
         .eq("organization_id", organization!.id)
-        .ilike("name_ar", `%${search.trim()}%`)
         .limit(20);
+      // البحث الموحَّد؛ والمنظور يُقنِّع ما لا يُصرَّح برؤيته فلا يُطابقه البحث
+      const searchFilter = buildPatientSearchOr(search, searchScopes, PATIENT_DIRECTORY_SEARCH_COLUMNS);
+      const { data, error } = await (searchFilter ? query.or(searchFilter) : query);
       if (error) throw error;
       return data ?? [];
     },
@@ -206,10 +216,11 @@ function ConsentsPanel() {
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <Input
-            placeholder="ابحث باسم المريض (حرفان على الأقل)"
+            placeholder={`${patientSearchPlaceholder(searchScopes)} (حرفان على الأقل)`}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
+          <PatientSearchScopeChips scopes={searchScopes} onScopesChange={setSearchScopes} />
           {patients.isLoading && <Skeleton className="h-16 w-full" />}
           <div className="flex flex-col gap-1">
             {(patients.data ?? []).map((p: any) => (

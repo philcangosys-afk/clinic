@@ -11,6 +11,13 @@ import {
   X,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
+import {
+  buildPatientSearchOr,
+  patientSearchPlaceholder,
+  PATIENTS_SEARCH_COLUMNS,
+  type PatientSearchScope,
+} from "@/lib/patient-search";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import VitalSignsForm, { VITAL_MEASURES } from "@/components/medical/VitalSignsForm";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -355,22 +362,23 @@ export default function VitalSigns() {
 function DirectRecordPanel() {
   const { organization } = useOrganizationAccess();
   const [search, setSearch] = useState("");
+  const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [patientId, setPatientId] = useState("");
   const [doctorId, setDoctorId] = useState("");
 
   const patients = useQuery({
-    queryKey: ["vitals-direct-patients", organization?.id, search],
+    queryKey: ["vitals-direct-patients", organization?.id, search, searchScopes.join("+")],
     enabled: Boolean(organization?.id),
     queryFn: async () => {
       let q = supabase
         .from("patients")
-        .select("id, name_ar, id_number")
+        .select("id, name_ar, id_number, mobile_number, phone_1, file_number")
         .eq("organization_id", organization!.id)
         .order("name_ar")
         .limit(50);
-      if (search.trim()) {
-        q = q.or(`name_ar.ilike.%${search.trim()}%,id_number.ilike.%${search.trim()}%`);
-      }
+      // البحث الموحَّد: الاسم والجوال والهوية — أو ما تحصره أزرار النطاق
+      const searchFilter = buildPatientSearchOr(search, searchScopes, PATIENTS_SEARCH_COLUMNS);
+      if (searchFilter) q = q.or(searchFilter);
       const { data, error } = await q;
       if (error) throw error;
       return (data ?? []) as { id: string; name_ar: string; id_number: string | null }[];
@@ -413,8 +421,9 @@ function DirectRecordPanel() {
               dir="rtl"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="ابحث بالاسم أو رقم الهوية"
+              placeholder={patientSearchPlaceholder(searchScopes)}
             />
+            <PatientSearchScopeChips scopes={searchScopes} onScopesChange={setSearchScopes} />
             <select
               id="vs-patient"
               dir="rtl"

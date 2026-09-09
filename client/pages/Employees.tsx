@@ -21,6 +21,7 @@ import {
 import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
+import { formatAmount, formatDate, useLocaleSettings } from "@/lib/locale";
 
 function useEmployees(organizationId: string | undefined) {
   return useQuery({
@@ -41,6 +42,7 @@ function useEmployees(organizationId: string | undefined) {
 }
 
 export default function Employees() {
+  const { calendarDisplay } = useLocaleSettings();
   const { organization } = useOrganizationAccess();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<EmployeeEditRow | null>(null);
@@ -100,13 +102,11 @@ export default function Employees() {
                     </TableCell>
                     <TableCell className="font-mono text-xs">{employee.job_number ?? "—"}</TableCell>
                     <TableCell>{employee.mobile_1 ?? "—"}</TableCell>
-                    <TableCell>{employee.hire_date ? new Date(employee.hire_date).toLocaleDateString("ar-SA") : "—"}</TableCell>
+                    <TableCell>{formatDate(employee.hire_date, calendarDisplay)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {employee.termination_date
-                        ? new Date(employee.termination_date).toLocaleDateString("ar-SA")
-                        : "—"}
+                      {formatDate(employee.termination_date, calendarDisplay)}
                     </TableCell>
-                    <TableCell className="font-semibold">{Number(employee.total_salary).toLocaleString("ar-SA")} ر.س</TableCell>
+                    <TableCell className="font-semibold">{formatAmount(employee.total_salary)} ر.س</TableCell>
                     <TableCell>
                       <Badge variant={employee.status === "active" ? "success" : "secondary"}>
                         {employee.status === "active" ? "نشط" : "منتهي"}
@@ -387,6 +387,7 @@ function EmployeeDocumentsDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { calendarDisplay } = useLocaleSettings();
   const [docTypeId, setDocTypeId] = useState("");
   const [documentNumber, setDocumentNumber] = useState("");
   const [issueDate, setIssueDate] = useState("");
@@ -450,8 +451,8 @@ function EmployeeDocumentsDialog({
                 {doc.note && <span className="text-xs text-muted-foreground">{doc.note}</span>}
               </div>
               <span className="text-xs text-muted-foreground">
-                {doc.issue_date ? `إصدار: ${new Date(doc.issue_date).toLocaleDateString("ar-SA")} — ` : ""}
-                {doc.expiry_date ? `ينتهي: ${new Date(doc.expiry_date).toLocaleDateString("ar-SA")}` : "بلا تاريخ انتهاء"}
+                {doc.issue_date ? `إصدار: ${formatDate(doc.issue_date, calendarDisplay)} — ` : ""}
+                {doc.expiry_date ? `ينتهي: ${formatDate(doc.expiry_date, calendarDisplay)}` : "بلا تاريخ انتهاء"}
               </span>
             </div>
           ))}
