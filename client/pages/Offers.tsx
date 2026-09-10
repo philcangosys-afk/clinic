@@ -221,6 +221,8 @@ function OfferFormDialog({
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["offer-items"] }),
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حذف الصنف من العرض", description: errorMessage(error) }),
   });
 
   return (

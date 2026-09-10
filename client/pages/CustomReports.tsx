@@ -301,6 +301,8 @@ export default function CustomReports() {
       queryClient.invalidateQueries({ queryKey: ["custom-reports", organization?.id] });
       toast({ title: "تم حذف التقرير" });
     },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حذف التقرير", description: errorMessage(error) }),
   });
 
   const loadReport = (report: CustomReportRow) => {

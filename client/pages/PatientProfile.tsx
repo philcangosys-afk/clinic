@@ -10,6 +10,9 @@ import {
   ClipboardList,
   Contact2,
   Eye,
+  FileBadge,
+  FileSpreadsheet,
+  LineChart,
   FileSignature,
   FileStack,
   HeartPulse,
@@ -25,6 +28,7 @@ import {
   Sparkles,
   Stethoscope,
   StickyNote,
+  Syringe,
   UserRound,
   Wallet,
 } from "lucide-react";
@@ -59,6 +63,10 @@ import {
 import WalletTab from "@/components/patients/WalletTab";
 import DocumentsTab from "@/components/patients/DocumentsTab";
 import RadiologyImagesTab from "@/components/patients/RadiologyImagesTab";
+import MedicalReportsTab from "@/components/patients/MedicalReportsTab";
+import OccupationalExamTab from "@/components/patients/OccupationalExamTab";
+import ClaimFormsTab from "@/components/patients/ClaimFormsTab";
+import GrowthChartTab from "@/components/patients/GrowthChartTab";
 import Odontogram from "@/components/medical/Odontogram";
 import SendToDoctorDialog from "@/components/patients/SendToDoctorDialog";
 import {
@@ -153,6 +161,9 @@ export default function PatientProfile() {
    * ملفًّا طبيًّا يفتحه ليقرأ حالة المريض، والبيانات الشخصية يعرفها من الشريط.
    */
   const [section, setSection] = useState("conditions");
+  /* الاتفاقية ذات المتبقّي لا تُرى إلّا بفتح قسمها، فيخرج المريض وعليه رصيد
+     لم يره أحد. التنبيه يظهر فور فتح الملفّ ويقود إلى القسم بضغطة. */
+  const [agreementsAlertDismissed, setAgreementsAlertDismissed] = useState(false);
 
   /** عدد الحالات الصحية المؤشَّرة — يظهر في شريط الهوية */
   const chronicCount = useQuery({
@@ -243,6 +254,10 @@ export default function PatientProfile() {
         { key: "vitals", label: "المؤشرات الحيوية", icon: Activity },
         { key: "prescriptions", label: "الوصفات الطبية", icon: Pill },
         { key: "radiology", label: "صور الأشعة", icon: ImageIcon },
+        { key: "medical-reports", label: "التقارير الطبية", icon: FileBadge },
+        { key: "claim-forms", label: "نماذج المطالبات", icon: FileSpreadsheet },
+        { key: "occupational", label: "الفحص المهنيّ", icon: Syringe },
+        { key: "growth", label: "مخططات النمو", icon: LineChart },
         { key: "cbahi", label: "الجودة والسلامة (CBAHI)", icon: ShieldCheck },
         { key: "documents", label: "المستندات", icon: FileStack },
       ],
@@ -313,6 +328,10 @@ export default function PatientProfile() {
       )}
       {section === "contacts" && <PatientContactsTab patientId={id!} />}
       {section === "notes" && <NotesTab patientId={patient.data.id} />}
+      {section === "medical-reports" && <MedicalReportsTab patientId={patient.data.id} />}
+      {section === "claim-forms" && <ClaimFormsTab patientId={patient.data.id} />}
+      {section === "occupational" && <OccupationalExamTab patientId={patient.data.id} />}
+      {section === "growth" && <GrowthChartTab patientId={patient.data.id} />}
       {section === "blocking" && <BlockingTab patient={patient.data} />}
       {section === "visits" && <PatientVisitsTab patientId={patient.data.id} />}
       {section === "vitals" && <VitalsTab patientId={patient.data.id} />}

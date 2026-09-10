@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Smile, Wallet, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, Plus, Smile, Wallet, Trash2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { formatAmount, formatCount, formatDate, useLocaleSettings } from "@/lib/locale";
 import type {
   DentalLabBalanceRow,
   DentalLabItemRow,
@@ -178,15 +179,28 @@ export default function DentalLab() {
 // ---------------------------------------------------------------------------
 // الطلبيات
 // ---------------------------------------------------------------------------
+/** بند طلبية معمل الأسنان كما يُقرأ في القائمة. */
+type DentalLabOrderItemRow = {
+  id: string;
+  description: string | null;
+  tooth_numbers: string[] | null;
+  price: number | null;
+  qty: number | null;
+  net_amount: number | null;
+};
+
 function useDentalLabOrders(organizationId: string | undefined) {
   return useQuery({
     queryKey: ["dental-lab-orders", organizationId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
+      // البنود مضمَّنة في الاستعلام نفسه: `dental_lab_order_items` كان يُكتب
+      // إليه ولا يقرؤه أحد منذ 0007، فطلبيةٌ بثلاث تركيبات تُعرض بإجماليها
+      // وحده ولا سبيل إلى معرفة ما طُلب من المعمل.
       const { data, error } = await supabase
         .from("dental_lab_orders")
         .select(
-          "id, order_number, order_date, delivery_date, total_amount, paid_amount, remaining_amount, status, note, distributor:distributors(name_ar), patient:patients(name_ar, file_number), doctor:doctors(name_ar)",
+          "id, order_number, order_date, delivery_date, total_amount, paid_amount, remaining_amount, status, note, distributor:distributors(name_ar), patient:patients(name_ar, file_number), doctor:doctors(name_ar), dental_lab_order_items(id, description, tooth_numbers, price, qty, net_amount)",
         )
         .eq("organization_id", organizationId)
         .order("order_date", { ascending: false })
@@ -206,6 +220,10 @@ function OrdersTab({
 }) {
   const orders = useDentalLabOrders(organizationId);
   const voided = useVoidedLabVouchers(organizationId);
+  const { calendarDisplay } = useLocaleSettings();
+  /* الطلبية تُفتح على بنودها بالضغط: صفٌّ إضافيّ دائم لكل طلبية يُغرق الجدول،
+     وإخفاء البنود بالكلّية هو العيب الذي نُصلحه. */
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [createOpen, setCreateOpen] = useState(false);
   const [expenseFor, setExpenseFor] = useState<{ id: string; remaining: number } | null>(null);
   const queryClient = useQueryClient();
@@ -296,26 +314,50 @@ function OrdersTab({
                 const voidedAmount = voided.data?.byOrder.get(order.id) ?? 0;
                 const paid = Number(order.paid_amount ?? 0) - voidedAmount;
                 const remaining = Number(order.total_amount ?? 0) - paid;
+                const items = (order.dental_lab_order_items ?? []) as DentalLabOrderItemRow[];
+                const isOpen = Boolean(expanded[order.id]);
                 return (
-                <TableRow key={order.id}>
-                  <TableCell className="font-mono text-xs">#{order.order_number}</TableCell>
+                // الشظيّة تحمل المفتاح لأنّها الجذر المُعاد من map — و`<>`
+                // لا تقبل key، فتُكتب صريحةً
+                <Fragment key={order.id}>
+                <TableRow>
+                  <TableCell className="font-mono text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setExpanded((prev) => ({ ...prev, [order.id]: !prev[order.id] }))}
+                      className="inline-flex items-center gap-1 hover:text-foreground"
+                      title={items.length > 0 ? "عرض بنود الطلبية" : "لا بنود مسجَّلة لهذه الطلبية"}
+                      disabled={items.length === 0}
+                    >
+                      {items.length > 0 &&
+                        (isOpen ? (
+                          <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+                        ) : (
+                          <ChevronLeft className="h-3.5 w-3.5" aria-hidden />
+                        ))}
+                      #{order.order_number}
+                      {items.length > 0 && (
+                        <span className="rounded bg-muted px-1 text-[10px]">{formatCount(items.length)}</span>
+                      )}
+                    </button>
+                  </TableCell>
                   <TableCell className="font-medium">{order.distributor?.name_ar ?? "—"}</TableCell>
                   <TableCell>
                     {order.patient?.name_ar ? `${order.patient.name_ar} (#${order.patient.file_number})` : "—"}
                   </TableCell>
                   <TableCell>{order.doctor?.name_ar ? `د. ${order.doctor.name_ar}` : "—"}</TableCell>
-                  <TableCell>{new Date(order.order_date).toLocaleDateString("ar-SA")}</TableCell>
-                  <TableCell>{Number(order.total_amount).toLocaleString("ar-SA")}</TableCell>
+                  <TableCell>{formatDate(order.order_date, calendarDisplay)}</TableCell>
+                  <TableCell>{formatAmount(order.total_amount)}</TableCell>
                   <TableCell className="text-emerald-700">
-                    {paid.toLocaleString("ar-SA")}
+                    {formatAmount(paid)}
                     {voidedAmount > 0 && (
                       <span className="block text-[10px] text-muted-foreground">
-                        بعد استثناء {voidedAmount.toLocaleString("ar-SA")} من سندات ملغاة
+                        بعد استثناء {formatAmount(voidedAmount)} من سندات ملغاة
                       </span>
                     )}
                   </TableCell>
                   <TableCell className={remaining > 0 ? "text-rose-600" : ""}>
-                    {remaining.toLocaleString("ar-SA")}
+                    {formatAmount(remaining)}
                   </TableCell>
                   <TableCell>
                     <Select
@@ -361,6 +403,33 @@ function OrdersTab({
                     )}
                   </TableCell>
                 </TableRow>
+                {isOpen && items.length > 0 && (
+                  <TableRow className="bg-muted/30">
+                    <TableCell colSpan={10} className="py-2">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-semibold">بنود الطلبية</span>
+                        {items.map((item) => (
+                          <div
+                            key={item.id}
+                            className="flex flex-wrap items-center gap-x-4 gap-y-0.5 border-s-2 ps-2 text-xs"
+                          >
+                            <span className="font-medium">{item.description ?? "بند"}</span>
+                            {(item.tooth_numbers ?? []).length > 0 && (
+                              <span className="text-muted-foreground">
+                                الأسنان: {(item.tooth_numbers ?? []).join("، ")}
+                              </span>
+                            )}
+                            <span className="text-muted-foreground">
+                              {formatCount(item.qty)} × {formatAmount(item.price)}
+                            </span>
+                            <span className="font-mono">{formatAmount(item.net_amount)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                )}
+                </Fragment>
                 );
               })}
               {(orders.data ?? []).length === 0 && (
@@ -715,7 +784,7 @@ function NewDentalLabOrderDialog({
           )}
           {allLines.length > 0 && (
             <div className="text-sm font-medium tabular-nums sm:col-span-2">
-              إجمالي الطلبية: {orderTotal.toLocaleString("ar-SA")}
+              إجمالي الطلبية: {formatAmount(orderTotal)}
               <span className="mr-2 text-xs font-normal text-muted-foreground">
                 ({allLines.length} تركيبة)
               </span>
@@ -786,7 +855,7 @@ function RegisterExpenseDialog({
           <DialogDescription>ينشئ سند صرف يُحدِّث المدفوع/المتبقي في الطلبية تلقائيًا</DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-1.5">
-          <Label>المبلغ {order ? `(المتبقي: ${order.remaining.toLocaleString("ar-SA")})` : ""}</Label>
+          <Label>المبلغ {order ? `(المتبقي: ${formatAmount(order.remaining)})` : ""}</Label>
           <Input type="number" min={0} value={amount} onChange={(e) => setAmount(e.target.value)} autoFocus />
         </div>
         <DialogFooter>
@@ -942,7 +1011,7 @@ function ItemsTab({
                         {item.name_ar}
                         {item.name_en && <span className="text-muted-foreground"> · {item.name_en}</span>}
                       </TableCell>
-                      <TableCell>{Number(item.price).toLocaleString("ar-SA")}</TableCell>
+                      <TableCell>{formatAmount(item.price)}</TableCell>
                       <TableCell>
                         <Badge variant={item.is_disabled ? "secondary" : "success"}>
                           {item.is_disabled ? "معطّل" : "مفعّل"}
@@ -1035,17 +1104,17 @@ function BalancesTab({ organizationId }: { organizationId: string | undefined })
               {rows.map((row) => (
                 <TableRow key={row.distributor_id}>
                   <TableCell className="font-medium">{row.name_ar}</TableCell>
-                  <TableCell>{Number(row.total_orders).toLocaleString("ar-SA")}</TableCell>
+                  <TableCell>{formatAmount(row.total_orders)}</TableCell>
                   <TableCell className="text-emerald-700">
-                    {row.totalPaid.toLocaleString("ar-SA")}
+                    {formatAmount(row.totalPaid)}
                     {row.voidedAmount > 0 && (
                       <span className="block text-[10px] text-muted-foreground">
-                        بعد استثناء {row.voidedAmount.toLocaleString("ar-SA")} من سندات ملغاة
+                        بعد استثناء {formatAmount(row.voidedAmount)} من سندات ملغاة
                       </span>
                     )}
                   </TableCell>
                   <TableCell className={row.balanceDue > 0 ? "text-rose-600" : ""}>
-                    {row.balanceDue.toLocaleString("ar-SA")}
+                    {formatAmount(row.balanceDue)}
                   </TableCell>
                 </TableRow>
               ))}
@@ -1061,10 +1130,10 @@ function BalancesTab({ organizationId }: { organizationId: string | undefined })
               <TableBody>
                 <TableRow className="font-semibold">
                   <TableCell>الإجمالي</TableCell>
-                  <TableCell>{totals.total_orders.toLocaleString("ar-SA")}</TableCell>
-                  <TableCell className="text-emerald-700">{totals.total_paid.toLocaleString("ar-SA")}</TableCell>
+                  <TableCell>{formatAmount(totals.total_orders)}</TableCell>
+                  <TableCell className="text-emerald-700">{formatAmount(totals.total_paid)}</TableCell>
                   <TableCell className={totals.balance_due > 0 ? "text-rose-600" : ""}>
-                    {totals.balance_due.toLocaleString("ar-SA")}
+                    {formatAmount(totals.balance_due)}
                   </TableCell>
                 </TableRow>
               </TableBody>

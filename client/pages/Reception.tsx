@@ -120,7 +120,7 @@ function useTodayQueue(organizationId: string | undefined, doctorFilter: string)
       let query = supabase
         .from("appointments")
         .select(
-          "id, organization_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, clinic_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number, phone_1, insurance_company_name, insurance_policy_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name), invoices:sales_invoices!sales_invoices_appointment_tenant_fk(id, status, remaining_amount, is_temporary)",
+          "id, organization_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, sent_by_user_id, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, clinic_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number, phone_1, insurance_company_name, insurance_policy_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name), invoices:sales_invoices!sales_invoices_appointment_tenant_fk(id, status, remaining_amount, is_temporary)",
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
         // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
@@ -444,6 +444,33 @@ export default function Reception() {
 }
 
 /**
+ * أسماء أعضاء المنشأة — لعرض «المرسل» بدل معرّف مستخدم.
+ *
+ * `appointments.sent_by_user_id` (0154) يشير إلى `auth.users`، وPostgREST لا
+ * يصل إلى ذلك المخطّط، فالاسم يأتي من `v_organization_members_directory`.
+ */
+function useMemberNames() {
+  const { organization } = useOrganizationAccess();
+  return useQuery({
+    queryKey: ["members-directory-names", organization?.id],
+    enabled: Boolean(organization?.id),
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_organization_members_directory")
+        .select("user_id, display_name")
+        .eq("organization_id", organization!.id);
+      if (error) throw error;
+      const map: Record<string, string> = {};
+      for (const row of (data ?? []) as { user_id: string; display_name: string }[]) {
+        map[row.user_id] = row.display_name;
+      }
+      return map;
+    },
+  });
+}
+
+/**
  * أزمنة الطابور الخمسة — تُكتب ولا تُعرض.
  *
  * التدقيق أثبت أن `checked_in_1_at` و`checked_in_2_at` و`called_at` و
@@ -453,10 +480,13 @@ export default function Reception() {
  * في مؤشرات CBAHI لزمن الانتظار.
  */
 function QueueTimeline({ appointment }: { appointment: ReceptionAppointment }) {
-  const fmt = (value: string | null | undefined) =>
-    value
-      ? new Date(value).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })
-      : null;
+  const memberNames = useMemberNames();
+  // `ar-SA` وحدها تُخرج أرقامًا عربية-هندية في Chrome، و`formatTime` تفرض
+  // اللاتينية كما في بقيّة النظام
+  const fmt = (value: string | null | undefined) => (value ? formatTime(value) : null);
+  const sentBy = appointment.sent_by_user_id
+    ? (memberNames.data?.[appointment.sent_by_user_id] ?? null)
+    : null;
 
   const stamps = [
     { label: "وصل", value: fmt(appointment.checked_in_1_at) },
@@ -476,7 +506,7 @@ function QueueTimeline({ appointment }: { appointment: ReceptionAppointment }) {
   const waited = minutesBetween(appointment.checked_in_1_at, appointment.entered_at);
   const duration = minutesBetween(appointment.entered_at, appointment.left_at);
 
-  if (stamps.length === 0) return null;
+  if (stamps.length === 0 && !sentBy) return null;
 
   return (
     <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
@@ -491,6 +521,8 @@ function QueueTimeline({ appointment }: { appointment: ReceptionAppointment }) {
       {duration !== null && (
         <span className="font-medium text-emerald-700 tabular-nums">الجلسة {duration} د</span>
       )}
+      {/* من أرسل المريض: بدونه لا يُعرف مصدر ازدحام عيادة */}
+      {sentBy && <span>المرسل {sentBy}</span>}
     </div>
   );
 }

@@ -4,7 +4,17 @@ import AppointmentCalendar, {
   type CalendarView,
 } from "@/components/appointments/AppointmentCalendar";
 import AppointmentMessages from "@/components/appointments/AppointmentMessages";
-import { CalendarX, Check, ChevronLeft, ChevronRight, Edit3, ExternalLink, Plus, Search } from "lucide-react";
+import {
+  CalendarClock,
+  CalendarX,
+  Check,
+  ChevronLeft,
+  ChevronRight,
+  Edit3,
+  ExternalLink,
+  Plus,
+  Search,
+} from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
@@ -15,6 +25,7 @@ import { matchesPatientSearch, type PatientSearchScope } from "@/lib/patient-sea
 import type { AppointmentStatus, AppointmentWithRelations } from "@/lib/database.types";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { localDayRange } from "@/lib/date-range";
+import { formatDateTime, useLocaleSettings } from "@/lib/locale";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -1064,6 +1075,48 @@ function CreateAppointmentDialog({
     },
   });
 
+  /**
+   * أقرب موعد متاح — ولو بعد أيّام.
+   *
+   * «الأوقات المتاحة» أعلاه تعرض خانات **اليوم المختار** وحده، فمن لا يجد
+   * فراغًا اليوم يتنقّل يومًا يومًا بعينه — فيحجز في أوّل فراغٍ يراه لا في
+   * أقرب فراغ فعليّ، ويترك فجوات في جدول الطبيب. والبحث في القاعدة
+   * (`app_next_available_slot`، 0154) لا في المتصفّح: شبكةٌ حُمِّلت قبل
+   * دقيقتين تقترح خانةً حُجزت.
+   *
+   * تقترح ولا تحجز: الحجز يبقى بمساره المعتاد بكل تحقّقاته.
+   */
+  const findNextSlot = useMutation({
+    mutationFn: async () => {
+      if (!organizationId || !doctorId) throw new Error("اختر الطبيب أوّلًا");
+      const { data, error } = await supabase.rpc("app_next_available_slot", {
+        p_organization_id: organizationId,
+        p_doctor_id: doctorId,
+        p_duration_minutes: Number(duration) || 30,
+        p_from: new Date().toISOString(),
+        p_days_ahead: 30,
+      });
+      if (error) throw error;
+      return data as string | null;
+    },
+    onSuccess: (slot) => {
+      if (!slot) {
+        toast({
+          variant: "destructive",
+          title: "لا خانة متاحة خلال ثلاثين يومًا",
+          description: "راجع دوام الطبيب — قد لا يكون له دوام مسجَّل أصلًا.",
+        });
+        return;
+      }
+      const at = new Date(slot);
+      setDate(at.toLocaleDateString("en-CA"));
+      setTime(at.toTimeString().slice(0, 5));
+      toast({ title: `أقرب موعد: ${formatDateTime(at, calendarDisplay)}` });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر البحث", description: errorMessage(error) }),
+  });
+
   const createAppointment = useMutation({
     mutationFn: async () => {
       if (!organizationId || !patient || !doctorId) throw new Error("أكمل بيانات المريض والطبيب والوقت");
@@ -1322,6 +1375,19 @@ function CreateAppointmentDialog({
                 <Input type="number" min={5} step={5} value={duration} onChange={(e) => setDuration(e.target.value)} />
               </div>
             </div>
+
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="self-start"
+              disabled={!doctorId || findNextSlot.isPending}
+              title={doctorId ? "أوّل خانة تتّسع للمدّة في دوام الطبيب" : "اختر الطبيب أوّلًا"}
+              onClick={() => findNextSlot.mutate()}
+            >
+              <CalendarClock className="h-3.5 w-3.5" />
+              {findNextSlot.isPending ? "جارٍ البحث..." : "أقرب موعد"}
+            </Button>
 
             {/* الأوقات المتاحة تُحسب في القاعدة من جدول الطبيب ومواعيده
                 واستثناءاته — لا في المتصفّح، حيث قد تكون البيانات تغيّرت

@@ -602,6 +602,8 @@ function CashRegistersDialog({
       setIsDoctorCustody(false);
       setAssignedDoctorId("");
     },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّرت إضافة الصندوق", description: errorMessage(error) }),
   });
 
   const toggleDisabled = useMutation({
@@ -621,6 +623,8 @@ function CashRegistersDialog({
       queryClient.invalidateQueries({ queryKey: ["cash-registers", organizationId] });
       queryClient.invalidateQueries({ queryKey: ["cash-registers-select", organizationId] });
     },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر تغيير حالة الصندوق", description: errorMessage(error) }),
   });
 
   return (

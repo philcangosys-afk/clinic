@@ -282,6 +282,8 @@ function QuickInvoiceGroupsTab({
       invalidate();
       toast({ title: "تم حذف المجموعة" });
     },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حذف المجموعة", description: errorMessage(error) }),
   });
 
   const addItem = useMutation({
@@ -311,6 +313,8 @@ function QuickInvoiceGroupsTab({
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: invalidate,
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حذف البند", description: errorMessage(error) }),
   });
 
   const setItemQty = useMutation({
@@ -997,6 +1001,8 @@ function DiscountLimitsList({ organizationId, readOnly }: { organizationId: stri
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["discount_limits", organizationId] }),
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حذف الحدّ", description: errorMessage(error) }),
   });
 
   return (
@@ -1132,21 +1138,23 @@ function ConsultationSettingsTab({ organizationId, readOnly }: { organizationId:
         <CardHeader>
           <CardTitle>إعدادات الكشفية</CardTitle>
           {/*
-            الوصف كان يقول إن التنبيه «يُحسَب تلقائيًا» — ولا شيء يحسبه: جدول
-            `consultation_fee_settings` لا تقرؤه أي دالّة ولا منظور، ودالّة
-            الاستحقاق `app_is_consultation_renewal_due` لا يستدعيها أحد.
+            الوصف كان يقول إن التنبيه «يُحسَب تلقائيًا» ولا شيء يحسبه. صار
+            الجدول يُقرأ فعلًا في `app_resolve_consultation_item` (0153):
+            المفتاح يُشغِّل قواعد المراجعة كلّها أو يُطفئها، والتخصّصات المعفاة
+            تُستثنى منها. فالنصّ هنا يقول ما يقع، لا ما كان يُنتظر.
           */}
           <CardDescription>
-            المدّة التي تبقى فيها الكشفية سارية تُدار من القواعد أدناه.
-            <span className="mt-1 block font-medium text-amber-700">
-              تنبيه تجديد الكشفية غير مُنفَّذ بعد: لا يُنشئ النظام تنبيهًا عند حلول موعد التجديد،
-              والمفتاح أدناه يُسجَّل استعدادًا لذلك فقط.
+            المدّة التي تبقى فيها الكشفية سارية تُدار من القواعد أدناه، والمفتاح هنا يُشغّلها
+            كلّها أو يُطفئها.
+            <span className="mt-1 block font-medium text-emerald-700">
+              حين يكون مُفعَّلًا: المريض العائد داخل مدّة التجديد تُستبدَل كشفيته بصنف «المراجعة»
+              تلقائيًّا في شاشة الفوترة، مع بيان السبب على السطر. وحين يكون مُطفأً لا يقع استبدال.
             </span>
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <ToggleRow
-            label="تفعيل تنبيه تجديد الكشفية (غير مُنفَّذ بعد)"
+            label="تفعيل قواعد المراجعة (استبدال الكشفية بالمراجعة داخل مدّة التجديد)"
             checked={enabled}
             disabled={readOnly}
             onChange={setEnabled}
@@ -1286,6 +1294,8 @@ function ConsultationRulesList({
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["consultation-fee-rules"] }),
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حذف القاعدة", description: errorMessage(error) }),
   });
 
   return (
@@ -1293,19 +1303,22 @@ function ConsultationRulesList({
       <CardHeader>
         <CardTitle>قواعد الكشفية حسب التخصص</CardTitle>
         {/*
-          القواعد تُحفظ ولا تُطبَّق: `consultation_fee_rules` لا يقرؤه إلا
-          `app_auto_create_insurance_claim_form` ولغرض واحد (هل الصنف كشفية أم
-          لا)، ولا يقرأ `renewal_days` ولا `free_reviews_count` ولا `doctor_ids`.
-          فالمريض العائد بعد أسبوع يُفوَّتر كشفية جديدة كاملة. لا يجوز أن تقول
-          الشاشة «تلقائيًا» عن شيء لا يقع.
+          صارت تُطبَّق في 0153 عبر `app_resolve_consultation_item`: مدّة التجديد
+          وصنف المراجعة والأطباء والتخصّص وشركة التأمين كلّها تُقرأ. ويبقى
+          `free_reviews_count` وحده بلا أثر — لم يطلبه المالك، والنصّ يقوله
+          صراحةً بدل أن يوهم بأنّه يعمل.
         */}
         <CardDescription>
-          تحدد خدمة الكشفية وخدمة المراجعة لكل تخصص، ومدة صلاحية الكشفية بالأيام، وعدد المراجعات
-          المجانية خلالها — سجلٌّ مرجعيّ يعتمده الموظّف عند الفوترة.
+          تحدد خدمة الكشفية وخدمة المراجعة لكل تخصص، ومدة صلاحية الكشفية بالأيام.
+          <span className="mt-1 block font-medium text-emerald-700">
+            مُطبَّقة في الفوترة: عند إضافة صنف الكشفية لمريضٍ آخر كشفية له داخل مدّة التجديد،
+            يُستبدَل الصنف بصنف «المراجعة» بسعره ويظهر السبب على السطر. والأخصّ يغلب: قاعدة
+            الأطباء تسبق قاعدة شركة التأمين، وهي تسبق قاعدة التخصص، وهي تسبق القاعدة العامّة.
+            والفاتورة الملغاة أو المؤقّتة لا تبدأ مدّة.
+          </span>
           <span className="mt-1 block font-medium text-amber-700">
-            الاحتساب التلقائي غير مُنفَّذ بعد: الفوترة لا تستبدل صنف الكشفية بصنف المراجعة ولا
-            تخصم من المراجعات المجانية ولا تُقصر القاعدة على الأطباء المحدَّدين — استبدال الصنف
-            يجري يدويًّا في الفاتورة.
+            «عدد المراجعات المجانية» غير مُطبَّق: الاستبدال يقع بسعر صنف المراجعة كاملًا ولا
+            يُخصم من عدّاد مجانيّ. الخصم اليدويّ يبقى متاحًا على السطر.
           </span>
         </CardDescription>
       </CardHeader>

@@ -136,6 +136,14 @@ type DraftLine = {
   /** رقم الاتفاقية — للعرض بجانب السطر فقط، لا يُكتب في القاعدة. */
   agreement_label: string | null;
   /**
+   * سبب استبدال الكشفية بالمراجعة — للعرض بجانب السطر فقط.
+   *
+   * اختياريّ عمدًا: مواضع إنشاء السطور الأخرى (بنود الزيارة، الطلبات،
+   * الاتفاقيات) لا تمرّ بقواعد الكشفية، وجعله إلزاميًّا كان سيفرض تعديلها
+   * كلّها بلا فائدة.
+   */
+  follow_up_note?: string | null;
+  /**
    * الخدمة المنفَّذة في الزيارة التي وُلِّد منها هذا السطر (0053).
    *
    * وجوده يجعل الفهرس الفريد في القاعدة يرفض فوترة الخدمة مرتين — فالمنع
@@ -678,15 +686,58 @@ export default function NewInvoiceDialog({
   };
 
   const addLine = async (item: { id: string; name_ar: string; price: number; is_vat_exempt: boolean }) => {
+    /**
+     * قواعد الكشفية (0004) بقيت مكتوبة ولا تُطبَّق حتى 0153: المريض العائد بعد
+     * أسبوع كان يُفوَّتر كشفية جديدة كاملة، والشاشة تقول «تلقائيًّا» عن شيء
+     * لا يقع. الآن تُسأل القاعدة عن الصنف الذي يُفوتَر فعلًا.
+     *
+     * الاستبدال يقع **هنا لا عند الحفظ**: الفاتورة المطبوعة يجب أن تطابق ما
+     * رآه المحاسب وأقرّه، واستبدالٌ صامت في القاعدة بعد أن قرأ «كشفية ٢٠٠»
+     * يُخرج ورقةً تخالف الشاشة. والحكم يبقى في القاعدة — الشاشة تسأل ولا
+     * تقرّر، فلا تُستنسخ القاعدة في الواجهة ولا تُغيَّر من المتصفّح.
+     */
+    let billedId = item.id;
+    let billedName = item.name_ar;
+    let billedPrice = Number(item.price);
+    let billedVatExempt = item.is_vat_exempt;
+    let followUpNote: string | null = null;
+    try {
+      const { data, error } = await supabase.rpc("app_resolve_consultation_item", {
+        p_organization_id: organizationId,
+        p_patient_id: patient?.id ?? null,
+        p_item_id: item.id,
+        p_doctor_id: doctorId === NONE ? null : doctorId,
+        p_insurance_company_name: isInsurance ? insCompany.trim() || null : null,
+      });
+      const row = (Array.isArray(data) ? data[0] : data) as
+        | { item_id: string; item_name: string; item_price: number; item_is_vat_exempt: boolean; is_follow_up: boolean; reason: string }
+        | undefined;
+      if (!error && row?.is_follow_up) {
+        billedId = row.item_id;
+        billedName = row.item_name;
+        billedPrice = Number(row.item_price) || 0;
+        billedVatExempt = Boolean(row.item_is_vat_exempt);
+        followUpNote = row.reason || "مراجعة";
+        // سعرٌ تغيّر عمّا ضغطه المحاسب لا يُمرَّر بصمت
+        toast({ title: "استُبدلت الكشفية بالمراجعة", description: followUpNote });
+      }
+    } catch {
+      // تعذّر احتساب المراجعة لا يمنع الإضافة — يُضاف الصنف كما هو
+      followUpNote = null;
+    }
+
     // منطق أولوية الخصومات (خصم المريض ← الخصم العام ← العروض ← خصم الصنف)
     // مبنيّ في قاعدة البيانات منذ 0004 لكنه لم يكن يُستدعى من أي مكان، فبقيت
     // كل الخصومات يدوية. هنا نستدعيه ليقترح النسبة، ويبقى للمستخدم تعديلها.
+    //
+    // ويُحتسب على **الصنف المفوتَر** بعد الاستبدال لا قبله: عرضٌ على الكشفية
+    // لا يخصّ المراجعة، والعكس.
     let autoDiscount = 0;
     try {
       const { data, error } = await supabase.rpc("app_resolve_discount", {
         p_organization_id: organizationId,
         p_patient_id: patient?.id ?? null,
-        p_item_id: item.id,
+        p_item_id: billedId,
       });
       if (!error && data != null) autoDiscount = Number(data) || 0;
     } catch {
@@ -697,21 +748,22 @@ export default function NewInvoiceDialog({
 
     // المفتاح يُولَّد قبل الإضافة ويُعاد للمستدعي، حتى يستطيع تعديل هذا
     // السطر بعينه بلا افتراض أنه الأخير.
-    const key = `${item.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const key = `${billedId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     setLines((prev) => [
       ...prev,
       {
         key,
-        item_id: item.id,
-        description: item.name_ar,
-        price: Number(item.price),
+        item_id: billedId,
+        description: billedName,
+        price: billedPrice,
         qty: 1,
         discount_percent: autoDiscount,
         auto_discount_percent: autoDiscount,
-        is_vat_exempt: item.is_vat_exempt,
+        is_vat_exempt: billedVatExempt,
         agreement_item_id: null,
         agreement_label: null,
         visit_service_id: null,
+        follow_up_note: followUpNote,
       },
     ]);
     return key;
@@ -1261,6 +1313,14 @@ export default function NewInvoiceDialog({
                   {line.visit_service_id && (
                     <Badge className="shrink-0 bg-emerald-100 text-[10px] text-emerald-800">
                       من الزيارة
+                    </Badge>
+                  )}
+                  {line.follow_up_note && (
+                    <Badge
+                      className="shrink-0 bg-amber-100 text-[10px] text-amber-900"
+                      title={line.follow_up_note}
+                    >
+                      مراجعة
                     </Badge>
                   )}
                 </span>

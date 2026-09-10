@@ -1,4 +1,4 @@
-# دوالّ قاعدة ZainCare (422)
+# دوالّ قاعدة ZainCare (429)
 
 > **مُولَّد آليًّا — لا يُحرَّر يدويًّا:** `python scripts/schema-doc.py`
 
@@ -515,6 +515,17 @@ app_can_access_branch(
 ```sql
 app_cancel_dispensing(
   p_record_id uuid,
+  p_reason text
+) returns void
+```
+
+### app_cancel_medical_report(2)
+
+عُرِّفت في: `0154`
+
+```sql
+app_cancel_medical_report(
+  p_report_id uuid,
   p_reason text
 ) returns void
 ```
@@ -2078,6 +2089,33 @@ app_issue_maintenance_part(
 ) returns uuid
 ```
 
+### app_issue_medical_report(18)
+
+عُرِّفت في: `0154`
+
+```sql
+app_issue_medical_report(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_report_type text,
+  p_doctor_id uuid default null,
+  p_visit_id uuid default null,
+  p_report_date date default null,
+  p_issued_to text default null,
+  p_medical_director_name text default null,
+  p_insurance_company_name text default null,
+  p_diagnosis_text text default null,
+  p_body text default null,
+  p_leave_start_date date default null,
+  p_leave_end_date date default null,
+  p_referral_facility text default null,
+  p_referral_specialty_value_id uuid default null,
+  p_admission_at timestamptz default null,
+  p_discharge_at timestamptz default null,
+  p_status text default 'issued'
+) returns uuid
+```
+
 ### app_item_available_in_branch(2)
 
 عُرِّفت في: `0071`
@@ -2317,6 +2355,15 @@ app_measure_quality_indicator(
 ) returns uuid
 ```
 
+### app_medical_report_branch(0)
+
+عُرِّفت في: `0154`
+
+```sql
+app_medical_report_branch(
+) returns trigger
+```
+
 ### app_merge_patients(3)
 
 عُرِّفت في: `0066`
@@ -2327,6 +2374,21 @@ app_merge_patients(
   p_duplicate_patient_id uuid,
   p_reason text
 ) returns jsonb
+```
+
+### app_next_available_slot(6)
+
+عُرِّفت في: `0154`
+
+```sql
+app_next_available_slot(
+  p_organization_id uuid,
+  p_doctor_id uuid,
+  p_duration_minutes integer default 30,
+  p_from timestamptz default null,
+  p_days_ahead integer default 14,
+  p_step_minutes integer default 5
+) returns timestamptz
 ```
 
 ### app_next_document_number(3)
@@ -2602,7 +2664,7 @@ app_pick_message_template(
 
 ### app_plan_tooth_procedures(6)
 
-عُرِّفت في: `0141`
+عُرِّفت في: `0141`، `0154`
 
 ```sql
 app_plan_tooth_procedures(
@@ -3581,6 +3643,20 @@ app_reserve_prescription(
 ) returns jsonb
 ```
 
+### app_resolve_consultation_item(5)
+
+عُرِّفت في: `0153`
+
+```sql
+app_resolve_consultation_item(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_item_id uuid,
+  p_doctor_id uuid default null,
+  p_insurance_company_name text default null
+) returns table ( item_id uuid, item_name text, item_price numeric, item_is_vat_exempt boolean, is_follow_up boolean, rule_id uuid, last_consultation_date date, renewal_days int, reason text )
+```
+
 ### app_resolve_discount(4)
 
 عُرِّفت في: `0004`، `0152`
@@ -3828,6 +3904,25 @@ app_save_locale_settings(
   p_org uuid,
   p_changes jsonb
 ) returns void
+```
+
+### app_save_occupational_exam(10)
+
+عُرِّفت في: `0154`
+
+```sql
+app_save_occupational_exam(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_visit_id uuid,
+  p_exam_purpose text,
+  p_fitness_status text,
+  p_employer_value_id uuid default null,
+  p_restrictions_note text default null,
+  p_certificate_number text default null,
+  p_exam_date date default null,
+  p_next_exam_due_date date default null
+) returns uuid
 ```
 
 ### app_save_org_policies(2)
@@ -4085,6 +4180,24 @@ app_sell_package(
 app_send_appointment_confirmation(
   p_appointment_id uuid
 ) returns bigint
+```
+
+### app_send_patient_to_doctor(9)
+
+عُرِّفت في: `0154`
+
+```sql
+app_send_patient_to_doctor(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_doctor_id uuid,
+  p_clinic_id uuid default null,
+  p_priority text default 'normal',
+  p_note text default null,
+  p_visit_type_value_id uuid default null,
+  p_expected_duration_minutes integer default null,
+  p_skip_consultation_check boolean default false
+) returns table (appointment_id uuid, queue_number integer, consultation_checked boolean)
 ```
 
 ### app_service_consent_status(2)

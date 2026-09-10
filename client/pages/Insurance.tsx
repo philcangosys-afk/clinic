@@ -130,6 +130,7 @@ function useCompanies(organizationId: string | undefined) {
 function CompaniesTab() {
   const { organization } = useOrganizationAccess();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const companies = useCompanies(organization?.id);
   const [companyDialogOpen, setCompanyDialogOpen] = useState(false);
   const [policyDialogFor, setPolicyDialogFor] = useState<string | null>(null);
@@ -149,6 +150,8 @@ function CompaniesTab() {
       if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insurance-companies"] }),
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر تغيير حالة الشركة", description: errorMessage(error) }),
   });
 
   const togglePolicyDisabled = useMutation({
@@ -164,6 +167,8 @@ function CompaniesTab() {
       if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["insurance-companies"] }),
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر تغيير حالة الوثيقة", description: errorMessage(error) }),
   });
 
   return (
@@ -270,6 +275,7 @@ const ELIGIBILITY_LABELS_AR: Record<string, string> = {
 
 function MembershipsList({ organizationId }: { organizationId: string | undefined }) {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const memberships = useQuery({
     queryKey: ["patient-insurance-memberships", organizationId],
     enabled: Boolean(organizationId),
@@ -301,6 +307,8 @@ function MembershipsList({ organizationId }: { organizationId: string | undefine
       if (!data || data.length === 0) throw new Error("لم تُحفَظ العملية — راجع صلاحيتك");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["patient-insurance-memberships"] }),
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر تغيير حالة العضوية", description: errorMessage(error) }),
   });
 
   return (
@@ -2773,6 +2781,8 @@ function CoverageRulesDialog({
       queryClient.invalidateQueries({ queryKey: ["coverage-rules", contract?.id] });
       queryClient.invalidateQueries({ queryKey: ["insurance-contracts"] });
     },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر تعطيل القاعدة", description: errorMessage(error) }),
   });
 
   return (

@@ -315,6 +315,8 @@ function TemplatesTab() {
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["message-templates", organization?.id] }),
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر تغيير حالة القالب", description: errorMessage(error) }),
   });
 
   return (
@@ -532,6 +534,7 @@ function useCannedTexts(organizationId: string | undefined) {
 function CannedTextsTab() {
   const { organization } = useOrganizationAccess();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const texts = useCannedTexts(organization?.id);
   const [createOpen, setCreateOpen] = useState(false);
 
@@ -546,6 +549,8 @@ function CannedTextsTab() {
         throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["canned-texts", organization?.id] }),
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر تغيير حالة النصّ", description: errorMessage(error) }),
   });
 
   return (

@@ -13,7 +13,11 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import LookupSelect from "@/components/shared/LookupSelect";
+import { printHtml } from "@/lib/document-merge";
+import { formatDateTime, useLocaleSettings } from "@/lib/locale";
 import {
   Select,
   SelectContent,
@@ -25,6 +29,12 @@ import { useToast } from "@/hooks/use-toast";
 
 const NONE = "__none__";
 
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c,
+  );
+}
+
 /**
  * إرسال المريض إلى الطبيب من ملفه مباشرةً.
  *
@@ -32,10 +42,22 @@ const NONE = "__none__";
  * يبحث عن المريض من جديد ليضيفه إلى الطابور — ثلاث شاشات لعملية واحدة يفعلها
  * عشرات المرّات في اليوم.
  *
- * الإضافة تمرّ بـ`app_add_walk_in` نفسها التي تستعملها شاشة الاستقبال، لا
- * بإدراج موعد مباشر: الدالّة تحجز رقم الطابور بقفل، وتتحقّق من تبعية المريض
- * للمنشأة وتوافر الطبيب للحجز، وتفرض الصلاحية. ونسخُ منطقها هنا كان سيُنتج
- * أرقام طابور مكرّرة عند إضافتَين في اللحظة نفسها.
+ * الإضافة تمرّ بـ`app_send_patient_to_doctor` (0154) التي تغلّف
+ * `app_add_walk_in` نفسها التي تستعملها شاشة الاستقبال، لا بإدراج موعد مباشر:
+ * الدالّة تحجز رقم الطابور بقفل، وتتحقّق من تبعية المريض للمنشأة وتوافر
+ * الطبيب للحجز، وتفرض الصلاحية. ونسخُ منطقها هنا كان سيُنتج أرقام طابور
+ * مكرّرة عند إضافتَين في اللحظة نفسها.
+ *
+ * وتُضيف الغلافة ثلاثة نواقص كانت تفصلنا عن النظام المرجعيّ:
+ *
+ * - **نوع الزيارة والمدّة المتوقّعة**: شاشة الدور تُلوّن الصفّ وتُحصي بنوع
+ *   الزيارة (كشفية/مراجعة)، ولم يكن يُسأل عنه عند الإرسال إطلاقًا.
+ * - **المرسِل**: من أرسل المريض إلى الطبيب. بدونه لا يُعرف مصدر ازدحام عيادة.
+ * - **فحص فاتورة الكشفية**: يُمنع الإرسال قبل أن تُفتَح فاتورة كشفية أو
+ *   مراجعة اليوم، ويبقى التجاوز صريحًا بخانةٍ يضغطها الموظّف — لا صامتًا.
+ *   ولا فحص أصلًا في منشأةٍ لم تُعرِّف قواعد كشفية بعد.
+ *
+ * و**كرت الانتظار** يُطبع برقم الدور بعد الإرسال، إلّا أن يُلغيه الموظّف.
  */
 export default function SendToDoctorDialog({
   open,
@@ -58,6 +80,13 @@ export default function SendToDoctorDialog({
   const [clinicId, setClinicId] = useState(NONE);
   const [priority, setPriority] = useState("normal");
   const [note, setNote] = useState("");
+  const [visitTypeId, setVisitTypeId] = useState("");
+  const [duration, setDuration] = useState("");
+  /* الخياران يُعادان إلى وضعهما الافتراضيّ مع كل فتح: تجاوزٌ بقي مفعَّلًا من
+     مريضٍ سابق يُدخل التالي بلا فاتورة بلا أن ينتبه أحد. */
+  const [skipConsultationCheck, setSkipConsultationCheck] = useState(false);
+  const [skipCard, setSkipCard] = useState(false);
+  const { calendarDisplay } = useLocaleSettings();
 
   const doctors = useQuery({
     queryKey: ["send-to-doctor-doctors", organizationId],
@@ -97,21 +126,54 @@ export default function SendToDoctorDialog({
       if (!doctorId) throw new Error("اختر الطبيب");
       // حظر المواعيد يُفحَص قبل النداء كما في شاشة الاستقبال والمواعيد
       await assertPatientNotBlocked(patientId, "appointments");
-      const { error } = await supabase.rpc("app_add_walk_in", {
+      const minutes = Number(duration);
+      const { data, error } = await supabase.rpc("app_send_patient_to_doctor", {
         p_organization_id: organizationId,
         p_patient_id: patientId,
         p_doctor_id: doctorId,
         p_clinic_id: clinicId === NONE ? null : clinicId,
         p_priority: priority,
         p_note: note.trim() || null,
+        p_visit_type_value_id: visitTypeId || null,
+        p_expected_duration_minutes:
+          duration.trim() && Number.isFinite(minutes) && minutes > 0 ? Math.round(minutes) : null,
+        p_skip_consultation_check: skipConsultationCheck,
       });
       if (error) throw error;
+      const row = (Array.isArray(data) ? data[0] : data) as
+        | { appointment_id: string; queue_number: number | null }
+        | undefined;
+      return row ?? null;
     },
-    onSuccess: () => {
+    onSuccess: (row) => {
       queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
       queryClient.invalidateQueries({ queryKey: ["patient-appointments", patientId] });
-      toast({ title: `أُضيف ${patientName} إلى طابور الطبيب` });
+      toast({
+        title: `أُضيف ${patientName} إلى طابور الطبيب`,
+        description: row?.queue_number ? `رقم الدور: ${row.queue_number}` : undefined,
+      });
+      if (!skipCard && row?.queue_number) {
+        const doctorName =
+          (doctors.data ?? []).find((doctor) => doctor.id === doctorId)?.name_ar ?? "";
+        const clinicName =
+          clinicId === NONE
+            ? ""
+            : ((clinics.data ?? []).find((clinic) => clinic.id === clinicId)?.name ?? "");
+        printHtml(
+          "كرت الانتظار",
+          `<div style="text-align:center">
+             <h3>${escapeHtml(patientName)}</h3>
+             <p style="font-size:64px;margin:0;font-weight:700">${row.queue_number}</p>
+             <p>${escapeHtml(doctorName)}${clinicName ? ` — ${escapeHtml(clinicName)}` : ""}</p>
+             <p>${escapeHtml(formatDateTime(new Date(), calendarDisplay))}</p>
+           </div>`,
+          "thermal80",
+        );
+      }
       setNote("");
+      setDuration("");
+      setVisitTypeId("");
+      setSkipConsultationCheck(false);
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -187,10 +249,59 @@ export default function SendToDoctorDialog({
             </Select>
           </div>
 
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label>نوع الزيارة</Label>
+              <LookupSelect
+                categoryKey="visit_types"
+                value={visitTypeId}
+                onChange={setVisitTypeId}
+                placeholder="بدون"
+                allowClear
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>المدّة المتوقّعة (دقيقة)</Label>
+              <Input
+                type="number"
+                min={5}
+                step={5}
+                value={duration}
+                onChange={(event) => setDuration(event.target.value)}
+                placeholder="اختياري"
+              />
+            </div>
+          </div>
+
           <div className="flex flex-col gap-1.5">
             <Label>ملاحظة للطبيب</Label>
             <Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} />
           </div>
+
+          <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2.5 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4"
+              checked={skipConsultationCheck}
+              onChange={(event) => setSkipConsultationCheck(event.target.checked)}
+            />
+            <span className="flex flex-col gap-0.5">
+              <span>عدم التحقق من فاتورة الكشفية أو المراجعة</span>
+              <span className="text-xs text-muted-foreground">
+                الأصل أن تُفتَح للمريض فاتورة كشفية أو مراجعة اليوم قبل دخوله على الطبيب.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              checked={skipCard}
+              onChange={(event) => setSkipCard(event.target.checked)}
+            />
+            <span>عدم طباعة كرت الانتظار للمريض</span>
+          </label>
         </div>
 
         <DialogFooter>

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
@@ -287,6 +288,16 @@ function ToothPanel({
   const [itemId, setItemId] = useState("");
   const [note, setNote] = useState("");
   const [search, setSearch] = useState("");
+  /* السياق السريريّ على السنّ نفسه (0154): من يفتح السنّ بعد سنة يحتاج أن
+     يعرف ما الشكوى وما التخدير وهل أُعطي مضادّ وقائيّ — لا سطرًا واحدًا. */
+  const [chiefComplaint, setChiefComplaint] = useState("");
+  const [diagnosisText, setDiagnosisText] = useState("");
+  const [complications, setComplications] = useState("");
+  const [anesthesia, setAnesthesia] = useState("");
+  const [antibiotic, setAntibiotic] = useState("");
+  const [education, setEducation] = useState("");
+  const [nextVisit, setNextVisit] = useState("");
+  const [clinicalOpen, setClinicalOpen] = useState(false);
 
   const services = useQuery({
     queryKey: ["dental-services", organizationId, search],
@@ -356,6 +367,13 @@ function ToothPanel({
             item_id: itemId,
             surfaces,
             note: note.trim() || null,
+            chief_complaint: chiefComplaint.trim() || null,
+            diagnosis_text: diagnosisText.trim() || null,
+            complications: complications.trim() || null,
+            anesthesia: anesthesia.trim() || null,
+            antibiotic_prophylaxis: antibiotic.trim() || null,
+            patient_education: education.trim() || null,
+            next_visit_date: nextVisit || null,
           },
         ],
         p_doctor_id: null,
@@ -368,6 +386,13 @@ function ToothPanel({
       toast({ title: "أُضيف للخطة" });
       setItemId("");
       setNote("");
+      setChiefComplaint("");
+      setDiagnosisText("");
+      setComplications("");
+      setAnesthesia("");
+      setAntibiotic("");
+      setEducation("");
+      setNextVisit("");
       onChanged();
       history.refetch();
     },
@@ -468,6 +493,68 @@ function ToothPanel({
             onChange={(e) => setNote(e.target.value)}
             placeholder="ملاحظة (اختياري)"
           />
+
+          {/* السياق السريريّ مطويّ افتراضًا: أكثر الإجراءات تُخطَّط بخدمة
+              وملاحظة، وسبعة حقول مفتوحة دائمًا تُبطئ العمل اليوميّ. */}
+          <button
+            type="button"
+            onClick={() => setClinicalOpen((prev) => !prev)}
+            className="self-start text-xs font-medium text-muted-foreground hover:text-foreground"
+          >
+            {clinicalOpen ? "إخفاء التفاصيل السريرية" : "تفاصيل سريرية (شكوى، تشخيص، تخدير...)"}
+          </button>
+
+          {clinicalOpen && (
+            <div className="flex flex-col gap-1.5 rounded-md border p-2">
+              <Input
+                dir="rtl"
+                value={chiefComplaint}
+                onChange={(e) => setChiefComplaint(e.target.value)}
+                placeholder="الشكوى الرئيسية"
+              />
+              <Input
+                dir="rtl"
+                value={diagnosisText}
+                onChange={(e) => setDiagnosisText(e.target.value)}
+                placeholder="التشخيص الطبي"
+              />
+              <Input
+                dir="rtl"
+                value={anesthesia}
+                onChange={(e) => setAnesthesia(e.target.value)}
+                placeholder="التخدير"
+              />
+              <Input
+                dir="rtl"
+                value={antibiotic}
+                onChange={(e) => setAntibiotic(e.target.value)}
+                placeholder="المضادات الحيوية الوقائية"
+              />
+              <Input
+                dir="rtl"
+                value={complications}
+                onChange={(e) => setComplications(e.target.value)}
+                placeholder="المضاعفات"
+              />
+              <Textarea
+                dir="rtl"
+                rows={2}
+                value={education}
+                onChange={(e) => setEducation(e.target.value)}
+                placeholder="تثقيف المريض وعائلته"
+              />
+              <div className="flex flex-col gap-1">
+                <Label htmlFor="tp-next">الزيارة التالية لهذا السنّ</Label>
+                <Input
+                  id="tp-next"
+                  type="date"
+                  value={nextVisit}
+                  onChange={(e) => setNextVisit(e.target.value)}
+                />
+              </div>
+            </div>
+          )}
+
           <Button
             size="sm"
             className="self-start"
