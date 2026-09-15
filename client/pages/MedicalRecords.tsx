@@ -1316,7 +1316,12 @@ function NewVisitDialog({
             </div>
           </div>
 
-          <VisitOrders organizationId={organizationId} value={orders} onChange={setOrders} />
+          <VisitOrders
+            organizationId={organizationId}
+            patientId={patient?.id ?? null}
+            value={orders}
+            onChange={setOrders}
+          />
           {hasAnyOrder(orders) && (
             <p className="-mt-1 text-xs text-muted-foreground">
               تُصدر الطلبات عند حفظ الزيارة، ومربوطةً بها.

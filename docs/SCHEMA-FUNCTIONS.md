@@ -1,4 +1,4 @@
-# دوالّ قاعدة ZainCare (429)
+# دوالّ قاعدة ZainCare (433)
 
 > **مُولَّد آليًّا — لا يُحرَّر يدويًّا:** `python scripts/schema-doc.py`
 
@@ -617,6 +617,18 @@ app_check_doctor_availability(
   p_start timestamptz,
   p_end timestamptz
 ) returns text
+```
+
+### app_check_drug_allergy(3)
+
+عُرِّفت في: `0155`
+
+```sql
+app_check_drug_allergy(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_item_id uuid
+) returns table ( allergy_id uuid, match_kind text, allergen_label text, severity_name text, reaction text, recorded_at timestamptz )
 ```
 
 ### app_check_insurance_eligibility(4)
@@ -3273,6 +3285,22 @@ app_record_vital_signs(
 ) returns uuid
 ```
 
+### app_refer_patient_to_doctor(7)
+
+عُرِّفت في: `0155`
+
+```sql
+app_refer_patient_to_doctor(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_to_doctor_id uuid,
+  p_from_doctor_id uuid,
+  p_reason text,
+  p_preferred_date date default null,
+  p_clinic_id uuid default null
+) returns uuid
+```
+
 ### app_refund_invoice_payment(4)
 
 عُرِّفت في: `0091`
@@ -3563,6 +3591,25 @@ app_report_waiting(
 ```sql
 app_request_device_name(
 ) returns text
+```
+
+### app_request_preauthorization(10)
+
+عُرِّفت في: `0155`
+
+```sql
+app_request_preauthorization(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_item_id uuid,
+  p_service_description text,
+  p_doctor_id uuid default null,
+  p_visit_id uuid default null,
+  p_clinic_id uuid default null,
+  p_qty numeric default 1,
+  p_requested_amount numeric default null,
+  p_note text default null
+) returns uuid
 ```
 
 ### app_request_vital_signs(9)
@@ -4686,6 +4733,15 @@ app_touch_conversation_last_message(
 
 ```sql
 app_touch_exam_schema(
+) returns trigger
+```
+
+### app_touch_patient_allergy(0)
+
+عُرِّفت في: `0155`
+
+```sql
+app_touch_patient_allergy(
 ) returns trigger
 ```
 

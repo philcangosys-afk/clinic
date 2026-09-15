@@ -3,6 +3,7 @@ import { useParams, Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
+  AlertTriangle,
   ArrowRight,
   Ban,
   CalendarClock,
@@ -67,6 +68,7 @@ import MedicalReportsTab from "@/components/patients/MedicalReportsTab";
 import OccupationalExamTab from "@/components/patients/OccupationalExamTab";
 import ClaimFormsTab from "@/components/patients/ClaimFormsTab";
 import GrowthChartTab from "@/components/patients/GrowthChartTab";
+import AllergiesTab from "@/components/patients/AllergiesTab";
 import Odontogram from "@/components/medical/Odontogram";
 import SendToDoctorDialog from "@/components/patients/SendToDoctorDialog";
 import {
@@ -166,6 +168,28 @@ export default function PatientProfile() {
   const [agreementsAlertDismissed, setAgreementsAlertDismissed] = useState(false);
 
   /** عدد الحالات الصحية المؤشَّرة — يظهر في شريط الهوية */
+  /**
+   * الحساسية النشطة في شريط الهوية.
+   *
+   * تعليق `PatientFileShell` يَعِد بأن يرى الطبيب «الأمراض المزمنة والحساسية»
+   * وهو يكتب الوصفة. الأولى كانت معروضة والثانية لم تكن موجودة في القاعدة
+   * أصلًا (0155). الأسماء تُعرض لا العدد: «٣ حساسيات» لا تمنع وصف البنسلين.
+   */
+  const allergies = useQuery({
+    queryKey: ["patient-allergy-count", id],
+    enabled: Boolean(id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_patient_allergies")
+        .select("allergen_label, severity_name")
+        .eq("patient_id", id)
+        .eq("status", "active")
+        .limit(20);
+      if (error) throw error;
+      return (data ?? []) as { allergen_label: string | null; severity_name: string | null }[];
+    },
+  });
+
   const chronicCount = useQuery({
     queryKey: ["patient-chronic-count", id],
     enabled: Boolean(id),
@@ -238,6 +262,16 @@ export default function PatientProfile() {
     { label: "العمر", value: age !== null ? `${formatAmount(age)} سنة` : null },
     { label: "الجنس", value: genderLabel },
     { label: "الأمراض المزمنة", value: chronicLabel, alert: (chronicCount.data ?? 0) > 0 },
+    {
+      label: "الحساسية",
+      value:
+        allergies.data === undefined
+          ? null
+          : allergies.data.length > 0
+            ? allergies.data.map((row) => row.allergen_label ?? "—").join(" • ")
+            : "لا حساسية مسجَّلة",
+      alert: (allergies.data ?? []).length > 0,
+    },
     { label: "التأمين", value: patient.data.insurance_company_name || "لا يوجد" },
     { label: "متبقّي الحساب", value: `${formatAmount(balance)} ر.س`, alert: balance > 0 },
   ];
@@ -248,6 +282,12 @@ export default function PatientProfile() {
       label: "الملفّ الطبي",
       items: [
         { key: "conditions", label: "الحالة الصحية", icon: HeartPulse },
+        {
+          key: "allergies",
+          label: "الحساسية",
+          icon: AlertTriangle,
+          badge: (allergies.data ?? []).length || null,
+        },
         { key: "odontogram", label: "عيادة الأسنان", icon: Smile },
         { key: "aesthetic", label: "عيادة الجلدية", icon: Sparkles },
         { key: "visits", label: "الزيارات والفحوصات", icon: ClipboardList },
@@ -326,6 +366,7 @@ export default function PatientProfile() {
           <MedicalHistoryTab patientId={patient.data.id} />
         </div>
       )}
+      {section === "allergies" && <AllergiesTab patientId={patient.data.id} />}
       {section === "contacts" && <PatientContactsTab patientId={id!} />}
       {section === "notes" && <NotesTab patientId={patient.data.id} />}
       {section === "medical-reports" && <MedicalReportsTab patientId={patient.data.id} />}

@@ -1,12 +1,16 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
-import { AlertOctagon, ClipboardList, PhoneCall, Stethoscope } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { AlertOctagon, ClipboardList, PhoneCall, Play, Stethoscope } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { usePermissions } from "@/lib/permissions";
 import { useDemoRole } from "@/contexts/DemoRoleContext";
-import DoctorRequestPanel, { DoctorInbox } from "@/components/medical/DoctorRequestPanel";
+import DoctorRequestPanel, {
+  DoctorInbox,
+  DoctorLabInbox,
+  DoctorRequestsPanel,
+} from "@/components/medical/DoctorRequestPanel";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +25,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { errorMessage } from "@/lib/error-message";
+import { formatTime } from "@/lib/locale";
 
 /**
  * مساحة عمل الطبيب — المرحلة 25.
@@ -49,10 +54,12 @@ export default function DoctorWorkspace() {
       )}
 
       <Tabs defaultValue="critical">
-        <TabsList>
+        <TabsList className="flex-wrap">
           <TabsTrigger value="critical">القيم الحرجة</TabsTrigger>
-          <TabsTrigger value="inbox">وصلني</TabsTrigger>
+          <TabsTrigger value="inbox">الأشعة</TabsTrigger>
+          <TabsTrigger value="lab">نتائج المختبر</TabsTrigger>
           <TabsTrigger value="request">إرسال طلب</TabsTrigger>
+          <TabsTrigger value="mine">طلباتي</TabsTrigger>
           <TabsTrigger value="today">يومي</TabsTrigger>
           <TabsTrigger value="open">زيارات لم تُغلق</TabsTrigger>
         </TabsList>
@@ -60,8 +67,14 @@ export default function DoctorWorkspace() {
         <TabsContent value="inbox" className="mt-4">
           <DoctorInbox doctorId={doctorId} resolvingDoctor={resolving} />
         </TabsContent>
+        <TabsContent value="lab" className="mt-4">
+          <DoctorLabInbox doctorId={doctorId} resolvingDoctor={resolving} />
+        </TabsContent>
         <TabsContent value="request" className="mt-4">
           <DoctorRequestPanel doctorId={doctorId} resolvingDoctor={resolving} />
+        </TabsContent>
+        <TabsContent value="mine" className="mt-4">
+          <DoctorRequestsPanel doctorId={doctorId} resolvingDoctor={resolving} />
         </TabsContent>
         <TabsContent value="today" className="mt-4"><TodayPanel /></TabsContent>
         <TabsContent value="open" className="mt-4"><OpenVisitsPanel /></TabsContent>
@@ -396,7 +409,52 @@ function CriticalPanel() {
  * ════════════════════════════════════════════════════════════════════════ */
 function TodayPanel() {
   const { organization, session } = useOrganizationAccess();
+  const { can } = usePermissions();
+  const { toast } = useToast();
+  const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [mineOnly, setMineOnly] = useState(true);
+
+  /**
+   * **بدء الزيارة من قائمة اليوم.**
+   *
+   * كان العمود يعرض نصًّا ميتًا: `r.visit_id ? <Link…> : "لم تُفتح"` — فالطبيب
+   * الذي يرى مريضه أمامه بلا زيارة مفتوحة لا يملك من هذه الشاشة ما يفتحها، بل
+   * يطلب من الاستقبال أن يضغط «بدء» عنده. والزيارة هي ما تُعلَّق به الطلبات
+   * والوصفة والفاتورة، فتأخّرها يؤخّر كل ما بعدها.
+   *
+   * ولا يُبنى مسارٌ جديد: `app_reception_transition` هي نفسها التي يستدعيها
+   * الاستقبال، وتفحص الصلاحية والفرع وتنقل الموعد إلى `in_progress` وتُنشئ
+   * الزيارة في معاملةٍ واحدة.
+   */
+  const startVisit = useMutation({
+    mutationFn: async (appointmentId: string) => {
+      const { data, error } = await supabase.rpc("app_reception_transition", {
+        p_appointment_id: appointmentId,
+        p_action: "start",
+        p_reason: null,
+      });
+      if (error) throw error;
+      const row = (Array.isArray(data) ? data[0] : data) as { visit_id?: string } | null;
+      return { appointmentId, visitId: row?.visit_id ?? null };
+    },
+    onSuccess: ({ appointmentId }) => {
+      queryClient.invalidateQueries({ queryKey: ["doctor-worklist"] });
+      queryClient.invalidateQueries({ queryKey: ["doctor-open-visits"] });
+      queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
+      queryClient.invalidateQueries({ queryKey: ["reception-board"] });
+      toast({ title: "فُتحت الزيارة" });
+      navigate(`/medical-records?appointmentId=${appointmentId}`);
+    },
+    onError: (error: unknown) =>
+      toast({
+        variant: "destructive",
+        title: "تعذّر بدء الزيارة",
+        description: errorMessage(error),
+      }),
+  });
+
+  const canStart = can("medical_records.write");
 
   const worklist = useQuery({
     queryKey: ["doctor-worklist", organization?.id],
@@ -456,9 +514,7 @@ function TodayPanel() {
               {rows.map((r) => (
                 <TableRow key={r.appointment_id}>
                   <TableCell className="font-mono text-xs">
-                    {new Date(r.scheduled_start).toLocaleTimeString("ar-SA", {
-                      hour: "2-digit", minute: "2-digit",
-                    })}
+                    {formatTime(r.scheduled_start)}
                   </TableCell>
                   <TableCell className="text-sm">
                     <Link to={`/patients/${r.patient_id}`} className="hover:underline">
@@ -484,7 +540,19 @@ function TodayPanel() {
                       <Link to="/patient-visits" className="hover:underline">
                         {r.visit_status}
                       </Link>
-                    ) : "لم تُفتح"}
+                    ) : canStart ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={startVisit.isPending}
+                        onClick={() => startVisit.mutate(r.appointment_id)}
+                      >
+                        <Play className="h-3.5 w-3.5" />
+                        بدء الزيارة
+                      </Button>
+                    ) : (
+                      "لم تُفتح"
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

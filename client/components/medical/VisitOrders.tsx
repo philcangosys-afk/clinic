@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { FlaskConical, Pill, Scan, Trash2 } from "lucide-react";
+import { AlertTriangle, FlaskConical, Pill, Scan, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { errorMessage } from "@/lib/error-message";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -158,6 +159,115 @@ function useDrugCatalog(organizationId: string | undefined) {
   });
 }
 
+/**
+ * حساسية المريض النشطة — تُقرأ مرّة وتُعرض فوق الوصفة قبل كتابتها.
+ *
+ * العرض قبل الوصف لا بعده: تحذيرٌ يظهر بعد اختيار الدواء يُقرأ وقد صار
+ * الطبيب مقتنعًا به، والمعلومة التي تغيّر القرار تُعرض قبله.
+ */
+function usePatientAllergies(organizationId: string | undefined, patientId: string | undefined) {
+  return useQuery({
+    queryKey: ["visit-patient-allergies", organizationId, patientId],
+    enabled: Boolean(organizationId && patientId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_patient_allergies")
+        .select("id, allergen_label, severity_name, reaction, allergen_kind")
+        .eq("organization_id", organizationId)
+        .eq("patient_id", patientId)
+        .eq("status", "active")
+        .limit(30);
+      if (error) throw error;
+      return (data ?? []) as {
+        id: string;
+        allergen_label: string | null;
+        severity_name: string | null;
+        reaction: string | null;
+        allergen_kind: string;
+      }[];
+    },
+  });
+}
+
+type AllergyMatch = {
+  allergy_id: string;
+  match_kind: "same_item" | "same_generic" | "text_match";
+  allergen_label: string | null;
+  severity_name: string | null;
+  reaction: string | null;
+};
+
+const MATCH_LABELS: Record<AllergyMatch["match_kind"], string> = {
+  same_item: "نفس الدواء المسجَّلة عليه الحساسية",
+  same_generic: "نفس الاسم العلميّ للدواء المسجَّلة عليه الحساسية",
+  text_match: "يطابق نصّ المُسبِّب المسجَّل",
+};
+
+/**
+ * تحذير الحساسية لدواءٍ بعينه.
+ *
+ * الفحص في القاعدة لا في المتصفّح (`app_check_drug_allergy`, 0155): المطابقة
+ * تحتاج `drug_details.generic_name` لصنف الحساسية ولصنف الوصفة معًا، وجلبهما
+ * إلى الواجهة لكل دواء يُكتب هدرٌ ومصدر اختلاف بين شاشةٍ وأخرى.
+ *
+ * **وحدّ الفحص يُقال:** مطابقةٌ بالصنف وبالاسم العلميّ وبالنصّ، لا محرّك
+ * تفاعلات متصالبة. غياب التحذير يعني «لا حساسية مسجَّلة»، لا «آمن».
+ */
+function DrugAllergyWarning({
+  organizationId,
+  patientId,
+  itemId,
+}: {
+  organizationId: string | undefined;
+  patientId: string | undefined;
+  itemId: string;
+}) {
+  const check = useQuery({
+    queryKey: ["drug-allergy-check", organizationId, patientId, itemId],
+    enabled: Boolean(organizationId && patientId && itemId),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_check_drug_allergy", {
+        p_organization_id: organizationId,
+        p_patient_id: patientId,
+        p_item_id: itemId,
+      });
+      if (error) throw error;
+      return (data ?? []) as AllergyMatch[];
+    },
+  });
+
+  /**
+   * فشل الفحص يُعلَن ولا يُبتلع: صمتٌ بعد فشلٍ يُقرأ «لا حساسية»، وهو أسوأ من
+   * لا فحص — لأنّه يطمئن.
+   */
+  if (check.isError) {
+    return (
+      <p className="rounded-md border border-amber-400 bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+        تعذّر فحص الحساسية لهذا الدواء: {errorMessage(check.error)} — راجِع قسم
+        الحساسية في ملفّ المريض يدويًّا.
+      </p>
+    );
+  }
+
+  const matches = check.data ?? [];
+  if (matches.length === 0) return null;
+
+  return (
+    <div className="rounded-md border border-rose-400 bg-rose-50 px-2 py-1.5 text-xs text-rose-900 dark:border-rose-800 dark:bg-rose-950/50 dark:text-rose-100">
+      {matches.map((match) => (
+        <p key={match.allergy_id} className="flex flex-wrap items-center gap-1">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden />
+          <span className="font-bold">حساسية مسجَّلة:</span>
+          <span>{match.allergen_label ?? "—"}</span>
+          {match.severity_name && <span>— {match.severity_name}</span>}
+          {match.reaction && <span>— {match.reaction}</span>}
+          <span className="text-[11px] opacity-80">({MATCH_LABELS[match.match_kind]})</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function CatalogMultiSelect({
   items,
   isLoading,
@@ -223,16 +333,20 @@ function CatalogMultiSelect({
 
 export default function VisitOrders({
   organizationId,
+  patientId,
   value,
   onChange,
 }: {
   organizationId: string | undefined;
+  /** بدونه لا يُفحص دواءٌ ضدّ حساسية — والغياب يُعلَن على الشاشة لا يُسكَت عنه. */
+  patientId?: string | null;
   value: VisitOrdersValue;
   onChange: (next: VisitOrdersValue) => void;
 }) {
   const labTests = useLabTestCatalog(organizationId);
   const radiologyExams = useRadiologyExamCatalog(organizationId);
   const drugs = useDrugCatalog(organizationId);
+  const allergies = usePatientAllergies(organizationId, patientId ?? undefined);
   const [drugTerm, setDrugTerm] = useState("");
 
   const patch = (next: Partial<VisitOrdersValue>) => onChange({ ...value, ...next });
@@ -337,6 +451,35 @@ export default function VisitOrders({
             <Badge variant="secondary">{value.prescriptionItems.length}</Badge>
           )}
         </div>
+
+        {/* ما يعرفه النظام عن حساسية هذا المريض — قبل كتابة الوصفة لا بعدها */}
+        {!patientId && (
+          <p className="rounded-md border border-amber-400 bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+            لم يُحدَّد المريض بعد، فلا يُفحص دواءٌ ضدّ الحساسية.
+          </p>
+        )}
+        {patientId && allergies.isError && (
+          <p className="rounded-md border border-amber-400 bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+            تعذّر قراءة حساسية المريض: {errorMessage(allergies.error)}
+          </p>
+        )}
+        {patientId && allergies.isSuccess && (allergies.data ?? []).length > 0 && (
+          <div className="rounded-md border border-rose-400 bg-rose-50 px-2 py-1.5 text-xs text-rose-900 dark:border-rose-800 dark:bg-rose-950/50 dark:text-rose-100">
+            <span className="font-bold">حساسية نشطة: </span>
+            {(allergies.data ?? [])
+              .map((row) =>
+                [row.allergen_label ?? "—", row.severity_name].filter(Boolean).join(" — "),
+              )
+              .join(" • ")}
+          </div>
+        )}
+        {patientId && allergies.isSuccess && (allergies.data ?? []).length === 0 && (
+          <p className="text-[11px] text-muted-foreground">
+            لا حساسية مسجَّلة لهذا المريض — وخلوّ السجلّ ليس نفيًا: يعني أنّ أحدًا
+            لم يسأل بعد.
+          </p>
+        )}
+
         <div className="relative">
           <Input
             className="h-8"
@@ -460,6 +603,11 @@ export default function VisitOrders({
                     }
                   />
                 </div>
+                <DrugAllergyWarning
+                  organizationId={organizationId}
+                  patientId={patientId ?? undefined}
+                  itemId={entry.drugItemId}
+                />
                 <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
                   <Checkbox
                     checked={entry.substitutable}
