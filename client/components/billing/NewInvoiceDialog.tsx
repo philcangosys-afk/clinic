@@ -386,13 +386,19 @@ export default function NewInvoiceDialog({
   open,
   onOpenChange,
   organizationId,
-  vatRate,
+  vatRate: fallbackVatRate,
   isQuote,
   appointment,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   organizationId: string | undefined;
+  /**
+   * نسبة المنشأة الافتراضية — **تُعرض قبل اختيار المريض فقط**.
+   *
+   * لم تعد مصدر الحساب: النسبة السارية تُسأل عنها القاعدة (`0156`) لأنّها
+   * وحدها تعرف تفعيل الضريبة وإعفاء الجنسية.
+   */
   vatRate: number;
   isQuote?: boolean;
   appointment: BillingAppointmentContext | null;
@@ -794,6 +800,53 @@ export default function NewInvoiceDialog({
     setLines((prev) => prev.map((line) => (line.key === key ? { ...line, ...patch } : line)));
   const removeLine = (key: string) => setLines((prev) => prev.filter((line) => line.key !== key));
 
+  /**
+   * **النسبة السارية من القاعدة لا من المتصفّح.**
+   *
+   * كان للضريبة تعريفان: هذه الشاشة تحسبها من
+   * `organizations.default_vat_rate ?? 15`، و`app_create_sales_invoice` تحسبها
+   * من ثلاثة مصادر لا تراها الشاشة — تفعيل الضريبة، وإعفاء الجنسية، وكون
+   * النسبة الفارغة تعني صفرًا لا ١٥.
+   *
+   * فحين فُوتِرت مريضة سعودية معفاة: عرضت الشاشة ١٢٠ + ١٨ = ١٣٨ وأرسلت دفعةً
+   * بـ١٣٨، وحسبت القاعدة ١٢٠، فردّت «المبلغ 138.00 يتجاوز المتبقّي 120.00»
+   * ولم تُحفظ الفاتورة. القاعدة كانت مُحقّة — الإعفاء قرارٌ مُثبَت في
+   * الإعدادات — والشاشة هي التي خمّنت.
+   *
+   * `app_effective_vat_rate` تُعيد ما ستطبّقه الدالّة **فعلًا**، بنفس ترتيب
+   * فحوصها. فلا يبقى تعريفان يفترقان.
+   */
+  const effectiveVat = useQuery({
+    queryKey: ["effective-vat-rate", organizationId, patient?.id ?? null],
+    enabled: Boolean(organizationId) && open,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_effective_vat_rate", {
+        p_organization_id: organizationId,
+        p_patient_id: patient?.id ?? null,
+      });
+      if (error) throw error;
+      const row = (Array.isArray(data) ? data[0] : data) as
+        | {
+            vat_rate: number | string;
+            patient_exempt: boolean;
+            exempt_reason: string | null;
+            blocked: boolean;
+            block_reason: string | null;
+          }
+        | undefined;
+      if (!row) throw new Error("تعذّر تحديد نسبة الضريبة السارية");
+      return { ...row, vat_rate: Number(row.vat_rate) };
+    },
+  });
+
+  /**
+   * لا تخمين عند الفشل: النسبة الافتراضية تُعرض ريثما تصل الإجابة، والحفظ
+   * ممنوع حتى تصل. رقمٌ مخمَّن على شاشة صرّاف أسوأ من انتظار ثانية.
+   */
+  const vatRate = effectiveVat.data?.vat_rate ?? fallbackVatRate;
+  const vatUnresolved = !effectiveVat.isSuccess;
+  const vatBlocked = Boolean(effectiveVat.data?.blocked);
+
   const totals = useMemo(() => {
     let subtotal = 0;
     let discount = 0;
@@ -967,7 +1020,9 @@ export default function NewInvoiceDialog({
           <DialogDescription>
             {isQuote
               ? "عرض السعر لا يُعد فاتورة فعلية ولا يؤثر على المخزون أو السندات حتى يتم تحويله."
-              : `الضريبة محسوبة تلقائيًا بنسبة ${vatRate}% (إعداد المؤسسة الافتراضي)`}
+              : effectiveVat.isSuccess
+                ? `الضريبة محسوبة في القاعدة بنسبة ${vatRate}%`
+                : "جارٍ تحديد نسبة الضريبة السارية..."}
           </DialogDescription>
         </DialogHeader>
 
@@ -1541,6 +1596,27 @@ export default function NewInvoiceDialog({
             </div>
           )}
 
+          {/* سبب الإعفاء يُقال للصرّاف: صفرٌ بلا تفسير يُقرأ خطأً في النظام */}
+          {effectiveVat.isSuccess && effectiveVat.data.exempt_reason && (
+            <p className="rounded-md border border-emerald-400 bg-emerald-50 px-3 py-2 text-xs text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-100">
+              {effectiveVat.data.exempt_reason} — لا تُحتسب ضريبة على هذه الفاتورة.
+            </p>
+          )}
+
+          {/* المنع يُعرض قبل الإدخال لا بعده */}
+          {vatBlocked && (
+            <p className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs">
+              {effectiveVat.data?.block_reason}
+            </p>
+          )}
+
+          {effectiveVat.isError && (
+            <p className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs">
+              تعذّر تحديد نسبة الضريبة السارية: {errorMessage(effectiveVat.error)} — الحفظ
+              متوقّف حتى تُقرأ، فالرقم المعروض قد يخالف ما تحسبه القاعدة.
+            </p>
+          )}
+
           <div className="flex flex-col items-end gap-1 text-sm">
             <span>الإجمالي الفرعي: {totals.subtotal.toFixed(2)}</span>
             <span>الخصم: {totals.discount.toFixed(2)}</span>
@@ -1551,7 +1627,13 @@ export default function NewInvoiceDialog({
 
         <DialogFooter>
           <Button
-            disabled={createInvoice.isPending || lines.length === 0 || paymentsInvalid}
+            disabled={
+              createInvoice.isPending ||
+              lines.length === 0 ||
+              paymentsInvalid ||
+              vatUnresolved ||
+              vatBlocked
+            }
             onClick={() => createInvoice.mutate()}
           >
             <Receipt className="h-4 w-4" />

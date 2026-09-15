@@ -1,4 +1,4 @@
-# دوالّ قاعدة ZainCare (433)
+# دوالّ قاعدة ZainCare (434)
 
 > **مُولَّد آليًّا — لا يُحرَّر يدويًّا:** `python scripts/schema-doc.py`
 
@@ -1331,6 +1331,17 @@ app_doctors_for_clinic(
   p_organization_id uuid,
   p_clinic_id uuid
 ) returns table ( id uuid, name_ar text, specialty text, default_duration int, license_expired boolean, is_primary boolean )
+```
+
+### app_effective_vat_rate(2)
+
+عُرِّفت في: `0156`
+
+```sql
+app_effective_vat_rate(
+  p_organization_id uuid,
+  p_patient_id uuid default null
+) returns table ( vat_rate numeric, patient_exempt boolean, exempt_reason text, blocked boolean, block_reason text )
 ```
 
 ### app_employee_days_employed(1)
