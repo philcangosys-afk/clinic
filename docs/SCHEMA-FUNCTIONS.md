@@ -1,4 +1,4 @@
-# دوالّ قاعدة ZainCare (434)
+# دوالّ قاعدة ZainCare (435)
 
 > **مُولَّد آليًّا — لا يُحرَّر يدويًّا:** `python scripts/schema-doc.py`
 
@@ -1108,9 +1108,9 @@ app_create_radiology_order(
 ) returns uuid
 ```
 
-### app_create_sales_invoice(22)
+### app_create_sales_invoice(24)
 
-عُرِّفت في: `0147`، `0152`
+عُرِّفت في: `0160`
 
 ```sql
 app_create_sales_invoice(
@@ -1135,7 +1135,9 @@ app_create_sales_invoice(
   p_lab_order_ids uuid[] DEFAULT NULL::uuid[],
   p_radiology_order_ids uuid[] DEFAULT NULL::uuid[],
   p_prescription_ids uuid[] DEFAULT NULL::uuid[],
-  p_payments jsonb DEFAULT '[]'::jsonb
+  p_payments jsonb DEFAULT '[]'::jsonb,
+  p_source_value_id uuid DEFAULT NULL::uuid,
+  p_classification_value_id uuid DEFAULT NULL::uuid
 ) returns uuid
 ```
 
@@ -1753,6 +1755,15 @@ app_guard_fiscal_period(
 
 ```sql
 app_guard_integration_secret(
+) returns trigger
+```
+
+### app_guard_invoice_item_price(0)
+
+عُرِّفت في: `0159`
+
+```sql
+app_guard_invoice_item_price(
 ) returns trigger
 ```
 
@@ -3165,7 +3176,7 @@ app_receive_stock_transfer(
 
 ### app_reception_transition(3)
 
-عُرِّفت في: `0050`، `0055`، `0065`
+عُرِّفت في: `0050`، `0055`، `0065`، `0158`
 
 ```sql
 app_reception_transition(

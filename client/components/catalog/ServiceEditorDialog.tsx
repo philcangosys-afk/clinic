@@ -94,6 +94,8 @@ const EMPTY_DRAFT: Draft = {
   requires_appointment: false,
   price: "0",
   cost_price: "0",
+  min_price: "",
+  max_price: "",
   default_discount_percent: "0",
   is_vat_exempt: false,
   is_disabled: false,
@@ -337,6 +339,9 @@ export default function ServiceEditorDialog({
         requires_appointment: Boolean(draft.requires_appointment),
         price: text(draft.price) ?? "0",
         cost_price: text(draft.cost_price) ?? "0",
+        // الفارغ يعني «بلا حدّ» لا صفرًا: صفرٌ افتراضيّ كان سيمنع كل بيع
+        min_price: text(draft.min_price),
+        max_price: text(draft.max_price),
         default_discount_percent: text(draft.default_discount_percent) ?? "0",
         is_vat_exempt: Boolean(draft.is_vat_exempt),
         is_disabled: Boolean(draft.is_disabled),
@@ -565,6 +570,42 @@ export default function ServiceEditorDialog({
             </div>
             <p className="text-xs text-muted-foreground">
               هذا السعر قاعدةٌ أخيرة: إن وُجدت قائمة أسعار مطابقة للفرع أو التأمين فهي المقدَّمة عليه.
+            </p>
+
+            {/**
+              * حدّا السعر (0159) — **يُفرَضان في القاعدة لا في الشاشة.**
+              *
+              * مُحفِّزٌ على بنود الفاتورة يرفض أيّ بيعٍ خارجهما، فيحرس كل مسارٍ
+              * يكتب بندًا لا هذه الشاشة وحدها. وحدٌّ يُحفَظ ولا يمنع تجاوزه
+              * ليس حدًّا — وهو العيب الذي تكرّر في هذا النظام.
+              */}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Field label="الحد الأدنى للسعر">
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={draft.min_price}
+                  disabled={!canManage}
+                  placeholder="بلا حدّ"
+                  onChange={(e) => set("min_price", e.target.value)}
+                />
+              </Field>
+              <Field label="الحد الأعلى للسعر">
+                <Input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={draft.max_price}
+                  disabled={!canManage}
+                  placeholder="بلا حدّ"
+                  onChange={(e) => set("max_price", e.target.value)}
+                />
+              </Field>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              الفارغ يعني <span className="font-medium">بلا حدّ</span>. القاعدة ترفض بيع الصنف
+              خارجهما — والمرتجع والبند بسعر صفر مستثنيان، فلا يُحبَس ردّ ما بيع بسعرٍ قديم.
             </p>
 
             <Separator />

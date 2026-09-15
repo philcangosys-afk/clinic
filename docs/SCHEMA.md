@@ -5,8 +5,8 @@
 
 ## كيف قُرئ
 
-قُرئت 154 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
-`migrations/0013…0156` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
+قُرئت 158 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
+`migrations/0013…0160` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
 وكل `alter table` تعدّل، وكل `drop` تحذف. فما تراه هنا هو المخطط **بعد آخر
 ترقية**، لا كما كان يوم إنشائه. ودخل المولّد إلى أجسام `do $$ … $$` لأنّ
 معظم قيود المفاتيح تُضاف داخلها بحارس `if not exists`.
@@ -16,8 +16,8 @@
 | | من الترقيات (هنا) | من فحص الإنتاج (`docs/deep-gap-probe.sql`) |
 | --- | ---: | ---: |
 | جداول | 234 | 232 |
-| دوالّ | 434 | 420 |
-| منظورات | 180 | 175 |
+| دوالّ | 435 | 420 |
+| منظورات | 184 | 175 |
 | مفاتيح ربط | 1063 | 1076 |
 | فهارس | 392 | — |
 
@@ -3163,7 +3163,7 @@
 
 ### items
 
-أُنشئ في `0003` · عُدِّل في: `0053`، `0071`، `0073`، `0077`، `0083`، `0088`، `0092`، `0141`، `0142`، `0146`
+أُنشئ في `0003` · عُدِّل في: `0053`، `0071`، `0073`، `0077`، `0083`، `0088`، `0092`، `0141`، `0142`، `0146`، `0159`
 
 | العمود | النوع | إلزامي | افتراضي | يشير إلى |
 | --- | --- | :-: | --- | --- |
@@ -3221,6 +3221,8 @@
 | `session_interval_days` | `int` |  |  |  |
 | `min_interval_days` | `int` |  |  |  |
 | `legacy_code` | `text` |  |  |  |
+| `min_price` | `numeric(12,2)` |  |  |  |
+| `max_price` | `numeric(12,2)` |  |  |  |
 
 **قيود:**
 
@@ -3236,6 +3238,8 @@
 - `constraint items_vat_category_check check ( vat_category in ('standard','zero_rated','exempt','out_of_scope') )` — *(0092)*
 - `constraint items_dental_kind_check check (dental_procedure_kind is null or dental_procedure_kind = any(app_dental_procedure_kinds()))` — *(0141)*
 - `constraint items_session_protocol_check check ((default_sessions_count is null or default_sessions_count between 1 and 100) and (session_interval_days is null or session_interval_days between 1 and 365) and (min_interval_days is null or min_interval_days between 1 and 365) and (min_interval_days is null or session_interval_days is null or min_interval_days <= session_interval_days))` — *(0142)*
+- `constraint items_price_bounds_check check (min_price is null or max_price is null or max_price >= min_price) not valid` — *(0159)*
+- `constraint items_price_bounds_sign_check check (coalesce(min_price, 0) >= 0 and coalesce(max_price, 0) >= 0) not valid` — *(0159)*
 
 **فهارس:**
 
@@ -5331,7 +5335,7 @@
 
 ### print_settings
 
-أُنشئ في `0010`
+أُنشئ في `0010` · عُدِّل في: `0157`
 
 | العمود | النوع | إلزامي | افتراضي | يشير إلى |
 | --- | --- | :-: | --- | --- |
@@ -5342,6 +5346,9 @@
 | `show_logo` | `boolean` | ✔ | `true` |  |
 | `footer_note` | `text` |  |  |  |
 | `updated_at` | `timestamptz` | ✔ | `now()` |  |
+| `logo_url` | `text` |  |  |  |
+| `invoice_address_line` | `text` |  |  |  |
+| `invoice_policy_lines` | `text[]` | ✔ | `'{}'` |  |
 
 ### procedure_codes
 
@@ -6826,7 +6833,7 @@
 | `csr_config` | `jsonb` |  |  |  |
 | `created_at` | `timestamptz` | ✔ | `now()` |  |
 
-## المنظورات (180)
+## المنظورات (184)
 
 | المنظور | نوعه | عُرِّف في |
 | --- | --- | --- |
@@ -6897,8 +6904,11 @@
 | `v_internal_unread_counts` | منظور | `0026`، `0059` |
 | `v_inventory_on_hand` | منظور | `0038`، `0044` |
 | `v_inventory_warehouse_summary` | منظور | `0038` |
+| `v_invoice_payment_methods` | منظور | `0157` |
+| `v_invoice_print` | منظور | `0157` |
 | `v_invoice_profitability` | منظور | `0010`، `0143` |
 | `v_invoice_register` | منظور | `0091`، `0144` |
+| `v_item_picker` | منظور | `0159` |
 | `v_item_price_history` | منظور | `0072` |
 | `v_lab_pending_orders` | منظور | `0013`، `0144` |
 | `v_lab_worklist` | منظور | `0083` |
@@ -6949,6 +6959,7 @@
 | `v_radiology_unreported_orders` | منظور | `0138`، `0144` |
 | `v_radiology_worklist` | منظور | `0084` |
 | `v_reception_queue` | منظور | `0065` |
+| `v_reception_queue_by_doctor` | منظور | `0158` |
 | `v_reception_queue_ordered` | منظور | `0065` |
 | `v_reception_requests` | منظور | `0138` |
 | `v_recruitment_pipeline` | منظور | `0022` |
@@ -7013,4 +7024,4 @@
 
 ## الدوالّ
 
-توقيعات الدوالّ الـ434 في ملفّ مستقلّ: [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md).
+توقيعات الدوالّ الـ435 في ملفّ مستقلّ: [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md).

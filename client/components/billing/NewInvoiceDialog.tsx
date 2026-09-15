@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Receipt } from "lucide-react";
+import { LayoutGrid, Plus, Receipt } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
@@ -28,6 +28,8 @@ import {
 } from "@/components/ui/select";
 import PatientPicker from "@/components/shared/PatientPicker";
 import ItemPicker from "@/components/shared/ItemPicker";
+import LookupSelect from "@/components/shared/LookupSelect";
+import ServiceBrowserDialog from "@/components/billing/ServiceBrowserDialog";
 import { useToast } from "@/hooks/use-toast";
 
 /**
@@ -419,6 +421,14 @@ export default function NewInvoiceDialog({
   const [payments, setPayments] = useState<PaymentDraft[]>([]);
   const paymentMethods = useInvoicePaymentMethods();
   const cashRegisters = useInvoiceCashRegisters(organizationId);
+  /**
+   * منتقي الخدمات المتصفَّح.
+   *
+   * صندوق البحث وحده يكفي من يعرف اسم الصنف؛ ومن يريد أن يرى خدمات عيادةٍ
+   * بعينها، أو يبحث بالسعر الذي سمعه من المريض، لا يملك سبيلًا قبل هذه
+   * النافذة.
+   */
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [lines, setLines] = useState<DraftLine[]>([]);
 
   // رأس الفاتورة — كانت هذه الحقول كلها موجودة في جدول sales_invoices منذ
@@ -439,6 +449,19 @@ export default function NewInvoiceDialog({
   const [insCopayPercent, setInsCopayPercent] = useState("");
   const [insMaxAmount, setInsMaxAmount] = useState("");
   const [insApprovalNumber, setInsApprovalNumber] = useState("");
+  /**
+   * حدّ الكشفية وأهلية العلاج — عمودان في `sales_invoices` منذ 0005 لا
+   * يكتبهما أحد. يمرّان في jsonb التأمين (0160) فلا يتغيّر توقيع الدالّة.
+   */
+  const [insConsultationLimit, setInsConsultationLimit] = useState("");
+  const [insEligibility, setInsEligibility] = useState("");
+  /**
+   * مصدر الفاتورة وتصنيفها — عمودان قائمان لا يكتبهما أحد، وتقارير المصدر
+   * والتصنيف تقرأ فراغًا أبدًا. يُهيَّآن من ملفّ المريض ويظلّان قابلَين
+   * للتعديل: مريضٌ جاء هذه المرّة بإعلانٍ مختلف عن مصدره الأصليّ.
+   */
+  const [sourceValueId, setSourceValueId] = useState("");
+  const [classificationValueId, setClassificationValueId] = useState("");
   /**
    * فاتورة أعمال (B2B) — عمود `is_b2b` موجود في `sales_invoices` ولم يكن
    * يُكتب من أي مكان، فبقي `false` دائمًا. وZATCA تفرّق بين الفاتورة
@@ -816,6 +839,36 @@ export default function NewInvoiceDialog({
    * `app_effective_vat_rate` تُعيد ما ستطبّقه الدالّة **فعلًا**، بنفس ترتيب
    * فحوصها. فلا يبقى تعريفان يفترقان.
    */
+  /**
+   * مصدر المريض وتصنيفه من ملفّه — قيمتان أوّليّتان لا قيدان.
+   *
+   * لا تُكتبان فوق اختيارٍ يدويّ: من غيّر المصدر لهذه الفاتورة قصد ذلك،
+   * وإعادة ضبطه مع كل جلب تمحو عمله أمام عينيه.
+   */
+  const patientContext = useQuery({
+    queryKey: ["invoice-patient-context", organizationId, patient?.id ?? null],
+    enabled: Boolean(organizationId && patient?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patients")
+        .select("source_value_id, customer_type_value_id")
+        .eq("id", patient!.id)
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as
+        | { source_value_id: string | null; customer_type_value_id: string | null }
+        | null;
+    },
+  });
+
+  useEffect(() => {
+    const row = patientContext.data;
+    if (!row) return;
+    setSourceValueId((current) => current || row.source_value_id || "");
+    setClassificationValueId((current) => current || row.customer_type_value_id || "");
+  }, [patientContext.data]);
+
   const effectiveVat = useQuery({
     queryKey: ["effective-vat-rate", organizationId, patient?.id ?? null],
     enabled: Boolean(organizationId) && open,
@@ -932,8 +985,15 @@ export default function NewInvoiceDialog({
               copay_percent: insCopayPercent || null,
               max_amount: insMaxAmount || null,
               approval_number: insApprovalNumber.trim() || null,
+              consultation_limit: insConsultationLimit || null,
+              eligibility: insEligibility.trim() || null,
             }
           : {},
+        // الجنسية لا تُرسَل: القاعدة تلتقطها من ملفّ المريض لحظة الإصدار،
+        // والإعفاء الضريبيّ يُبنى عليها فتلقّيها من المتصفّح يجعله قابلًا
+        // للتزوير بتعديل الطلب.
+        p_source_value_id: sourceValueId || null,
+        p_classification_value_id: classificationValueId || null,
         p_is_temporary: Boolean(isQuote),
         p_is_b2b: isB2b,
         p_id_number: idNumber.trim() || null,
@@ -1002,6 +1062,12 @@ export default function NewInvoiceDialog({
       setInsCopayPercent("");
       setInsMaxAmount("");
       setInsApprovalNumber("");
+      setInsConsultationLimit("");
+      setInsEligibility("");
+      // المصدر والتصنيف يُصفَّران أيضًا: النافذة تُفتح لمريضٍ آخر بعد قليل،
+      // وبقاؤهما يُسجّل مصدر المريض السابق على فاتورة اللاحق.
+      setSourceValueId("");
+      setClassificationValueId("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -1113,6 +1179,26 @@ export default function NewInvoiceDialog({
               <Label>رقم الهوية</Label>
               <Input value={idNumber} onChange={(e) => setIdNumber(e.target.value)} />
             </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>المصدر</Label>
+              <LookupSelect
+                categoryKey="patient_sources"
+                value={sourceValueId}
+                onChange={setSourceValueId}
+                allowClear
+                placeholder="بدون"
+              />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>التصنيف</Label>
+              <LookupSelect
+                categoryKey="customer_types"
+                value={classificationValueId}
+                onChange={setClassificationValueId}
+                allowClear
+                placeholder="بدون"
+              />
+            </div>
           </div>
 
           <div className="flex flex-col gap-2 rounded-lg border p-3">
@@ -1172,6 +1258,25 @@ export default function NewInvoiceDialog({
                     onChange={(e) => setInsApprovalNumber(e.target.value)}
                   />
                 </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label>حد الكشفية</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={insConsultationLimit}
+                      onChange={(e) => setInsConsultationLimit(e.target.value)}
+                      placeholder="بلا حدّ"
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    <Label>أهلية العلاج</Label>
+                    <Input
+                      value={insEligibility}
+                      onChange={(e) => setInsEligibility(e.target.value)}
+                      placeholder="مثال: مؤهَّل — وثيقة سارية"
+                    />
+                  </div>
               </div>
             )}
           </div>
@@ -1346,11 +1451,32 @@ export default function NewInvoiceDialog({
 
           <div className="flex flex-col gap-1.5">
             <Label>إضافة بند</Label>
-            <ItemPicker onSelect={addLine} />
+            <div className="flex items-start gap-2">
+              <div className="min-w-0 flex-1">
+                <ItemPicker onSelect={addLine} />
+              </div>
+              <Button type="button" variant="outline" onClick={() => setBrowserOpen(true)}>
+                <LayoutGrid className="h-4 w-4" />
+                تصفّح الخدمات
+              </Button>
+            </div>
             <p className="text-xs text-muted-foreground">
               يُقترح الخصم تلقائيًا حسب أولوية النظام (خصم المريض ← الخصم العام ← العروض ← خصم الصنف) ويمكن تعديله يدويًا.
             </p>
           </div>
+
+          <ServiceBrowserDialog
+            open={browserOpen}
+            onOpenChange={setBrowserOpen}
+            onSelect={(item) =>
+              addLine({
+                id: item.id,
+                name_ar: item.name_ar,
+                price: item.price,
+                is_vat_exempt: item.is_vat_exempt,
+              })
+            }
+          />
 
           <div className="flex flex-col gap-2 rounded-lg border p-2">
             {totals.computed.length === 0 && (

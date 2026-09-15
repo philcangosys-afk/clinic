@@ -493,6 +493,29 @@ function PrintSettingsTab({ organizationId, readOnly }: { organizationId: string
           disabled={readOnly}
           onChange={(checked) => setForm((f) => ({ ...f, show_logo: checked }))}
         />
+        <LogoUploader
+          value={value.logo_url}
+          organizationId={organizationId}
+          disabled={readOnly}
+          onChange={(url) => setForm((f) => ({ ...f, logo_url: url }))}
+        />
+        <div className="flex flex-col gap-1.5">
+          <Label>سطر العنوان في الفاتورة</Label>
+          <Input
+            value={value.invoice_address_line ?? ""}
+            disabled={readOnly}
+            onChange={(e) => setForm((f) => ({ ...f, invoice_address_line: e.target.value }))}
+            placeholder="مثال: الطائف - الجفيف - طريق الملك خالد"
+          />
+          <span className="text-[11px] text-muted-foreground">
+            يُترك فارغًا ليُركَّب تلقائيًّا من العنوان الوطنيّ في إعدادات الضريبة.
+          </span>
+        </div>
+        <PolicyLinesEditor
+          value={value.invoice_policy_lines ?? []}
+          disabled={readOnly}
+          onChange={(lines) => setForm((f) => ({ ...f, invoice_policy_lines: lines }))}
+        />
         <div className="flex flex-col gap-1.5">
           <Label>ملاحظة أسفل المستند (اختياري)</Label>
           <Input
@@ -503,7 +526,18 @@ function PrintSettingsTab({ organizationId, readOnly }: { organizationId: string
           />
         </div>
         {!readOnly && (
-          <Button className="self-start" disabled={save.isPending} onClick={() => save.mutate(form)}>
+          <Button
+            className="self-start"
+            disabled={save.isPending}
+            onClick={() =>
+              save.mutate({
+                ...form,
+                invoice_policy_lines: (form.invoice_policy_lines ?? value.invoice_policy_lines ?? [])
+                  .map((line) => line.trim())
+                  .filter((line) => line.length > 0),
+              })
+            }
+          >
             {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
           </Button>
         )}
@@ -519,7 +553,165 @@ const defaultPrintSettings: PrintSettingsRow = {
   show_logo: true,
   footer_note: null,
   updated_at: "",
+  logo_url: null,
+  invoice_address_line: null,
+  invoice_policy_lines: [],
 };
+
+const BRANDING_BUCKET = "clinic-branding";
+
+/**
+ * رفع شعار المنشأة.
+ *
+ * `show_logo` موجود في `print_settings` منذ 0010 ويُحفَظ من هذه الشاشة —
+ * **ولم يكن في القاعدة شعارٌ أصلًا**: لا عمود يحمل مساره ولا دلو يخزّنه. فكان
+ * الإعداد يسأل «أظهر الشعار؟» عن شيء لا وجود له، وتخرج كل فاتورة بلا هوية.
+ *
+ * الدلو عامّ القراءة (0157): الشعار يُعرض في نافذة طباعة وفي رسالة تصل
+ * المريض، وكلاهما بلا ترويسة استيثاق. والكتابة تبقى للأعضاء وحدهم.
+ */
+function LogoUploader({
+  value,
+  organizationId,
+  disabled,
+  onChange,
+}: {
+  value: string | null;
+  organizationId: string | undefined;
+  disabled: boolean;
+  onChange: (url: string | null) => void;
+}) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+
+  const upload = async (file: File) => {
+    if (!organizationId) return;
+    // حدٌّ معقول: الشعار يُضمَّن في كل ورقة تُطبع، وملفٌّ ضخم يُبطئ كل طباعة
+    if (file.size > 1024 * 1024) {
+      toast({
+        variant: "destructive",
+        title: "الملفّ كبير",
+        description: "اختر صورة أصغر من ميغابايت واحد — الشعار يُضمَّن في كل فاتورة.",
+      });
+      return;
+    }
+    setBusy(true);
+    try {
+      const ext = (file.name.split(".").pop() || "png").toLowerCase();
+      const path = `${organizationId}/logo-${Date.now()}.${ext}`;
+      const { error } = await supabase.storage
+        .from(BRANDING_BUCKET)
+        .upload(path, file, { upsert: true, contentType: file.type || undefined });
+      if (error) throw error;
+      const { data } = supabase.storage.from(BRANDING_BUCKET).getPublicUrl(path);
+      onChange(data.publicUrl);
+      toast({ title: "رُفع الشعار", description: "اضغط «حفظ» لاعتماده." });
+    } catch (error: unknown) {
+      toast({
+        variant: "destructive",
+        title: "تعذّر رفع الشعار",
+        description: errorMessage(error),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <Label>شعار المنشأة</Label>
+      <div className="flex flex-wrap items-center gap-3">
+        {value ? (
+          <img
+            src={value}
+            alt="شعار المنشأة"
+            className="h-16 w-auto max-w-[10rem] rounded border bg-white object-contain p-1"
+          />
+        ) : (
+          <span className="rounded border border-dashed px-4 py-5 text-xs text-muted-foreground">
+            لا شعار
+          </span>
+        )}
+        <div className="flex flex-col gap-1.5">
+          <Input
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/svg+xml"
+            disabled={disabled || busy}
+            className="max-w-xs"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void upload(file);
+              e.target.value = "";
+            }}
+          />
+          {value && !disabled && (
+            <Button variant="ghost" size="sm" className="self-start" onClick={() => onChange(null)}>
+              إزالة الشعار
+            </Button>
+          )}
+        </div>
+      </div>
+      <span className="text-[11px] text-muted-foreground">
+        PNG أو JPG أو SVG، أقلّ من ميغابايت. يظهر أعلى الفاتورة المطبوعة حين يكون
+        «إظهار الشعار» مفعَّلًا.
+      </span>
+    </div>
+  );
+}
+
+/**
+ * شروط المجمع أسفل الفاتورة — بندًا بندًا لا نصًّا واحدًا.
+ *
+ * «للمريض الحق في المراجعة المجانية خلال ١٤ يومًا» و«الفاتورة تخضع لسياسة
+ * الاسترداد» بندان يُحرَّران ويُرتَّبان ويُحذف أحدهما دون الآخر. حشرهما في
+ * حقلٍ واحد يجعل تعديل بندٍ إعادةَ كتابة الجميع.
+ */
+function PolicyLinesEditor({
+  value,
+  disabled,
+  onChange,
+}: {
+  value: string[];
+  disabled: boolean;
+  onChange: (next: string[]) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Label>شروط المجمع أسفل الفاتورة</Label>
+      {value.map((line, index) => (
+        <div key={index} className="flex items-center gap-2">
+          <Input
+            value={line}
+            disabled={disabled}
+            onChange={(e) => {
+              const next = [...value];
+              next[index] = e.target.value;
+              onChange(next);
+            }}
+            placeholder="مثال: للمريض الحق في المراجعة المجانية خلال 14 يوم من تاريخ الفاتورة"
+          />
+          {!disabled && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onChange(value.filter((_, i) => i !== index))}
+            >
+              حذف
+            </Button>
+          )}
+        </div>
+      ))}
+      {!disabled && (
+        <Button variant="outline" size="sm" className="self-start" onClick={() => onChange([...value, ""])}>
+          إضافة بند
+        </Button>
+      )}
+      <span className="text-[11px] text-muted-foreground">
+        تُطبع بخطٍّ عريض أسفل المبالغ، بترتيبها هنا. البند الفارغ يُهمَل عند الحفظ.
+      </span>
+    </div>
+  );
+}
 
 function PaperSizeRow({
   label,

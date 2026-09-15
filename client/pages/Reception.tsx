@@ -16,6 +16,7 @@ import {
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { formatTime } from "@/lib/locale";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import type { AppointmentStatus, AppointmentWithRelations } from "@/lib/database.types";
 import { PatientSearchInput } from "@/components/shared/PatientSearchInput";
@@ -365,6 +366,7 @@ export default function Reception() {
           doctors={doctors.data ?? []}
           clinics={clinicList.data ?? []}
           doctorFilter={doctorFilter}
+          onDoctorFilterChange={setDoctorFilter}
           highlightAppointmentId={highlightAppointmentId}
         />
       )}

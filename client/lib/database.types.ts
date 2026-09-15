@@ -289,6 +289,9 @@ export interface ItemRow {
   unit: string | null;
   price: number;
   cost_price: number | null;
+  /** حدّا السعر (0159) — الفارغ = بلا حدّ، ويفرضهما مُحفِّز بنود الفاتورة. */
+  min_price: number | null;
+  max_price: number | null;
   is_vat_exempt: boolean;
   track_inventory: boolean;
   is_disabled: boolean;
@@ -539,6 +542,12 @@ export interface PrintSettingsRow {
   show_logo: boolean;
   footer_note: string | null;
   updated_at: string;
+  /** شعار المنشأة في دلو clinic-branding (0157) — فارغٌ يعني لا شعار. */
+  logo_url: string | null;
+  /** سطر العنوان تحت اسم المنشأة؛ فارغٌ يُركَّب من العنوان الوطنيّ. */
+  invoice_address_line: string | null;
+  /** شروط المجمع أسفل الفاتورة، بندًا بندًا. */
+  invoice_policy_lines: string[];
 }
 
 export interface OrganizationVatSettingsRow {

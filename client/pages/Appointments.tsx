@@ -157,6 +157,25 @@ function useRangeAppointments(organizationId: string | undefined, from: string, 
 /** تاريخ صالح لمعامل عنوان: أي نصّ آخر يُهمَل بدل أن يُبنى عليه استعلام. */
 const isDateParam = (value: string | null): value is string => /^\d{4}-\d{2}-\d{2}$/.test(value ?? "");
 
+/**
+ * خانات شريط الملخّص — كلٌّ تقول أيّ حالات تجمع.
+ *
+ * لا خانة «خارجيّون» بالمعنى الحرفيّ في نظام العيادات المرجعيّ: لا حقل في
+ * بياناتنا يميّز «مريضًا خارجيًّا». الأقرب صدقًا **الحضور المباشر**
+ * (`walk_in`) — من جاء بلا موعدٍ سابق — وهو ما تعرضه الخانة باسمها.
+ */
+const SUMMARY_BUCKETS: { key: string; label: string; statuses: AppointmentStatus[] }[] = [
+  { key: "all", label: "كل المواعيد", statuses: [] },
+  { key: "new", label: "جديدة", statuses: ["new", "scheduled"] },
+  { key: "confirmed", label: "مؤكَّدة", statuses: ["confirmed"] },
+  { key: "unconfirmed", label: "غير مؤكَّدة", statuses: ["unconfirmed"] },
+  { key: "attended", label: "حضرت", statuses: ["arrived", "checked_in", "called", "in_progress", "completed"] },
+  { key: "waiting", label: "في الانتظار", statuses: ["waiting"] },
+  { key: "walk_in", label: "حضور مباشر", statuses: ["walk_in"] },
+  { key: "no_show", label: "لم تحضر", statuses: ["no_show"] },
+  { key: "cancelled", label: "ألغيت", statuses: ["cancelled_by_patient", "cancelled_by_staff"] },
+];
+
 export default function Appointments() {
   const { organization, membership, legacyMode } = useOrganizationAccess();
   const navigate = useNavigate();
@@ -171,6 +190,8 @@ export default function Appointments() {
   const [search, setSearch] = useState("");
   const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [statusFilter, setStatusFilter] = useState("all");
+  /** خانة شريط الملخّص المختارة — "all" يعني بلا حصر. */
+  const [summaryKey, setSummaryKey] = useState("all");
   /**
    * نمط العرض. التقويم هو الافتراضي لأنه ما يُطلب في الاستقبال، والقائمة
    * القديمة تبقى كما هي — لا تُستبدل: من اعتاد عليها لا يُجبَر على تعلّم
@@ -313,12 +334,29 @@ export default function Appointments() {
    */
   const activeStatuses = reportStatuses.length > 0
     ? reportStatuses
-    : statusFilter === "all" ? [] : [statusFilter];
+    : summaryKey !== "all"
+      ? (SUMMARY_BUCKETS.find((bucket) => bucket.key === summaryKey)?.statuses ?? [])
+      : statusFilter === "all" ? [] : [statusFilter];
 
-  const filteredAppointments = useMemo(() => appointmentRows.filter((appointment) => {
-    const matchesSearch = matchesPatientSearch(appointment.patient, search, searchScopes);
-    return matchesSearch && (activeStatuses.length === 0 || activeStatuses.includes(appointment.status));
-  }), [appointmentRows, search, searchScopes, activeStatuses.join(",")]);
+  /**
+   * البحث أوّلًا، ثمّ الحالة — **وشريط الملخّص يُحسب من الأولى.**
+   *
+   * لو حُسبت العدّادات من القائمة بعد ترشيح الحالة لَصار اختيار خانةٍ يُصفّر
+   * بقيّة الخانات، فيبدو أن لا مواعيد أخرى اليوم. الشريط يقيس اليوم كلّه
+   * ويحصر القائمة، ولا يقيس نفسه.
+   */
+  const searchedAppointments = useMemo(
+    () => appointmentRows.filter((appointment) => matchesPatientSearch(appointment.patient, search, searchScopes)),
+    [appointmentRows, search, searchScopes],
+  );
+
+  const filteredAppointments = useMemo(
+    () =>
+      searchedAppointments.filter(
+        (appointment) => activeStatuses.length === 0 || activeStatuses.includes(appointment.status),
+      ),
+    [searchedAppointments, activeStatuses.join(",")],
+  );
 
   const confirmAppointment = useMutation({
     mutationFn: async (appointment: AppointmentWithRelations) => {
@@ -341,6 +379,30 @@ export default function Appointments() {
     },
     onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر التأكيد", description: errorMessage(error, "حدث خطأ") }),
   });
+
+  /**
+   * ملخّص اليوم — شريطٌ يقرأ منه الاستقبال حال المواعيد نظرةً واحدة، كما في
+   * شريط نظام العيادات المرجعيّ.
+   *
+   * **العدّادات مبنيّة على حالات النظام نفسها لا على تسمياتٍ مقاربة.** كل
+   * خانة تقول أيّ الحالات تجمع، والضغط عليها يحصر القائمة بها — فلا رقمٌ
+   * يُعرض ولا يُعرف من أين جاء ولا كيف يُفتَح.
+   *
+   * ولم أُضف خانة «الخارجيّون» بالمعنى الحرفيّ في اللقطة: لا حقل في بياناتنا
+   * يميّز «مريضًا خارجيًّا» عن غيره. الأقرب صدقًا هو **الحضور المباشر**
+   * (`walk_in`) — من جاء بلا موعدٍ سابق — وهو ما تعرضه الخانة باسمها.
+   */
+  const summary = useMemo(
+    () =>
+      SUMMARY_BUCKETS.map((bucket) => ({
+        ...bucket,
+        value:
+          bucket.statuses.length === 0
+            ? searchedAppointments.length
+            : searchedAppointments.filter((row) => bucket.statuses.includes(row.status)).length,
+      })),
+    [searchedAppointments],
+  );
 
   const byDoctor = useMemo(() => {
     const map = new Map<string, AppointmentWithRelations[]>();
@@ -589,6 +651,38 @@ export default function Appointments() {
             <Skeleton key={index} className="h-64 w-full" />
           ))}
         </div>
+      )}
+
+      {/* شريط الملخّص — يقيس اليوم كلّه ويحصر القائمة بالضغط */}
+      {!appointments.isLoading && searchedAppointments.length > 0 && (
+        <Card>
+          <CardContent className="flex flex-wrap gap-2 p-3">
+            {summary.map((bucket) => {
+              const active = summaryKey === bucket.key;
+              return (
+                <button
+                  key={bucket.key}
+                  type="button"
+                  disabled={urlFilterActive}
+                  onClick={() => setSummaryKey(active ? "all" : bucket.key)}
+                  className={`rounded-md border px-3 py-1.5 text-start transition disabled:opacity-50 ${
+                    active ? "border-primary bg-primary/5" : "hover:border-primary/40"
+                  }`}
+                >
+                  <div className="text-xs text-muted-foreground">{bucket.label}</div>
+                  <div className="font-mono text-lg font-bold leading-tight tabular-nums">
+                    {bucket.value}
+                  </div>
+                </button>
+              );
+            })}
+            {urlFilterActive && (
+              <span className="self-center text-[11px] text-muted-foreground">
+                المرشّح يأتي من التقرير — امسحه لتفعيل الشريط.
+              </span>
+            )}
+          </CardContent>
+        </Card>
       )}
 
       {(urlFilterActive || mode === "classic") && !appointments.isLoading && (
@@ -925,6 +1019,8 @@ function CreateAppointmentDialog({
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { session } = useOrganizationAccess();
+  // تقويم المنشأة يُحترَم في رسالة «أقرب موعد» كما في بقيّة الشاشات
+  const { calendarDisplay } = useLocaleSettings();
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [doctorId, setDoctorId] = useState("");
   const [date, setDate] = useState(defaultDay);

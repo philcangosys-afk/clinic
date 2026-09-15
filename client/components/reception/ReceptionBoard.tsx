@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -6,12 +6,20 @@ import {
   ArrowLeftRight,
   Bell,
   BellOff,
+  CalendarDays,
+  CalendarPlus,
   CheckCircle2,
+  FileSignature,
   Flag,
+  MoreHorizontal,
   Printer,
+  Receipt,
   Undo2,
   UserCheck,
+  UserRound,
   UserX,
+  Wallet,
+  XCircle,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
@@ -24,6 +32,14 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -111,6 +127,7 @@ export default function ReceptionBoard({
   doctors,
   clinics,
   doctorFilter,
+  onDoctorFilterChange,
   highlightAppointmentId,
 }: {
   organizationId: string | undefined;
@@ -125,6 +142,14 @@ export default function ReceptionBoard({
    * فيختار الموظف طبيبًا من العليا ويبقى الطابور كما هو فيحسب التصفية معطّلة.
    */
   doctorFilter: string;
+  /**
+   * تغيير المرشِّح من شريط الأطباء أعلى اللوحة.
+   *
+   * المرشِّح تملكه الشاشة لا اللوحة (انظر التعليق أعلاه)، فالضغط على بطاقة
+   * طبيبٍ هنا يُبلّغها لتغيّره — وإلا ظهر شريطٌ يبدو قابلًا للضغط ولا يفعل
+   * شيئًا، وهو أسوأ من شريطٍ للعرض فقط.
+   */
+  onDoctorFilterChange?: (doctorId: string) => void;
   /** صفّ الموعد القادم من `?appointmentId=` يُبرَز حتى يُعثَر عليه بلا بحث. */
   highlightAppointmentId?: string | null;
 }) {
@@ -141,6 +166,12 @@ export default function ReceptionBoard({
    * «بطاقات» — فيبقى في الطابور بقية اليوم ويشوّه عدّاد الانتظار.
    */
   const [noShowTarget, setNoShowTarget] = useState<QueueRow | null>(null);
+  /**
+   * الإلغاء كان غائبًا كليًّا: مريضٌ اعتذر أو حُجز له مرّتين بالخطأ يبقى في
+   * الطابور بقيّة اليوم ويُحسب في عدّاد الانتظار. و«لم يحضر» ليست الحقيقة.
+   * والقدرة كانت في القاعدة بلا باب — أُضيف الإجراء في 0158.
+   */
+  const [cancelTarget, setCancelTarget] = useState<QueueRow | null>(null);
 
   const queue = useQuery({
     queryKey: ["reception-board", organizationId],
@@ -187,6 +218,52 @@ export default function ReceptionBoard({
       }),
   });
 
+  /**
+   * ضغط الطابور على كل طبيب (0158).
+   *
+   * الاستقبال كان يرى قائمةً واحدة مسطَّحة لا تقول مَن ينتظر أيّ طبيب إلا
+   * بترشيح طبيبٍ واحد في كل مرّة. البطاقات تقول ذلك نظرةً واحدة، والضغط على
+   * بطاقةٍ يحصر اللوحة على طبيبها.
+   */
+  const pressure = useQuery({
+    queryKey: ["reception-doctor-pressure", organizationId],
+    enabled: Boolean(organizationId),
+    refetchInterval: 20_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_reception_queue_by_doctor")
+        .select("*")
+        .eq("organization_id", organizationId);
+      if (error) throw error;
+      return (data ?? []) as {
+        doctor_id: string;
+        doctor_name: string;
+        total: number;
+        waiting_count: number;
+        arrived_count: number;
+        checked_in_count: number;
+        called_count: number;
+        in_progress_count: number;
+        longest_wait_minutes: number | null;
+      }[];
+    },
+  });
+
+  /**
+   * الصفوف مُجمَّعة بالطبيب مع عنوانٍ فوق كل مجموعة — كما في نظام العيادات
+   * المرجعيّ. الترتيب داخل المجموعة يبقى كما جاء من القاعدة (الدور).
+   */
+  const groups = useMemo(() => {
+    const map = new Map<string, { doctorId: string; doctorName: string; items: QueueRow[] }>();
+    for (const row of rows) {
+      const key = row.doctor_id ?? "—";
+      const entry = map.get(key);
+      if (entry) entry.items.push(row);
+      else map.set(key, { doctorId: key, doctorName: row.doctor_name ?? "بلا طبيب", items: [row] });
+    }
+    return [...map.values()].sort((a, b) => a.doctorName.localeCompare(b.doctorName, "ar"));
+  }, [rows]);
+
   const printTicket = (row: QueueRow) => {
     // اسم مختصر: الاسم الأول والأخير. التذكرة تُترك على طاولة أو تُعلَّق،
     // وطباعة الاسم الرباعي عليها إفشاء لا داعي له.
@@ -227,6 +304,59 @@ export default function ReceptionBoard({
         )}
       </div>
 
+      {/* ضغط الطابور على كل طبيب — بطاقةٌ لكل طبيبٍ له منتظرون، والضغط يحصر */}
+      {(pressure.data ?? []).length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onDoctorFilterChange?.("all")}
+            className={`rounded-lg border px-3 py-2 text-start transition ${
+              doctorFilter === "all" ? "border-primary bg-primary/5" : "hover:border-primary/40"
+            }`}
+          >
+            <div className="text-sm font-semibold">كل الأطباء</div>
+            <div className="text-xs text-muted-foreground tabular-nums">
+              {(pressure.data ?? []).reduce((sum, d) => sum + Number(d.total ?? 0), 0)} في الطابور
+            </div>
+          </button>
+          {(pressure.data ?? [])
+            .slice()
+            .sort((a, b) => a.doctor_name.localeCompare(b.doctor_name, "ar"))
+            .map((doctor) => (
+              <button
+                key={doctor.doctor_id}
+                type="button"
+                onClick={() => onDoctorFilterChange?.(doctor.doctor_id)}
+                className={`rounded-lg border px-3 py-2 text-start transition ${
+                  doctorFilter === doctor.doctor_id
+                    ? "border-primary bg-primary/5"
+                    : "hover:border-primary/40"
+                }`}
+              >
+                <div className="text-sm font-semibold">{doctor.doctor_name}</div>
+                <div className="flex flex-wrap items-center gap-1 text-[11px] tabular-nums">
+                  <span className="text-muted-foreground">{doctor.total} مريض</span>
+                  {Number(doctor.in_progress_count) > 0 && (
+                    <Badge variant="secondary" className="px-1 py-0 text-[10px]">
+                      {doctor.in_progress_count} بالداخل
+                    </Badge>
+                  )}
+                  {Number(doctor.called_count) > 0 && (
+                    <Badge variant="outline" className="px-1 py-0 text-[10px]">
+                      {doctor.called_count} نُودي
+                    </Badge>
+                  )}
+                  {Number(doctor.longest_wait_minutes ?? 0) >= 30 && (
+                    <Badge variant="destructive" className="px-1 py-0 text-[10px]">
+                      أطول انتظار {doctor.longest_wait_minutes} د
+                    </Badge>
+                  )}
+                </div>
+              </button>
+            ))}
+        </div>
+      )}
+
       {queue.isLoading && <Skeleton className="h-72 w-full" />}
 
       {!queue.isLoading && (
@@ -252,7 +382,19 @@ export default function ReceptionBoard({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((row) => (
+              {groups.map((group) => (
+                <Fragment key={group.doctorId}>
+                  {/* عنوان المجموعة: الطبيب وعدد منتظريه — نظير «اسم الطبيب: د.
+                      فلان» في نظام العيادات المرجعيّ. */}
+                  <TableRow className="bg-muted/60 hover:bg-muted/60">
+                    <TableCell colSpan={11} className="py-1.5 text-sm font-bold">
+                      اسم الطبيب: {group.doctorName}
+                      <span className="ms-2 font-normal text-muted-foreground tabular-nums">
+                        ({group.items.length})
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                  {group.items.map((row) => (
                 <TableRow
                   key={row.appointment_id}
                   className={row.appointment_id === highlightAppointmentId ? "ring-2 ring-inset ring-primary" : undefined}
@@ -423,9 +565,70 @@ export default function ReceptionBoard({
                           <Printer className="h-3.5 w-3.5" /> تذكرة
                         </Button>
                       )}
+                      {/* الإلغاء (0158): إخراجٌ من الطابور بسببٍ يبقى في السجلّ،
+                          لا حذف. و«لم يحضر» ليست بديلًا — هي حقيقةٌ أخرى. */}
+                      {can("reception.transfer") && row.status !== "completed" && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="text-destructive"
+                          onClick={() => setCancelTarget(row)}
+                        >
+                          <XCircle className="h-3.5 w-3.5" /> إلغاء
+                        </Button>
+                      )}
+                      {/* أوامر المريض — نظير قائمة الزرّ الأيمن في نظام
+                          العيادات المرجعيّ: ما يحتاجه الاستقبال وهو واقفٌ على
+                          صفّ المريض بلا مغادرة الشاشة. */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button size="sm" variant="ghost">
+                            <MoreHorizontal className="h-3.5 w-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="w-56">
+                          <DropdownMenuLabel>أوامر على المريض</DropdownMenuLabel>
+                          <DropdownMenuItem
+                            onClick={() => navigate(`/billing?appointmentId=${row.appointment_id}`)}
+                          >
+                            <Receipt className="h-4 w-4" />
+                            فاتورة جديدة
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => navigate(`/appointments?patientId=${row.patient_id}`)}
+                          >
+                            <CalendarPlus className="h-4 w-4" />
+                            حجز موعد
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => navigate(`/patients/${row.patient_id}?section=invoices`)}
+                          >
+                            <Wallet className="h-4 w-4" />
+                            عرض فواتير المريض
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => navigate(`/patients/${row.patient_id}?section=agreements`)}
+                          >
+                            <FileSignature className="h-4 w-4" />
+                            عرض اتفاقيات المريض
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => navigate(`/patients/${row.patient_id}`)}>
+                            <UserRound className="h-4 w-4" />
+                            فتح المعلومات الشخصية
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuLabel>نوافذ النظام</DropdownMenuLabel>
+                          <DropdownMenuItem onClick={() => navigate("/appointments")}>
+                            <CalendarDays className="h-4 w-4" />
+                            جدول المواعيد
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </div>
                   </TableCell>
                 </TableRow>
+                  ))}
+                </Fragment>
               ))}
               {rows.length === 0 && (
                 <TableRow>
@@ -453,6 +656,15 @@ export default function ReceptionBoard({
           if (!noShowTarget) return;
           transition.mutate({ id: noShowTarget.appointment_id, action: "no_show", reason });
           setNoShowTarget(null);
+        }}
+      />
+      <CancelDialog
+        row={cancelTarget}
+        onClose={() => setCancelTarget(null)}
+        onConfirm={(reason) => {
+          if (!cancelTarget) return;
+          transition.mutate({ id: cancelTarget.appointment_id, action: "cancel", reason });
+          setCancelTarget(null);
         }}
       />
       <UndoDialog
@@ -642,6 +854,61 @@ function PriorityDialog({ row, onClose }: { row: QueueRow | null; onClose: () =>
         <DialogFooter>
           <Button disabled={save.isPending || !reason.trim()} onClick={() => save.mutate()}>
             حفظ
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * إلغاء الموعد من الطابور — سببٌ إلزاميّ تفرضه القاعدة أيضًا.
+ *
+ * **إلغاء لا حذف:** الموعد يخرج من الطابور بتغيّر حالته ويبقى في السجلّ
+ * بسببه ومن ألغاه، فيُعرف بعد شهر كم موعدًا أُلغي ولماذا.
+ */
+function CancelDialog({
+  row,
+  onClose,
+  onConfirm,
+}: {
+  row: QueueRow | null;
+  onClose: () => void;
+  onConfirm: (reason: string) => void;
+}) {
+  const [reason, setReason] = useState("");
+  return (
+    <Dialog open={Boolean(row)} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>إلغاء الموعد</DialogTitle>
+          <DialogDescription>
+            {row?.patient_name} — {row?.doctor_name}
+            <br />
+            الموعد يخرج من الطابور ولا يُحذف: يبقى في السجلّ بسببه ووقته ومن
+            ألغاه. وإن كانت عليه فاتورة محصَّلة سترفض القاعدة الإلغاء حتى
+            تُعالَج الفاتورة.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label>سبب الإلغاء *</Label>
+          <Textarea
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            rows={2}
+            placeholder="اعتذر المريض هاتفيًّا، أو حُجز مرّتين بالخطأ"
+          />
+        </div>
+        <DialogFooter>
+          <Button
+            variant="destructive"
+            disabled={!reason.trim()}
+            onClick={() => {
+              onConfirm(reason.trim());
+              setReason("");
+            }}
+          >
+            تأكيد الإلغاء
           </Button>
         </DialogFooter>
       </DialogContent>

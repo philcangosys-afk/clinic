@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Printer, Receipt, WalletCards, Undo2 } from "lucide-react";
+import { Plus, Printer, Receipt, Send, WalletCards, Undo2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
@@ -37,7 +37,15 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { printHtml, type PaperSize } from "@/lib/document-merge";
+import SendInvoiceDialog from "@/components/billing/SendInvoiceDialog";
+import {
+  loadLogoDataUrl,
+  printInvoiceReceipt,
+  type InvoicePaymentMethod,
+  type InvoicePrintData,
+  type InvoicePrintHeader,
+  type InvoicePrintItem,
+} from "@/lib/invoice-receipt";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/permissions";
 import TaxSettingsTab, {
@@ -105,128 +113,67 @@ function useMemberNames(organizationId: string | undefined) {
 
 
 /**
- * طباعة الفاتورة (لقطة 20). لم يكن هناك أي مسار طباعة للفواتير رغم أن
- * `print_settings.invoice_paper_size` موجود منذ 0010 — أي أن الإعداد كان
- * يُحفَظ ولا يقرؤه شيء.
+ * تجميع بيانات الفاتورة المطبوعة.
  *
- * البنود تُجلب عند الضغط لا مع القائمة: تحميل بنود 50 فاتورة مقدّمًا لأجل
- * فاتورة واحدة قد تُطبع هدرٌ لكل مستخدم في كل فتح للشاشة.
+ * **قراءةٌ واحدة من `v_invoice_print` (0157)** بدل ستّ قراءات في الواجهة:
+ * البائع واسمه القانونيّ وعنوانه ورقمه الضريبيّ، والمريض وعمره وجنسيته ورقم
+ * هويته وملفّه، والطبيب والعيادة، والشعار وشروط المجمع. كانت الورقة قبلها
+ * جدولًا أبيض بلا هوية، و`print_settings.show_logo` يسأل عن شعارٍ لا وجود له
+ * في القاعدة أصلًا.
+ *
+ * البنود وطرق الدفع تُجلبان عند الضغط لا مع القائمة: تحميلها لخمسين فاتورة
+ * مقدّمًا لأجل واحدة قد تُطبع هدرٌ في كل فتح للشاشة.
  */
-async function printInvoice(
-  invoice: SalesInvoiceWithPatient,
-  organizationName: string,
-  taxNumber: string | null,
-  paper: PaperSize,
-  footerNote: string | null,
-) {
-  const { data: items, error } = await supabase
-    .from("sales_invoice_items")
-    .select("description, price, qty, discount_amount, vat_amount, net_amount")
-    .eq("invoice_id", invoice.id);
-  if (error) throw error;
+async function loadInvoicePrintData(
+  invoiceId: string,
+  printedBy: string | null,
+): Promise<InvoicePrintData> {
+  const [headerRes, itemsRes, paymentsRes] = await Promise.all([
+    supabase.from("v_invoice_print").select("*").eq("invoice_id", invoiceId).maybeSingle(),
+    supabase
+      .from("sales_invoice_items")
+      .select("description, price, qty, discount_amount, vat_amount, net_amount")
+      .eq("invoice_id", invoiceId)
+      .order("created_at"),
+    supabase
+      .from("v_invoice_payment_methods")
+      .select("method_name, method_code, amount")
+      .eq("invoice_id", invoiceId),
+  ]);
+  if (headerRes.error) throw headerRes.error;
+  if (itemsRes.error) throw itemsRes.error;
+  if (paymentsRes.error) throw paymentsRes.error;
+  if (!headerRes.data) throw new Error("تعذّر قراءة بيانات الفاتورة للطباعة");
 
-  const esc = (value: unknown) =>
-    String(value ?? "").replace(/[&<>"]/g, (ch) =>
-      ch === "&" ? "&amp;" : ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : "&quot;",
-    );
-  const money = (value: unknown) => Number(value ?? 0).toFixed(2);
+  const header = headerRes.data as unknown as InvoicePrintHeader;
+  // الشعار يُضمَّن قبل الطباعة: `printHtml` تطبع فور الكتابة، وصورةٌ من
+  // الشبكة قد لا تصل قبلها فتخرج الورقة بلا شعار أحيانًا وبه أحيانًا.
+  const logoDataUrl = header.show_logo ? await loadLogoDataUrl(header.logo_url) : null;
 
-  const rows = (items ?? [])
-    .map(
-      (line) =>
-        `<tr><td>${esc(line.description)}</td><td>${line.qty}</td><td>${money(line.price)}</td>` +
-        `<td>${money(line.discount_amount)}</td><td>${money(line.net_amount)}</td></tr>`,
-    )
-    .join("");
-
-  printHtml(
-    `فاتورة ${invoice.invoice_number}`,
-    `<h2>${esc(organizationName)}</h2>
-     ${taxNumber ? `<p>الرقم الضريبي: ${esc(taxNumber)}</p>` : ""}
-     <p>
-       ${invoice.invoice_type === "return" ? "فاتورة مرتجع" : "فاتورة مبيعات"} رقم
-       <strong>${invoice.invoice_number}</strong><br />
-       التاريخ: ${formatDateTime(invoice.created_at)}<br />
-       العميل: ${esc(invoice.patient?.name_ar ?? invoice.external_customer_name ?? "—")}
-       ${invoice.patient?.file_number ? ` · ملف ${invoice.patient.file_number}` : ""}
-       ${invoice.doctor?.name_ar ? `<br />الطبيب: ${esc(invoice.doctor.name_ar)}` : ""}
-       ${invoice.zatca_invoice_number ? `<br />زاتكا: ${esc(invoice.zatca_invoice_number)}` : ""}
-     </p>
-     <table border="1" cellpadding="4">
-       <thead><tr><th>البند</th><th>الكمية</th><th>السعر</th><th>الخصم</th><th>الصافي</th></tr></thead>
-       <tbody>${rows}</tbody>
-     </table>
-     <p>
-       الإجمالي قبل الضريبة: ${money(invoice.subtotal_amount)}<br />
-       الخصم: ${money(invoice.discount_amount)}<br />
-       ${Number(invoice.exemption_amount ?? 0) > 0 ? `الإعفاء: ${money(invoice.exemption_amount)}<br />` : ""}
-       الضريبة: ${money(invoice.vat_amount)}<br />
-       <strong>الصافي: ${money(invoice.net_amount)}</strong><br />
-       ${
-         /**
-          * حصّتا التأمين والمريض تُحسَبان في القاعدة (0052) وتُخزَّنان في
-          * `insurance_share_amount` و`patient_share_amount` — ولم تكن تُقرآن
-          * في أي مكان. فالمريض المؤمَّن يستلم إيصالًا يقول «الصافي 500
-          * والمتبقي 500» بينما لا يخصّه منها إلا حصته. رقم يخيف المريض بلا
-          * سبب، ويجعل تحصيل الاستقبال خاطئًا.
-          */
-         invoice.is_insurance_invoice
-           ? `حصة شركة التأمين${invoice.insurance_company_name ? ` (${esc(invoice.insurance_company_name)})` : ""}: ${money(invoice.insurance_share_amount ?? 0)}<br />
-              <strong>حصة المريض: ${money(invoice.patient_share_amount ?? invoice.net_amount)}</strong><br />`
-           : ""
-       }
-       المدفوع: ${money(invoice.paid_amount)}<br />
-       المتبقي: ${money(invoice.remaining_amount)}
-     </p>
-     ${
-       /**
-        * حمولة رمز QR لزاتكا (TLV ثم Base64) تُولَّد في القاعدة (0058) وتُخزَّن
-        * في `sales_invoices.zatca_qr` — وكان العمود فارغًا في كل فاتورة صدرت
-        * من النظام.
-        *
-        * تُطبع هنا **نصًّا** لا صورةً: توليد صورة QR يحتاج مكتبة، وإضافتها
-        * تتطلب تحديث `pnpm-lock.yaml` — وبناء Netlify يعمل بقفل مجمَّد فيفشل
-        * إن اختلّ. الحمولة نفسها هي المطلوب نظاميًا، والصورة تمثيلٌ لها؛
-        * فطباعتها نصًّا إفصاح صحيح ريثما تُضاف المكتبة، لا بديل نهائي عنها.
-        */
-       invoice.zatca_qr
-         ? `<p style="font-size:9px;word-break:break-all;direction:ltr;text-align:left">
-              <span style="direction:rtl;display:block">حمولة رمز QR (زاتكا):</span>${esc(invoice.zatca_qr)}
-            </p>`
-         : ""
-     }
-     ${footerNote ? `<p>${esc(footerNote)}</p>` : ""}`,
-    paper,
-  );
+  return {
+    header,
+    items: (itemsRes.data ?? []) as unknown as InvoicePrintItem[],
+    payments: (paymentsRes.data ?? []) as unknown as InvoicePaymentMethod[],
+    printedBy,
+    logoDataUrl,
+  };
 }
-
-/** إعدادات الطباعة للمؤسسة — مقاس الورق وتذييل الفاتورة (0010). */
-function usePrintSettings(organizationId: string | undefined) {
-  return useQuery({
-    queryKey: ["print-settings", organizationId],
-    enabled: Boolean(organizationId),
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("print_settings")
-        .select("invoice_paper_size, footer_note")
-        .eq("organization_id", organizationId)
-        .maybeSingle();
-      if (error) throw error;
-      return (data ?? null) as { invoice_paper_size: PaperSize; footer_note: string | null } | null;
-    },
-  });
-}
-
 
 export default function Billing() {
-  const { organization, membership, legacyMode } = useOrganizationAccess();
+  const { organization, membership, legacyMode, session } = useOrganizationAccess();
   const [searchParams] = useSearchParams();
   // تقويم المنشأة يُحترَم هنا كما في باقي الشاشات: كان الجدول يطبع بالتقويم
   // الذي يختاره المتصفّح للعربية (هجريًّا في كروم) بلا نظرٍ إلى الإعداد.
   const { calendarDisplay } = useLocaleSettings();
   const appointmentId = searchParams.get("appointmentId");
   const memberNames = useMemberNames(organization?.id);
-  const printSettings = usePrintSettings(organization?.id);
+  /**
+   * اسم من يطبع يظهر في تذييل الإيصال — كما في إيصال العيادات المرجعيّ.
+   * ورقةٌ تُسلَّم للمريض يُسأل عنها لاحقًا: «من أصدرها؟» جوابه على الورقة.
+   */
+  const printedByName = session?.user.id
+    ? memberNames.data?.get(session.user.id) ?? null
+    : null;
   const [statusFilter, setStatusFilter] = useState("all");
   const [quotesOnly, setQuotesOnly] = useState(false);
   const [showShifts, setShowShifts] = useState(false);
@@ -240,6 +187,10 @@ export default function Billing() {
   const [createOpen, setCreateOpen] = useState(false);
   const [paymentTarget, setPaymentTarget] = useState<SalesInvoiceWithPatient | null>(null);
   const [returnTarget, setReturnTarget] = useState<SalesInvoiceWithPatient | null>(null);
+  /** بيانات الفاتورة المجمَّعة — تُستعمل للطباعة وللإرسال معًا. */
+  const [sendData, setSendData] = useState<InvoicePrintData | null>(null);
+  const [sendOpen, setSendOpen] = useState(false);
+  const [busyInvoiceId, setBusyInvoiceId] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const canManageBilling = legacyMode || ["owner", "organization_admin", "accountant", "receptionist"].includes(membership?.role_key ?? "");
@@ -602,23 +553,49 @@ export default function Billing() {
                         size="sm"
                         variant="ghost"
                         title="طباعة"
-                        onClick={() =>
-                          printInvoice(
-                            invoice,
-                            organization?.name ?? "",
-                            organization?.tax_number ?? null,
-                            printSettings.data?.invoice_paper_size ?? "a4",
-                            printSettings.data?.footer_note ?? null,
-                          ).catch((error: unknown) =>
-                            toast({
-                              variant: "destructive",
-                              title: "تعذر تجهيز الفاتورة للطباعة",
-                              description: errorMessage(error),
-                            }),
-                          )
-                        }
+                        disabled={busyInvoiceId === invoice.id}
+                        onClick={() => {
+                          setBusyInvoiceId(invoice.id);
+                          loadInvoicePrintData(invoice.id, printedByName)
+                            .then((data) => printInvoiceReceipt(data))
+                            .catch((error: unknown) =>
+                              toast({
+                                variant: "destructive",
+                                title: "تعذر تجهيز الفاتورة للطباعة",
+                                description: errorMessage(error),
+                              }),
+                            )
+                            .finally(() => setBusyInvoiceId(null));
+                        }}
                       >
                         <Printer className="h-3.5 w-3.5" />
+                      </Button>
+                      {/* الإرسال للمريض: واتساب أو بريد، بنصٍّ معبَّأ من بيانات
+                          الفاتورة نفسها. لا تكامل ولا مفاتيح — الرابط يُفتح في
+                          متصفّح الموظّف والإرسال من حسابه هو. */}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="إرسال للمريض"
+                        disabled={busyInvoiceId === invoice.id}
+                        onClick={() => {
+                          setBusyInvoiceId(invoice.id);
+                          loadInvoicePrintData(invoice.id, printedByName)
+                            .then((data) => {
+                              setSendData(data);
+                              setSendOpen(true);
+                            })
+                            .catch((error: unknown) =>
+                              toast({
+                                variant: "destructive",
+                                title: "تعذر تجهيز الفاتورة للإرسال",
+                                description: errorMessage(error),
+                              }),
+                            )
+                            .finally(() => setBusyInvoiceId(null));
+                        }}
+                      >
+                        <Send className="h-3.5 w-3.5" />
                       </Button>
                       {invoice.is_temporary ? (
                         <Button
@@ -783,6 +760,17 @@ export default function Billing() {
         appointment={invoiceContext}
       />
       <RecordPaymentDialog invoice={paymentTarget} onOpenChange={() => setPaymentTarget(null)} organizationId={organization?.id} />
+      <SendInvoiceDialog
+        data={sendData}
+        open={sendOpen}
+        onOpenChange={(next) => {
+          setSendOpen(next);
+          if (!next) setSendData(null);
+        }}
+        onPrint={() => {
+          if (sendData) printInvoiceReceipt(sendData);
+        }}
+      />
       <ReturnInvoiceDialog
         invoice={returnTarget}
         onOpenChange={() => setReturnTarget(null)}
