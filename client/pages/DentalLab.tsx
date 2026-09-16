@@ -1,9 +1,9 @@
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronLeft, Plus, Smile, Wallet, Trash2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
-import { formatAmount, formatCount, formatDate, useLocaleSettings } from "@/lib/locale";
+import { formatAmount, formatCount, formatDate, formatDateTime, useLocaleSettings } from "@/lib/locale";
 import type {
   DentalLabBalanceRow,
   DentalLabItemRow,
@@ -16,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -30,7 +31,14 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import PatientPicker from "@/components/shared/PatientPicker";
+import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
+import { useSessionDoctor } from "@/lib/session-doctor";
+import {
+  LabBoardTab,
+  LabByDoctorTab,
+  LabPerformanceTab,
+} from "@/components/dental/DentalLabPanels";
 import { errorMessage } from "@/lib/error-message";
 
 /**
@@ -58,11 +66,48 @@ const STATUS_LABELS_AR: Record<DentalLabOrderStatus, string> = {
  * «ملغاة» نهاية لا رجوع منها من هذه الشاشة: الرجوع عنها قرار مالي يحتاج
  * معالجة السندات أوّلًا.
  */
-const ALLOWED_STATUS_MOVES: Record<DentalLabOrderStatus, DentalLabOrderStatus[]> = {
-  pending: ["in_progress", "delivered", "cancelled"],
-  in_progress: ["pending", "delivered", "cancelled"],
-  delivered: ["in_progress"],
-  cancelled: [],
+/**
+ * أفعال الطلبية — **أفعالٌ لا حالات**.
+ *
+ * القائمة القديمة كانت تعرض الحالات الأربع، فيُنقل «تم التسليم» إلى «قيد
+ * الانتظار» بضغطة، ويُكتب `status` وحده بلا طابعه الزمنيّ. وهذه تعرض ما
+ * يصحّ فعله من الحالة الحالية، وكلٌّ منها يستدعي `app_dental_lab_transition`
+ * (0166) فتكتب القاعدة الحالة والطابع والحدث معًا.
+ *
+ * و«الإعادة» ليست حالة: التركيبة التي عادت من التجربة ما زالت عند المعمل.
+ * تُسجَّل حدثًا بسببه، ومنه تُحسب نسبة إعادة كل معمل.
+ */
+type LabAction = "send" | "try_in" | "rework" | "receive" | "deliver" | "reopen" | "cancel";
+
+const LAB_ACTIONS: Record<
+  LabAction,
+  { label: string; done: string; from: DentalLabOrderStatus[]; needsReason?: boolean }
+> = {
+  send:    { label: "إرسال للمعمل", done: "سُجِّل إرسال الطلبية", from: ["pending"] },
+  try_in:  { label: "تجربة",        done: "سُجِّلت التجربة",      from: ["in_progress"] },
+  rework:  { label: "إعادة",        done: "سُجِّلت الإعادة",      from: ["in_progress"], needsReason: true },
+  receive: { label: "استلام",       done: "سُجِّل الاستلام",      from: ["in_progress"] },
+  deliver: { label: "تسليم للمريض", done: "سُلِّمت الطلبية",      from: ["pending", "in_progress"] },
+  reopen:  { label: "إعادة فتح",    done: "أُعيد فتح الطلبية",   from: ["delivered"], needsReason: true },
+  cancel:  { label: "إلغاء",        done: "أُلغيت الطلبية",      from: ["pending", "in_progress"], needsReason: true },
+};
+
+/** الترتيب المعروض — مسار العمل من اليمين إلى اليسار كما يجري فعلًا. */
+const LAB_ACTION_ORDER: LabAction[] = [
+  "send",
+  "try_in",
+  "rework",
+  "receive",
+  "deliver",
+  "reopen",
+  "cancel",
+];
+
+const LAB_STATUS_BADGE: Record<string, string> = {
+  pending: "bg-slate-100 text-slate-700",
+  in_progress: "bg-sky-100 text-sky-700",
+  delivered: "bg-emerald-100 text-emerald-700",
+  cancelled: "bg-rose-100 text-rose-700",
 };
 
 /**
@@ -135,6 +180,7 @@ function useVoidedLabVouchers(organizationId: string | undefined) {
 
 export default function DentalLab() {
   const { organization } = useOrganizationAccess();
+  const { doctorId: scopeDoctorId, isDoctorScope } = useSessionDoctor();
   const labs = useDentalLabs(organization?.id);
 
   return (
@@ -142,9 +188,11 @@ export default function DentalLab() {
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-bold">
           <Smile className="h-6 w-6 text-primary" />
-          معامل الأسنان
+          معمل الأسنان
         </h1>
-        <p className="text-sm text-muted-foreground">طلبيات التركيبات، كتالوج أصناف كل معمل، وأرصدة المعامل</p>
+        <p className="text-sm text-muted-foreground">
+          طلبيات التركيبات ومتابعتها، وأداء المعامل، وكتالوج الأصناف، والأرصدة
+        </p>
       </div>
 
       {!labs.isLoading && (labs.data ?? []).length === 0 && (
@@ -156,12 +204,30 @@ export default function DentalLab() {
         </Card>
       )}
 
-      <Tabs defaultValue="orders">
-        <TabsList>
+      {/* اللوحة أوّلًا لا الطلبيات: من يفتح القسم يسأل «ما الذي يحتاج
+          تصرّفًا اليوم؟» قبل أن يسأل «ما الطلبيات؟». */}
+      <Tabs defaultValue="board">
+        <TabsList className="flex-wrap">
+          <TabsTrigger value="board">اللوحة</TabsTrigger>
           <TabsTrigger value="orders">الطلبيات</TabsTrigger>
+          <TabsTrigger value="by-doctor">حسب الطبيب</TabsTrigger>
+          <TabsTrigger value="labs">أداء المعامل</TabsTrigger>
           <TabsTrigger value="items">أصناف المعامل</TabsTrigger>
           <TabsTrigger value="balances">الأرصدة</TabsTrigger>
         </TabsList>
+        <TabsContent value="board" className="mt-4">
+          {/* الطبيب الداخل بصفته يرى طلبياته هو. وغيرُه يرى الكلّ. */}
+          <LabBoardTab
+            organizationId={organization?.id}
+            doctorId={isDoctorScope ? scopeDoctorId : null}
+          />
+        </TabsContent>
+        <TabsContent value="by-doctor" className="mt-4">
+          <LabByDoctorTab organizationId={organization?.id} />
+        </TabsContent>
+        <TabsContent value="labs" className="mt-4">
+          <LabPerformanceTab organizationId={organization?.id} />
+        </TabsContent>
         <TabsContent value="orders" className="mt-4">
           <OrdersTab organizationId={organization?.id} labs={labs.data ?? []} />
         </TabsContent>
@@ -229,51 +295,32 @@ function OrdersTab({
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
-  const updateStatus = useMutation({
-    mutationFn: async ({
-      id,
-      status,
-      currentStatus,
-      paidAmount,
-    }: {
-      id: string;
-      status: DentalLabOrderStatus;
-      currentStatus: DentalLabOrderStatus;
-      paidAmount: number;
-    }) => {
-      // الحارس مكرَّر هنا لا في القائمة وحدها: القائمة تمنع الاختيار الخاطئ،
-      // وهذا يمنع تنفيذه لو تغيّرت حالة الطلبية من مستخدم آخر بعد آخر تحميل.
-      if (!ALLOWED_STATUS_MOVES[currentStatus]?.includes(status))
-        throw new Error(
-          `انتقال غير مشروع: من «${STATUS_LABELS_AR[currentStatus]}» إلى «${STATUS_LABELS_AR[status]}»`,
-        );
-      if (status === "cancelled" && paidAmount > 0)
-        throw new Error("الطلبية سُدّد عليها مبلغ — ألغِ سندات صرفها أولًا ثم ألغِ الطلبية");
+  /** الطلبية التي يُطلب لها سببٌ قبل تنفيذ إجرائها. */
+  const [reasonFor, setReasonFor] = useState<{ id: string; action: LabAction } | null>(null);
 
-      const patch: Record<string, unknown> = { status };
-      // تاريخ الاستلام يُمسح عند الخروج من «تم التسليم»: تركه كان يُنتج طلبية
-      // «قيد التنفيذ» ولها تاريخ استلام — سطرٌ يكذّب نفسه في السجل.
-      patch.received_date = status === "delivered" ? new Date().toISOString().slice(0, 10) : null;
-      const { data, error } = await supabase
-        .from("dental_lab_orders")
-        .update(patch)
-        .eq("id", id)
-        // شرط الحالة الحالية يجعل التحديث فاشلًا (صفر صفوف) إن سبقك غيرك إليها
-        .eq("status", currentStatus)
-        .select("id");
+  const transition = useMutation({
+    mutationFn: async ({ id, action, note }: { id: string; action: LabAction; note?: string }) => {
+      const { error } = await supabase.rpc("app_dental_lab_transition", {
+        p_order_id: id,
+        p_action: action,
+        p_note: note ?? null,
+      });
       if (error) throw error;
-      if (!data || data.length === 0)
-        throw new Error("لم يُحفظ التغيير — تغيّرت حالة الطلبية أو لا تسمح صلاحيتك");
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ["dental-lab-orders", organizationId] });
-      // عرض الأرصدة يُجمَّع من الطلبيات، فإلغاء طلبية يغيّر إجمالي المعمل
+      // الأرصدة تُجمَّع من الطلبيات، واللوحات تقرأ منظور 0166
       queryClient.invalidateQueries({ queryKey: ["dental-lab-balances", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["dental-lab-board"] });
+      queryClient.invalidateQueries({ queryKey: ["dental-lab-by-doctor"] });
+      queryClient.invalidateQueries({ queryKey: ["dental-lab-by-lab"] });
+      setReasonFor(null);
+      toast({ title: LAB_ACTIONS[variables.action].done });
     },
     onError: (error: unknown) =>
       toast({
         variant: "destructive",
-        title: "تعذر تحديث الحالة",
+        title: "تعذّر تنفيذ الإجراء",
         description: errorMessage(error),
       }),
   });
@@ -360,35 +407,32 @@ function OrdersTab({
                     {formatAmount(remaining)}
                   </TableCell>
                   <TableCell>
-                    <Select
-                      value={order.status}
-                      disabled={
-                        (ALLOWED_STATUS_MOVES[order.status as DentalLabOrderStatus] ?? []).length === 0
-                      }
-                      onValueChange={(value) =>
-                        updateStatus.mutate({
-                          id: order.id,
-                          status: value as DentalLabOrderStatus,
-                          currentStatus: order.status as DentalLabOrderStatus,
-                          paidAmount: paid,
-                        })
-                      }
-                    >
-                      <SelectTrigger className="h-8 w-36">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {/* الحالة الحالية معروضة لتُقرأ، ومعطَّلة لأنها ليست انتقالًا */}
-                        <SelectItem value={order.status} disabled>
-                          {STATUS_LABELS_AR[order.status as DentalLabOrderStatus] ?? order.status}
-                        </SelectItem>
-                        {(ALLOWED_STATUS_MOVES[order.status as DentalLabOrderStatus] ?? []).map((next) => (
-                          <SelectItem key={next} value={next}>
-                            {STATUS_LABELS_AR[next]}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    {/* **أفعالٌ لا حالات.** القائمة القديمة كانت تعرض الحالات
+                        الأربع فيُختار منها أيّها كان؛ وهذه تعرض ما يصحّ فعله
+                        من هنا، والقاعدة تفرض الباقي وتكتب طابعه الزمنيّ. */}
+                    <div className="flex flex-wrap items-center gap-1">
+                      <Badge className={LAB_STATUS_BADGE[order.status] ?? ""}>
+                        {STATUS_LABELS_AR[order.status as DentalLabOrderStatus] ?? order.status}
+                      </Badge>
+                      {LAB_ACTION_ORDER.filter((action) =>
+                        LAB_ACTIONS[action].from.includes(order.status as DentalLabOrderStatus),
+                      ).map((action) => (
+                        <Button
+                          key={action}
+                          size="sm"
+                          variant={action === "cancel" ? "ghost" : "outline"}
+                          className={`h-7 px-2 text-[11px] ${action === "cancel" ? "text-destructive" : ""}`}
+                          disabled={transition.isPending}
+                          onClick={() =>
+                            LAB_ACTIONS[action].needsReason
+                              ? setReasonFor({ id: order.id, action })
+                              : transition.mutate({ id: order.id, action })
+                          }
+                        >
+                          {LAB_ACTIONS[action].label}
+                        </Button>
+                      ))}
+                    </div>
                   </TableCell>
                   <TableCell>
                     {remaining > 0 && (
@@ -403,6 +447,7 @@ function OrdersTab({
                     )}
                   </TableCell>
                 </TableRow>
+                {isOpen && <OrderTimelineRow orderId={order.id} />}
                 {isOpen && items.length > 0 && (
                   <TableRow className="bg-muted/30">
                     <TableCell colSpan={10} className="py-2">
@@ -444,6 +489,18 @@ function OrdersTab({
         )}
       </CardContent>
       <NewDentalLabOrderDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organizationId} labs={labs} />
+      {/* السبب يُطلب **قبل** الاستدعاء: القاعدة ترفض بدونه، وطلبُه بعد الرفض
+          يجعل الموظّف يرى رسالة خطأ على فعلٍ قصده. */}
+      <LabReasonDialog
+        target={reasonFor}
+        pending={transition.isPending}
+        onClose={() => setReasonFor(null)}
+        onConfirm={(note) => {
+          if (!reasonFor) return;
+          transition.mutate({ id: reasonFor.id, action: reasonFor.action, note });
+        }}
+      />
+
       <RegisterExpenseDialog
         organizationId={organizationId}
         order={expenseFor}
@@ -473,6 +530,24 @@ function NewDentalLabOrderDialog({
   const [deliveryDate, setDeliveryDate] = useState("");
   const [shadeGuideId, setShadeGuideId] = useState("");
   const [shadeId, setShadeId] = useState("");
+  /**
+   * نوع الحالة والمادّة والأولوية — أعمدة 0166.
+   *
+   * كانت تُكتب نصًّا حرًّا في وصف البند: «تاج زركونيا 11» في طلبية و«زركون
+   * تاج» في أخرى. فلا يُفرز، ولا يُقارن سعرُ مادّةٍ بين معملين، ولا يُعرف
+   * متوسّط زمن إنجاز الجسور. وهي في القاعدة لوائح تُدار من شاشة اللوائح.
+   */
+  const [caseTypeId, setCaseTypeId] = useState("");
+  const [materialId, setMaterialId] = useState("");
+  const [priority, setPriority] = useState("normal");
+  /**
+   * الطلبية المُعادة: تُربط بأصلها بسببٍ إلزاميّ (قيدٌ في القاعدة).
+   *
+   * بلا الربط تُفتح طلبيةٌ منفصلة فينكسر أثر الحالة الواحدة، ويبدو المعمل
+   * أكثر إنتاجًا ممّا هو — طلبيتان حيث العمل واحد أُعيد.
+   */
+  const [reworkOfId, setReworkOfId] = useState("");
+  const [reworkReason, setReworkReason] = useState("");
   const [note, setNote] = useState("");
   const [itemDescription, setItemDescription] = useState("");
   const [toothNumbers, setToothNumbers] = useState("");
@@ -545,6 +620,11 @@ function NewDentalLabOrderDialog({
     setDeliveryDate("");
     setShadeGuideId("");
     setShadeId("");
+    setCaseTypeId("");
+    setMaterialId("");
+    setPriority("normal");
+    setReworkOfId("");
+    setReworkReason("");
     setNote("");
     setItemDescription("");
     setToothNumbers("");
@@ -597,6 +677,32 @@ function NewDentalLabOrderDialog({
         },
       ]
     : [];
+  /**
+   * ما يصلح أن تكون هذه إعادةً له.
+   *
+   * المُسلَّم وحده: طلبيةٌ ما زالت عند المعمل تُعاد بإجراء «إعادة» عليها لا
+   * بفتح طلبيةٍ جديدة. وتسعون يومًا حدٌّ عمليّ — تركيبةٌ سُلِّمت قبل سنة
+   * عودتها حالةٌ جديدة لا إعادة.
+   */
+  const reworkCandidates = useQuery({
+    queryKey: ["dental-lab-rework-candidates", organizationId],
+    enabled: Boolean(organizationId) && open,
+    queryFn: async () => {
+      const since = new Date();
+      since.setDate(since.getDate() - 90);
+      const { data, error } = await supabase
+        .from("v_dental_lab_orders")
+        .select("id, order_number, patient_name, lab_name")
+        .eq("organization_id", organizationId)
+        .eq("status", "delivered")
+        .gte("order_date", since.toISOString().slice(0, 10))
+        .order("order_number", { ascending: false })
+        .limit(100);
+      if (error) throw error;
+      return (data ?? []) as { id: string; order_number: number; patient_name: string | null; lab_name: string | null }[];
+    },
+  });
+
   const allLines = [...lines, ...pendingLine];
   const orderTotal = allLines.reduce((sum, line) => sum + line.price * line.qty, 0);
 
@@ -605,6 +711,10 @@ function NewDentalLabOrderDialog({
       if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
       if (!distributorId) throw new Error("اختر المعمل");
       if (allLines.length === 0) throw new Error("أضف تركيبة واحدة على الأقل");
+      // القاعدة تفرض هذا بقيدٍ أيضًا؛ وفحصه هنا يجعل الرفض مستحيلًا بدل أن
+      // يكون رسالة خطأ بعد الضغط.
+      if (reworkOfId && !reworkReason.trim())
+        throw new Error("طلبية الإعادة تحتاج سببًا — بلا «لماذا» لا يُقاس أداء المعمل");
       const net = orderTotal;
       const { data: order, error } = await supabase
         .from("dental_lab_orders")
@@ -617,6 +727,11 @@ function NewDentalLabOrderDialog({
           doctor_id: doctorId || null,
           shade_guide_id: shadeGuideId || null,
           shade_id: shadeId || null,
+          case_type_value_id: caseTypeId || null,
+          material_value_id: materialId || null,
+          priority,
+          rework_of_order_id: reworkOfId || null,
+          rework_reason: reworkOfId ? reworkReason.trim() : null,
           note: note.trim() || null,
           total_amount: net,
         })
@@ -695,6 +810,38 @@ function NewDentalLabOrderDialog({
             <Label>المريض</Label>
             <PatientPicker onSelect={(p) => setPatient({ id: p.id, name_ar: p.name_ar })} />
             {patient && <p className="text-xs text-muted-foreground">المحدَّد: {patient.name_ar}</p>}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>نوع الحالة</Label>
+            <LookupSelect
+              categoryKey="dental_lab_case_types"
+              value={caseTypeId}
+              onChange={setCaseTypeId}
+              placeholder="تاج، جسر، طقم..."
+              allowClear
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>المادّة</Label>
+            <LookupSelect
+              categoryKey="dental_lab_materials"
+              value={materialId}
+              onChange={setMaterialId}
+              placeholder="زركونيا، إيماكس..."
+              allowClear
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الأولوية</Label>
+            <Select value={priority} onValueChange={setPriority}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="normal">عادية</SelectItem>
+                <SelectItem value="urgent">عاجلة</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>تاريخ الطلب</Label>
@@ -788,6 +935,43 @@ function NewDentalLabOrderDialog({
               <span className="mr-2 text-xs font-normal text-muted-foreground">
                 ({allLines.length} تركيبة)
               </span>
+            </div>
+          )}
+          {/* الإعادة تُربط بأصلها: طلبيةٌ منفصلة تكسر أثر الحالة الواحدة،
+              وتجعل المعمل يبدو أكثر إنتاجًا ممّا هو. */}
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label>هذه إعادة لطلبية سابقة؟ (اختياري)</Label>
+            <Select
+              value={reworkOfId || NONE_ORDER}
+              onValueChange={(value) => setReworkOfId(value === NONE_ORDER ? "" : value)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="لا — طلبية جديدة" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE_ORDER}>لا — طلبية جديدة</SelectItem>
+                {(reworkCandidates.data ?? []).map((row) => (
+                  <SelectItem key={row.id} value={row.id}>
+                    #{row.order_number}
+                    {row.patient_name ? ` · ${row.patient_name}` : ""}
+                    {row.lab_name ? ` · ${row.lab_name}` : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {reworkOfId && (
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <Label>سبب الإعادة *</Label>
+              <Input
+                value={reworkReason}
+                onChange={(e) => setReworkReason(e.target.value)}
+                placeholder="مثال: اللون غير مطابق، أو الإطباق مرتفع"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                السبب إلزاميّ في القاعدة: نسبة الإعادة تقول «كم»، والسبب يقول «لماذا» —
+                وبلا الثاني لا يُصلَح معمل.
+              </p>
             </div>
           )}
           <div className="flex flex-col gap-1.5 sm:col-span-2">
@@ -1142,5 +1326,135 @@ function BalancesTab({ organizationId }: { organizationId: string | undefined })
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * سبب الإعادة أو الإلغاء أو إعادة الفتح.
+ *
+ * الثلاثة تُلزم بسببٍ في القاعدة (0166): الإعادة لأنّ «كم» بلا «لماذا» لا
+ * يُصلح معملًا، والإلغاء وإعادة الفتح لأنّهما يمسّان مستندًا ماليًّا.
+ */
+function LabReasonDialog({
+  target,
+  pending,
+  onClose,
+  onConfirm,
+}: {
+  target: { id: string; action: LabAction } | null;
+  pending: boolean;
+  onClose: () => void;
+  onConfirm: (note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  useEffect(() => setNote(""), [target?.id, target?.action]);
+
+  return (
+    <Dialog open={Boolean(target)} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{target ? LAB_ACTIONS[target.action].label : ""}</DialogTitle>
+          <DialogDescription>
+            السبب يُحفظ في سجلّ أحداث الطلبية، ومنه تُحسب نسبة إعادة كل معمل.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label>السبب *</Label>
+          <Textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            تراجع
+          </Button>
+          <Button disabled={!note.trim() || pending} onClick={() => onConfirm(note.trim())}>
+            {pending ? "جارٍ التنفيذ..." : "تأكيد"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** Radix Select يرفض القيمة الفارغة، فيُستعمل رمزٌ صريح لـ«لا». */
+const NONE_ORDER = "__none_order__";
+
+const EVENT_LABELS: Record<string, string> = {
+  created: "أُنشئت",
+  sent: "أُرسلت للمعمل",
+  try_in: "تجربة",
+  rework: "إعادة",
+  received: "استُلمت من المعمل",
+  delivered: "سُلِّمت للمريض",
+  cancelled: "أُلغيت",
+  note: "ملاحظة",
+};
+
+const EVENT_TONE: Record<string, string> = {
+  rework: "text-amber-700",
+  cancelled: "text-rose-600",
+  delivered: "text-emerald-700",
+};
+
+/**
+ * خطّ أحداث الطلبية — «متى» لا «أين هي».
+ *
+ * الحالة تقول أين وصلت الطلبية اليوم، وهذا يقول متى صارت كذلك ومَن نقلها
+ * وبأيّ سبب. والسؤال الذي يُطرح فعلًا عند الخلاف مع المعمل هو الثاني:
+ * «متى أرسلناها؟» لا «ما حالتها؟».
+ *
+ * يُجلب عند فتح الصفّ لا مع القائمة: جلب أحداث مئة طلبية لأجل واحدة قد
+ * تُفتح هدرٌ في كل فتح للشاشة.
+ */
+function OrderTimelineRow({ orderId }: { orderId: string }) {
+  const { calendarDisplay } = useLocaleSettings();
+  const events = useQuery({
+    queryKey: ["dental-lab-events", orderId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("dental_lab_order_events")
+        .select("id, event_type, occurred_at, note")
+        .eq("order_id", orderId)
+        .order("occurred_at", { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as {
+        id: string;
+        event_type: string;
+        occurred_at: string;
+        note: string | null;
+      }[];
+    },
+  });
+
+  return (
+    <TableRow className="bg-muted/20">
+      <TableCell colSpan={10} className="py-2">
+        <span className="mb-1 block text-xs font-semibold">مسار الطلبية</span>
+        {events.isLoading && <Skeleton className="h-8 w-full" />}
+        {events.isError && (
+          <span className="text-xs text-destructive">
+            تعذّر تحميل المسار: {errorMessage(events.error)} — الترقية{" "}
+            <span className="font-mono">0166</span> تُنشئ هذا السجلّ.
+          </span>
+        )}
+        {!events.isLoading && !events.isError && (events.data ?? []).length === 0 && (
+          <span className="text-xs text-muted-foreground">
+            لا أحداث مسجَّلة — الطلبية أُنشئت قبل ترقية المسار، أو لم يُنفَّذ عليها إجراء بعد.
+          </span>
+        )}
+        <div className="flex flex-col gap-1">
+          {(events.data ?? []).map((event) => (
+            <div key={event.id} className="flex flex-wrap items-baseline gap-2 text-xs">
+              <span className="font-mono tabular-nums text-muted-foreground">
+                {formatDateTime(event.occurred_at, calendarDisplay)}
+              </span>
+              <span className={`font-medium ${EVENT_TONE[event.event_type] ?? ""}`}>
+                {EVENT_LABELS[event.event_type] ?? event.event_type}
+              </span>
+              {event.note && <span className="text-muted-foreground">— {event.note}</span>}
+            </div>
+          ))}
+        </div>
+      </TableCell>
+    </TableRow>
   );
 }

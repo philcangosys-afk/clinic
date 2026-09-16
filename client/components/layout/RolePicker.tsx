@@ -6,6 +6,7 @@ import {
   ClipboardList,
   Microscope,
   ShieldCheck,
+  Smile,
   Stethoscope,
   type LucideIcon,
 } from "lucide-react";
@@ -24,6 +25,7 @@ const ICONS: Record<DemoRoleKey, LucideIcon> = {
   doctor: Stethoscope,
   radiology_technician: Activity,
   lab_technician: Microscope,
+  dental_lab_technician: Smile,
   accountant: Banknote,
 };
 

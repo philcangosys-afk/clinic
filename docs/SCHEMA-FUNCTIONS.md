@@ -1,4 +1,4 @@
-# دوالّ قاعدة ZainCare (437)
+# دوالّ قاعدة ZainCare (438)
 
 > **مُولَّد آليًّا — لا يُحرَّر يدويًّا:** `python scripts/schema-doc.py`
 
@@ -1169,6 +1169,18 @@ app_decide_patient_change_request(
   p_approve boolean,
   p_note text default null
 ) returns void
+```
+
+### app_dental_lab_transition(3)
+
+عُرِّفت في: `0166`
+
+```sql
+app_dental_lab_transition(
+  p_order_id uuid,
+  p_action text,
+  p_note text default null
+) returns text
 ```
 
 ### app_dental_procedure_kinds(0)

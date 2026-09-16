@@ -21,6 +21,7 @@ export type DemoRoleKey =
   | "doctor"
   | "radiology_technician"
   | "lab_technician"
+  | "dental_lab_technician"
   | "accountant";
 
 export type DemoRoleDefinition = {
@@ -68,6 +69,9 @@ export const DEMO_ROLES: DemoRoleDefinition[] = [
       "vitals",
       "prescriptions",
       "documents",
+      // الطبيب صاحب طلبية التركيب: يرسلها ويتابعها. و`0165` تمنحه
+      // `dental_lab.view` و`dental_lab.manage` في القاعدة.
+      "dental-lab",
     ],
   },
   {
@@ -85,6 +89,18 @@ export const DEMO_ROLES: DemoRoleDefinition[] = [
     modules: ["laboratory", "vitals", "patients", "documents"],
   },
   {
+    key: "dental_lab_technician",
+    label: "معمل الأسنان",
+    description: "طلبيات التركيبات ومتابعتها مع المعامل، والأصناف والأرصدة",
+    home: "/dental-lab",
+    /**
+     * ثلاث وحدات لا أكثر: القسم، والمرضى لقراءة الملفّ الذي تخصّه الطلبية،
+     * والمشتريات لأنّ المعامل مورّدون تُدار بياناتهم هناك. وما زاد على ذلك
+     * فتحٌ لا يحتاجه عمله.
+     */
+    modules: ["dental-lab", "patients", "procurement"],
+  },
+  {
     key: "accountant",
     label: "المحاسب",
     description: "الفوترة والمدفوعات والقيود والتقارير المالية",
@@ -98,6 +114,9 @@ export const DEMO_ROLES: DemoRoleDefinition[] = [
       "price-lists",
       "packages",
       "offers",
+      // المحاسب يرى أرصدة المعامل ولا يُنشئ طلبيات — والقاعدة تمنحه
+      // `dental_lab.view` دون `dental_lab.manage`.
+      "dental-lab",
     ],
   },
 ];

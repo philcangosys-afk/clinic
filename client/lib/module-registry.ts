@@ -111,7 +111,7 @@ export const moduleRegistry: ModuleRegistryItem[] = [
   { id: "patient-portal", label: "بوابة المريض", icon: Contact2, featureKey: "patient_portal", requiredPermission: "patient_portal.view", category: "الاستقبال والمواعيد", order: 46 },
   { id: "documents", label: "المستندات والموافقات", icon: FileStack, featureKey: "documents", requiredPermission: "documents.view", category: "الإدارة", order: 276 },
   { id: "assets", label: "الأصول والصيانة", icon: Wrench, featureKey: "assets", requiredPermission: "assets.view", category: "التشغيل والإدارة", order: 334 },
-  { id: "dental-lab", label: "معامل الأسنان", icon: Smile, featureKey: "dental_lab", requiredPermission: "dental_lab.view", category: "التشغيل والإدارة", order: 335 },
+  { id: "dental-lab", label: "معمل الأسنان", icon: Smile, featureKey: "dental_lab", requiredPermission: "dental_lab.view", category: "التشغيل والإدارة", order: 335 },
   { id: "messaging", label: "الرسائل والتنبيهات", icon: MessageCircle, badge: "3", featureKey: "messaging", requiredPermission: "messaging.view", category: "التشغيل والإدارة", order: 340 },
   { id: "external-clients", label: "العملاء الخارجيون", icon: Contact2, featureKey: "messaging", requiredPermission: "messaging.view", category: "التشغيل والإدارة", order: 345 },
   { id: "audit", label: "سجل التدقيق", icon: LockKeyhole, badge: "107", featureKey: "audit_log", requiredPermission: "audit_log.view", category: "التشغيل والإدارة", order: 350 },
