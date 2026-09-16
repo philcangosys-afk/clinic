@@ -102,7 +102,7 @@ type QueueRow = {
   note: string | null;
   patient_name_en: string | null;
   visit_type_name: string | null;
-  sent_by_email: string | null;
+  sent_by_name: string | null;
   agreement_remaining: number | null;
   deferred_amount: number | null;
   treated: boolean | null;
@@ -429,7 +429,16 @@ export default function ReceptionBoard({
       {queue.isLoading && <Skeleton className="h-72 w-full" />}
 
       {!queue.isLoading && (
-        <div className="overflow-x-auto rounded-lg border">
+        <div
+          className={
+            "overflow-x-auto rounded-lg border text-xs " +
+            // الصفّ الواحد: سطرٌ واحد لا يلتفّ، وحشوٌ ضيّق، وخطٌّ أصغر.
+            "[&_td]:px-1.5 [&_td]:py-1 [&_td]:align-middle [&_th]:px-1.5 [&_th]:py-1.5 " +
+            "[&_td]:text-xs [&_th]:text-[11px] [&_td]:leading-tight [&_th]:leading-tight " +
+            // الشارات داخل الجدول تتقلّص معه، وإلّا فرضت هي ارتفاع الصفّ.
+            "[&_td_.badge]:text-[10px]"
+          }
+        >
           <Table>
             <TableHeader>
               <TableRow>
@@ -469,7 +478,7 @@ export default function ReceptionBoard({
                   {/* عنوان المجموعة: الطبيب وعدد منتظريه — نظير «اسم الطبيب: د.
                       فلان» في نظام العيادات المرجعيّ. */}
                   <TableRow className="bg-muted/60 hover:bg-muted/60">
-                    <TableCell colSpan={QUEUE_COLUMN_COUNT} className="py-1.5 text-sm font-bold">
+                    <TableCell colSpan={QUEUE_COLUMN_COUNT} className="!py-0.5 text-[11px] font-bold">
                       اسم الطبيب: {group.doctorName}
                       <span className="ms-2 font-normal text-muted-foreground tabular-nums">
                         ({group.items.length})
@@ -490,27 +499,30 @@ export default function ReceptionBoard({
                       className="text-start"
                       onClick={() => navigate(`/patients/${row.patient_id}`)}
                     >
-                      <div className="font-medium hover:text-primary">{row.patient_name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {[row.file_number && `ملف ${row.file_number}`, row.mobile_number]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </div>
-                    </button>
-                    {(row.medical_alert || row.blood_type) && (
-                      <div className="mt-1 flex flex-wrap gap-1">
+                      <span className="flex flex-wrap items-center gap-1">
+                        <span className="font-medium hover:text-primary">{row.patient_name}</span>
                         {row.blood_type && (
-                          <Badge variant="outline" className="text-[10px]">
+                          <Badge variant="outline" className="px-1 py-0 text-[10px]">
                             {row.blood_type}
                           </Badge>
                         )}
+                        {/* التنبيه الطبّي يُقتطع ولا يُلفّ: سطرٌ ثانٍ في خليةٍ
+                            واحدة يرفع ارتفاع الصفّ كلّه، والنصّ كامل في
+                            التلميح عند الوقوف عليه. */}
                         {row.medical_alert && (
-                          <Badge variant="destructive" className="max-w-[12rem] truncate text-[10px]">
+                          <Badge
+                            variant="destructive"
+                            title={row.medical_alert}
+                            className="max-w-[9rem] truncate px-1 py-0 text-[10px]"
+                          >
                             {row.medical_alert}
                           </Badge>
                         )}
-                      </div>
-                    )}
+                      </span>
+                      <span className="block text-[10px] text-muted-foreground">
+                        {row.mobile_number ?? ""}
+                      </span>
+                    </button>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs">
                     {row.patient_name_en ?? "—"}
@@ -553,7 +565,7 @@ export default function ReceptionBoard({
                     {row.waiting_minutes === null ? "—" : `${row.waiting_minutes} د`}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs">
-                    {row.sent_by_email ?? "—"}
+                    {row.sent_by_name ?? "—"}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs tabular-nums">
                     {Number(row.agreement_remaining ?? 0) > 0 ? (
@@ -608,7 +620,7 @@ export default function ReceptionBoard({
                     )}
                   </TableCell>
                   <TableCell>
-                    <div className="flex flex-wrap gap-1">
+                    <div className="flex flex-wrap gap-0.5 [&_button]:h-6 [&_button]:px-1.5 [&_button]:text-[11px] [&_svg]:h-3 [&_svg]:w-3">
                       {row.status === "confirmed" && can("reception.check_in") && (
                         <Button
                           size="sm"

@@ -21,7 +21,7 @@ export type PaymentReceiptRow = {
   payment_method_name: string | null;
   register_name: string | null;
   doctor_name: string | null;
-  user_email: string | null;
+  user_name: string | null;
   device_name: string | null;
   amount: number | string | null;
   note: string | null;
@@ -81,7 +81,7 @@ export function buildPaymentReceiptHtml(
     ${line("الحساب / الصندوق", row.register_name)}
     ${line("المرجع البنكي", row.bank_transfer_ref)}
     ${line("الطبيب", row.doctor_name)}
-    ${line("المستخدم", row.user_email)}
+    ${line("المستخدم", row.user_name)}
     ${line("اسم الجهاز", row.device_name)}
   </tbody>
 </table>

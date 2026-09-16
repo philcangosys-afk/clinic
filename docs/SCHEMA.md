@@ -5,8 +5,8 @@
 
 ## كيف قُرئ
 
-قُرئت 160 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
-`migrations/0013…0162` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
+قُرئت 162 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
+`migrations/0013…0164` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
 وكل `alter table` تعدّل، وكل `drop` تحذف. فما تراه هنا هو المخطط **بعد آخر
 ترقية**، لا كما كان يوم إنشائه. ودخل المولّد إلى أجسام `do $$ … $$` لأنّ
 معظم قيود المفاتيح تُضاف داخلها بحارس `if not exists`.
@@ -17,9 +17,9 @@
 | --- | ---: | ---: |
 | جداول | 234 | 232 |
 | دوالّ | 437 | 420 |
-| منظورات | 187 | 175 |
+| منظورات | 188 | 175 |
 | مفاتيح ربط | 1063 | 1076 |
-| فهارس | 392 | — |
+| فهارس | 394 | — |
 
 **الجداول والمنظورات تطابق الإنتاج عددًا بعد `0149`** التي تبنّت ستّة كائنات
 كانت تعمل في الإنتاج ولا يُنشئها أيّ ملفّ. الفرق الباقي في المفاتيح يعود إلى
@@ -290,6 +290,7 @@
 - `idx_appointments_branch` على (`organization_id, branch_id`) — *(0062)*
 - `idx_appointments_branch_fk` على (`branch_id`) — *(0124)*
 - `idx_appointments_clinic_fk` على (`clinic_id`) — *(0124)*
+- `idx_appointments_doctor_patient` على (`doctor_id, patient_id`) — *(0164)*
 - `idx_appointments_doctor_time` على (`doctor_id, scheduled_start`) — *(0002)*
 - `idx_appointments_item` على (`item_id`) — *(0074)*
 - `idx_appointments_org_clinic` على (`organization_id, clinic_id`) — *(0051)*
@@ -4829,6 +4830,7 @@
 **فهارس:**
 
 - `idx_patient_visits_branch` على (`organization_id, branch_id`) — *(0062)*
+- `idx_patient_visits_doctor_patient` على (`doctor_id, patient_id`) — *(0164)*
 - `idx_patient_visits_next_visit_date` على (`organization_id, next_visit_date`) — *(0056)*
 - `idx_patient_visits_one_per_appointment` — فريد على (`appointment_id`) — *(0050)*
 - `idx_patient_visits_org` على (`organization_id, visit_date desc`) — *(0006)*
@@ -6833,7 +6835,7 @@
 | `csr_config` | `jsonb` |  |  |  |
 | `created_at` | `timestamptz` | ✔ | `now()` |  |
 
-## المنظورات (187)
+## المنظورات (188)
 
 | المنظور | نوعه | عُرِّف في |
 | --- | --- | --- |
@@ -6874,6 +6876,7 @@
 | `v_doctor_lab_inbox` | منظور | `0155` |
 | `v_doctor_license_status` | منظور | `0081` |
 | `v_doctor_open_visits` | منظور | `0105` |
+| `v_doctor_patients` | منظور | `0164` |
 | `v_doctor_referrals_in` | منظور | `0155` |
 | `v_doctor_requests` | منظور | `0155` |
 | `v_doctor_vitals_inbox` | منظور | `0139` |
@@ -6905,7 +6908,7 @@
 | `v_inventory_on_hand` | منظور | `0038`، `0044` |
 | `v_inventory_warehouse_summary` | منظور | `0038` |
 | `v_invoice_payment_methods` | منظور | `0157` |
-| `v_invoice_payments` | منظور | `0162` |
+| `v_invoice_payments` | منظور | `0163` |
 | `v_invoice_print` | منظور | `0157` |
 | `v_invoice_profitability` | منظور | `0010`، `0143` |
 | `v_invoice_register` | منظور | `0091`، `0144` |
@@ -6961,9 +6964,9 @@
 | `v_radiology_console_queue` | منظور | `0138` |
 | `v_radiology_unreported_orders` | منظور | `0138`، `0144` |
 | `v_radiology_worklist` | منظور | `0084` |
-| `v_reception_queue` | منظور | `0065`، `0161` |
-| `v_reception_queue_by_doctor` | منظور | `0158` |
-| `v_reception_queue_ordered` | منظور | `0161` |
+| `v_reception_queue` | منظور | `0163` |
+| `v_reception_queue_by_doctor` | منظور | `0163` |
+| `v_reception_queue_ordered` | منظور | `0163` |
 | `v_reception_requests` | منظور | `0138` |
 | `v_recruitment_pipeline` | منظور | `0022` |
 | `v_reference_categories` | منظور | `0086` |

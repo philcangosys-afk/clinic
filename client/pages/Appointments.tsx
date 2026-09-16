@@ -30,6 +30,7 @@ import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { localDayRange } from "@/lib/date-range";
 import { formatAmount, formatDate, formatDateTime, formatTime, useLocaleSettings, type CalendarDisplay } from "@/lib/locale";
 import { useMemberNames } from "@/lib/member-names";
+import { useSessionDoctor } from "@/lib/session-doctor";
 import { useLookupTree } from "@/components/shared/LookupTree";
 import PatientCommandsDialog from "@/components/patients/PatientCommandsDialog";
 import { printHtml } from "@/lib/document-merge";
@@ -148,20 +149,35 @@ const APPOINTMENT_ROW_LIMIT = 1000;
  * بتوقيت المستخدم لا بتوقيت الخادم. و`count: "exact"` يكشف بلوغ السقف —
  * قائمة مقصوصة بصمت تُقرأ كأنها كل المواعيد.
  */
-function useRangeAppointments(organizationId: string | undefined, from: string, to: string) {
+function useRangeAppointments(
+  organizationId: string | undefined,
+  from: string,
+  to: string,
+  /**
+   * حصرُ الجدول على طبيبٍ بعينه حين يدخل الموظّف بصفة «الطبيب».
+   *
+   * الحصر في **الاستعلام** لا في المتصفّح: الجدول محدود بسقفٍ من الصفوف
+   * (`APPOINTMENT_ROW_LIMIT`)، فترشيحُ الظاهر منه يجعل الطبيب يرى يومًا
+   * ناقصًا في عيادةٍ مزدحمة — ويظنّه يومه كاملًا.
+   */
+  doctorId?: string | null,
+) {
   return useQuery({
-    queryKey: ["appointments-day", organizationId, from, to],
+    queryKey: ["appointments-day", organizationId, from, to, doctorId ?? ""],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       const bounds = localDayRange(from, to);
-      const { data, error, count } = await supabase
+      let query = supabase
         .from("appointments")
         .select(
           "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
           { count: "exact" },
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
-        .eq("organization_id", organizationId)
+        .eq("organization_id", organizationId);
+      // صفة الطبيب: يومه هو، لا يوم العيادة كلّها
+      if (doctorId) query = query.eq("doctor_id", doctorId);
+      const { data, error, count } = await query
         .gte("scheduled_start", bounds.from ?? `${from}T00:00:00`)
         .lte("scheduled_start", bounds.to ?? `${to}T23:59:59`)
         .order("scheduled_start", { ascending: true })
@@ -301,7 +317,17 @@ export default function Appointments() {
     [visitTypeNodes.data],
   );
 
-  const appointments = useRangeAppointments(organization?.id, rangeFrom, rangeTo);
+  const {
+    doctorId: scopeDoctorId,
+    isDoctorScope,
+    unresolvedDoctor,
+  } = useSessionDoctor();
+  const appointments = useRangeAppointments(
+    organization?.id,
+    rangeFrom,
+    rangeTo,
+    isDoctorScope ? scopeDoctorId : null,
+  );
   const appointmentRows = appointments.data?.rows ?? [];
   const appointmentsCapped = (appointments.data?.matchedCount ?? 0) > appointmentRows.length;
   const websiteAppointments = useUpcomingWebsiteAppointments(organization?.id);
@@ -576,16 +602,29 @@ export default function Appointments() {
     [searchedAppointments],
   );
 
+  /**
+   * الأطباء المعروضون. حين تُحصر الشاشة على طبيب، تُحصر معها **قائمة
+   * الأطباء** لا المواعيد وحدها: وإلّا بقيت أعمدة التقويم ومرشّح الطبيب
+   * وبطاقات الزملاء معروضةً فارغة، فيظنّ الطبيب أنّ زملاءه بلا مواعيد اليوم.
+   */
+  const visibleDoctors = useMemo(
+    () =>
+      isDoctorScope && scopeDoctorId
+        ? (doctors.data ?? []).filter((doctor) => doctor.id === scopeDoctorId)
+        : (doctors.data ?? []),
+    [doctors.data, isDoctorScope, scopeDoctorId],
+  );
+
   const byDoctor = useMemo(() => {
     const map = new Map<string, AppointmentWithRelations[]>();
-    (doctors.data ?? []).forEach((doctor) => map.set(doctor.id, []));
+    visibleDoctors.forEach((doctor) => map.set(doctor.id, []));
     filteredAppointments.forEach((appointment) => {
       const list = map.get(appointment.doctor_id) ?? [];
       list.push(appointment);
       map.set(appointment.doctor_id, list);
     });
     return map;
-  }, [doctors.data, filteredAppointments]);
+  }, [visibleDoctors, filteredAppointments]);
 
   /**
    * التنقّل بوحدة العرض المعروض لا باليوم دائمًا.
@@ -621,10 +660,19 @@ export default function Appointments() {
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 p-4 sm:p-6">
+      {unresolvedDoctor && (
+        <p className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          الصفة «طبيب» ولم يُعرف أيّ طبيبٍ أنت — لا حسابٌ مربوط بسجلّ طبيب
+          (<span className="font-mono">doctors.user_id</span>) ولا طبيبٌ مختار في
+          شاشة الصفة. <strong>المعروض هنا كلّ المنشأة لا ما يخصّك.</strong>
+        </p>
+      )}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">المواعيد</h1>
-          <p className="text-sm text-muted-foreground">جدول الأطباء اليومي</p>
+          <p className="text-sm text-muted-foreground">
+            {isDoctorScope ? "جدولك أنت" : "جدول الأطباء اليومي"}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {/* أسهم اليوم وحقل التاريخ معطَّلة أثناء مرشّح فترة قادم من التقارير:
@@ -803,7 +851,7 @@ export default function Appointments() {
           organizationId={organization?.id}
           selectedDay={day}
           onViewChange={setCalendarView}
-          doctors={doctors.data ?? []}
+          doctors={visibleDoctors}
           clinics={clinicList.data ?? []}
           search={search}
           statusFilter={statusFilter}
@@ -897,7 +945,7 @@ export default function Appointments() {
       {(urlFilterActive || mode === "classic") && !appointments.isLoading && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {[...byDoctor.entries()].map(([doctorId, list]) => {
-            const doctor = (doctors.data ?? []).find((item) => item.id === doctorId);
+            const doctor = visibleDoctors.find((item) => item.id === doctorId);
             return (
               <Card key={doctorId}>
                 <CardHeader>
@@ -967,7 +1015,7 @@ export default function Appointments() {
         appointment={managedAppointment}
         onOpenChange={(open) => { if (!open) setManagedAppointment(null); }}
         organizationId={organization?.id}
-        doctors={doctors.data ?? []}
+        doctors={visibleDoctors}
       />
       <CreateAppointmentDialog
         open={createOpen}
@@ -976,7 +1024,7 @@ export default function Appointments() {
           if (!open) clearRequestParam();
         }}
         organizationId={organization?.id}
-        doctors={doctors.data ?? []}
+        doctors={visibleDoctors}
         defaultDay={prefill?.day ?? day}
         prefill={prefill}
         onConsumePrefill={() => setPrefill(null)}

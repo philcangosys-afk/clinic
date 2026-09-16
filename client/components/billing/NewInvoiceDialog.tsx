@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, Plus, Receipt } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
@@ -851,13 +851,18 @@ export default function NewInvoiceDialog({
     queryFn: async () => {
       const { data, error } = await supabase
         .from("patients")
-        .select("source_value_id, customer_type_value_id")
+        .select("id, source_value_id, customer_type_value_id, id_number")
         .eq("id", patient!.id)
         .eq("organization_id", organizationId)
         .maybeSingle();
       if (error) throw error;
       return (data ?? null) as
-        | { source_value_id: string | null; customer_type_value_id: string | null }
+        | {
+            id: string;
+            source_value_id: string | null;
+            customer_type_value_id: string | null;
+            id_number: string | null;
+          }
         | null;
     },
   });
@@ -868,6 +873,34 @@ export default function NewInvoiceDialog({
     setSourceValueId((current) => current || row.source_value_id || "");
     setClassificationValueId((current) => current || row.customer_type_value_id || "");
   }, [patientContext.data]);
+
+  /**
+   * رقم هوية المريض المختار.
+   *
+   * يُكتب **مرّةً لكل مريض**: اختيارُ مريضٍ يجلب هويّته، وتبديلُ المريض يجلب
+   * هويّة الجديد ويمحو القديمة — وبقاؤها كان يضع هوية مريضٍ على فاتورة
+   * مريضٍ آخر. أمّا ما يكتبه الموظّف يدويًّا لهذا المريض نفسه فيبقى، لأنّ
+   * المرجع هو **تغيّر المريض** لا وصول البيانات.
+   *
+   * ولا طول مفروض على الحقل: منشآتٌ تُسجّل إقاماتٍ وجوازاتٍ تتجاوز عشرة
+   * أرقام، ورفضُها يمنع فوترة مريضٍ حاضر.
+   */
+  const lastIdPatient = useRef<string | null>(null);
+  useEffect(() => {
+    const row = patientContext.data;
+    if (!row) return;
+    if (lastIdPatient.current === row.id) return;
+    lastIdPatient.current = row.id;
+    setIdNumber(row.id_number ?? "");
+  }, [patientContext.data]);
+
+  // إزالة المريض تُخلي الحقل: رقمُ هويةٍ بلا صاحبٍ على الشاشة يُحفظ على
+  // أوّل مريضٍ يُختار بعده.
+  useEffect(() => {
+    if (patient?.id) return;
+    lastIdPatient.current = null;
+    setIdNumber("");
+  }, [patient?.id]);
 
   const effectiveVat = useQuery({
     queryKey: ["effective-vat-rate", organizationId, patient?.id ?? null],

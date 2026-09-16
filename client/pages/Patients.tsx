@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { useSessionDoctor } from "@/lib/session-doctor";
 import type { PatientRow } from "@/lib/database.types";
 import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
 import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
@@ -119,22 +120,55 @@ const EMPTY_FILTERS: Filters = {
   blockedOnly: false,
 };
 
+/** أعمدة قائمة المرضى — مشتركة بين مصدرَي القراءة فلا يفترق أحدهما. */
+const PATIENT_LIST_COLUMNS =
+  "id, file_number, name_ar, name_en, mobile_number, gender, birth_date, id_number, " +
+  "file_date, block_appointments, block_invoices, block_file, block_sms, insurance_company_name";
+
 function usePatientsList(
   organizationId: string | undefined,
   search: string,
   searchScopes: PatientSearchScope[],
   filters: Filters,
+  /**
+   * حصرُ القائمة على مرضى طبيبٍ بعينه.
+   *
+   * حين يُمرَّر، تُقرأ القائمة من `v_doctor_patients` (0164) بدل جدول
+   * `patients`: المنظور يُعرّف «مريض الطبيب» بالعلاقات الأربع التي حدّدها
+   * المالك — المعالج، والمشارك، وصاحب الموعد، وصاحب الزيارة — ويعطي صفًّا
+   * لكل زوج (طبيب، مريض). والأعمدة نفسها لأنّ المنظور يمرّر `patients.*`،
+   * فلا يتغيّر شيءٌ في بقيّة الشاشة.
+   *
+   * ولا يُطبَّق الحصر في المتصفّح: القائمة محدودة بسقفٍ من الصفوف، فترشيحُ
+   * الظاهر منها يترك الطبيب يرى «لا نتائج» ومريضه في الصفحة التالية.
+   */
+  scopedDoctorId?: string | null,
 ) {
   return useQuery({
-    queryKey: ["patients-list", organizationId, search, searchScopes.join("+"), filters],
+    queryKey: [
+      "patients-list",
+      organizationId,
+      search,
+      searchScopes.join("+"),
+      filters,
+      scopedDoctorId ?? "",
+    ],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      let query = supabase
-        .from("patients")
-        .select(
-          "id, file_number, name_ar, name_en, mobile_number, gender, birth_date, id_number, file_date, block_appointments, block_invoices, block_file, block_sms, insurance_company_name",
-        )
-        .eq("organization_id", organizationId)
+      // الفرعان مكتوبان صراحةً لا باسمٍ محسوب: مدقّق الاكتمال يمسح
+      // `from("NAME")` حرفيًّا، واسمٌ داخل شرطٍ ثلاثيّ يجعله يُعلن المنظور
+      // ميتًا وهو مستعمَل.
+      let query = scopedDoctorId
+        ? supabase
+            .from("v_doctor_patients")
+            .select(PATIENT_LIST_COLUMNS)
+            .eq("organization_id", organizationId)
+            .eq("doctor_id", scopedDoctorId)
+        : supabase
+            .from("patients")
+            .select(PATIENT_LIST_COLUMNS)
+            .eq("organization_id", organizationId);
+      query = query
         /**
          * الملفات المدموجة تُستثنى. دالّة الدمج `app_merge_patients` تُعلّم
          * المكرَّر بـ`merged_into_id` وتضع عليه `block_appointments` فقط — لا
@@ -268,7 +302,14 @@ export default function Patients() {
   const [smsOpen, setSmsOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [smsText, setSmsText] = useState("");
-  const patients = usePatientsList(organization?.id, search, searchScopes, filters);
+  const { doctorId: scopeDoctorId, isDoctorScope, unresolvedDoctor } = useSessionDoctor();
+  const patients = usePatientsList(
+    organization?.id,
+    search,
+    searchScopes,
+    filters,
+    isDoctorScope ? scopeDoctorId : null,
+  );
   const doctors = useQuery({
     queryKey: ["doctors-for-patient-filter", organization?.id],
     enabled: Boolean(organization?.id),
@@ -355,9 +396,19 @@ export default function Patients() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">المرضى</h1>
-          <p className="text-sm text-muted-foreground">بحث وفتح ملفات المرضى</p>
+          <p className="text-sm text-muted-foreground">
+            {isDoctorScope ? "مرضاك: من تعالجهم أو تشارك فيهم أو لك معهم موعد" : "بحث وفتح ملفات المرضى"}
+          </p>
         </div>
       </div>
+
+      {unresolvedDoctor && (
+        <p className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+          الصفة «طبيب» ولم يُعرف أيّ طبيبٍ أنت — لا حسابٌ مربوط بسجلّ طبيب
+          (<span className="font-mono">doctors.user_id</span>) ولا طبيبٌ مختار في
+          شاشة الصفة. <strong>المعروض هنا كلّ المنشأة لا ما يخصّك.</strong>
+        </p>
+      )}
 
       <ScreenToolbar
         items={[

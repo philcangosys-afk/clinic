@@ -100,7 +100,7 @@ export function useInvoicePaymentGrid(invoiceId: string | null | undefined) {
         .from("v_invoice_payments")
         .select(
           "allocation_id, voucher_id, voucher_number, voucher_date, movement_label, " +
-            "payment_method_name, register_name, doctor_name, user_email, amount, " +
+            "payment_method_name, register_name, doctor_name, user_name, amount, " +
             "device_name, note, bank_transfer_ref, is_void, void_reason, is_refund",
         )
         .eq("invoice_id", invoiceId)
@@ -325,7 +325,7 @@ export function InvoiceDetailsDialog({
                             </TableCell>
                             <TableCell className="whitespace-nowrap text-xs">{row.register_name ?? "—"}</TableCell>
                             <TableCell className="whitespace-nowrap text-xs">{row.doctor_name ?? "—"}</TableCell>
-                            <TableCell className="whitespace-nowrap text-xs">{row.user_email ?? "—"}</TableCell>
+                            <TableCell className="whitespace-nowrap text-xs">{row.user_name ?? "—"}</TableCell>
                             <TableCell
                               className={`whitespace-nowrap font-semibold tabular-nums ${value < 0 ? "text-rose-600" : ""}`}
                             >

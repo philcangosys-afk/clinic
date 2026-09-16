@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarDays, ChevronLeft, ChevronRight, Clock, ShieldAlert } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { useSessionDoctor } from "@/lib/session-doctor";
 import { usePermissions } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -236,11 +237,25 @@ export default function AppointmentCalendar({
     return { from: startOfDay(anchor), to: addDays(startOfDay(anchor), 1) };
   }, [anchor, view]);
 
+  /**
+   * التقويم يجلب مواعيده باستعلامٍ خاصّ به، فلا يكفي حصرُ استعلام الشاشة:
+   * كان الطبيب يرى يوم العيادة كاملًا في التقويم ويومَه هو في القائمة —
+   * رقمان متناقضان على شاشةٍ واحدة.
+   */
+  const { doctorId: scopeDoctorId, isDoctorScope } = useSessionDoctor();
+  const scopedDoctorId = isDoctorScope ? scopeDoctorId : null;
+
   const appointments = useQuery({
-    queryKey: ["calendar-appointments", organizationId, range.from.toISOString(), range.to.toISOString()],
+    queryKey: [
+      "calendar-appointments",
+      organizationId,
+      range.from.toISOString(),
+      range.to.toISOString(),
+      scopedDoctorId ?? "",
+    ],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase
+      let query = supabase
         .from("appointments")
         .select(
           "id, scheduled_start, scheduled_end, status, priority, queue_number, doctor_id, clinic_id, note, " +
@@ -249,7 +264,9 @@ export default function AppointmentCalendar({
             "clinic:clinics!appointments_clinic_tenant_fk(id, name), " +
             "visit_type:lookup_values!appointments_visit_type_value_id_fkey(name_ar)",
         )
-        .eq("organization_id", organizationId)
+        .eq("organization_id", organizationId);
+      if (scopedDoctorId) query = query.eq("doctor_id", scopedDoctorId);
+      const { data, error } = await query
         .gte("scheduled_start", range.from.toISOString())
         .lt("scheduled_start", range.to.toISOString())
         .order("scheduled_start");
