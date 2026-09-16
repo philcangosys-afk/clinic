@@ -402,6 +402,19 @@ export default function Patients() {
         </div>
       </div>
 
+      {patients.isError && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+          تعذّر تحميل المرضى: {errorMessage(patients.error)}
+          {isDoctorScope ? (
+            <>
+              {" "}— القائمة محصورة على مرضى الطبيب، وهي تقرأ المنظور{" "}
+              <span className="font-mono">v_doctor_patients</span>. إن لم تُنفَّذ الترقية{" "}
+              <span className="font-mono">0164</span> على القاعدة بعد، نفِّذها.
+            </>
+          ) : null}
+        </p>
+      )}
+
       {unresolvedDoctor && (
         <p className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
           الصفة «طبيب» ولم يُعرف أيّ طبيبٍ أنت — لا حسابٌ مربوط بسجلّ طبيب

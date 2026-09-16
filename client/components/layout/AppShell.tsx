@@ -27,6 +27,7 @@ import {
 import { useLiveBadgeCounts, formatBadgeNumber } from "@/hooks/use-live-badges";
 import { demoRoleAllowsModule, demoRoleLabel } from "@/lib/demo-role";
 import { useDemoRole } from "@/contexts/DemoRoleContext";
+import { useSessionDoctor } from "@/lib/session-doctor";
 import {
   filterAccessibleModules,
   groupModules,
@@ -59,7 +60,12 @@ function initialsOf(name: string | undefined | null) {
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { canAccess, organization, branch, session } = useOrganizationAccess();
   const location = useLocation();
-  const liveBadges = useLiveBadgeCounts(organization?.id, session?.user.id);
+  const { doctorId: scopeDoctorId, isDoctorScope } = useSessionDoctor();
+  const liveBadges = useLiveBadgeCounts(
+    organization?.id,
+    session?.user.id,
+    isDoctorScope ? scopeDoctorId : null,
+  );
 
   const { role } = useDemoRole();
 

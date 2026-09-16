@@ -24,36 +24,61 @@ function todayBounds() {
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 }
 
-async function fetchLiveBadges(organizationId: string, userId?: string): Promise<Record<string, number | null>> {
+async function fetchLiveBadges(
+  organizationId: string,
+  userId?: string,
+  /**
+   * حصرُ العدّادات على طبيبٍ بعينه.
+   *
+   * ثلاثة عدّادات وحدها تُحصَر — المواعيد والمرضى والزيارات — لأنّها وحدها
+   * التي تُقابل شاشاتٍ محصورة. وعدّادات المختبر والأشعة والصيدلية تبقى على
+   * المنشأة: طوابيرُ عملٍ مشتركة لا ملكيّة فيها لطبيب.
+   */
+  scopedDoctorId?: string | null,
+): Promise<Record<string, number | null>> {
   const { startIso, endIso } = todayBounds();
+
+  const receptionQuery = supabase
+    .from("appointments")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", organizationId)
+    .gte("scheduled_start", startIso)
+    .lt("scheduled_start", endIso);
+
+  // مصدرٌ مختلف لا مرشَّحٌ مضاف: `v_doctor_patients` (0164) هو ما يُعرّف
+  // «مريض الطبيب»، وهو نفسه مصدر شاشة المرضى — فلا يفترق الرقمان.
+  const patientsQuery = scopedDoctorId
+    ? supabase
+        .from("v_doctor_patients")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", organizationId)
+        .eq("doctor_id", scopedDoctorId)
+    : supabase
+        .from("patients")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", organizationId);
+
+  const visitsQuery = supabase
+    .from("patient_visits")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", organizationId)
+    .gte("visit_date", startIso)
+    .lt("visit_date", endIso);
 
   const entries: [string, Promise<number | null>][] = [
     [
       "reception",
       safeCount(
-        supabase
-          .from("appointments")
-          .select("id", { count: "exact", head: true })
-          .eq("organization_id", organizationId)
-          .gte("scheduled_start", startIso)
-          .lt("scheduled_start", endIso) as any,
+        (scopedDoctorId
+          ? receptionQuery.eq("doctor_id", scopedDoctorId)
+          : receptionQuery) as any,
       ),
     ],
-    [
-      "patients",
-      safeCount(
-        supabase.from("patients").select("id", { count: "exact", head: true }).eq("organization_id", organizationId) as any,
-      ),
-    ],
+    ["patients", safeCount(patientsQuery as any)],
     [
       "medical-records",
       safeCount(
-        supabase
-          .from("patient_visits")
-          .select("id", { count: "exact", head: true })
-          .eq("organization_id", organizationId)
-          .gte("visit_date", startIso)
-          .lt("visit_date", endIso) as any,
+        (scopedDoctorId ? visitsQuery.eq("doctor_id", scopedDoctorId) : visitsQuery) as any,
       ),
     ],
     [
@@ -245,10 +270,15 @@ async function fetchLiveBadges(organizationId: string, userId?: string): Promise
  * "حركات المخزون" التي تحتاج عرضًا خاصًا بالمخزون المنخفض) يبقى على شارته
  * الثابتة الأصلية أو بلا شارة.
  */
-export function useLiveBadgeCounts(organizationId?: string | null, userId?: string | null) {
+export function useLiveBadgeCounts(
+  organizationId?: string | null,
+  userId?: string | null,
+  scopedDoctorId?: string | null,
+) {
   return useQuery({
-    queryKey: ["live-badge-counts", organizationId, userId],
-    queryFn: () => fetchLiveBadges(organizationId as string, userId ?? undefined),
+    queryKey: ["live-badge-counts", organizationId, userId, scopedDoctorId ?? ""],
+    queryFn: () =>
+      fetchLiveBadges(organizationId as string, userId ?? undefined, scopedDoctorId ?? null),
     enabled: Boolean(organizationId),
     staleTime: 60_000,
     refetchInterval: 120_000,
