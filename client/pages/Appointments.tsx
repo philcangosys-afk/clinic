@@ -12,7 +12,10 @@ import {
   ChevronRight,
   Edit3,
   ExternalLink,
+  MoreHorizontal,
   Plus,
+  Printer,
+  RefreshCw,
   Search,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -25,7 +28,23 @@ import { matchesPatientSearch, type PatientSearchScope } from "@/lib/patient-sea
 import type { AppointmentStatus, AppointmentWithRelations } from "@/lib/database.types";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { localDayRange } from "@/lib/date-range";
-import { formatDateTime, useLocaleSettings } from "@/lib/locale";
+import { formatAmount, formatDate, formatDateTime, formatTime, useLocaleSettings, type CalendarDisplay } from "@/lib/locale";
+import { useMemberNames } from "@/lib/member-names";
+import { useLookupTree } from "@/components/shared/LookupTree";
+import PatientCommandsDialog from "@/components/patients/PatientCommandsDialog";
+import { printHtml } from "@/lib/document-merge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -158,6 +177,15 @@ function useRangeAppointments(organizationId: string | undefined, from: string, 
 const isDateParam = (value: string | null): value is string => /^\d{4}-\d{2}-\d{2}$/.test(value ?? "");
 
 /**
+ * أعمدة الجدول كما في شاشة المواعيد المرجعيّة، بما تملكه قاعدتنا فعلًا.
+ *
+ * عمود «SMS1» في اللقطة **غير موجود هنا عن قصد**: قرار المالك ألّا يُنفَّذ
+ * شيءٌ يخصّ الرسائل النصّية ولا يُضاف لها تكامل حتى إشعارٍ آخر. والعمود
+ * `appointments.sms_reminder_sent` موجود في القاعدة، فإظهاره سطرٌ واحد متى
+ * رُفع القرار.
+ */
+
+/**
  * خانات شريط الملخّص — كلٌّ تقول أيّ حالات تجمع.
  *
  * لا خانة «خارجيّون» بالمعنى الحرفيّ في نظام العيادات المرجعيّ: لا حقل في
@@ -197,8 +225,25 @@ export default function Appointments() {
    * القديمة تبقى كما هي — لا تُستبدل: من اعتاد عليها لا يُجبَر على تعلّم
    * شاشة جديدة في يوم عمل.
    */
-  const [mode, setMode] = useState<"calendar" | "classic">("calendar");
-  const [prefill, setPrefill] = useState<{ day: string; time: string; doctorId: string | null; clinicId: string | null } | null>(null);
+  const [mode, setMode] = useState<"calendar" | "classic" | "table">("calendar");
+  const [prefill, setPrefill] = useState<{
+    day: string;
+    time: string;
+    doctorId: string | null;
+    clinicId: string | null;
+    patient?: { id: string; name_ar: string } | null;
+  } | null>(null);
+  /** الموعد الذي فُتحت عليه قائمة الزرّ الأيمن ويُطلب له سببٌ (لم يحضر/إلغاء). */
+  const [reasonTarget, setReasonTarget] = useState<{
+    appointment: AppointmentWithRelations;
+    action: "no_show" | "cancel";
+  } | null>(null);
+  /** المريض المفتوحة عليه لوحة أوامر الملفّ من قائمة الزرّ الأيمن. */
+  const [commandsTarget, setCommandsTarget] = useState<{
+    id: string;
+    name_ar: string;
+    file_number: number | string | null;
+  } | null>(null);
   const doctors = useDoctorsList(organization?.id);
   const clinicList = useQuery({
     queryKey: ["appointments-clinic-list", organization?.id],
@@ -234,6 +279,27 @@ export default function Appointments() {
   const urlFilterActive = rangeActive || reportStatuses.length > 0;
   const rangeFrom = rangeActive ? reportFrom : day;
   const rangeTo = rangeActive ? reportTo : day;
+
+  // التقويم المحلّي يُحترَم في الجدول كما في بقيّة الشاشات: `ar-SA` وحدها
+  // تُخرج أرقامًا عربية-هندية وتاريخًا هجريًّا في كروم.
+  const { calendarDisplay } = useLocaleSettings();
+  const memberNames = useMemberNames(organization?.id);
+  const visitTypeNodes = useLookupTree("visit_types");
+  const visitTypeNames = useMemo(() => {
+    const map = new Map<string, string>();
+    // **كلّها** للعرض: موعدٌ قديم على نوعٍ عُطِّل لاحقًا يجب أن يبقى مقروءًا
+    // في عموده، وإخفاؤه يجعله يظهر «—» فيُظنّ أنّه بلا نوع.
+    (visitTypeNodes.data ?? []).forEach((node) => map.set(node.id, node.name_ar));
+    return map;
+  }, [visitTypeNodes.data]);
+  /** المعروض للاختيار: النشط وحده — لا يُسنَد موعدٌ جديد إلى نوعٍ معطَّل. */
+  const activeVisitTypes = useMemo(
+    () =>
+      (visitTypeNodes.data ?? [])
+        .filter((node) => !node.is_disabled)
+        .map((node) => ({ id: node.id, name: node.name_ar })),
+    [visitTypeNodes.data],
+  );
 
   const appointments = useRangeAppointments(organization?.id, rangeFrom, rangeTo);
   const appointmentRows = appointments.data?.rows ?? [];
@@ -291,6 +357,47 @@ export default function Appointments() {
       setCreateOpen(true);
     }
   }, [pendingRequest?.id, canSchedule]);
+  /**
+   * `?patientId=…&new=1` — «موعد جديد» من قائمة أوامر ملفّ المريض.
+   *
+   * الرابط كان مكتوبًا في لوحة الاستقبال منذ مدّة والشاشة **لا تقرؤه**: يصل
+   * الموظّف إلى جدول اليوم بلا أثرٍ للمريض الذي كان يعمل عليه، فيبحث عنه من
+   * جديد في نافذة الحجز. الآن يُجلب المريض ويُعبَّأ في النافذة.
+   */
+  const patientIdParam = searchParams.get("patientId");
+  const wantsNewAppointment = searchParams.get("new") === "1";
+  const prefillPatient = useQuery({
+    queryKey: ["appointments-prefill-patient", organization?.id, patientIdParam],
+    enabled: Boolean(organization?.id && patientIdParam),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patients")
+        .select("id, name_ar")
+        .eq("id", patientIdParam)
+        // RLS يسمح بكل مؤسّسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organization?.id)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as { id: string; name_ar: string } | null;
+    },
+  });
+  useEffect(() => {
+    if (!wantsNewAppointment || !prefillPatient.data || !canSchedule) return;
+    setPrefill({
+      day,
+      time: "09:00",
+      doctorId: null,
+      clinicId: null,
+      patient: prefillPatient.data,
+    });
+    setCreateOpen(true);
+    const next = new URLSearchParams(searchParams);
+    // المعامل يُستهلَك مرّة: إبقاؤه يُعيد فتح النافذة كلّما أُغلقت.
+    next.delete("new");
+    next.delete("patientId");
+    setSearchParams(next, { replace: true });
+  }, [wantsNewAppointment, prefillPatient.data?.id, canSchedule]);
+
   const clearRequestParam = () => {
     if (!requestId) return;
     const next = new URLSearchParams(searchParams);
@@ -357,6 +464,71 @@ export default function Appointments() {
       ),
     [searchedAppointments, activeStatuses.join(",")],
   );
+
+  /**
+   * انتقالات الحالة تمرّ بـ`app_reception_transition` (0065/0158) لا بـ
+   * `update` مباشر من المتصفّح.
+   *
+   * الدالّة تفحص الصلاحية والفرع، وتمنع الانتقال من حالةٍ لا يصحّ منه، وتُلزم
+   * بسببٍ حيث يلزم، وتكتب الطوابع الزمنية الصحيحة (`called_at`، `entered_at`،
+   * …). و`update` من الشاشة كان سيكتب حالةً بلا طابعها، فيبقى الموعد «داخل
+   * الكشف» بلا `entered_at` — فلا يحسب له تقريرٌ مدّة، ولا يعرف الطابور متى
+   * دخل.
+   */
+  const transition = useMutation({
+    mutationFn: async (input: {
+      appointment: AppointmentWithRelations;
+      action: string;
+      reason?: string | null;
+    }) => {
+      const { error } = await supabase.rpc("app_reception_transition", {
+        p_appointment_id: input.appointment.id,
+        p_action: input.action,
+        p_reason: input.reason ?? null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
+      queryClient.invalidateQueries({ queryKey: ["calendar-appointments"] });
+      queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
+      queryClient.invalidateQueries({ queryKey: ["reception-board"] });
+      toast({ title: "تم تنفيذ الإجراء" });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر تنفيذ الإجراء", description: errorMessage(error, "حدث خطأ") }),
+  });
+
+  /**
+   * نوع الزيارة — عمودٌ في `appointments` منذ 0002 يُكتب عند الإنشاء ولا
+   * يُعدَّل بعده من أيّ شاشة. وهو أساس تقارير أنواع الزيارات وترتيب الطابور،
+   * فخطأٌ فيه يبقى إلى الأبد.
+   *
+   * التعديل محصورٌ بالمواعيد التي لم تُغلق: تغيير نوع زيارةٍ مكتملة يُعيد
+   * كتابة تاريخٍ حُوسب عليه سلفًا.
+   */
+  const setVisitType = useMutation({
+    mutationFn: async (input: { appointment: AppointmentWithRelations; valueId: string | null }) => {
+      if (!organization?.id) throw new Error("لا توجد منشأة نشطة");
+      const { data, error } = await supabase
+        .from("appointments")
+        .update({ visit_type_value_id: input.valueId })
+        .eq("id", input.appointment.id)
+        .eq("organization_id", organization.id)
+        .not("status", "in", "(completed,no_show,cancelled_by_patient,cancelled_by_staff)")
+        .select("id");
+      if (error) throw error;
+      // PostgREST لا يعدّ «لم يتغيّر أيّ صفّ» خطأً — الفحص هنا
+      if (!data?.length) throw new Error("لم يعد الموعد قابلًا للتعديل");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
+      queryClient.invalidateQueries({ queryKey: ["calendar-appointments"] });
+      toast({ title: "تم تغيير نوع الزيارة" });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر تغيير نوع الزيارة", description: errorMessage(error, "حدث خطأ") }),
+  });
 
   const confirmAppointment = useMutation({
     mutationFn: async (appointment: AppointmentWithRelations) => {
@@ -515,6 +687,13 @@ export default function Appointments() {
               >
                 بطاقات الأطباء
               </button>
+              <button
+                type="button"
+                onClick={() => setMode("table")}
+                className={`rounded px-2.5 py-1 text-xs ${mode === "table" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+              >
+                جدول
+              </button>
             </div>
           )}
           <Button variant="outline" onClick={() => navigate("/waitlist")}>قائمة الانتظار</Button>
@@ -645,6 +824,36 @@ export default function Appointments() {
         />
       )}
 
+      {mode === "table" && !urlFilterActive && (
+        <AppointmentsTable
+          rows={filteredAppointments}
+          loading={appointments.isLoading}
+          calendarDisplay={calendarDisplay}
+          memberNames={memberNames.data}
+          visitTypes={visitTypeNames}
+          activeVisitTypes={activeVisitTypes}
+          canSchedule={canSchedule}
+          onEdit={(appointment) => setManagedAppointment(appointment)}
+          onTransition={(appointment, action) => transition.mutate({ appointment, action })}
+          onAskReason={(appointment, action) => setReasonTarget({ appointment, action })}
+          onSetVisitType={(appointment, valueId) =>
+            setVisitType.mutate({ appointment, valueId })
+          }
+          onPrint={(appointment) => printAppointmentCard(appointment, calendarDisplay)}
+          onRefresh={() => {
+            queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
+            queryClient.invalidateQueries({ queryKey: ["calendar-appointments"] });
+          }}
+          onPatientCommands={(appointment) =>
+            setCommandsTarget({
+              id: appointment.patient_id,
+              name_ar: appointment.patient?.name_ar ?? "—",
+              file_number: appointment.patient?.file_number ?? null,
+            })
+          }
+        />
+      )}
+
       {(urlFilterActive || mode === "classic") && appointments.isLoading && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {Array.from({ length: 3 }).map((_, index) => (
@@ -733,6 +942,27 @@ export default function Appointments() {
         </div>
       )}
 
+      <AppointmentReasonDialog
+        target={reasonTarget}
+        onOpenChange={() => setReasonTarget(null)}
+        onSubmit={(reason) => {
+          if (!reasonTarget) return;
+          transition.mutate({
+            appointment: reasonTarget.appointment,
+            action: reasonTarget.action,
+            reason,
+          });
+          setReasonTarget(null);
+        }}
+        pending={transition.isPending}
+      />
+      <PatientCommandsDialog
+        patient={commandsTarget}
+        open={Boolean(commandsTarget)}
+        onOpenChange={(next) => {
+          if (!next) setCommandsTarget(null);
+        }}
+      />
       <ManageAppointmentDialog
         appointment={managedAppointment}
         onOpenChange={(open) => { if (!open) setManagedAppointment(null); }}
@@ -996,7 +1226,13 @@ function CreateAppointmentDialog({
   doctors: { id: string; name_ar: string }[];
   defaultDay: string;
   /** قيم من الضغط على خانة فارغة في التقويم — يوم ووقت وطبيب وعيادة. */
-  prefill?: { day: string; time: string; doctorId: string | null; clinicId: string | null } | null;
+  prefill?: {
+    day: string;
+    time: string;
+    doctorId: string | null;
+    clinicId: string | null;
+    patient?: { id: string; name_ar: string } | null;
+  } | null;
   onConsumePrefill?: () => void;
   /**
    * طلب متابعة معلّق أرسله طبيب (`appointment_requests`).
@@ -1070,6 +1306,7 @@ function CreateAppointmentDialog({
       setTime(prefill.time);
       if (prefill.doctorId) setDoctorId(prefill.doctorId);
       if (prefill.clinicId) setClinicId(prefill.clinicId);
+      if (prefill.patient) setPatient(prefill.patient);
       onConsumePrefill?.();
     }
   }, [defaultDay, open]);
@@ -1593,5 +1830,377 @@ function CreateAppointmentDialog({
         onCreated={(created) => setPatient({ id: created.id, name_ar: created.name_ar })}
       />
     </>
+  );
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * العرض الجدوليّ وقائمة الزرّ الأيمن
+ * ════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * إجراءات الحالة المعروضة في القائمة.
+ *
+ * **هذه أفعالٌ لا حالات.** القائمة لا تكتب `status` مباشرةً: كل بند يستدعي
+ * `app_reception_transition` بفعله، فتفرض القاعدة ما يصحّ من أين، وتكتب
+ * الطابع الزمنيّ المرافق، وتفحص الصلاحية. وقائمةٌ تعرض أربع عشرة حالةً
+ * يُختار منها أيّ واحدة كانت ستسمح بـ«مكتمل» لموعدٍ لم يحضر صاحبه.
+ */
+const TRANSITION_ACTIONS: {
+  action: string;
+  label: string;
+  from: AppointmentStatus[];
+  needsReason?: boolean;
+}[] = [
+  { action: "confirm", label: "تأكيد الموعد", from: ["new", "scheduled", "unconfirmed"] },
+  { action: "arrive", label: "تسجيل الوصول", from: ["confirmed", "scheduled", "new", "unconfirmed"] },
+  { action: "check_in", label: "تسجيل الدخول", from: ["arrived"] },
+  { action: "call", label: "النداء", from: ["arrived", "checked_in", "waiting", "walk_in"] },
+  { action: "recall", label: "إعادة النداء", from: ["called"] },
+  { action: "uncall", label: "إلغاء النداء", from: ["called"] },
+  { action: "start", label: "بدء الزيارة", from: ["called", "checked_in", "arrived", "waiting", "walk_in"] },
+  { action: "finish", label: "إنهاء الزيارة", from: ["in_progress"] },
+  {
+    action: "no_show",
+    label: "لم يحضر",
+    from: ["new", "scheduled", "confirmed", "unconfirmed", "arrived"],
+    needsReason: true,
+  },
+  {
+    action: "cancel",
+    label: "إلغاء الموعد",
+    from: [
+      "new",
+      "scheduled",
+      "confirmed",
+      "unconfirmed",
+      "arrived",
+      "checked_in",
+      "called",
+      "in_progress",
+      "waiting",
+      "walk_in",
+    ],
+    needsReason: true,
+  },
+];
+
+/** بطاقة الموعد المطبوعة — ما يُسلَّم للمريض أو يُعلَّق على ملفّه. */
+function printAppointmentCard(
+  appointment: AppointmentWithRelations,
+  calendarDisplay: CalendarDisplay,
+) {
+  const esc = (value: unknown) =>
+    String(value ?? "—")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  const row = (label: string, value: unknown) =>
+    `<tr><td style="color:#555">${esc(label)}</td><td style="text-align:end">${esc(value)}</td></tr>`;
+  printHtml(
+    `موعد ${appointment.patient?.name_ar ?? ""}`,
+    `<div style="text-align:center"><h2 style="margin:0 0 6px">بطاقة موعد</h2></div>
+     <table><tbody>
+       ${row("المريض", appointment.patient?.name_ar)}
+       ${row("رقم الملف", appointment.patient?.file_number)}
+       ${row("الجوال", appointment.patient?.mobile_number)}
+       ${row("الطبيب", appointment.doctor?.name_ar)}
+       ${row("العيادة", appointment.clinic?.name)}
+       ${row("التاريخ", formatDate(appointment.scheduled_start, calendarDisplay))}
+       ${row("الوقت", formatTime(appointment.scheduled_start))}
+       ${row("النهاية", formatTime(appointment.scheduled_end))}
+       ${row("الحالة", statusLabel(appointment.status))}
+       ${row("ملاحظة", appointment.note)}
+     </tbody></table>
+     <p style="margin-top:8px;font-size:10px;color:#666;text-align:center">
+       يُرجى الحضور قبل الموعد بعشر دقائق.
+     </p>`,
+    "thermal_80mm",
+  );
+}
+
+function AppointmentsTable({
+  rows,
+  loading,
+  calendarDisplay,
+  memberNames,
+  visitTypes,
+  activeVisitTypes,
+  canSchedule,
+  onEdit,
+  onTransition,
+  onAskReason,
+  onSetVisitType,
+  onPrint,
+  onRefresh,
+  onPatientCommands,
+}: {
+  rows: AppointmentWithRelations[];
+  loading: boolean;
+  calendarDisplay: CalendarDisplay;
+  memberNames: Map<string, string> | undefined;
+  visitTypes: Map<string, string>;
+  activeVisitTypes: { id: string; name: string }[];
+  canSchedule: boolean;
+  onEdit: (appointment: AppointmentWithRelations) => void;
+  onTransition: (appointment: AppointmentWithRelations, action: string) => void;
+  onAskReason: (appointment: AppointmentWithRelations, action: "no_show" | "cancel") => void;
+  onSetVisitType: (appointment: AppointmentWithRelations, valueId: string | null) => void;
+  onPrint: (appointment: AppointmentWithRelations) => void;
+  onRefresh: () => void;
+  onPatientCommands: (appointment: AppointmentWithRelations) => void;
+}) {
+  const navigate = useNavigate();
+  if (loading) return <Skeleton className="h-72 w-full" />;
+
+  return (
+    <div className="overflow-x-auto rounded-lg border">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead className="whitespace-nowrap">التاريخ</TableHead>
+            <TableHead className="whitespace-nowrap">الوقت</TableHead>
+            <TableHead className="whitespace-nowrap">النهاية</TableHead>
+            <TableHead className="whitespace-nowrap">رقم الملف</TableHead>
+            <TableHead className="min-w-[10rem]">المريض</TableHead>
+            <TableHead className="whitespace-nowrap">الجوال</TableHead>
+            <TableHead className="min-w-[10rem]">ملاحظات</TableHead>
+            <TableHead className="whitespace-nowrap">أضافه</TableHead>
+            <TableHead className="whitespace-nowrap">تاريخ التسجيل</TableHead>
+            <TableHead className="whitespace-nowrap">آخر تعديل</TableHead>
+            <TableHead className="whitespace-nowrap">مؤكَّد</TableHead>
+            <TableHead className="whitespace-nowrap">الزيارة</TableHead>
+            <TableHead className="whitespace-nowrap">الحالة</TableHead>
+            <TableHead className="w-10"> </TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((appointment) => {
+            const confirmed = ![
+              "new",
+              "scheduled",
+              "unconfirmed",
+              "cancelled_by_patient",
+              "cancelled_by_staff",
+            ].includes(appointment.status);
+            const menu = (
+              <ContextMenuContent className="w-60">
+                <ContextMenuLabel>{appointment.patient?.name_ar ?? "الموعد"}</ContextMenuLabel>
+                <ContextMenuItem disabled={!canSchedule} onSelect={() => onEdit(appointment)}>
+                  <Edit3 className="h-4 w-4" />
+                  تعديل
+                </ContextMenuItem>
+                <ContextMenuSub>
+                  <ContextMenuSubTrigger disabled={!canSchedule}>حالة الموعد</ContextMenuSubTrigger>
+                  <ContextMenuSubContent className="w-56">
+                    {TRANSITION_ACTIONS.map((entry) => (
+                      <ContextMenuItem
+                        key={entry.action}
+                        disabled={!entry.from.includes(appointment.status)}
+                        onSelect={() =>
+                          entry.needsReason
+                            ? onAskReason(appointment, entry.action as "no_show" | "cancel")
+                            : onTransition(appointment, entry.action)
+                        }
+                      >
+                        {entry.label}
+                      </ContextMenuItem>
+                    ))}
+                  </ContextMenuSubContent>
+                </ContextMenuSub>
+                <ContextMenuSub>
+                  <ContextMenuSubTrigger disabled={!canSchedule}>نوع الزيارة</ContextMenuSubTrigger>
+                  <ContextMenuSubContent className="max-h-72 w-56 overflow-y-auto">
+                    <ContextMenuItem onSelect={() => onSetVisitType(appointment, null)}>
+                      بدون
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    {activeVisitTypes.map((entry) => (
+                      <ContextMenuItem
+                        key={entry.id}
+                        onSelect={() => onSetVisitType(appointment, entry.id)}
+                      >
+                        {entry.name}
+                      </ContextMenuItem>
+                    ))}
+                    {activeVisitTypes.length === 0 && (
+                      <ContextMenuItem disabled>
+                        لا أنواع زيارات — تُضاف من الإعدادات ← اللوائح
+                      </ContextMenuItem>
+                    )}
+                  </ContextMenuSubContent>
+                </ContextMenuSub>
+                <ContextMenuSeparator />
+                <ContextMenuItem onSelect={() => onPrint(appointment)}>
+                  <Printer className="h-4 w-4" />
+                  طباعة
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={onRefresh}>
+                  <RefreshCw className="h-4 w-4" />
+                  تحديث
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem onSelect={() => onPatientCommands(appointment)}>
+                  <MoreHorizontal className="h-4 w-4" />
+                  إجراءات أخرى على ملفّ المريض
+                </ContextMenuItem>
+                <ContextMenuItem onSelect={() => navigate(`/reception?appointmentId=${appointment.id}`)}>
+                  <ExternalLink className="h-4 w-4" />
+                  فتح في الاستقبال
+                </ContextMenuItem>
+              </ContextMenuContent>
+            );
+
+            return (
+              <ContextMenu key={appointment.id}>
+                <ContextMenuTrigger asChild>
+                  <TableRow className="cursor-context-menu">
+                    <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                      {formatDate(appointment.scheduled_start, calendarDisplay)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                      {formatTime(appointment.scheduled_start)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                      {formatTime(appointment.scheduled_end)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap tabular-nums">
+                      {appointment.patient?.file_number ?? "—"}
+                    </TableCell>
+                    <TableCell>
+                      <button
+                        type="button"
+                        className="text-start font-medium hover:text-primary"
+                        onClick={() => navigate(`/patients/${appointment.patient_id}`)}
+                      >
+                        {appointment.patient?.name_ar ?? "—"}
+                      </button>
+                      <div className="text-[11px] text-muted-foreground">
+                        {appointment.doctor?.name_ar ?? "—"}
+                        {appointment.clinic?.name ? ` · ${appointment.clinic.name}` : ""}
+                      </div>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                      {appointment.patient?.mobile_number ?? "—"}
+                    </TableCell>
+                    <TableCell className="text-xs">
+                      <span className="line-clamp-2">{appointment.note ?? "—"}</span>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">
+                      {appointment.created_by
+                        ? memberNames?.get(appointment.created_by) ?? "—"
+                        : "—"}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                      {formatDateTime(appointment.created_at, calendarDisplay)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                      {formatDateTime(appointment.updated_at, calendarDisplay)}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {confirmed ? (
+                        <Badge className="bg-emerald-100 text-emerald-700">مؤكَّد</Badge>
+                      ) : (
+                        <Badge variant="outline">لا</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">
+                      {appointment.visit_type_value_id
+                        ? visitTypes.get(appointment.visit_type_value_id) ?? "—"
+                        : "—"}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      <Badge className={statusBadgeClass(appointment.status)}>
+                        {statusLabel(appointment.status)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground">
+                      <MoreHorizontal className="h-4 w-4" />
+                    </TableCell>
+                  </TableRow>
+                </ContextMenuTrigger>
+                {menu}
+              </ContextMenu>
+            );
+          })}
+          {rows.length === 0 && (
+            <TableRow>
+              <TableCell colSpan={14} className="py-10 text-center text-sm text-muted-foreground">
+                لا مواعيد في هذا اليوم بهذا الترشيح.
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      <div className="flex flex-wrap items-center gap-4 border-t bg-muted/30 px-3 py-2 text-xs">
+        <span>
+          إجمالي العدد:{" "}
+          <span className="font-mono font-semibold tabular-nums">{formatAmount(rows.length)}</span>
+        </span>
+        <span>
+          المدخلون:{" "}
+          <span className="font-mono font-semibold tabular-nums">
+            {formatAmount(rows.filter((row) => row.checked_in_1_at).length)}
+          </span>
+        </span>
+        <span>
+          غير المدخلين:{" "}
+          <span className="font-mono font-semibold tabular-nums">
+            {formatAmount(rows.filter((row) => !row.checked_in_1_at).length)}
+          </span>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * سبب «لم يحضر» و«الإلغاء».
+ *
+ * القاعدة تطلبهما وترفض بدونهما (0065/0158). وطلبهما هنا **قبل** الاستدعاء
+ * يجعل الرفض مستحيلًا بدل أن يكون رسالة خطأ يراها الموظّف بعد الضغط.
+ */
+function AppointmentReasonDialog({
+  target,
+  onOpenChange,
+  onSubmit,
+  pending,
+}: {
+  target: { appointment: AppointmentWithRelations; action: "no_show" | "cancel" } | null;
+  onOpenChange: () => void;
+  onSubmit: (reason: string) => void;
+  pending: boolean;
+}) {
+  const [reason, setReason] = useState("");
+  useEffect(() => setReason(""), [target?.appointment.id, target?.action]);
+
+  const title = target?.action === "no_show" ? "تسجيل عدم الحضور" : "إلغاء الموعد";
+  return (
+    <Dialog open={Boolean(target)} onOpenChange={(next) => !next && onOpenChange()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>
+            {target?.appointment.patient?.name_ar ?? ""} — السبب يُحفظ على الموعد ويظهر في التقارير.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label>السبب *</Label>
+          <Textarea rows={3} value={reason} onChange={(event) => setReason(event.target.value)} />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onOpenChange}>
+            تراجع
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={!reason.trim() || pending}
+            onClick={() => onSubmit(reason.trim())}
+          >
+            {pending ? "جارٍ التنفيذ..." : "تأكيد"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

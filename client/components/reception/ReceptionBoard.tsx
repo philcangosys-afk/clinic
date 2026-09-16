@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import {
@@ -12,8 +12,10 @@ import {
   FileSignature,
   Flag,
   MoreHorizontal,
+  Pencil,
   Printer,
   Receipt,
+  RefreshCw,
   Undo2,
   UserCheck,
   UserRound,
@@ -94,7 +96,27 @@ type QueueRow = {
   invoice_id: string | null;
   invoice_status: string | null;
   remaining_amount: number | null;
+  /* ── أعمدة 0161 ─────────────────────────────────────────────────────── */
+  entered_at: string | null;
+  left_at: string | null;
+  note: string | null;
+  patient_name_en: string | null;
+  visit_type_name: string | null;
+  sent_by_email: string | null;
+  agreement_remaining: number | null;
+  deferred_amount: number | null;
+  treated: boolean | null;
+  service_name: string | null;
 };
+
+/**
+ * عدد أعمدة الطابور — مكتوبٌ مرّةً لا في كل `colSpan`.
+ *
+ * كان العدد `11` مكتوبًا يدويًّا في موضعين، وإضافة عمودٍ واحد تترك صفّ عنوان
+ * الطبيب وصفّ «لا مرضى» أقصر من الجدول فينكسر المحاذاة في RTL. أيّ تغييرٍ
+ * في الأعمدة يُغيَّر هنا وحده.
+ */
+const QUEUE_COLUMN_COUNT = 24;
 
 const STATUS_LABELS: Record<string, string> = {
   confirmed: "مؤكد",
@@ -172,6 +194,14 @@ export default function ReceptionBoard({
    * والقدرة كانت في القاعدة بلا باب — أُضيف الإجراء في 0158.
    */
   const [cancelTarget, setCancelTarget] = useState<QueueRow | null>(null);
+  /**
+   * تعديل الملاحظة المسجَّلة — «تعديل الملاحظة» في قائمة الزرّ الأيمن.
+   *
+   * الملاحظة تُكتب عند الحجز ولا تُعدَّل بعده من أيّ شاشة، مع أنّ أكثر ما
+   * يُكتب فيها يظهر عند الاستقبال لا عند الحجز: «يريد الطبيب نفسه»، «معه
+   * مرافق»، «تأخّر ويقبل الانتظار». فتُكتب على ورقةٍ جانبية وتضيع.
+   */
+  const [noteTarget, setNoteTarget] = useState<QueueRow | null>(null);
 
   const queue = useQuery({
     queryKey: ["reception-board", organizationId],
@@ -216,6 +246,30 @@ export default function ReceptionBoard({
         title: "تعذّر تنفيذ الإجراء",
         description: errorMessage(error),
       }),
+  });
+
+  /**
+   * حفظ الملاحظة عبر `app_set_appointment_note` (0161) لا بـ`update` مباشر:
+   * الدالّة تفحص العضوية والصلاحية وتتحقّق من أنّ صفًّا تغيّر فعلًا — و
+   * PostgREST لا يعدّ «لم يتغيّر شيء» خطأً، فكان التعديل الفاشل يبدو ناجحًا.
+   */
+  const saveNote = useMutation({
+    mutationFn: async ({ id, note }: { id: string; note: string }) => {
+      const { error } = await supabase.rpc("app_set_appointment_note", {
+        p_appointment_id: id,
+        p_note: note,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["reception-board"] });
+      queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
+      queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
+      setNoteTarget(null);
+      toast({ title: "تم حفظ الملاحظة" });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حفظ الملاحظة", description: errorMessage(error) }),
   });
 
   /**
@@ -304,8 +358,23 @@ export default function ReceptionBoard({
         )}
       </div>
 
+      {/**
+        * فشل قراءة ضغط الأطباء يُعلَن ولا يُبتلع.
+        *
+        * الشريط يعتمد على `v_reception_queue_by_doctor` (0158). لو لم تُنفَّذ
+        * الترقية كان الشريط يختفي بصمت، فيظنّ من يقرأ الشاشة أنّ الميزة لم
+        * تُبنَ — وهو أسوأ من خطأٍ ظاهر: يُرسل الشكوى إلى الجهة الخطأ.
+        */}
+      {pressure.isError && (
+        <p className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
+          تعذّر قراءة ضغط الأطباء: {errorMessage(pressure.error)} — إن لم تُنفَّذ
+          الترقية <span className="font-mono">0158</span> على القاعدة بعد، نفِّذها
+          ليظهر الشريط. الطابور أدناه يعمل بدونها.
+        </p>
+      )}
+
       {/* ضغط الطابور على كل طبيب — بطاقةٌ لكل طبيبٍ له منتظرون، والضغط يحصر */}
-      {(pressure.data ?? []).length > 0 && (
+      {pressure.isSuccess && (pressure.data ?? []).length > 0 && (
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -370,14 +439,27 @@ export default function ReceptionBoard({
                     الضيّقة بدل أن تسحق المريض والحالة. */}
                 <TableHead className="w-12 whitespace-nowrap">الدور</TableHead>
                 <TableHead className="min-w-[10rem]">المريض</TableHead>
+                <TableHead className="whitespace-nowrap">الاسم الإنجليزي</TableHead>
+                <TableHead className="whitespace-nowrap">الملف</TableHead>
                 <TableHead className="min-w-[9rem]">الطبيب / العيادة</TableHead>
+                <TableHead className="whitespace-nowrap">الزيارة</TableHead>
+                <TableHead className="whitespace-nowrap">الخدمة</TableHead>
                 <TableHead className="whitespace-nowrap">الموعد</TableHead>
-                <TableHead className="hidden whitespace-nowrap lg:table-cell">الوصول</TableHead>
+                <TableHead className="whitespace-nowrap">استقبال ١</TableHead>
+                <TableHead className="whitespace-nowrap">استقبال ٢</TableHead>
+                <TableHead className="whitespace-nowrap">النداء</TableHead>
+                <TableHead className="whitespace-nowrap">دخول</TableHead>
+                <TableHead className="whitespace-nowrap">خروج</TableHead>
                 <TableHead className="whitespace-nowrap">الانتظار</TableHead>
+                <TableHead className="whitespace-nowrap">المرسل</TableHead>
+                <TableHead className="whitespace-nowrap">اتفاقية</TableHead>
+                <TableHead className="whitespace-nowrap">أجل</TableHead>
+                <TableHead className="whitespace-nowrap">عولج</TableHead>
+                <TableHead className="min-w-[10rem]">ملاحظة</TableHead>
                 <TableHead className="whitespace-nowrap">الأولوية</TableHead>
                 <TableHead className="whitespace-nowrap">الحالة</TableHead>
-                <TableHead className="hidden whitespace-nowrap xl:table-cell">التأمين</TableHead>
-                <TableHead className="hidden whitespace-nowrap xl:table-cell">الفاتورة</TableHead>
+                <TableHead className="whitespace-nowrap">التأمين</TableHead>
+                <TableHead className="whitespace-nowrap">الفاتورة</TableHead>
                 <TableHead className="min-w-[16rem] whitespace-nowrap">الإجراءات</TableHead>
               </TableRow>
             </TableHeader>
@@ -387,7 +469,7 @@ export default function ReceptionBoard({
                   {/* عنوان المجموعة: الطبيب وعدد منتظريه — نظير «اسم الطبيب: د.
                       فلان» في نظام العيادات المرجعيّ. */}
                   <TableRow className="bg-muted/60 hover:bg-muted/60">
-                    <TableCell colSpan={11} className="py-1.5 text-sm font-bold">
+                    <TableCell colSpan={QUEUE_COLUMN_COUNT} className="py-1.5 text-sm font-bold">
                       اسم الطبيب: {group.doctorName}
                       <span className="ms-2 font-normal text-muted-foreground tabular-nums">
                         ({group.items.length})
@@ -430,18 +512,74 @@ export default function ReceptionBoard({
                       </div>
                     )}
                   </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {row.patient_name_en ?? "—"}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">
+                    {row.file_number ?? "—"}
+                  </TableCell>
                   <TableCell className="text-sm">
                     <div>{row.doctor_name}</div>
                     <div className="text-xs text-muted-foreground">{row.clinic_name ?? "—"}</div>
                   </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {row.visit_type_name ?? "—"}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {row.service_name ?? "—"}
+                  </TableCell>
                   <TableCell className="text-xs tabular-nums">
                     {formatTime(row.scheduled_start)}
                   </TableCell>
-                  <TableCell className="hidden whitespace-nowrap text-xs tabular-nums lg:table-cell">
+                  {/* استقبال ١ هو الوصول، واستقبال ٢ هو تسجيل الدخول —
+                      عمودان في `appointments` منذ 0002 لم يكن يُعرض منهما إلا
+                      الأوّل، فلا يُعرف كم بقي المريض بين المكتبين. */}
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
                     {formatTime(row.arrived_at)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {formatTime(row.checked_in_at)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {formatTime(row.called_at)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {formatTime(row.entered_at)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {formatTime(row.left_at)}
                   </TableCell>
                   <TableCell className={`whitespace-nowrap tabular-nums ${WAITING_STYLES[row.waiting_state]}`}>
                     {row.waiting_minutes === null ? "—" : `${row.waiting_minutes} د`}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {row.sent_by_email ?? "—"}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {Number(row.agreement_remaining ?? 0) > 0 ? (
+                      <span className="text-amber-700">
+                        {formatAmount(row.agreement_remaining ?? 0)}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {Number(row.deferred_amount ?? 0) > 0 ? (
+                      <span className="text-rose-600">{formatAmount(row.deferred_amount ?? 0)}</span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {row.treated ? (
+                      <Badge variant="success">نعم</Badge>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    <span className="line-clamp-2">{row.note ?? "—"}</span>
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
                     <Badge variant={row.priority === "normal" ? "outline" : "destructive"}>
@@ -451,7 +589,7 @@ export default function ReceptionBoard({
                   <TableCell className="whitespace-nowrap">
                     <Badge variant="secondary">{STATUS_LABELS[row.status] ?? row.status}</Badge>
                   </TableCell>
-                  <TableCell className="hidden whitespace-nowrap text-xs xl:table-cell">
+                  <TableCell className="whitespace-nowrap text-xs">
                     {row.insurance_company_name ? (
                       <Badge variant={row.insurance_valid ? "success" : "destructive"}>
                         {row.insurance_valid ? row.insurance_company_name : "بطاقة منتهية"}
@@ -460,7 +598,7 @@ export default function ReceptionBoard({
                       <span className="text-muted-foreground">نقدي</span>
                     )}
                   </TableCell>
-                  <TableCell className="hidden whitespace-nowrap text-xs xl:table-cell">
+                  <TableCell className="whitespace-nowrap text-xs">
                     {row.invoice_id ? (
                       <span className={Number(row.remaining_amount) > 0 ? "text-rose-600" : "text-emerald-700"}>
                         متبقٍ {formatAmount(row.remaining_amount ?? 0)}
@@ -587,6 +725,75 @@ export default function ReceptionBoard({
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-56">
+                          <DropdownMenuLabel>الطابور</DropdownMenuLabel>
+                          {/* بنود الطابور نفسها في قائمة النظام المرجعيّ.
+                              كلٌّ منها يستدعي `app_reception_transition`
+                              فتفرض القاعدة ما يصحّ من أين وتكتب طابعه. */}
+                          <DropdownMenuItem
+                            disabled={
+                              !can("reception.call") ||
+                              !["arrived", "checked_in", "waiting", "walk_in"].includes(row.status)
+                            }
+                            onClick={() =>
+                              transition.mutate({ id: row.appointment_id, action: "call" })
+                            }
+                          >
+                            <Bell className="h-4 w-4" />
+                            النداء في غرفة الانتظار
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={
+                              !can("reception.start_visit") ||
+                              !["called", "checked_in", "arrived", "waiting", "walk_in"].includes(
+                                row.status,
+                              )
+                            }
+                            onClick={() =>
+                              transition.mutate({ id: row.appointment_id, action: "start" })
+                            }
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                            الدخول إلى العيادة
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!can("reception.finish") || row.status !== "in_progress"}
+                            onClick={() =>
+                              transition.mutate({ id: row.appointment_id, action: "finish" })
+                            }
+                          >
+                            <CheckCircle2 className="h-4 w-4" />
+                            الخروج من العيادة
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!can("appointments.update")}
+                            onClick={() => setNoteTarget(row)}
+                          >
+                            <Pencil className="h-4 w-4" />
+                            تعديل الملاحظة المسجَّلة
+                          </DropdownMenuItem>
+                          {/* «حذف من قائمة الانتظار» في النظام المرجعيّ =
+                              إخراجٌ من الطابور. وهو هنا إلغاءٌ بسببٍ يبقى في
+                              السجلّ لا حذف: المالك يمنع الحذف النهائي
+                              للبيانات الطبية والمالية، والموعد المحذوف يمحو
+                              معه أثر مَن حجزه ومتى. */}
+                          <DropdownMenuItem
+                            disabled={!can("reception.transfer") || row.status === "completed"}
+                            className="text-destructive"
+                            onClick={() => setCancelTarget(row)}
+                          >
+                            <XCircle className="h-4 w-4" />
+                            إخراج من قائمة الانتظار
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            onClick={() => {
+                              queue.refetch();
+                              pressure.refetch();
+                            }}
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                            تحديث
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
                           <DropdownMenuLabel>أوامر على المريض</DropdownMenuLabel>
                           <DropdownMenuItem
                             onClick={() => navigate(`/billing?appointmentId=${row.appointment_id}`)}
@@ -632,16 +839,52 @@ export default function ReceptionBoard({
               ))}
               {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={11} className="py-10 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={QUEUE_COLUMN_COUNT} className="py-10 text-center text-sm text-muted-foreground">
                     لا مرضى في الطابور الآن.
                   </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
+          {/* مجاميع الذيل — الأرقام الثلاثة نفسها في الشاشة المرجعيّة.
+              «المدخلون» من سُجِّل وصوله (استقبال ١)، لا من فُتحت له زيارة:
+              الاستقبال يقيس مَن دخل من الباب. */}
+          <div className="flex flex-wrap items-center gap-4 border-t bg-muted/30 px-3 py-2 text-xs">
+            <span>
+              إجمالي العدد:{" "}
+              <span className="font-mono font-semibold tabular-nums">{formatAmount(rows.length)}</span>
+            </span>
+            <span>
+              عدد المدخلين:{" "}
+              <span className="font-mono font-semibold tabular-nums">
+                {formatAmount(rows.filter((row) => row.arrived_at).length)}
+              </span>
+            </span>
+            <span>
+              غير المدخلين:{" "}
+              <span className="font-mono font-semibold tabular-nums">
+                {formatAmount(rows.filter((row) => !row.arrived_at).length)}
+              </span>
+            </span>
+            <span className="text-muted-foreground">
+              عولجوا:{" "}
+              <span className="font-mono font-semibold tabular-nums">
+                {formatAmount(rows.filter((row) => row.treated).length)}
+              </span>
+            </span>
+          </div>
         </div>
       )}
 
+      <NoteDialog
+        row={noteTarget}
+        pending={saveNote.isPending}
+        onClose={() => setNoteTarget(null)}
+        onConfirm={(note) => {
+          if (!noteTarget) return;
+          saveNote.mutate({ id: noteTarget.appointment_id, note });
+        }}
+      />
       <TransferDialog
         row={transferTarget}
         doctors={doctors}
@@ -677,6 +920,55 @@ export default function ReceptionBoard({
         }}
       />
     </div>
+  );
+}
+
+/**
+ * تعديل الملاحظة المسجَّلة على الموعد.
+ *
+ * الحقل يُملأ بالملاحظة الحالية لا فارغًا: حقلٌ فارغ فوق ملاحظةٍ قائمة يُغري
+ * بالكتابة فوقها، فتُمحى ملاحظة زميلٍ بلا قصد.
+ */
+function NoteDialog({
+  row,
+  pending,
+  onClose,
+  onConfirm,
+}: {
+  row: QueueRow | null;
+  pending: boolean;
+  onClose: () => void;
+  onConfirm: (note: string) => void;
+}) {
+  const [note, setNote] = useState("");
+  useEffect(() => setNote(row?.note ?? ""), [row?.appointment_id]);
+
+  return (
+    <Dialog open={Boolean(row)} onOpenChange={(next) => !next && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>تعديل الملاحظة</DialogTitle>
+          <DialogDescription>
+            {row?.patient_name ?? ""} — الملاحظة تظهر للطبيب في شاشته أيضًا.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label>الملاحظة</Label>
+          <Textarea rows={3} value={note} onChange={(event) => setNote(event.target.value)} />
+          <p className="text-[11px] text-muted-foreground">
+            تركُ الحقل فارغًا يمحو الملاحظة.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            تراجع
+          </Button>
+          <Button disabled={pending} onClick={() => onConfirm(note)}>
+            {pending ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

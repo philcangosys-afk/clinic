@@ -166,6 +166,17 @@ export default function Billing() {
   // الذي يختاره المتصفّح للعربية (هجريًّا في كروم) بلا نظرٍ إلى الإعداد.
   const { calendarDisplay } = useLocaleSettings();
   const appointmentId = searchParams.get("appointmentId");
+  /**
+   * فتح الشاشة على مريضٍ بعينه.
+   *
+   * «فاتورة جديدة» في قائمة أوامر ملفّ المريض كانت تنتقل إلى هذه الشاشة
+   * بمعامل `patientId` **لا تقرؤه الشاشة** — فيصل الموظّف إلى قائمة الفواتير
+   * كلّها ويبحث عن المريض الذي كان واقفًا في ملفّه قبل لحظة.
+   *
+   * و`quote=new` يفتح عرض سعر، و`quote=list` يحصر القائمة بعروض الأسعار.
+   */
+  const patientIdParam = searchParams.get("patientId");
+  const quoteParam = searchParams.get("quote");
   const memberNames = useMemberNames(organization?.id);
   /**
    * اسم من يطبع يظهر في تذييل الإيصال — كما في إيصال العيادات المرجعيّ.
@@ -175,7 +186,7 @@ export default function Billing() {
     ? memberNames.data?.get(session.user.id) ?? null
     : null;
   const [statusFilter, setStatusFilter] = useState("all");
-  const [quotesOnly, setQuotesOnly] = useState(false);
+  const [quotesOnly, setQuotesOnly] = useState(quoteParam === "new" || quoteParam === "list");
   const [showShifts, setShowShifts] = useState(false);
   const [showTax, setShowTax] = useState(false);
   /** تبويب اليومية المالية — إغلاق يوم العمل وجرد ما جرى فيه. */
@@ -207,11 +218,52 @@ export default function Billing() {
     },
   });
 
-  const invoiceContext = appointment.data ?? null;
+  /**
+   * سياق المريض حين لا يكون هناك موعد. نفس شكل سياق الموعد بـ`id: null`،
+   * فالنافذة تقبل الاثنين بلا فرع ثانٍ فيها.
+   */
+  const patientContext = useQuery({
+    queryKey: ["billing-patient", organization?.id, patientIdParam],
+    enabled: Boolean(organization?.id && patientIdParam && !appointmentId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patients")
+        .select(
+          "id, name_ar, treating_doctor_id, insurance_company_name, insurance_policy_number, " +
+            "insurance_policy_category, insurance_membership_number",
+        )
+        .eq("id", patientIdParam)
+        // RLS يسمح بكل مؤسّسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organization?.id)
+        .maybeSingle();
+      if (error) throw error;
+      if (!data) return null;
+      const row = data as any;
+      return {
+        id: null,
+        patient_id: row.id,
+        doctor_id: row.treating_doctor_id ?? null,
+        clinic_id: null,
+        patient: {
+          id: row.id,
+          name_ar: row.name_ar,
+          insurance_company_name: row.insurance_company_name,
+          insurance_policy_number: row.insurance_policy_number,
+          insurance_policy_category: row.insurance_policy_category,
+          insurance_membership_number: row.insurance_membership_number,
+        },
+      } as BillingAppointmentContext;
+    },
+  });
+
+  const invoiceContext = appointment.data ?? patientContext.data ?? null;
 
   useEffect(() => {
+    // `quote=list` يحصر القائمة ولا يفتح نافذة: من طلب رؤية عروض الأسعار لا
+    // يريد نافذة إنشاءٍ تُغطّيها فور وصوله.
+    if (quoteParam === "list") return;
     if (invoiceContext && canManageBilling) setCreateOpen(true);
-  }, [invoiceContext, canManageBilling]);
+  }, [invoiceContext, canManageBilling, quoteParam]);
 
   const convertToInvoice = useMutation({
     mutationFn: async (invoiceId: string) => {

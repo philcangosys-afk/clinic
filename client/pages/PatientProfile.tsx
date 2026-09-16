@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, Link, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -32,6 +32,7 @@ import {
   Syringe,
   UserRound,
   Wallet,
+  MoreHorizontal,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
@@ -49,6 +50,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
 import PatientContactsTab from "@/components/patients/PatientContactsTab";
 import MergePatientsDialog from "@/components/patients/MergePatientsDialog";
+import PatientCommandsDialog from "@/components/patients/PatientCommandsDialog";
 import { usePermissions } from "@/lib/permissions";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LookupSelect from "@/components/shared/LookupSelect";
@@ -162,7 +164,30 @@ export default function PatientProfile() {
    * القسم المعروض. الافتراضيّ «الحالة الصحية» لا «المعلومات الشخصية»: من يفتح
    * ملفًّا طبيًّا يفتحه ليقرأ حالة المريض، والبيانات الشخصية يعرفها من الشريط.
    */
-  const [section, setSection] = useState("conditions");
+  /**
+   * القسم يأتي من العنوان حين يُذكر فيه.
+   *
+   * روابط `?section=invoices` كانت مكتوبةً في لوحة الاستقبال وفي غيرها منذ
+   * أشهر، والشاشة لا تقرأ المعامل أصلًا — فكان الرابط يفتح الملفّ على «الحالة
+   * الصحية» أيًّا كان القسم المطلوب. الزرّ يعمل ظاهرًا ولا يصل، وهو أسوأ من
+   * زرٍّ لا يعمل لأنّه لا يشتكي منه أحد.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sectionParam = searchParams.get("section");
+  const [section, setSectionState] = useState(sectionParam || "conditions");
+  useEffect(() => {
+    if (sectionParam && sectionParam !== section) setSectionState(sectionParam);
+    // القسم وحده يُتابَع: إضافة `section` تُعيد الضبط كلّما غيّره المستخدم
+    // يدويًّا فيصير التنقّل مستحيلًا.
+  }, [sectionParam]);
+  const setSection = (next: string) => {
+    setSectionState(next);
+    const params = new URLSearchParams(searchParams);
+    params.set("section", next);
+    // `replace` لا `push`: تصفّح الأقسام ليس تاريخًا يُرجَع فيه بزرّ الرجوع،
+    // وإلّا احتاج الخروج من الملفّ ضغطاتٍ بعدد ما فُتح من أقسام.
+    setSearchParams(params, { replace: true });
+  };
   /* الاتفاقية ذات المتبقّي لا تُرى إلّا بفتح قسمها، فيخرج المريض وعليه رصيد
      لم يره أحد. التنبيه يظهر فور فتح الملفّ ويقود إلى القسم بضغطة. */
   const [agreementsAlertDismissed, setAgreementsAlertDismissed] = useState(false);
@@ -300,6 +325,8 @@ export default function PatientProfile() {
         { key: "growth", label: "مخططات النمو", icon: LineChart },
         { key: "cbahi", label: "الجودة والسلامة (CBAHI)", icon: ShieldCheck },
         { key: "documents", label: "المستندات", icon: FileStack },
+        { key: "images", label: "صور الملفّ", icon: ImageIcon },
+        { key: "signatures", label: "توقيع الملفّ الإلكتروني", icon: Pencil },
       ],
     },
     {
@@ -388,7 +415,13 @@ export default function PatientProfile() {
       {section === "agreements" && <PatientAgreementsTab patientId={patient.data.id} />}
       {section === "wallet" && <WalletTab patientId={patient.data.id} />}
       {section === "appointments" && <AppointmentsTab patientId={patient.data.id} />}
-      {section === "documents" && <DocumentsTab patientId={patient.data.id} />}
+      {section === "documents" && <DocumentsTab patientId={patient.data.id} kind="document" />}
+      {/* صور الملفّ وتواقيعه هما **نفس** الجدول برشّاحٍ مختلف، لا شاشتان:
+          `patient_documents.category = 'image'` و`signed_at is not null`
+          عمودان قائمان منذ 0037. شاشةٌ ثالثة كانت ستُكرّر الرفع والأرشفة
+          والتوقيع ثلاث مرّات ثم تفترق إحداها عن الأخريين. */}
+      {section === "images" && <DocumentsTab patientId={patient.data.id} kind="image" />}
+      {section === "signatures" && <DocumentsTab patientId={patient.data.id} kind="signed" />}
       {section === "radiology" && <RadiologyImagesTab patientId={patient.data.id} />}
       {section === "odontogram" && <Odontogram patientId={patient.data.id} />}
     </PatientFileShell>
@@ -492,6 +525,8 @@ function PatientQuickActions({ patient }: { patient: PatientRow }) {
   const { organization, membership, legacyMode } = useOrganizationAccess();
   const [sendOpen, setSendOpen] = useState(false);
   const [invoiceOpen, setInvoiceOpen] = useState(false);
+  const [quoteOpen, setQuoteOpen] = useState(false);
+  const [commandsOpen, setCommandsOpen] = useState(false);
 
   /**
    * الصفات هنا **نفس** الصفات التي تفرضها القاعدة، لا مفاتيح صلاحية جديدة.
@@ -511,8 +546,32 @@ function PatientQuickActions({ patient }: { patient: PatientRow }) {
       membership?.role_key ?? "",
     );
 
+  /**
+   * `?action=send-to-doctor` — يصل من قائمة أوامر الملفّ حين تُفتح من شاشةٍ
+   * أخرى (الطابور، جدول المواعيد). بلا هذا يصل الموظّف إلى الملفّ ثم يبحث
+   * عن الزرّ الذي كان قد ضغطه لتوّه.
+   *
+   * والمعامل يُستهلَك مرّةً: إبقاؤه يُعيد فتح النافذة كلّما أُغلقت.
+   */
+  const [actionParams, setActionParams] = useSearchParams();
+  useEffect(() => {
+    if (actionParams.get("action") !== "send-to-doctor") return;
+    const next = new URLSearchParams(actionParams);
+    next.delete("action");
+    setActionParams(next, { replace: true });
+    if (!canQueue || patient.block_appointments || patient.block_file) return;
+    setSendOpen(true);
+  }, [actionParams.get("action"), canQueue]);
+
   return (
     <>
+      {/* أوامر الملفّ — مدخلٌ واحد إلى كل ما يُفعل بالمريض. يبقى «إصدار
+          فاتورة» و«إرسال إلى الطبيب» زرَّين ظاهرين لأنّهما الأكثر استعمالًا،
+          والبقيّة خلف هذا الزرّ بدل أن تُفرَّق على الشاشات. */}
+      <Button size="sm" variant="outline" onClick={() => setCommandsOpen(true)}>
+        <MoreHorizontal className="h-3.5 w-3.5" />
+        أوامر على الملفّ
+      </Button>
       {canBill && !patient.block_invoices && !patient.block_file && (
         <Button size="sm" variant="outline" onClick={() => setInvoiceOpen(true)}>
           <Receipt className="h-3.5 w-3.5" />
@@ -569,6 +628,48 @@ function PatientQuickActions({ patient }: { patient: PatientRow }) {
           defaultDoctorId={patient.treating_doctor_id}
         />
       )}
+      {/* عرض السعر هو **نفس** نافذة الفاتورة بعلم `isQuote`: الحقول والقواعد
+          والضريبة واحدة، والفارق أنّه يُحفظ `is_temporary` فلا يُحتسب ذمّةً
+          على المريض حتى يُحوَّل. نافذةٌ ثانية كانت ستفترق عن الأولى بعد أوّل
+          تعديل. */}
+      {quoteOpen && organization?.id && (
+        <NewInvoiceDialog
+          open={quoteOpen}
+          onOpenChange={setQuoteOpen}
+          organizationId={organization.id}
+          vatRate={organization.default_vat_rate ?? 15}
+          isQuote
+          appointment={{
+            id: null,
+            patient_id: patient.id,
+            doctor_id: patient.treating_doctor_id,
+            clinic_id: null,
+            patient: {
+              id: patient.id,
+              name_ar: patient.name_ar,
+              insurance_company_name: patient.insurance_company_name,
+              insurance_policy_number: patient.insurance_policy_number,
+              insurance_policy_category: patient.insurance_policy_category,
+              insurance_membership_number: patient.insurance_membership_number,
+            },
+          }}
+        />
+      )}
+      <PatientCommandsDialog
+        patient={{
+          id: patient.id,
+          name_ar: patient.name_ar,
+          file_number: patient.file_number,
+          block_file: patient.block_file,
+          block_invoices: patient.block_invoices,
+          block_appointments: patient.block_appointments,
+        }}
+        open={commandsOpen}
+        onOpenChange={setCommandsOpen}
+        onNewInvoice={canBill ? () => setInvoiceOpen(true) : undefined}
+        onNewQuote={canBill ? () => setQuoteOpen(true) : undefined}
+        onSendToDoctor={canQueue ? () => setSendOpen(true) : undefined}
+      />
     </>
   );
 }
@@ -1779,79 +1880,225 @@ function InvoicesTab({ patientId }: { patientId: string }) {
   const { calendarDisplay } = useLocaleSettings();
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [payTarget, setPayTarget] = useState<SalesInvoiceWithPatient | null>(null);
+  /** الكل / الآجل / المدفوع — المرشّحات الثلاثة نفسها في النظام المرجعيّ. */
+  const [scope, setScope] = useState<"all" | "credit" | "settled">("all");
 
   const canReceive = can("cashier.receive");
 
   const invoices = useQuery({
-    queryKey: ["patient-invoices", patientId],
+    queryKey: ["patient-invoices", organization?.id, patientId, scope],
+    enabled: Boolean(organization?.id && patientId),
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("sales_invoices")
+      let query = supabase
+        .from("v_patient_invoices")
         .select(
-          "id, invoice_number, created_at, status, is_temporary, net_amount, paid_amount, remaining_amount",
+          "id, invoice_number, created_at, status, is_temporary, invoice_type, works, lines_count, " +
+            "subtotal_amount, discount_amount, vat_amount, net_amount, paid_amount, remaining_amount, " +
+            "doctor_name, is_credit, is_settled",
         )
-        .eq("patient_id", patientId)
+        // RLS يسمح بكل مؤسّسة ينتمي إليها المستخدم لا بالنشطة وحدها
+        .eq("organization_id", organization?.id)
+        .eq("patient_id", patientId);
+      if (scope === "credit") query = query.eq("is_credit", true);
+      if (scope === "settled") query = query.eq("is_settled", true);
+      const { data, error } = await query
         .order("created_at", { ascending: false })
-        .limit(30);
+        .limit(200);
       if (error) throw error;
-      return data ?? [];
+      return (data ?? []) as any[];
     },
   });
 
+  /**
+   * المجاميع تُحسب في القاعدة على **كلّ** فواتير المريض لا على المعروض.
+   *
+   * جمعُها في المتصفّح كان سيجمع المائتين المعروضة، فيخرج «المتبقّي» أصغر من
+   * الحقيقة لمريضٍ له أكثر — ورقمٌ ماليّ ناقصٌ يبدو صحيحًا أسوأ من لا رقم.
+   */
+  const totals = useQuery({
+    queryKey: ["patient-invoice-totals", organization?.id, patientId, scope],
+    enabled: Boolean(organization?.id && patientId),
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_patient_invoice_totals", {
+        p_organization_id: organization?.id,
+        p_patient_id: patientId,
+        p_scope: scope,
+      });
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+      return (row ?? null) as {
+        invoice_count: number;
+        before_discount: number;
+        discount_total: number;
+        discount_percent: number;
+        after_discount: number;
+        vat_total: number;
+        paid_total: number;
+        collection_percent: number;
+        remaining_total: number;
+      } | null;
+    },
+  });
+
+  const rows = invoices.data ?? [];
+
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>سجل الفواتير</CardTitle>
-        <CardDescription>اضغط الفاتورة لعرض بنودها ودفعاتها</CardDescription>
+      <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
+        <div>
+          <CardTitle>فواتير المريض</CardTitle>
+          <CardDescription>اضغط الفاتورة لعرض بنودها ودفعاتها</CardDescription>
+        </div>
+        <div className="flex flex-wrap items-center gap-1 rounded-md border p-1 text-xs">
+          {([
+            { key: "all", label: "الكل" },
+            { key: "credit", label: "الآجل" },
+            { key: "settled", label: "المدفوع" },
+          ] as const).map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              onClick={() => setScope(option.key)}
+              className={`rounded px-2.5 py-1 ${
+                scope === option.key ? "bg-primary text-primary-foreground" : "hover:bg-muted"
+              }`}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
       </CardHeader>
-      <CardContent className="flex flex-col gap-2">
-        {invoices.isLoading && <Skeleton className="h-24 w-full" />}
+      <CardContent className="flex flex-col gap-3">
+        {invoices.isLoading && <Skeleton className="h-40 w-full" />}
         {invoices.isError && (
           <p className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
-            تعذّر تحميل الفواتير: {errorMessage(invoices.error)}
+            تعذّر تحميل الفواتير: {errorMessage(invoices.error)} — إن لم تُنفَّذ الترقية{" "}
+            <span className="font-mono">0162</span> على القاعدة بعد، نفِّذها.
           </p>
         )}
-        {(invoices.data ?? []).map((invoice: any) => {
-          const remaining = Number(invoice.remaining_amount ?? 0);
-          const status = invoice.status as SalesInvoiceStatus;
-          const payable = invoiceAcceptsPayment(status, remaining);
-          return (
-            <div
-              key={invoice.id}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2"
-            >
-              <button
-                type="button"
-                onClick={() => setDetailsId(invoice.id)}
-                className="flex flex-1 flex-wrap items-center justify-between gap-2 text-start hover:opacity-80"
-              >
-                <div>
-                  <p className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                    فاتورة #{invoice.invoice_number}
-                    <Badge className={INVOICE_STATUS_BADGE[status]}>{INVOICE_STATUS_LABELS[status]}</Badge>
-                    {invoice.is_temporary && <Badge variant="outline">مؤقّتة</Badge>}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {formatDateTime(invoice.created_at, calendarDisplay)}
-                  </p>
-                </div>
-                <div className="text-end">
-                  <p className="text-sm font-semibold">{formatAmount(invoice.net_amount)} ر.س</p>
-                  {remaining > 0 && (
-                    <p className="text-xs text-rose-600">متبقي {formatAmount(remaining)}</p>
-                  )}
-                </div>
-              </button>
-              {payable && canReceive && (
-                <Button size="sm" onClick={() => setPayTarget(invoice as SalesInvoiceWithPatient)}>
-                  سداد
-                </Button>
-              )}
-            </div>
-          );
-        })}
-        {!invoices.isLoading && (invoices.data ?? []).length === 0 && (
-          <p className="py-6 text-center text-sm text-muted-foreground">لا توجد فواتير سابقة.</p>
+
+        {!invoices.isLoading && !invoices.isError && (
+          <div className="overflow-x-auto rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12 whitespace-nowrap">العدد</TableHead>
+                  <TableHead className="whitespace-nowrap">رقم الفاتورة</TableHead>
+                  <TableHead className="whitespace-nowrap">التاريخ</TableHead>
+                  <TableHead className="min-w-[14rem]">الأعمال</TableHead>
+                  <TableHead className="whitespace-nowrap">الإجمالي</TableHead>
+                  <TableHead className="whitespace-nowrap">الخصومات</TableHead>
+                  <TableHead className="whitespace-nowrap">الصافي</TableHead>
+                  <TableHead className="whitespace-nowrap">المدفوع</TableHead>
+                  <TableHead className="whitespace-nowrap">المتبقّي</TableHead>
+                  <TableHead className="whitespace-nowrap">الطبيب</TableHead>
+                  <TableHead className="w-24 whitespace-nowrap">إجراء</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((invoice: any, index: number) => {
+                  const remaining = Number(invoice.remaining_amount ?? 0);
+                  const status = invoice.status as SalesInvoiceStatus;
+                  const payable = invoiceAcceptsPayment(status, remaining);
+                  return (
+                    <TableRow
+                      key={invoice.id}
+                      className="cursor-pointer"
+                      onClick={() => setDetailsId(invoice.id)}
+                    >
+                      <TableCell className="text-center tabular-nums text-muted-foreground">
+                        {formatAmount(index + 1)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap font-medium tabular-nums">
+                        <span className="flex flex-wrap items-center gap-1">
+                          {invoice.invoice_number}
+                          {invoice.is_temporary && (
+                            <Badge variant="outline" className="text-[10px]">
+                              عرض سعر
+                            </Badge>
+                          )}
+                          <Badge className={INVOICE_STATUS_BADGE[status]}>
+                            {INVOICE_STATUS_LABELS[status]}
+                          </Badge>
+                        </span>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                        {formatDateTime(invoice.created_at, calendarDisplay)}
+                      </TableCell>
+                      <TableCell className="text-xs">
+                        <span className="line-clamp-2">{invoice.works ?? "—"}</span>
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {formatAmount(invoice.subtotal_amount)}
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {formatAmount(invoice.discount_amount)}
+                      </TableCell>
+                      <TableCell className="font-medium tabular-nums">
+                        {formatAmount(invoice.net_amount)}
+                      </TableCell>
+                      <TableCell className="tabular-nums">
+                        {formatAmount(invoice.paid_amount)}
+                      </TableCell>
+                      <TableCell
+                        className={`tabular-nums ${remaining > 0 ? "text-rose-600" : "text-emerald-700"}`}
+                      >
+                        {formatAmount(remaining)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">
+                        {invoice.doctor_name ?? "—"}
+                      </TableCell>
+                      <TableCell onClick={(event) => event.stopPropagation()}>
+                        {payable && canReceive && (
+                          <Button
+                            size="sm"
+                            onClick={() => setPayTarget(invoice as SalesInvoiceWithPatient)}
+                          >
+                            سداد
+                          </Button>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+                {rows.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={11} className="py-8 text-center text-sm text-muted-foreground">
+                      لا فواتير في هذا النطاق.
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+
+        {/* شريط المجاميع — الأرقام التسعة نفسها في ذيل الشاشة المرجعيّة */}
+        {totals.isError && (
+          <p className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+            تعذّر حساب المجاميع: {errorMessage(totals.error)} — الترقية{" "}
+            <span className="font-mono">0162</span> تضيف
+            <span className="font-mono"> app_patient_invoice_totals</span>. الجدول أعلاه يعمل بدونها.
+          </p>
+        )}
+        {totals.data && (
+          <div className="grid gap-2 rounded-md border bg-muted/30 p-3 text-xs sm:grid-cols-4 lg:grid-cols-7">
+            <TotalCell label="العدد" value={formatAmount(totals.data.invoice_count)} />
+            <TotalCell label="قبل الخصم" value={`${formatAmount(totals.data.before_discount)} ر.س`} />
+            <TotalCell label="الخصومات" value={`${formatAmount(totals.data.discount_total)} ر.س`} />
+            <TotalCell label="نسبة الخصم" value={`${formatAmount(totals.data.discount_percent)}%`} />
+            <TotalCell label="بعد الخصم" value={`${formatAmount(totals.data.after_discount)} ر.س`} />
+            <TotalCell label="المدفوعات" value={`${formatAmount(totals.data.paid_total)} ر.س`} />
+            <TotalCell
+              label="نسبة التحصيل"
+              value={`${formatAmount(totals.data.collection_percent)}%`}
+            />
+            <TotalCell
+              label="المتبقّي"
+              value={`${formatAmount(totals.data.remaining_total)} ر.س`}
+              alert={Number(totals.data.remaining_total) > 0}
+            />
+          </div>
         )}
       </CardContent>
 
@@ -1870,6 +2117,25 @@ function InvoicesTab({ patientId }: { patientId: string }) {
         organizationId={organization?.id}
       />
     </Card>
+  );
+}
+
+function TotalCell({
+  label,
+  value,
+  alert,
+}: {
+  label: string;
+  value: string;
+  alert?: boolean;
+}) {
+  return (
+    <div className="flex flex-col">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`font-mono text-sm font-semibold tabular-nums ${alert ? "text-rose-600" : ""}`}>
+        {value}
+      </span>
+    </div>
   );
 }
 

@@ -708,7 +708,28 @@ function ArchiveDialog({
 /* ══════════════════════════════════════════════════════════════════════════
  * التبويب
  * ════════════════════════════════════════════════════════════════════════ */
-export default function DocumentsTab({ patientId }: { patientId: string }) {
+/**
+ * أنواع ما يُعرض. الصور والتواقيع ليست جداول أخرى — هي **صفوف هذا الجدول**
+ * برشّاحٍ على عمودين قائمين: `category = 'image'` و`signed_at is not null`.
+ * وبناء شاشتين مستقلّتين لهما كان سيُكرّر الرفع والأرشفة والتوقيع ثم يفترق.
+ */
+export type DocumentKind = "all" | "image" | "document" | "signed";
+
+const DOCUMENT_KINDS: { key: DocumentKind; label: string }[] = [
+  { key: "all", label: "الكل" },
+  { key: "document", label: "مستندات" },
+  { key: "image", label: "صور" },
+  { key: "signed", label: "موقَّعة" },
+];
+
+export default function DocumentsTab({
+  patientId,
+  kind = "all",
+}: {
+  patientId: string;
+  /** النوع المفتوح أوّلًا — والمستخدم يغيّره من الرشّاح أعلى الجدول. */
+  kind?: DocumentKind;
+}) {
   const documents = usePatientDocuments(patientId);
   const { toast } = useToast();
   const { can } = usePermissions();
@@ -717,6 +738,9 @@ export default function DocumentsTab({ patientId }: { patientId: string }) {
   const [signing, setSigning] = useState<any | null>(null);
   const [archiving, setArchiving] = useState<any | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [activeKind, setActiveKind] = useState<DocumentKind>(kind);
+  // القسم يأتي من العنوان، فتغييره من الشريط الجانبي يجب أن يُغيّر الرشّاح
+  useEffect(() => setActiveKind(kind), [kind]);
 
   const openDocument = useMutation({
     mutationFn: async (row: any) => {
@@ -732,7 +756,17 @@ export default function DocumentsTab({ patientId }: { patientId: string }) {
       }),
   });
 
-  const rows = (documents.data ?? []).filter((r) => showArchived || !r.is_archived);
+  const rows = (documents.data ?? [])
+    .filter((r) => showArchived || !r.is_archived)
+    .filter((r) => {
+      if (activeKind === "all") return true;
+      if (activeKind === "image") return r.category === "image";
+      if (activeKind === "signed") return Boolean(r.signed_at);
+      // «مستندات» = كل ما ليس صورة، لا `category = 'document'` وحدها:
+      // 0037 يسمّي المولَّد من قالبٍ بأسماء أخرى، وحصرُه بقيمةٍ واحدة كان
+      // سيُخفي الموافقات المولَّدة من الجدول كلّه.
+      return r.category !== "image";
+    });
 
   return (
     <div className="flex flex-col gap-4">
@@ -748,7 +782,23 @@ export default function DocumentsTab({ patientId }: { patientId: string }) {
               لا يُنفَّذ بدونها.
             </CardDescription>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1 rounded-md border p-1 text-xs">
+              {DOCUMENT_KINDS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => setActiveKind(option.key)}
+                  className={`rounded px-2.5 py-1 ${
+                    activeKind === option.key
+                      ? "bg-primary text-primary-foreground"
+                      : "hover:bg-muted"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
             <Button variant="ghost" onClick={() => setShowArchived((v) => !v)}>
               {showArchived ? "إخفاء المؤرشف" : "إظهار المؤرشف"}
             </Button>

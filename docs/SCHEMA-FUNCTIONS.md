@@ -1,4 +1,4 @@
-# دوالّ قاعدة ZainCare (435)
+# دوالّ قاعدة ZainCare (437)
 
 > **مُولَّد آليًّا — لا يُحرَّر يدويًّا:** `python scripts/schema-doc.py`
 
@@ -2605,6 +2605,18 @@ app_patient_by_id_number(
 ) returns table (patient_id uuid, name_ar text, file_number bigint, is_merged boolean)
 ```
 
+### app_patient_invoice_totals(3)
+
+عُرِّفت في: `0162`
+
+```sql
+app_patient_invoice_totals(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_scope text default 'all'
+) returns table ( invoice_count bigint, before_discount numeric, discount_total numeric, discount_percent numeric, after_discount numeric, vat_total numeric, paid_total numeric, collection_percent numeric, remaining_total numeric )
+```
+
 ### app_patient_last_consultation_date(2)
 
 عُرِّفت في: `0004`
@@ -4291,6 +4303,17 @@ app_services_for_doctor(
   p_clinic_id uuid default null,
   p_branch_id uuid default null
 ) returns table ( id uuid, name_ar text, medical_service_type text, duration_minutes int, price numeric, source text )
+```
+
+### app_set_appointment_note(2)
+
+عُرِّفت في: `0161`
+
+```sql
+app_set_appointment_note(
+  p_appointment_id uuid,
+  p_note text
+) returns void
 ```
 
 ### app_set_appointment_priority(3)

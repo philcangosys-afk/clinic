@@ -5,8 +5,8 @@
 
 ## كيف قُرئ
 
-قُرئت 158 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
-`migrations/0013…0160` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
+قُرئت 160 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
+`migrations/0013…0162` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
 وكل `alter table` تعدّل، وكل `drop` تحذف. فما تراه هنا هو المخطط **بعد آخر
 ترقية**، لا كما كان يوم إنشائه. ودخل المولّد إلى أجسام `do $$ … $$` لأنّ
 معظم قيود المفاتيح تُضاف داخلها بحارس `if not exists`.
@@ -16,8 +16,8 @@
 | | من الترقيات (هنا) | من فحص الإنتاج (`docs/deep-gap-probe.sql`) |
 | --- | ---: | ---: |
 | جداول | 234 | 232 |
-| دوالّ | 435 | 420 |
-| منظورات | 184 | 175 |
+| دوالّ | 437 | 420 |
+| منظورات | 187 | 175 |
 | مفاتيح ربط | 1063 | 1076 |
 | فهارس | 392 | — |
 
@@ -6833,7 +6833,7 @@
 | `csr_config` | `jsonb` |  |  |  |
 | `created_at` | `timestamptz` | ✔ | `now()` |  |
 
-## المنظورات (184)
+## المنظورات (187)
 
 | المنظور | نوعه | عُرِّف في |
 | --- | --- | --- |
@@ -6905,6 +6905,7 @@
 | `v_inventory_on_hand` | منظور | `0038`، `0044` |
 | `v_inventory_warehouse_summary` | منظور | `0038` |
 | `v_invoice_payment_methods` | منظور | `0157` |
+| `v_invoice_payments` | منظور | `0162` |
 | `v_invoice_print` | منظور | `0157` |
 | `v_invoice_profitability` | منظور | `0010`، `0143` |
 | `v_invoice_register` | منظور | `0091`، `0144` |
@@ -6935,7 +6936,9 @@
 | `v_patient_financials` | منظور | `0039` |
 | `v_patient_financials_by_doctor` | منظور | `0041` |
 | `v_patient_insurance_status` | منظور | `0089` |
+| `v_patient_invoices` | منظور | `0162` |
 | `v_patient_odontogram` | منظور | `0141` |
+| `v_patient_open_agreements` | منظور | `0162` |
 | `v_patient_package_balances` | منظور | `0096` |
 | `v_patient_radiology_images` | منظور | `0138` |
 | `v_patient_subscriptions` | منظور | `0096` |
@@ -6958,9 +6961,9 @@
 | `v_radiology_console_queue` | منظور | `0138` |
 | `v_radiology_unreported_orders` | منظور | `0138`، `0144` |
 | `v_radiology_worklist` | منظور | `0084` |
-| `v_reception_queue` | منظور | `0065` |
+| `v_reception_queue` | منظور | `0065`، `0161` |
 | `v_reception_queue_by_doctor` | منظور | `0158` |
-| `v_reception_queue_ordered` | منظور | `0065` |
+| `v_reception_queue_ordered` | منظور | `0161` |
 | `v_reception_requests` | منظور | `0138` |
 | `v_recruitment_pipeline` | منظور | `0022` |
 | `v_reference_categories` | منظور | `0086` |
@@ -7024,4 +7027,4 @@
 
 ## الدوالّ
 
-توقيعات الدوالّ الـ435 في ملفّ مستقلّ: [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md).
+توقيعات الدوالّ الـ437 في ملفّ مستقلّ: [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md).
