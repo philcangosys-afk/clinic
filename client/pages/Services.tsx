@@ -3,8 +3,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   ArchiveRestore,
+  BadgePercent,
   Clock,
   Download,
+  Gift,
   ListOrdered,
   Package,
   Pencil,
@@ -54,6 +56,8 @@ function useItems(
   statusFilter: string,
   serviceTypeFilter: string,
   showArchived: boolean,
+  /** "all" | "free" (تُمنَح مجانًا) | "offer" (عليها عرض نشط اليوم) */
+  featureFilter: string,
 ) {
   return useQuery({
     queryKey: [
@@ -65,6 +69,7 @@ function useItems(
       statusFilter,
       serviceTypeFilter,
       showArchived,
+      featureFilter,
     ],
     enabled: Boolean(organizationId),
     queryFn: async () => {
@@ -74,7 +79,7 @@ function useItems(
       let query = supabase
         .from("v_service_catalog")
         .select(
-          "id, code, barcode, name_ar, name_en, item_type, medical_service_type, duration_minutes, category_value_id, category_name, price, cost_price, is_vat_exempt, is_disabled, is_archived, archive_reason, archived_at, default_clinic_id, clinic_name, requires_preauthorization, requires_consent, branch_ids, primary_claim_code",
+          "id, code, barcode, name_ar, name_en, item_type, medical_service_type, duration_minutes, category_value_id, category_name, price, cost_price, is_vat_exempt, is_disabled, is_archived, archive_reason, archived_at, default_clinic_id, clinic_name, requires_preauthorization, requires_consent, branch_ids, primary_claim_code, min_price, max_price, allow_complimentary, complimentary_note, offer_id, offer_title, offer_price, offer_show_before_after, offer_end_date, effective_price",
         )
         .eq("organization_id", organizationId)
         .eq("is_archived", showArchived)
@@ -87,6 +92,10 @@ function useItems(
       if (typeFilter !== "all") query = query.eq("item_type", typeFilter);
       if (serviceTypeFilter !== "all") query = query.eq("medical_service_type", serviceTypeFilter);
       if (statusFilter !== "all") query = query.eq("is_disabled", statusFilter === "disabled");
+      // الترشيح في القاعدة لا بعد الجلب: القائمة مسقوفة، وترشيحٌ بعد السقف
+      // يُخفي خدماتٍ مطابقة سقطت من الحدّ فتبدو غير موجودة.
+      if (featureFilter === "free") query = query.eq("allow_complimentary", true);
+      if (featureFilter === "offer") query = query.not("offer_id", "is", null);
       const { data, error } = await query;
       if (error) throw error;
       return (data ?? []) as any[];
@@ -242,6 +251,7 @@ export default function Services() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [serviceTypeFilter, setServiceTypeFilter] = useState("all");
   const [showArchived, setShowArchived] = useState(false);
+  const [featureFilter, setFeatureFilter] = useState("all");
   const [editorFor, setEditorFor] = useState<{ open: boolean; itemId: string | null }>({
     open: false,
     itemId: null,
@@ -292,6 +302,7 @@ export default function Services() {
     statusFilter,
     serviceTypeFilter,
     showArchived,
+    featureFilter,
   );
   const canManage = can("catalog.manage");
 
@@ -337,6 +348,30 @@ export default function Services() {
             icon: RefreshCw,
             onClick: () => void items.refetch(),
           },
+          {
+            /**
+             * «الخدمات المجانية» — بابٌ واحد لسياسة المنح.
+             *
+             * الإذن يُضبَط في بطاقة كل خدمة، لكنّ السؤال العمليّ «ما الذي
+             * يجوز منحه مجانًا؟» لا جواب له إلّا بفتح كلّ خدمة. وهذا الزرّ
+             * يجيبه في ضغطة، وهو المكان الذي يُراجَع فيه الباب قبل أن يُستنزف.
+             */
+            key: "free",
+            label: featureFilter === "free" ? "كل الخدمات" : "الخدمات المجانية",
+            icon: Gift,
+            title: "الخدمات المؤشَّرة «تُمنَح مجانًا» — المنح نفسه من شاشة الفاتورة بسببٍ مكتوب",
+            onClick: () =>
+              setFeatureFilter((prev) => (prev === "free" ? "all" : "free")),
+          },
+          {
+            key: "offers",
+            label: featureFilter === "offer" ? "كل الخدمات" : "عليها عرض",
+            icon: BadgePercent,
+            title: "الخدمات التي عليها عرضٌ نشطٌ اليوم — العرض يُنشأ من تبويب «العروض» في بطاقة الخدمة",
+            onClick: () =>
+              setFeatureFilter((prev) => (prev === "offer" ? "all" : "offer")),
+          },
+          { key: "sep2b", separator: true },
           {
             key: "archive",
             label: showArchived ? "عرض النشط" : "الأرشيف",
@@ -489,9 +524,49 @@ export default function Services() {
                           "—"
                         )}
                       </TableCell>
-                      <TableCell>{formatAmount(item.price)} ر.س</TableCell>
+                      <TableCell>
+                        {item.offer_id ? (
+                          <div className="flex flex-col leading-tight">
+                            {item.offer_show_before_after && (
+                              <span className="text-xs text-muted-foreground line-through">
+                                {formatAmount(item.price)}
+                              </span>
+                            )}
+                            <span className="font-semibold text-emerald-700">
+                              {formatAmount(item.offer_price)} ر.س
+                            </span>
+                          </div>
+                        ) : (
+                          <span>{formatAmount(item.price)} ر.س</span>
+                        )}
+                      </TableCell>
                       <TableCell>
                         <div className="flex flex-wrap gap-1">
+                          {item.offer_id && (
+                            <Badge
+                              className="bg-emerald-600 hover:bg-emerald-600"
+                              title={
+                                item.offer_end_date
+                                  ? `${item.offer_title} — إلى ${item.offer_end_date}`
+                                  : `${item.offer_title} — بلا نهاية`
+                              }
+                            >
+                              {item.offer_title}
+                            </Badge>
+                          )}
+                          {item.allow_complimentary && (
+                            <Badge
+                              className="bg-sky-600 hover:bg-sky-600"
+                              title={item.complimentary_note ?? "يجوز منحها مجانًا بسببٍ مكتوب"}
+                            >
+                              تُمنَح مجانًا
+                            </Badge>
+                          )}
+                          {item.min_price !== null && item.min_price !== undefined && (
+                            <Badge variant="outline" title="القاعدة ترفض البيع تحت هذا الحد">
+                              أدنى {formatAmount(item.min_price)}
+                            </Badge>
+                          )}
                           {item.requires_preauthorization && <Badge variant="outline">موافقة مسبقة</Badge>}
                           {item.requires_consent && <Badge variant="outline">إقرار</Badge>}
                           {item.is_vat_exempt && <Badge variant="secondary">معفى</Badge>}

@@ -148,6 +148,12 @@ export type PermissionKey =
   | "billing.refund"
   | "billing.void"
   | "billing.manual_line"
+  /* منح الخدمة المجانية — قرار الطبيب أو المدير (0167) */
+  | "billing.complimentary"
+  /* الخصم على سطر الفاتورة بسببٍ مكتوب (0167) */
+  | "billing.line_discount"
+  /* إصدار الطبيب فاتورةَ مريضه من شاشته، ويُحصّلها الاستقبال (0170) */
+  | "billing.doctor_invoice"
   | "cashier.receive"
   | "cashier.open"
   | "cashier.close"

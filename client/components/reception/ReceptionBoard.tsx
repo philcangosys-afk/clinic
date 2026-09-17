@@ -60,6 +60,43 @@ import {
 import { useToast } from "@/hooks/use-toast";
 
 /**
+ * ما أصدره الأطباء اليوم من غرفهم (0170).
+ *
+ * استعلامٌ واحد لكل الطابور لا استعلامٌ لكل صفّ: قراءةُ فاتورةٍ لكل مريضٍ في
+ * طابورٍ من ثلاثين تُرسل ثلاثين طلبًا في كل تحديث، والتحديث يجري كل دقيقة.
+ *
+ * والمفتاح `appointment_id`: الفاتورة تُربط بالموعد الذي أُصدرت فيه لا
+ * بالمريض، وإلّا ظهرت فاتورة زيارةٍ سابقة على صفّ اليوم.
+ */
+function useDoctorIssuedInvoices(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["doctor-issued-invoices", organizationId],
+    enabled: Boolean(organizationId),
+    refetchInterval: 60 * 1000,
+    queryFn: async () => {
+      const today = new Date();
+      const from = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
+      const { data, error } = await supabase
+        .from("v_doctor_issued_invoices")
+        .select(
+          "id, appointment_id, patient_id, gross_amount, discount_total, net_amount, remaining_amount, complimentary_count, complimentary_value, discount_reasons, complimentary_reasons, status, doctor_name",
+        )
+        .eq("organization_id", organizationId)
+        .gte("created_at", from)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      const byAppointment = new Map<string, any>();
+      for (const row of data ?? []) {
+        const key = (row as any).appointment_id;
+        // الأحدث أوّلًا في الترتيب، فأوّل ما يُسجَّل لكل موعدٍ هو الأحدث
+        if (key && !byAppointment.has(key)) byAppointment.set(key, row);
+      }
+      return byAppointment;
+    },
+  });
+}
+
+/**
  * لوحة الاستقبال.
  *
  * تقرأ `v_reception_queue_ordered` (0065) لا الجدول مباشرةً — **الترتيب في
@@ -116,7 +153,58 @@ type QueueRow = {
  * الطبيب وصفّ «لا مرضى» أقصر من الجدول فينكسر المحاذاة في RTL. أيّ تغييرٍ
  * في الأعمدة يُغيَّر هنا وحده.
  */
-const QUEUE_COLUMN_COUNT = 24;
+const QUEUE_COLUMN_COUNT = 26;
+
+/**
+ * تصنيف الصفّ: حضوريّ (زيارة جديدة) أم موعدٌ محجوز.
+ *
+ * `status = walk_in` هو الحضوريّ في القاعدة. وما عداه موعدٌ سُجِّل قبل الحضور،
+ * ونوعُ الزيارة المكتوب (`visit_type_name`) يُقدَّم عليه إن قال «جديد» صراحةً:
+ * منشأةٌ تُسجّل الزيارة الجديدة موعدًا في اللحظة نفسها لا يصحّ أن تظهر موعدًا
+ * مؤجَّلًا.
+ */
+function rowKind(row: QueueRow): "walk_in" | "new_visit" | "appointment" {
+  if (row.status === "walk_in") return "walk_in";
+  if ((row.visit_type_name ?? "").includes("جديد")) return "new_visit";
+  return "appointment";
+}
+
+const ROW_KIND_STYLE: Record<string, string> = {
+  walk_in: "border-e-4 border-e-amber-500 bg-amber-50/40",
+  new_visit: "border-e-4 border-e-sky-500 bg-sky-50/40",
+  appointment: "border-e-4 border-e-slate-300",
+};
+
+const ROW_KIND_BADGE: Record<string, { label: string; className: string }> = {
+  walk_in: { label: "حضوري", className: "bg-amber-500 hover:bg-amber-500" },
+  new_visit: { label: "زيارة جديدة", className: "bg-sky-600 hover:bg-sky-600" },
+  appointment: { label: "موعد", className: "bg-slate-500 hover:bg-slate-500" },
+};
+
+/**
+ * الخطوة التالية المشروعة من الحالة الحالية.
+ *
+ * الترتيب هو ترتيب الطابور نفسه: وصول ← تسجيل ← نداء ← دخول ← خروج. والقاعدة
+ * هي التي تفرضه (`app_reception_transition`)، وهذه تختار **ما يُعرض** منه لا
+ * ما يصحّ — فلا تعريفان للطابور.
+ */
+function nextQueueStep(
+  row: QueueRow,
+  can: (key: string) => boolean,
+): { action: string; label: string; primary: boolean } | null {
+  if (row.status === "confirmed" && can("reception.check_in"))
+    return { action: "arrive", label: "وصول", primary: false };
+  if (row.status === "arrived" && can("reception.check_in"))
+    return { action: "check_in", label: "تسجيل", primary: false };
+  if (["checked_in", "waiting", "walk_in"].includes(row.status) && can("reception.call"))
+    return { action: "call", label: "نداء", primary: false };
+  if (["called", "checked_in", "arrived", "waiting", "walk_in"].includes(row.status)
+      && can("reception.start_visit"))
+    return { action: "start", label: "دخول", primary: true };
+  if (row.status === "in_progress" && can("reception.finish"))
+    return { action: "finish", label: "خروج", primary: true };
+  return null;
+}
 
 const STATUS_LABELS: Record<string, string> = {
   confirmed: "مؤكد",
@@ -303,6 +391,9 @@ export default function ReceptionBoard({
     },
   });
 
+  /** ما أصدره الأطباء اليوم — مفتاحه رقم الموعد (0170). */
+  const doctorInvoices = useDoctorIssuedInvoices(organizationId);
+
   /**
    * الصفوف مُجمَّعة بالطبيب مع عنوانٍ فوق كل مجموعة — كما في نظام العيادات
    * المرجعيّ. الترتيب داخل المجموعة يبقى كما جاء من القاعدة (الدور).
@@ -442,6 +533,8 @@ export default function ReceptionBoard({
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-10 whitespace-nowrap">#</TableHead>
+                <TableHead className="w-[9rem] whitespace-nowrap">إجراءات</TableHead>
                 {/* أحد عشر عمودًا وخلية إجراءات فيها ستّة أزرار: بلا منع الالتفاف
                     تنكسر العناوين في منتصف الكلمة («الدو/ر»، «الفاتو/رة»)
                     ويصير الجدول غير مقروء. والأعمدة الثانوية تُخفى على الشاشات
@@ -469,7 +562,7 @@ export default function ReceptionBoard({
                 <TableHead className="whitespace-nowrap">الحالة</TableHead>
                 <TableHead className="whitespace-nowrap">التأمين</TableHead>
                 <TableHead className="whitespace-nowrap">الفاتورة</TableHead>
-                <TableHead className="min-w-[16rem] whitespace-nowrap">الإجراءات</TableHead>
+                <TableHead className="whitespace-nowrap">فاتورة الطبيب</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -485,258 +578,71 @@ export default function ReceptionBoard({
                       </span>
                     </TableCell>
                   </TableRow>
-                  {group.items.map((row) => (
+                  {group.items.map((row, indexInGroup) => {
+                  /**
+                   * الترقيم على القائمة المعروضة كلّها لا على المجموعة: الاستقبال
+                   * يقول «الثاني عشر» لا «الثاني في مجموعة د. فلان».
+                   */
+                  const rowIndex =
+                    groups
+                      .slice(0, groups.findIndex((g) => g.doctorId === group.doctorId))
+                      .reduce((sum, g) => sum + g.items.length, 0) + indexInGroup + 1;
+                  const nextStep = nextQueueStep(row, can);
+                  return (
                 <TableRow
                   key={row.appointment_id}
-                  className={row.appointment_id === highlightAppointmentId ? "ring-2 ring-inset ring-primary" : undefined}
+                  className={[
+                    ROW_KIND_STYLE[rowKind(row)],
+                    row.appointment_id === highlightAppointmentId
+                      ? "ring-2 ring-inset ring-primary"
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
                 >
-                  <TableCell className="text-center font-bold tabular-nums">
-                    {row.queue_number ?? "—"}
+                  <TableCell className="text-center text-[11px] text-muted-foreground tabular-nums">
+                    {rowIndex}
                   </TableCell>
                   <TableCell>
-                    <button
-                      type="button"
-                      className="text-start"
-                      onClick={() => navigate(`/patients/${row.patient_id}`)}
-                    >
-                      <span className="flex flex-wrap items-center gap-1">
-                        <span className="font-medium hover:text-primary">{row.patient_name}</span>
-                        {row.blood_type && (
-                          <Badge variant="outline" className="px-1 py-0 text-[10px]">
-                            {row.blood_type}
-                          </Badge>
-                        )}
-                        {/* التنبيه الطبّي يُقتطع ولا يُلفّ: سطرٌ ثانٍ في خليةٍ
-                            واحدة يرفع ارتفاع الصفّ كلّه، والنصّ كامل في
-                            التلميح عند الوقوف عليه. */}
-                        {row.medical_alert && (
-                          <Badge
-                            variant="destructive"
-                            title={row.medical_alert}
-                            className="max-w-[9rem] truncate px-1 py-0 text-[10px]"
-                          >
-                            {row.medical_alert}
-                          </Badge>
-                        )}
-                      </span>
-                      <span className="block text-[10px] text-muted-foreground">
-                        {row.mobile_number ?? ""}
-                      </span>
-                    </button>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {row.patient_name_en ?? "—"}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap tabular-nums">
-                    {row.file_number ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    <div>{row.doctor_name}</div>
-                    <div className="text-xs text-muted-foreground">{row.clinic_name ?? "—"}</div>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {row.visit_type_name ?? "—"}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {row.service_name ?? "—"}
-                  </TableCell>
-                  <TableCell className="text-xs tabular-nums">
-                    {formatTime(row.scheduled_start)}
-                  </TableCell>
-                  {/* استقبال ١ هو الوصول، واستقبال ٢ هو تسجيل الدخول —
-                      عمودان في `appointments` منذ 0002 لم يكن يُعرض منهما إلا
-                      الأوّل، فلا يُعرف كم بقي المريض بين المكتبين. */}
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {formatTime(row.arrived_at)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {formatTime(row.checked_in_at)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {formatTime(row.called_at)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {formatTime(row.entered_at)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {formatTime(row.left_at)}
-                  </TableCell>
-                  <TableCell className={`whitespace-nowrap tabular-nums ${WAITING_STYLES[row.waiting_state]}`}>
-                    {row.waiting_minutes === null ? "—" : `${row.waiting_minutes} د`}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {row.sent_by_name ?? "—"}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {Number(row.agreement_remaining ?? 0) > 0 ? (
-                      <span className="text-amber-700">
-                        {formatAmount(row.agreement_remaining ?? 0)}
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {Number(row.deferred_amount ?? 0) > 0 ? (
-                      <span className="text-rose-600">{formatAmount(row.deferred_amount ?? 0)}</span>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {row.treated ? (
-                      <Badge variant="success">نعم</Badge>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    <span className="line-clamp-2">{row.note ?? "—"}</span>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    <Badge variant={row.priority === "normal" ? "outline" : "destructive"}>
-                      {PRIORITY_LABELS[row.priority] ?? row.priority}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    <Badge variant="secondary">{STATUS_LABELS[row.status] ?? row.status}</Badge>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {row.insurance_company_name ? (
-                      <Badge variant={row.insurance_valid ? "success" : "destructive"}>
-                        {row.insurance_valid ? row.insurance_company_name : "بطاقة منتهية"}
-                      </Badge>
-                    ) : (
-                      <span className="text-muted-foreground">نقدي</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {row.invoice_id ? (
-                      <span className={Number(row.remaining_amount) > 0 ? "text-rose-600" : "text-emerald-700"}>
-                        متبقٍ {formatAmount(row.remaining_amount ?? 0)}
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">لا فاتورة</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-0.5 [&_button]:h-6 [&_button]:px-1.5 [&_button]:text-[11px] [&_svg]:h-3 [&_svg]:w-3">
-                      {row.status === "confirmed" && can("reception.check_in") && (
+                    <div className="flex items-center gap-0.5 [&_button]:h-6 [&_button]:px-1.5 [&_button]:text-[11px] [&_svg]:h-3 [&_svg]:w-3">
+                      {/**
+                        * **الخطوة التالية المشروعة وحدها.**
+                        *
+                        * القاعدة (`app_reception_transition`) تفرض ما يصحّ من
+                        * أيّ حالة، وعرضُ سبعة أزرارٍ يصحّ واحدٌ منها ليس
+                        * خيارًا بل بحثًا عن الصحيح. وكلّ ما عداها في القائمة
+                        * معطَّلًا لا محذوفًا — فيبقى مرئيًّا أنّه موجود وأنّه
+                        * لا يصحّ الآن.
+                        */}
+                      {nextStep && (
                         <Button
                           size="sm"
-                          variant="outline"
-                          onClick={() => transition.mutate({ id: row.appointment_id, action: "arrive" })}
+                          variant={nextStep.primary ? "default" : "outline"}
+                          title={nextStep.label}
+                          onClick={() =>
+                            transition.mutate({ id: row.appointment_id, action: nextStep.action })
+                          }
                         >
-                          <UserCheck className="h-3.5 w-3.5" /> وصول
-                        </Button>
-                      )}
-                      {row.status === "arrived" && can("reception.check_in") && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => transition.mutate({ id: row.appointment_id, action: "check_in" })}
-                        >
-                          تسجيل
-                        </Button>
-                      )}
-                      {["arrived", "checked_in", "waiting", "walk_in"].includes(row.status) &&
-                        can("reception.call") && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => transition.mutate({ id: row.appointment_id, action: "call" })}
-                          >
-                            <Bell className="h-3.5 w-3.5" /> نداء
-                          </Button>
-                        )}
-                      {row.status === "called" && can("reception.call") && (
-                        <>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => transition.mutate({ id: row.appointment_id, action: "recall" })}
-                          >
-                            <Bell className="h-3.5 w-3.5" /> إعادة نداء
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => transition.mutate({ id: row.appointment_id, action: "uncall" })}
-                          >
-                            <BellOff className="h-3.5 w-3.5" /> إلغاء النداء
-                          </Button>
-                        </>
-                      )}
-                      {["called", "checked_in", "arrived", "waiting", "walk_in"].includes(row.status) &&
-                        can("reception.start_visit") && (
-                          <Button
-                            size="sm"
-                            onClick={() => transition.mutate({ id: row.appointment_id, action: "start" })}
-                          >
-                            بدء الزيارة
-                          </Button>
-                        )}
-                      {row.status === "in_progress" && can("reception.finish") && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => transition.mutate({ id: row.appointment_id, action: "finish" })}
-                        >
-                          <CheckCircle2 className="h-3.5 w-3.5" /> إنهاء
-                        </Button>
-                      )}
-                      {["confirmed", "arrived"].includes(row.status) && can("reception.check_in") && (
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="text-destructive"
-                          onClick={() => setNoShowTarget(row)}
-                        >
-                          <UserX className="h-3.5 w-3.5" /> لم يحضر
-                        </Button>
-                      )}
-                      {can("reception.transfer") && (
-                        <Button size="sm" variant="ghost" onClick={() => setTransferTarget(row)}>
-                          <ArrowLeftRight className="h-3.5 w-3.5" /> نقل
-                        </Button>
-                      )}
-                      {can("appointments.update") && (
-                        <Button size="sm" variant="ghost" onClick={() => setPriorityTarget(row)}>
-                          <Flag className="h-3.5 w-3.5" /> أولوية
-                        </Button>
-                      )}
-                      {can("reception.override") && (
-                        <Button size="sm" variant="ghost" onClick={() => setUndoTarget(row)}>
-                          <Undo2 className="h-3.5 w-3.5" /> تراجع
+                          {nextStep.label}
                         </Button>
                       )}
                       {row.queue_number !== null && (
-                        <Button size="sm" variant="ghost" onClick={() => printTicket(row)}>
-                          <Printer className="h-3.5 w-3.5" /> تذكرة
-                        </Button>
-                      )}
-                      {/* الإلغاء (0158): إخراجٌ من الطابور بسببٍ يبقى في السجلّ،
-                          لا حذف. و«لم يحضر» ليست بديلًا — هي حقيقةٌ أخرى. */}
-                      {can("reception.transfer") && row.status !== "completed" && (
                         <Button
                           size="sm"
                           variant="ghost"
-                          className="text-destructive"
-                          onClick={() => setCancelTarget(row)}
+                          title="طباعة تذكرة الدور"
+                          onClick={() => printTicket(row)}
                         >
-                          <XCircle className="h-3.5 w-3.5" /> إلغاء
+                          <Printer className="h-3.5 w-3.5" />
                         </Button>
                       )}
-                      {/* أوامر المريض — نظير قائمة الزرّ الأيمن في نظام
-                          العيادات المرجعيّ: ما يحتاجه الاستقبال وهو واقفٌ على
-                          صفّ المريض بلا مغادرة الشاشة. */}
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button size="sm" variant="ghost">
                             <MoreHorizontal className="h-3.5 w-3.5" />
                           </Button>
                         </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="w-56">
+                        <DropdownMenuContent side="top" align="end" className="max-h-[70vh] w-60 overflow-y-auto">
                           <DropdownMenuLabel>الطابور</DropdownMenuLabel>
                           {/* بنود الطابور نفسها في قائمة النظام المرجعيّ.
                               كلٌّ منها يستدعي `app_reception_transition`
@@ -782,6 +688,75 @@ export default function ReceptionBoard({
                           >
                             <Pencil className="h-4 w-4" />
                             تعديل الملاحظة المسجَّلة
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!can("reception.check_in") || row.status !== "confirmed"}
+                            onClick={() =>
+                              transition.mutate({ id: row.appointment_id, action: "arrive" })
+                            }
+                          >
+                            <UserCheck className="h-4 w-4" />
+                            تسجيل الوصول
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!can("reception.check_in") || row.status !== "arrived"}
+                            onClick={() =>
+                              transition.mutate({ id: row.appointment_id, action: "check_in" })
+                            }
+                          >
+                            <UserCheck className="h-4 w-4" />
+                            تسجيل في الطابور
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!can("reception.call") || row.status !== "called"}
+                            onClick={() =>
+                              transition.mutate({ id: row.appointment_id, action: "recall" })
+                            }
+                          >
+                            <Bell className="h-4 w-4" />
+                            إعادة النداء
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!can("reception.call") || row.status !== "called"}
+                            onClick={() =>
+                              transition.mutate({ id: row.appointment_id, action: "uncall" })
+                            }
+                          >
+                            <BellOff className="h-4 w-4" />
+                            إلغاء النداء
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            disabled={
+                              !can("reception.check_in") ||
+                              !["confirmed", "arrived"].includes(row.status)
+                            }
+                            className="text-destructive"
+                            onClick={() => setNoShowTarget(row)}
+                          >
+                            <UserX className="h-4 w-4" />
+                            لم يحضر
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!can("reception.transfer")}
+                            onClick={() => setTransferTarget(row)}
+                          >
+                            <ArrowLeftRight className="h-4 w-4" />
+                            نقل إلى طبيبٍ آخر
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!can("appointments.update")}
+                            onClick={() => setPriorityTarget(row)}
+                          >
+                            <Flag className="h-4 w-4" />
+                            تغيير الأولوية
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!can("reception.override")}
+                            onClick={() => setUndoTarget(row)}
+                          >
+                            <Undo2 className="h-4 w-4" />
+                            تراجع عن آخر انتقال
                           </DropdownMenuItem>
                           {/* «حذف من قائمة الانتظار» في النظام المرجعيّ =
                               إخراجٌ من الطابور. وهو هنا إلغاءٌ بسببٍ يبقى في
@@ -845,8 +820,217 @@ export default function ReceptionBoard({
                       </DropdownMenu>
                     </div>
                   </TableCell>
+                  <TableCell className="text-center font-bold tabular-nums">
+                    {row.queue_number ?? "—"}
+                  </TableCell>
+                  <TableCell>
+                    <button
+                      type="button"
+                      className="text-start"
+                      onClick={() => navigate(`/patients/${row.patient_id}`)}
+                    >
+                      <span
+                        className="flex items-center gap-1 whitespace-nowrap"
+                        title={row.mobile_number ?? undefined}
+                      >
+                        <span className="max-w-[11rem] truncate font-medium hover:text-primary">
+                          {row.patient_name}
+                        </span>
+                        {row.blood_type && (
+                          <Badge variant="outline" className="px-1 py-0 text-[10px]">
+                            {row.blood_type}
+                          </Badge>
+                        )}
+                        {/* التنبيه الطبّي يُقتطع ولا يُلفّ: سطرٌ ثانٍ في خليةٍ
+                            واحدة يرفع ارتفاع الصفّ كلّه، والنصّ كامل في
+                            التلميح عند الوقوف عليه. */}
+                        {row.medical_alert && (
+                          <Badge
+                            variant="destructive"
+                            title={row.medical_alert}
+                            className="max-w-[9rem] truncate px-1 py-0 text-[10px]"
+                          >
+                            {row.medical_alert}
+                          </Badge>
+                        )}
+                      </span>
+                    </button>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {row.patient_name_en ?? "—"}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">
+                    {row.file_number ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-sm">
+                    <div>{row.doctor_name}</div>
+                    <div className="text-xs text-muted-foreground">{row.clinic_name ?? "—"}</div>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {/* اللون على حدّ الصفّ، والنصّ هنا: اللون وحده لا يقرؤه
+                        مَن لا يميّز الألوان، والنصّ وحده لا يُرى في لمحة. */}
+                    <Badge
+                      className={`px-1 py-0 text-[10px] ${ROW_KIND_BADGE[rowKind(row)].className}`}
+                      title={row.visit_type_name ?? undefined}
+                    >
+                      {row.visit_type_name ?? ROW_KIND_BADGE[rowKind(row)].label}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {row.service_name ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-xs tabular-nums">
+                    {formatTime(row.scheduled_start)}
+                  </TableCell>
+                  {/* استقبال ١ هو الوصول، واستقبال ٢ هو تسجيل الدخول —
+                      عمودان في `appointments` منذ 0002 لم يكن يُعرض منهما إلا
+                      الأوّل، فلا يُعرف كم بقي المريض بين المكتبين. */}
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {formatTime(row.arrived_at)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {formatTime(row.checked_in_at)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {formatTime(row.called_at)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {formatTime(row.entered_at)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {formatTime(row.left_at)}
+                  </TableCell>
+                  <TableCell className={`whitespace-nowrap tabular-nums ${WAITING_STYLES[row.waiting_state]}`}>
+                    {row.waiting_minutes === null ? "—" : `${row.waiting_minutes} د`}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {row.sent_by_name ?? "—"}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {Number(row.agreement_remaining ?? 0) > 0 ? (
+                      <span className="text-amber-700">
+                        {formatAmount(row.agreement_remaining ?? 0)}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
+                    {Number(row.deferred_amount ?? 0) > 0 ? (
+                      <span className="text-rose-600">{formatAmount(row.deferred_amount ?? 0)}</span>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {/**
+                      * ثلاث حالات لا اثنتان.
+                      *
+                      * «عولج» = زيارةٌ أُغلقت أو وُقّعت — دخلٌ محقَّق للطبيب.
+                      * «دخل» = دخل الغرفة ولم تُغلق زيارته — دخلٌ منتظَر.
+                      * والفرق هو الفرق بين ما يُحاسَب عليه الطبيب وما يُتابَع.
+                      */}
+                    {row.treated ? (
+                      <Badge variant="success" title="زيارة مُغلقة أو موقَّعة">
+                        عولج
+                      </Badge>
+                    ) : row.entered_at ? (
+                      <Badge variant="outline" title="دخل الطبيب ولم تُغلق زيارته بعد">
+                        دخل
+                      </Badge>
+                    ) : (
+                      <span className="text-muted-foreground">—</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    <span className="line-clamp-2">{row.note ?? "—"}</span>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <Badge variant={row.priority === "normal" ? "outline" : "destructive"}>
+                      {PRIORITY_LABELS[row.priority] ?? row.priority}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <Badge variant="secondary">{STATUS_LABELS[row.status] ?? row.status}</Badge>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {row.insurance_company_name ? (
+                      <Badge variant={row.insurance_valid ? "success" : "destructive"}>
+                        {row.insurance_valid ? row.insurance_company_name : "بطاقة منتهية"}
+                      </Badge>
+                    ) : (
+                      <span className="text-muted-foreground">نقدي</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {row.invoice_id ? (
+                      <span className={Number(row.remaining_amount) > 0 ? "text-rose-600" : "text-emerald-700"}>
+                        متبقٍ {formatAmount(row.remaining_amount ?? 0)}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">لا فاتورة</span>
+                    )}
+                  </TableCell>
+                  {/**
+                    * ما أعطاه الطبيب (0170).
+                    *
+                    * المُعلَن مشطوبًا والصافي بعده متى وُجد خصم: «بمئة والمريض
+                    * يدفع تسعين» يُقرأ في لمحة، وسببُ الخصم في التلميح. والتحصيل
+                    * على بيّنةٍ من النظام لا على ورقةٍ بيد المريض.
+                    */}
+                  <TableCell className="whitespace-nowrap text-xs">
+                    {doctorInvoices.isError ? (
+                      <span
+                        className="text-muted-foreground"
+                        title="تعذّر قراءة فواتير الأطباء — إن كانت الترقية 0170 غير منفَّذة فهذا سببها"
+                      >
+                        —
+                      </span>
+                    ) : (() => {
+                      const inv = doctorInvoices.data?.get(row.appointment_id);
+                      if (!inv) return <span className="text-muted-foreground">—</span>;
+                      const discount = Number(inv.discount_total) || 0;
+                      const comp = Number(inv.complimentary_count) || 0;
+                      return (
+                        <span
+                          className="flex items-center gap-1"
+                          title={[
+                            `أصدرها ${inv.doctor_name ?? "الطبيب"}`,
+                            discount > 0 && inv.discount_reasons
+                              ? `سبب الخصم: ${inv.discount_reasons}`
+                              : "",
+                            comp > 0 && inv.complimentary_reasons
+                              ? `مجاني: ${inv.complimentary_reasons}`
+                              : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        >
+                          {discount > 0 && (
+                            <span className="text-muted-foreground line-through">
+                              {formatAmount(inv.gross_amount ?? 0)}
+                            </span>
+                          )}
+                          <span className="font-semibold">
+                            {formatAmount(inv.net_amount ?? 0)}
+                          </span>
+                          {discount > 0 && (
+                            <Badge className="bg-rose-600 px-1 py-0 text-[10px] hover:bg-rose-600">
+                              خصم {formatAmount(discount)}
+                            </Badge>
+                          )}
+                          {comp > 0 && (
+                            <Badge className="bg-sky-600 px-1 py-0 text-[10px] hover:bg-sky-600">
+                              مجاني {comp}
+                            </Badge>
+                          )}
+                        </span>
+                      );
+                    })()}
+                  </TableCell>
                 </TableRow>
-                  ))}
+                  );
+                  })}
                 </Fragment>
               ))}
               {rows.length === 0 && (

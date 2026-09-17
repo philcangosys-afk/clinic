@@ -10,6 +10,7 @@ import {
   invoiceAcceptsPayment,
 } from "@/lib/invoice-status";
 import { useInvoicePayments } from "@/components/billing/RecordPaymentDialog";
+import InvoiceActions from "@/components/billing/InvoiceActions";
 import { printPaymentReceipt } from "@/lib/payment-receipt";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import type { SalesInvoiceStatus, SalesInvoiceWithPatient } from "@/lib/database.types";
@@ -179,6 +180,14 @@ export function InvoiceDetailsDialog({
           <DialogDescription>
             {invoice ? formatDateTime(invoice.created_at, calendarDisplay) : "جارٍ التحميل..."}
           </DialogDescription>
+          {invoiceId && (
+            <InvoiceActions
+              invoiceId={invoiceId}
+              printedByName={null}
+              variant="labeled"
+              className="pt-1"
+            />
+          )}
         </DialogHeader>
 
         {details.isLoading && <Skeleton className="h-48 w-full" />}

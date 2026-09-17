@@ -1,16 +1,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { LayoutGrid, Plus, Receipt } from "lucide-react";
+import { Gift, LayoutGrid, Percent, Plus, Receipt } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import { formatAmount } from "@/lib/locale";
 import { useInsuranceSettings } from "@/lib/insurance-settings";
+import { usePermissions } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Dialog,
   DialogContent,
@@ -127,6 +129,29 @@ type DraftLine = {
   discount_percent: number;
   /** النسبة التي اقترحها app_resolve_discount — للتمييز بين الآلي واليدوي. */
   auto_discount_percent: number;
+  /**
+   * خصمٌ بمبلغٍ إلى جانب النسبة (0167/0168).
+   *
+   * «الخدمة بمئة والمريض يدفع تسعين» عشرةُ ريالات لا نسبة، وتحويلها إلى نسبة
+   * يُنتج كسورًا تُقرَّب فيخرج ٨٩٫٩٩ على الورقة. والقاعدة تسقفه بمجموع السطر.
+   */
+  discount_amount?: number;
+  /** سبب الخصم — **إلزاميّ في القاعدة** متى وُجد خصم. */
+  discount_reason?: string;
+  /** خدمة مجانية: السطر بصفرٍ في السعر والضريبة والصافي. */
+  is_complimentary?: boolean;
+  /** سبب المنح — إلزاميّ في القاعدة. */
+  complimentary_reason?: string;
+  /** هل يُبيح الكتالوج منح هذه الخدمة مجانًا؟ (`items.allow_complimentary`) */
+  allow_complimentary?: boolean;
+  /** سياسة المنح المكتوبة على الصنف — تُعرض لمن يمنح. */
+  complimentary_note?: string | null;
+  /** العرض المُطبَّق على السطر — للعرض «قبل/بعد» لا للحساب. */
+  offer_title?: string | null;
+  offer_list_price?: number | null;
+  offer_show_before_after?: boolean;
+  /** حدّ 0159 الأدنى — لتحذير الخصم قبل أن ترفضه القاعدة. */
+  min_price?: number | null;
   is_vat_exempt: boolean;
   /**
    * ربط السطر ببند اتفاقية علاجية. هذا هو المفتاح الذي يعتمد عليه المُحفِّز
@@ -408,6 +433,17 @@ export default function NewInvoiceDialog({
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { session } = useOrganizationAccess();
+  const { can } = usePermissions();
+  /**
+   * **المجانيّ قرارُ الطبيب أو المدير، والخصم يملكه الاستقبال والمحاسبة.**
+   *
+   * القاعدة تفرض ذلك (0167)، وهذه الحالتان تُخفيان الزرّ عمّن لا يملكه بدل
+   * أن يضغطه فيُرفض — والزرّ الذي يُرفض دائمًا أسوأ من زرٍّ غائب.
+   */
+  const canComplimentary = can("billing.complimentary");
+  const canLineDiscount = can("billing.line_discount");
+  /** السطر المفتوحة خياراته — خصمٌ ومجانيّ لا يظهران إلّا عند الطلب. */
+  const [lineOptionsFor, setLineOptionsFor] = useState<string | null>(null);
   const [patient, setPatient] = useState<{ id: string; name_ar: string } | null>(null);
   const [externalName, setExternalName] = useState("");
   /** هل طلب المستخدم تغيير المريض المحدَّد؟ (يُظهر صندوق البحث) */
@@ -775,6 +811,78 @@ export default function NewInvoiceDialog({
       autoDiscount = 0;
     }
 
+    /**
+     * **السعر الساري من القاعدة: العرض النشط اليوم إن وُجد.**
+     *
+     * `app_item_effective_price` (0167) تُعيد سعر القائمة والسعر بعد العرض
+     * واسم العرض وحدّي السعر. والسؤال يقع **قبل الحفظ** كما في نسبة الضريبة
+     * (0156): المحاسب يجب أن يرى على الشاشة ما سيُطبع على الورقة.
+     *
+     * وتعذّر السؤال لا يمنع الإضافة: `app_create_sales_invoice` (بعد 0168)
+     * تُعيد تطبيق العرض في القاعدة على كلّ حال — فهذا عرضٌ مُسبَق لا حساب.
+     */
+    let offerTitle: string | null = null;
+    let offerListPrice: number | null = null;
+    let offerShowBeforeAfter = true;
+    let itemMinPrice: number | null = null;
+    let allowComplimentary = false;
+    let complimentaryNote: string | null = null;
+    try {
+      const { data, error } = await supabase.rpc("app_item_effective_price", {
+        p_organization_id: organizationId,
+        p_item_id: billedId,
+        p_on_date: new Date().toISOString().slice(0, 10),
+      });
+      const price = (Array.isArray(data) ? data[0] : data) as
+        | {
+            list_price: number;
+            effective_price: number;
+            offer_id: string | null;
+            offer_title: string | null;
+            show_before_after: boolean;
+            min_price: number | null;
+            max_price: number | null;
+          }
+        | undefined;
+      if (!error && price) {
+        itemMinPrice = price.min_price === null ? null : Number(price.min_price);
+        if (price.offer_id) {
+          offerTitle = price.offer_title;
+          offerListPrice = Number(price.list_price) || null;
+          offerShowBeforeAfter = Boolean(price.show_before_after);
+          billedPrice = Number(price.effective_price) || 0;
+          /**
+           * **السعر البعديّ يُسكِت اقتراح نسبة الحملة.**
+           *
+           * `offers` (0004) تقترح نسبةً عبر `app_resolve_discount`، فلو
+           * بقيت فوق السعر البعديّ خرج ١١٩٫٢٠ من خدمةٍ أُعلنت «بـ١٤٩»:
+           * تخفيضٌ لم تُعلنه المنشأة ولا وافقت عليه. والمعلَن هو البعديّ.
+           *
+           * والخصم اليدويّ يبقى ممكنًا بسببٍ مكتوب — قرارٌ لا تكديسٌ صامت.
+           */
+          autoDiscount = 0;
+        }
+      }
+    } catch {
+      // الترقية 0167 غير منفَّذة أو تعذّر السؤال — يُضاف البند بسعره المعروف
+      offerTitle = null;
+    }
+
+    // الإذن بالمنح مجانًا وسياستُه من بطاقة الصنف
+    try {
+      const { data, error } = await supabase
+        .from("items")
+        .select("allow_complimentary, complimentary_note")
+        .eq("id", billedId)
+        .maybeSingle();
+      if (!error && data) {
+        allowComplimentary = Boolean((data as any).allow_complimentary);
+        complimentaryNote = (data as any).complimentary_note ?? null;
+      }
+    } catch {
+      allowComplimentary = false;
+    }
+
     // المفتاح يُولَّد قبل الإضافة ويُعاد للمستدعي، حتى يستطيع تعديل هذا
     // السطر بعينه بلا افتراض أنه الأخير.
     const key = `${billedId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -793,6 +901,12 @@ export default function NewInvoiceDialog({
         agreement_label: null,
         visit_service_id: null,
         follow_up_note: followUpNote,
+        offer_title: offerTitle,
+        offer_list_price: offerListPrice,
+        offer_show_before_after: offerShowBeforeAfter,
+        min_price: itemMinPrice,
+        allow_complimentary: allowComplimentary,
+        complimentary_note: complimentaryNote,
       },
     ]);
     return key;
@@ -938,10 +1052,25 @@ export default function NewInvoiceDialog({
     let discount = 0;
     let vat = 0;
     const computed = lines.map((line) => {
-      const lineSubtotal = line.price * line.qty;
-      const lineDiscount = (lineSubtotal * line.discount_percent) / 100;
+      /**
+       * الحساب يحاكي 0168 حرفًا بحرف: المجانيّ صفرٌ، والخصم نسبةٌ ومبلغٌ
+       * **مسقوفان بمجموع السطر** فلا يخرج صافٍ سالب.
+       *
+       * والمحاكاة مقصودة لا مُكرَّرة: القاعدة هي التي تحسب المحفوظ، وهذه
+       * تُري المحاسب الرقم نفسه قبل الحفظ. واختلافهما يعني خطأً في أحدهما،
+       * وهو ما يجعل الفرق ملحوظًا بدل أن يُكتشف على ورقةٍ سُلِّمت للمريض.
+       */
+      const complimentary = Boolean(line.is_complimentary);
+      const unitPrice = complimentary ? 0 : line.price;
+      const lineSubtotal = unitPrice * line.qty;
+      const lineDiscount = complimentary
+        ? 0
+        : Math.min(
+            (lineSubtotal * line.discount_percent) / 100 + (line.discount_amount ?? 0),
+            lineSubtotal,
+          );
       const taxable = lineSubtotal - lineDiscount;
-      const lineVat = line.is_vat_exempt ? 0 : (taxable * vatRate) / 100;
+      const lineVat = line.is_vat_exempt || complimentary ? 0 : (taxable * vatRate) / 100;
       subtotal += lineSubtotal;
       discount += lineDiscount;
       vat += lineVat;
@@ -970,6 +1099,46 @@ export default function NewInvoiceDialog({
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
       if (!patient && !externalName.trim()) throw new Error("اختر مريضًا أو أدخل اسم عميل خارجي");
       if (lines.length === 0) throw new Error("أضف بندًا واحدًا على الأقل");
+
+      /**
+       * ما ترفضه القاعدة يُمنع هنا قبل الإرسال.
+       *
+       * حارس 0167 يرفض المجانيّ بلا سبب أو بلا إباحة، والخصم بلا سبب، والخصم
+       * الذي يهبط بالوحدة تحت الحدّ الأدنى. ورفضُه صحيح، لكنّه يأتي بعد إرسال
+       * الفاتورة كاملة برسالةٍ واحدة لا تقول أيّ سطر.
+       */
+      for (const line of lines) {
+        if (line.is_complimentary) {
+          if (!line.allow_complimentary) {
+            throw new Error(
+              `«${line.description}» غير مؤشَّرة «تُمنَح مجانًا» في بطاقة الصنف — أشِّرها من شاشة الخدمات أوّلًا`,
+            );
+          }
+          if (!String(line.complimentary_reason ?? "").trim()) {
+            throw new Error(`اكتب سبب منح «${line.description}» مجانًا`);
+          }
+          continue;
+        }
+        const lineSubtotal = line.price * line.qty;
+        const lineDiscount = Math.min(
+          (lineSubtotal * line.discount_percent) / 100 + (line.discount_amount ?? 0),
+          lineSubtotal,
+        );
+        if (lineDiscount > 0 && !String(line.discount_reason ?? "").trim()) {
+          throw new Error(`اكتب سبب الخصم على «${line.description}»`);
+        }
+        if (
+          lineDiscount > 0 &&
+          line.min_price !== null &&
+          line.min_price !== undefined &&
+          line.qty > 0 &&
+          (lineSubtotal - lineDiscount) / line.qty < line.min_price - 0.0001
+        ) {
+          throw new Error(
+            `الخصم يُنزل «${line.description}» إلى ${((lineSubtotal - lineDiscount) / line.qty).toFixed(2)} للوحدة، وحدّها الأدنى ${line.min_price.toFixed(2)}`,
+          );
+        }
+      }
       // حظر الفوترة في ملف المريض كان معروضًا بلا فرض — يُفرض هنا قبل إنشاء الرأس
       await assertPatientNotBlocked(patient?.id, "invoices");
 
@@ -996,6 +1165,13 @@ export default function NewInvoiceDialog({
           qty: line.qty,
           price: line.price,
           discount_percent: line.discount_percent,
+          // الخصم بمبلغ وسببه، والمجانيّ وسببه (0168). والقاعدة تُعيد حساب
+          // كلّ شيء وتُسجّل المانح من `auth.uid()` — فلا يُرسَل المانح.
+          discount_amount: line.discount_amount ?? 0,
+          discount_reason: String(line.discount_reason ?? "").trim() || null,
+          is_complimentary: Boolean(line.is_complimentary),
+          complimentary_reason:
+            String(line.complimentary_reason ?? "").trim() || null,
           is_vat_exempt: line.is_vat_exempt,
           agreement_item_id: line.agreement_item_id,
           visit_service_id: line.visit_service_id,
@@ -1516,9 +1692,29 @@ export default function NewInvoiceDialog({
               <p className="py-3 text-center text-xs text-muted-foreground">لم تُضف بنود بعد.</p>
             )}
             {totals.computed.map((line) => (
-              <div key={line.key} className="grid grid-cols-12 items-center gap-2 text-sm">
+              <div key={line.key} className="flex flex-col gap-1">
+              <div className="grid grid-cols-12 items-center gap-2 text-sm">
                 <span className="col-span-4 flex min-w-0 items-center gap-1.5">
                   <span className="truncate">{line.description}</span>
+                  {line.offer_title && (
+                    <Badge
+                      className="shrink-0 bg-emerald-600 text-[10px] hover:bg-emerald-600"
+                      title={
+                        line.offer_list_price
+                          ? `قبل العرض ${line.offer_list_price.toFixed(2)} — بعده ${line.price.toFixed(2)}`
+                          : line.offer_title
+                      }
+                    >
+                      {line.offer_show_before_after && line.offer_list_price
+                        ? `${line.offer_title}: ${line.offer_list_price.toFixed(2)} ← ${line.price.toFixed(2)}`
+                        : line.offer_title}
+                    </Badge>
+                  )}
+                  {line.is_complimentary && (
+                    <Badge className="shrink-0 bg-sky-600 text-[10px] hover:bg-sky-600">
+                      مجانية
+                    </Badge>
+                  )}
                   {line.agreement_label && (
                     <Badge variant="secondary" className="shrink-0 text-[10px]">
                       {line.agreement_label}
@@ -1541,7 +1737,15 @@ export default function NewInvoiceDialog({
                 <Input
                   className="col-span-2 h-8"
                   type="number"
-                  value={line.price}
+                  value={line.is_complimentary ? 0 : line.price}
+                  disabled={Boolean(line.is_complimentary)}
+                  title={
+                    line.is_complimentary
+                      ? "السطر المجانيّ بصفرٍ تفرضه القاعدة"
+                      : line.min_price !== null && line.min_price !== undefined
+                        ? `الحد الأدنى ${line.min_price.toFixed(2)}`
+                        : "السعر"
+                  }
                   onChange={(e) => updateLine(line.key, { price: Number(e.target.value) })}
                 />
                 <Input
@@ -1552,11 +1756,12 @@ export default function NewInvoiceDialog({
                   onChange={(e) => updateLine(line.key, { qty: Number(e.target.value) })}
                 />
                 <Input
-                  className="col-span-2 h-8"
+                  className="col-span-1 h-8"
                   type="number"
                   min={0}
                   max={100}
                   value={line.discount_percent}
+                  disabled={Boolean(line.is_complimentary)}
                   onChange={(e) => updateLine(line.key, { discount_percent: Number(e.target.value) })}
                   title={
                     line.auto_discount_percent > 0
@@ -1565,9 +1770,108 @@ export default function NewInvoiceDialog({
                   }
                 />
                 <span className="col-span-1 text-end text-xs font-semibold">{line.net.toFixed(2)}</span>
-                <Button variant="ghost" size="sm" className="col-span-1" onClick={() => removeLine(line.key)}>
-                  حذف
-                </Button>
+                <div className="col-span-2 flex items-center justify-end gap-0.5">
+                  {(canLineDiscount || canComplimentary) && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-8 px-1.5"
+                      title="خصم بمبلغ · خدمة مجانية"
+                      onClick={() =>
+                        setLineOptionsFor((prev) => (prev === line.key ? null : line.key))
+                      }
+                    >
+                      {line.is_complimentary ? (
+                        <Gift className="h-3.5 w-3.5" />
+                      ) : (
+                        <Percent className="h-3.5 w-3.5" />
+                      )}
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="sm" className="h-8 px-1.5" onClick={() => removeLine(line.key)}>
+                    حذف
+                  </Button>
+                </div>
+              </div>
+
+              {/**
+                * خيارات السطر — تظهر بالطلب لا دائمًا.
+                *
+                * إظهار أربعة حقولٍ إضافية على كل سطرٍ يجعل فاتورةً من خمسة
+                * بنود جدارًا لا يُقرأ، والخصم والمجانيّ استثناءٌ لا قاعدة.
+                */}
+              {lineOptionsFor === line.key && (
+                <div className="grid gap-2 rounded-md border bg-muted/30 p-2 text-xs sm:grid-cols-2">
+                  {canLineDiscount && !line.is_complimentary && (
+                    <>
+                      <div className="flex flex-col gap-1">
+                        <Label className="text-xs">خصم بمبلغ (ريال)</Label>
+                        <Input
+                          className="h-8"
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          value={line.discount_amount ?? 0}
+                          placeholder="مثال: 10 ليدفع 90 عن خدمة بـ100"
+                          onChange={(e) =>
+                            updateLine(line.key, { discount_amount: Number(e.target.value) || 0 })
+                          }
+                        />
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <Label className="text-xs">سبب الخصم (إلزاميّ مع أيّ خصم)</Label>
+                        <Input
+                          className="h-8"
+                          value={line.discount_reason ?? ""}
+                          placeholder="قرار الطبيب · مريض متكرّر · تسوية"
+                          onChange={(e) => updateLine(line.key, { discount_reason: e.target.value })}
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {canComplimentary && (
+                    <div className="flex flex-col gap-1 sm:col-span-2">
+                      <label className="flex items-center gap-2">
+                        <Switch
+                          checked={Boolean(line.is_complimentary)}
+                          disabled={!line.allow_complimentary}
+                          onCheckedChange={(value) =>
+                            updateLine(line.key, {
+                              is_complimentary: value,
+                              // المجانيّ يُلغي الخصم: صفرٌ لا يُخصم منه
+                              discount_percent: value ? 0 : line.discount_percent,
+                              discount_amount: value ? 0 : (line.discount_amount ?? 0),
+                              discount_reason: value ? "" : (line.discount_reason ?? ""),
+                            })
+                          }
+                        />
+                        خدمة مجانية
+                        {!line.allow_complimentary && (
+                          <span className="text-muted-foreground">
+                            — غير مؤشَّرة «تُمنَح مجانًا» في بطاقة الصنف
+                          </span>
+                        )}
+                      </label>
+                      {line.complimentary_note && (
+                        <span className="text-muted-foreground">
+                          سياسة الصنف: {line.complimentary_note}
+                        </span>
+                      )}
+                      {line.is_complimentary && (
+                        <Input
+                          className="h-8"
+                          value={line.complimentary_reason ?? ""}
+                          placeholder="سبب المنح — مثال: الجلسة الخامسة بعد أربع مدفوعة"
+                          onChange={(e) =>
+                            updateLine(line.key, { complimentary_reason: e.target.value })
+                          }
+                        />
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
               </div>
             ))}
           </div>

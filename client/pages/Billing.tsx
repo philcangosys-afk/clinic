@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Printer, Receipt, Send, WalletCards, Undo2 } from "lucide-react";
+import { Download, Plus, Printer, Receipt, Send, WalletCards, Undo2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
@@ -38,14 +38,8 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import SendInvoiceDialog from "@/components/billing/SendInvoiceDialog";
-import {
-  loadLogoDataUrl,
-  printInvoiceReceipt,
-  type InvoicePaymentMethod,
-  type InvoicePrintData,
-  type InvoicePrintHeader,
-  type InvoicePrintItem,
-} from "@/lib/invoice-receipt";
+import { downloadInvoicePdf, loadInvoicePrintData } from "@/lib/invoice-pdf";
+import { printInvoiceReceipt, type InvoicePrintData } from "@/lib/invoice-receipt";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/permissions";
 import TaxSettingsTab, {
@@ -124,40 +118,6 @@ function useMemberNames(organizationId: string | undefined) {
  * البنود وطرق الدفع تُجلبان عند الضغط لا مع القائمة: تحميلها لخمسين فاتورة
  * مقدّمًا لأجل واحدة قد تُطبع هدرٌ في كل فتح للشاشة.
  */
-async function loadInvoicePrintData(
-  invoiceId: string,
-  printedBy: string | null,
-): Promise<InvoicePrintData> {
-  const [headerRes, itemsRes, paymentsRes] = await Promise.all([
-    supabase.from("v_invoice_print").select("*").eq("invoice_id", invoiceId).maybeSingle(),
-    supabase
-      .from("sales_invoice_items")
-      .select("description, price, qty, discount_amount, vat_amount, net_amount")
-      .eq("invoice_id", invoiceId)
-      .order("created_at"),
-    supabase
-      .from("v_invoice_payment_methods")
-      .select("method_name, method_code, amount")
-      .eq("invoice_id", invoiceId),
-  ]);
-  if (headerRes.error) throw headerRes.error;
-  if (itemsRes.error) throw itemsRes.error;
-  if (paymentsRes.error) throw paymentsRes.error;
-  if (!headerRes.data) throw new Error("تعذّر قراءة بيانات الفاتورة للطباعة");
-
-  const header = headerRes.data as unknown as InvoicePrintHeader;
-  // الشعار يُضمَّن قبل الطباعة: `printHtml` تطبع فور الكتابة، وصورةٌ من
-  // الشبكة قد لا تصل قبلها فتخرج الورقة بلا شعار أحيانًا وبه أحيانًا.
-  const logoDataUrl = header.show_logo ? await loadLogoDataUrl(header.logo_url) : null;
-
-  return {
-    header,
-    items: (itemsRes.data ?? []) as unknown as InvoicePrintItem[],
-    payments: (paymentsRes.data ?? []) as unknown as InvoicePaymentMethod[],
-    printedBy,
-    logoDataUrl,
-  };
-}
 
 export default function Billing() {
   const { organization, membership, legacyMode, session } = useOrganizationAccess();
@@ -601,6 +561,31 @@ export default function Billing() {
                         فتصطفّ في عمود واحد طويل ويرتفع الصف بلا داعٍ. */}
                     <TableCell>
                       <div className="flex max-w-[16rem] flex-wrap items-center gap-1">
+                      {/* تحميل PDF: ملفٌّ واحدٌ مهما كان جهاز الموظّف.
+                          نافذة الطابعة فيها «حفظ كـ PDF» لكنّها تُضيف ترويسة
+                          المتصفّح ورابط الصفحة وتتبع إعدادات كلّ جهاز، فورقةُ
+                          مريضٍ تخرج بحاشيةٍ وأخرى بلا حاشية. */}
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        title="تحميل PDF"
+                        disabled={busyInvoiceId === invoice.id}
+                        onClick={() => {
+                          setBusyInvoiceId(invoice.id);
+                          loadInvoicePrintData(invoice.id, printedByName)
+                            .then((data) => downloadInvoicePdf(data))
+                            .catch((error: unknown) =>
+                              toast({
+                                variant: "destructive",
+                                title: "تعذر تجهيز ملفّ الفاتورة",
+                                description: errorMessage(error),
+                              }),
+                            )
+                            .finally(() => setBusyInvoiceId(null));
+                        }}
+                      >
+                        <Download className="h-3.5 w-3.5" />
+                      </Button>
                       <Button
                         size="sm"
                         variant="ghost"

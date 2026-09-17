@@ -23,6 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import LookupSelect from "@/components/shared/LookupSelect";
 import ServicePriceLists from "./ServicePriceLists";
+import ServiceOffersPanel from "./ServiceOffersPanel";
 import { errorMessage } from "@/lib/error-message";
 
 export const ITEM_TYPE_LABELS: Record<string, string> = {
@@ -96,6 +97,8 @@ const EMPTY_DRAFT: Draft = {
   cost_price: "0",
   min_price: "",
   max_price: "",
+  allow_complimentary: false,
+  complimentary_note: "",
   default_discount_percent: "0",
   is_vat_exempt: false,
   is_disabled: false,
@@ -342,6 +345,9 @@ export default function ServiceEditorDialog({
         // الفارغ يعني «بلا حدّ» لا صفرًا: صفرٌ افتراضيّ كان سيمنع كل بيع
         min_price: text(draft.min_price),
         max_price: text(draft.max_price),
+        // الإذن بمنح الخدمة مجانًا: قرارُ كتالوجٍ لا قرارُ لحظةِ الفوترة
+        allow_complimentary: Boolean(draft.allow_complimentary),
+        complimentary_note: text(draft.complimentary_note),
         default_discount_percent: text(draft.default_discount_percent) ?? "0",
         is_vat_exempt: Boolean(draft.is_vat_exempt),
         is_disabled: Boolean(draft.is_disabled),
@@ -420,6 +426,9 @@ export default function ServiceEditorDialog({
             <TabsTrigger value="scope">الفروع والموارد</TabsTrigger>
             <TabsTrigger value="codes" disabled={isNew}>
               أكواد المطالبات
+            </TabsTrigger>
+            <TabsTrigger value="offers" disabled={isNew}>
+              العروض
             </TabsTrigger>
             <TabsTrigger value="pricing" disabled={isNew}>
               الأسعار
@@ -607,6 +616,41 @@ export default function ServiceEditorDialog({
               الفارغ يعني <span className="font-medium">بلا حدّ</span>. القاعدة ترفض بيع الصنف
               خارجهما — والمرتجع والبند بسعر صفر مستثنيان، فلا يُحبَس ردّ ما بيع بسعرٍ قديم.
             </p>
+
+            {/**
+              * الخدمات المجانية (0167).
+              *
+              * **الإذن يُضبَط في الكتالوج لا في لحظة الفوترة.** «الجلسة الخامسة
+              * مجانًا» سياسةٌ تُقرَّر مرّةً على الخدمة، ولو تُرك القرار لكل
+              * فاتورة لصار كل سطرٍ قابلًا للتصفير بضغطة — وهذا بابٌ لا يُقاس
+              * ولا يُراجَع. والقاعدة ترفض منح خدمةٍ غير مؤشَّرة هنا، وتطلب سببًا
+              * مكتوبًا، وتُسجّل مانحه.
+              */}
+            <div className="rounded-md border p-3">
+              <Toggle
+                label="الخدمات المجانية: يُسمح بمنح هذه الخدمة مجانًا"
+                checked={Boolean(draft.allow_complimentary)}
+                disabled={!canManage}
+                onChange={(value) => set("allow_complimentary", value)}
+              />
+              {Boolean(draft.allow_complimentary) && (
+                <div className="mt-3 flex flex-col gap-1.5">
+                  <Label>سياسة المنح (تظهر لمن يمنح)</Label>
+                  <Textarea
+                    rows={2}
+                    value={draft.complimentary_note}
+                    disabled={!canManage}
+                    placeholder="مثال: بعد أربع جلسات مدفوعة تُمنح الخامسة مجانًا"
+                    onChange={(e) => set("complimentary_note", e.target.value)}
+                  />
+                </div>
+              )}
+              <p className="mt-2 text-xs text-muted-foreground">
+                المنح يحتاج صلاحية <span className="font-medium">منح الخدمات المجانية</span>{" "}
+                وسببًا مكتوبًا، والسطر ينزل بصفرٍ في ملف المريض وفي تقرير المجانيّات بقيمة
+                ما تُنازلت عنه المنشأة.
+              </p>
+            </div>
 
             <Separator />
 
@@ -974,6 +1018,21 @@ export default function ServiceEditorDialog({
               canManage={canManage}
               onChanged={() => claimCodes.refetch()}
             />
+          </TabsContent>
+
+          {/* ---------------------------------------------------------- */}
+          <TabsContent value="offers" className="pt-3">
+            {itemId && (
+              <ServiceOffersPanel
+                itemId={itemId}
+                listPrice={Number(draft.price) || 0}
+                minPrice={
+                  String(draft.min_price ?? "").trim() === ""
+                    ? null
+                    : Number(draft.min_price)
+                }
+              />
+            )}
           </TabsContent>
 
           {/* ---------------------------------------------------------- */}

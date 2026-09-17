@@ -1,4 +1,4 @@
-# دوالّ قاعدة ZainCare (438)
+# دوالّ قاعدة ZainCare (440)
 
 > **مُولَّد آليًّا — لا يُحرَّر يدويًّا:** `python scripts/schema-doc.py`
 
@@ -1772,7 +1772,7 @@ app_guard_integration_secret(
 
 ### app_guard_invoice_item_price(0)
 
-عُرِّفت في: `0159`
+عُرِّفت في: `0159`، `0167`
 
 ```sql
 app_guard_invoice_item_price(
@@ -1794,6 +1794,15 @@ app_guard_issued_invoice(
 
 ```sql
 app_guard_issued_invoice_lines(
+) returns trigger
+```
+
+### app_guard_item_offer(0)
+
+عُرِّفت في: `0167`
+
+```sql
+app_guard_item_offer(
 ) returns trigger
 ```
 
@@ -2182,6 +2191,18 @@ app_item_claim_code(
   p_item_id uuid,
   p_insurance_company_id uuid default null
 ) returns table (code text, code_system text, description text)
+```
+
+### app_item_effective_price(3)
+
+عُرِّفت في: `0167`
+
+```sql
+app_item_effective_price(
+  p_organization_id uuid,
+  p_item_id uuid,
+  p_on_date date default current_date
+) returns table ( list_price numeric, effective_price numeric, offer_id uuid, offer_title text, show_before_after boolean, min_price numeric, max_price numeric )
 ```
 
 ### app_lab_order_auto_complete(0)

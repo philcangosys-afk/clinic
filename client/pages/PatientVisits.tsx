@@ -9,6 +9,7 @@ import {
   FileSignature,
   History,
   Receipt,
+  Wallet,
 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { usePermissions } from "@/lib/permissions";
@@ -22,6 +23,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import NewInvoiceDialog, {
+  type BillingAppointmentContext,
+} from "@/components/billing/NewInvoiceDialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   Dialog,
@@ -126,6 +130,14 @@ export default function PatientVisits() {
     search: "",
   });
   const [target, setTarget] = useState<any | null>(null);
+  /**
+   * الزيارة التي يُصدر الطبيب فاتورتها الآن.
+   *
+   * النافذة في الشاشة الأمّ لا في `VisitTable`: نافذةٌ لكل صفٍّ تعني ثلاثين
+   * نسخةً من نموذج الفاتورة في الصفحة الواحدة، وكلٌّ منها يجلب طرق الدفع
+   * وصناديق النقد والأطباء.
+   */
+  const [invoiceVisit, setInvoiceVisit] = useState<any | null>(null);
 
   const set = (field: string, value: any) => setFilters((prev: any) => ({ ...prev, [field]: value }));
 
@@ -464,7 +476,11 @@ export default function PatientVisits() {
                 </p>
               )}
               {!visits.isLoading && !visits.isError && (
-                <VisitTable rows={rows} onOpen={setTarget} />
+                <VisitTable
+                  rows={rows}
+                  onOpen={setTarget}
+                  onIssueInvoice={setInvoiceVisit}
+                />
               )}
             </CardContent>
           </Card>
@@ -547,6 +563,38 @@ export default function PatientVisits() {
       </Tabs>
 
       <VisitActionsDialog visit={target} onClose={() => setTarget(null)} />
+
+      {/**
+        * نافذة فاتورة الطبيب.
+        *
+        * `id: null` في السياق يعني «لا موعد»: النافذة تقبل سياق موعدٍ أو سياق
+        * مريض بالشكل نفسه، فلا فرعٌ ثانٍ فيها. والزيارة تُمرَّر بمعرّفها عبر
+        * `appointment_id` إن وُجد فتُختَم به بنود الزيارة.
+        */}
+      {invoiceVisit && (
+        <NewInvoiceDialog
+          open={Boolean(invoiceVisit)}
+          onOpenChange={(next) => !next && setInvoiceVisit(null)}
+          organizationId={organization?.id}
+          vatRate={15}
+          appointment={
+            {
+              id: invoiceVisit.appointment_id ?? null,
+              patient_id: invoiceVisit.patient_id,
+              doctor_id: null,
+              clinic_id: null,
+              patient: {
+                id: invoiceVisit.patient_id,
+                name_ar: invoiceVisit.patient_name,
+                insurance_company_name: invoiceVisit.insurance_company_name ?? null,
+                insurance_policy_number: null,
+                insurance_policy_category: null,
+                insurance_membership_number: null,
+              },
+            } as BillingAppointmentContext
+          }
+        />
+      )}
     </div>
   );
 }
@@ -583,7 +631,15 @@ function Filter({
   );
 }
 
-function VisitTable({ rows, onOpen }: { rows: any[]; onOpen: (row: any) => void }) {
+function VisitTable({
+  rows,
+  onOpen,
+  onIssueInvoice,
+}: {
+  rows: any[];
+  onOpen: (row: any) => void;
+  onIssueInvoice: (row: any) => void;
+}) {
   const { can } = usePermissions();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -726,6 +782,19 @@ function VisitTable({ rows, onOpen }: { rows: any[]; onOpen: (row: any) => void 
                     >
                       <Receipt className="h-3.5 w-3.5" />
                       إنشاء فاتورة
+                    </Button>
+                  )}
+                  {/* فاتورة الطبيب بخصمٍ ومجانيّ (0170): القاعدة تشترط
+                      `billing.doctor_invoice`، فالزرّ لا يُظهر ما ترفضه. */}
+                  {can("billing.doctor_invoice") && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      title="اختيار البنود، وخصمٌ بسببٍ مكتوب، وخدمة مجانية — ثم يُحصّلها الاستقبال"
+                      onClick={() => onIssueInvoice(row)}
+                    >
+                      <Wallet className="h-3.5 w-3.5" />
+                      فاتورة بخصم
                     </Button>
                   )}
                 </div>

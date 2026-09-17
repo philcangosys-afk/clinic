@@ -5,8 +5,8 @@
 
 ## كيف قُرئ
 
-قُرئت 164 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
-`migrations/0013…0166` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
+قُرئت 168 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
+`migrations/0013…0170` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
 وكل `alter table` تعدّل، وكل `drop` تحذف. فما تراه هنا هو المخطط **بعد آخر
 ترقية**، لا كما كان يوم إنشائه. ودخل المولّد إلى أجسام `do $$ … $$` لأنّ
 معظم قيود المفاتيح تُضاف داخلها بحارس `if not exists`.
@@ -15,11 +15,11 @@
 
 | | من الترقيات (هنا) | من فحص الإنتاج (`docs/deep-gap-probe.sql`) |
 | --- | ---: | ---: |
-| جداول | 235 | 232 |
-| دوالّ | 438 | 420 |
-| منظورات | 191 | 175 |
-| مفاتيح ربط | 1070 | 1076 |
-| فهارس | 398 | — |
+| جداول | 236 | 232 |
+| دوالّ | 440 | 420 |
+| منظورات | 195 | 175 |
+| مفاتيح ربط | 1076 | 1076 |
+| فهارس | 401 | — |
 
 **الجداول والمنظورات تطابق الإنتاج عددًا بعد `0149`** التي تبنّت ستّة كائنات
 كانت تعمل في الإنتاج ولا يُنشئها أيّ ملفّ. الفرق الباقي في المفاتيح يعود إلى
@@ -29,7 +29,7 @@
 لا يستعمل المشروع أنواع `enum` إطلاقًا (0 نوعًا): القيم المحصورة تُفرض بـ
 `text ... check (col in (...))`، فتُقرأ من عمود القيد في جدول العمود أدناه.
 
-## الجداول (235)
+## الجداول (236)
 
 `appointment_reminder_jobs`  `appointment_requests`  `appointment_waitlist`  `appointments`
 
@@ -81,73 +81,73 @@
 
 `internal_messages`  `internal_messaging_settings`  `inventory_lots`  `inventory_movements`
 
-`inventory_reservations`  `item_branches`  `item_claim_codes`  `item_resources`
+`inventory_reservations`  `item_branches`  `item_claim_codes`  `item_offers`
 
-`item_stock_settings`  `items`  `job_postings`  `journal_entries`
+`item_resources`  `item_stock_settings`  `items`  `job_postings`
 
-`journal_entry_lines`  `lab_order_items`  `lab_orders`  `lab_reference_ranges`
+`journal_entries`  `journal_entry_lines`  `lab_order_items`  `lab_orders`
 
-`lab_result_amendments`  `lab_result_attachments`  `lab_test_categories`  `lab_test_components`
+`lab_reference_ranges`  `lab_result_amendments`  `lab_result_attachments`  `lab_test_categories`
 
-`lab_tests`  `leave_balances`  `leave_requests`  `leave_types`
+`lab_test_components`  `lab_tests`  `leave_balances`  `leave_requests`
 
-`lookup_categories`  `lookup_values`  `maintenance_order_parts`  `maintenance_orders`
+`leave_types`  `lookup_categories`  `lookup_values`  `maintenance_order_parts`
 
-`maintenance_plans`  `maintenance_requests`  `medical_record_access_log`  `medical_reports`
+`maintenance_orders`  `maintenance_plans`  `maintenance_requests`  `medical_record_access_log`
 
-`membership_permissions`  `message_log`  `message_templates`  `notification_preferences`
+`medical_reports`  `membership_permissions`  `message_log`  `message_templates`
 
-`notification_rules`  `notifications`  `nphies_messages`  `occupational_exam_results`
+`notification_preferences`  `notification_rules`  `notifications`  `nphies_messages`
 
-`offer_items`  `offers`  `organization_discount_settings`  `organization_features`
+`occupational_exam_results`  `offer_items`  `offers`  `organization_discount_settings`
 
-`organization_holidays`  `organization_locale_settings`  `organization_memberships`  `organization_policies`
+`organization_features`  `organization_holidays`  `organization_locale_settings`  `organization_memberships`
 
-`organization_vat_settings`  `organizations`  `package_items`  `packages`
+`organization_policies`  `organization_vat_settings`  `organizations`  `package_items`
 
-`patient_allergies`  `patient_change_requests`  `patient_consents`  `patient_contacts`
+`packages`  `patient_allergies`  `patient_change_requests`  `patient_consents`
 
-`patient_documents`  `patient_health_conditions`  `patient_insurance_memberships`  `patient_medical_history`
+`patient_contacts`  `patient_documents`  `patient_health_conditions`  `patient_insurance_memberships`
 
-`patient_notes`  `patient_package_usages`  `patient_packages`  `patient_portal_accounts`
+`patient_medical_history`  `patient_notes`  `patient_package_usages`  `patient_packages`
 
-`patient_tooth_status`  `patient_visit_diagnoses`  `patient_visit_services`  `patient_visits`
+`patient_portal_accounts`  `patient_tooth_status`  `patient_visit_diagnoses`  `patient_visit_services`
 
-`patient_vital_signs`  `patient_wallet_transactions`  `patient_wallets`  `patients`
+`patient_visits`  `patient_vital_signs`  `patient_wallet_transactions`  `patient_wallets`
 
-`payroll_item_details`  `payroll_run_items`  `payroll_runs`  `performance_review_criteria`
+`patients`  `payroll_item_details`  `payroll_run_items`  `payroll_runs`
 
-`performance_review_cycles`  `performance_review_scores`  `performance_reviews`  `permission_catalog`
+`performance_review_criteria`  `performance_review_cycles`  `performance_review_scores`  `performance_reviews`
 
-`prescription_items`  `prescriptions`  `price_list_items`  `price_lists`
+`permission_catalog`  `prescription_items`  `prescriptions`  `price_list_items`
 
-`print_settings`  `procedure_codes`  `public_booking_rate_limits`  `public_booking_settings`
+`price_lists`  `print_settings`  `procedure_codes`  `public_booking_rate_limits`
 
-`purchase_approval_rules`  `purchase_expenses`  `purchase_invoice_items`  `purchase_invoices`
+`public_booking_settings`  `purchase_approval_rules`  `purchase_expenses`  `purchase_invoice_items`
 
-`purchase_order_items`  `purchase_orders`  `purchase_request_items`  `purchase_requests`
+`purchase_invoices`  `purchase_order_items`  `purchase_orders`  `purchase_request_items`
 
-`purchase_return_items`  `purchase_returns`  `quality_incidents`  `quality_indicators`
+`purchase_requests`  `purchase_return_items`  `purchase_returns`  `quality_incidents`
 
-`quality_measurements`  `queue_display_screens`  `quick_invoice_group_items`  `quick_invoice_groups`
+`quality_indicators`  `quality_measurements`  `queue_display_screens`  `quick_invoice_group_items`
 
-`radiology_exam_categories`  `radiology_exams`  `radiology_images`  `radiology_order_items`
+`quick_invoice_groups`  `radiology_exam_categories`  `radiology_exams`  `radiology_images`
 
-`radiology_orders`  `reception_settings`  `resource_bookings`  `resources`
+`radiology_order_items`  `radiology_orders`  `reception_settings`  `resource_bookings`
 
-`role_default_permissions`  `salary_components`  `sales_invoice_items`  `sales_invoices`
+`resources`  `role_default_permissions`  `salary_components`  `sales_invoice_items`
 
-`shift_swap_requests`  `shift_templates`  `sms_credit_balance`  `sms_credit_transactions`
+`sales_invoices`  `shift_swap_requests`  `shift_templates`  `sms_credit_balance`
 
-`staff_requests`  `stock_count_items`  `stock_counts`  `stock_transfer_items`
+`sms_credit_transactions`  `staff_requests`  `stock_count_items`  `stock_counts`
 
-`stock_transfers`  `tooth_procedures`  `tooth_shade_guides`  `tooth_shades`
+`stock_transfer_items`  `stock_transfers`  `tooth_procedures`  `tooth_shade_guides`
 
-`training_enrollments`  `training_programs`  `treatment_agreement_items`  `treatment_agreements`
+`tooth_shades`  `training_enrollments`  `training_programs`  `treatment_agreement_items`
 
-`treatment_sessions`  `vital_sign_requests`  `voucher_invoice_allocations`  `waiting_room_tickers`
+`treatment_agreements`  `treatment_sessions`  `vital_sign_requests`  `voucher_invoice_allocations`
 
-`warehouse_locations`  `warehouses`  `zatca_companies`
+`waiting_room_tickers`  `warehouse_locations`  `warehouses`  `zatca_companies`
 
 ### appointment_reminder_jobs
 
@@ -3139,6 +3139,36 @@
 - `uq_item_claim_codes_primary_company` — فريد على (`item_id, insurance_company_id`) — *(0073)*
 - `uq_item_claim_codes_primary_generic` — فريد على (`item_id`) — *(0073)*
 
+### item_offers
+
+أُنشئ في `0167`
+
+| العمود | النوع | إلزامي | افتراضي | يشير إلى |
+| --- | --- | :-: | --- | --- |
+| `id` 🔑 | `uuid` | ✔ | `gen_random_uuid()` |  |
+| `organization_id` | `uuid` | ✔ |  | `organizations(id)` |
+| `item_id` | `uuid` | ✔ |  | `items(id)` |
+| `title` | `text` | ✔ |  |  |
+| `offer_price` | `numeric(12,2)` | ✔ |  |  |
+| `list_price_at_creation` | `numeric(12,2)` |  |  |  |
+| `show_before_after` | `boolean` | ✔ | `true` |  |
+| `start_date` | `date` |  |  |  |
+| `end_date` | `date` |  |  |  |
+| `is_disabled` | `boolean` | ✔ | `false` |  |
+| `note` | `text` |  |  |  |
+| `created_by` | `uuid` |  |  | `auth.users(id)` |
+| `created_at` | `timestamptz` | ✔ | `now()` |  |
+| `updated_at` | `timestamptz` | ✔ | `now()` |  |
+| `updated_by` | `uuid` |  |  | `auth.users(id)` |
+
+**قيود:**
+
+- `constraint item_offers_dates_check check (start_date is null or end_date is null or end_date >= start_date)` — *(0167)*
+
+**فهارس:**
+
+- `idx_item_offers_item` على (`organization_id, item_id`) — *(0167)*
+
 ### item_resources
 
 أُنشئ في `0073`
@@ -3196,7 +3226,7 @@
 
 ### items
 
-أُنشئ في `0003` · عُدِّل في: `0053`، `0071`، `0073`، `0077`، `0083`، `0088`، `0092`، `0141`، `0142`، `0146`، `0159`
+أُنشئ في `0003` · عُدِّل في: `0053`، `0071`، `0073`، `0077`، `0083`، `0088`، `0092`، `0141`، `0142`، `0146`، `0159`، `0167`
 
 | العمود | النوع | إلزامي | افتراضي | يشير إلى |
 | --- | --- | :-: | --- | --- |
@@ -3256,6 +3286,8 @@
 | `legacy_code` | `text` |  |  |  |
 | `min_price` | `numeric(12,2)` |  |  |  |
 | `max_price` | `numeric(12,2)` |  |  |  |
+| `allow_complimentary` | `boolean` | ✔ | `false` |  |
+| `complimentary_note` | `text` |  |  |  |
 
 **قيود:**
 
@@ -3277,6 +3309,7 @@
 **فهارس:**
 
 - `idx_items_active` على (`organization_id, item_type`) — *(0071)*
+- `idx_items_allow_complimentary` على (`organization_id`) — *(0167)*
 - `idx_items_barcode` على (`organization_id, barcode`) — *(0003)*
 - `idx_items_name` على (`to_tsvector('simple', coalesce(name_ar,'') || ' ' || coalesce(name_en,''))`) — *(0003)*
 - `idx_items_org` على (`organization_id`) — *(0003)*
@@ -6149,7 +6182,7 @@
 
 ### sales_invoice_items
 
-أُنشئ في `0003` · عُدِّل في: `0050`، `0053`، `0089`، `0091`
+أُنشئ في `0003` · عُدِّل في: `0050`، `0053`، `0089`، `0091`، `0167`
 
 | العمود | النوع | إلزامي | افتراضي | يشير إلى |
 | --- | --- | :-: | --- | --- |
@@ -6190,15 +6223,22 @@
 | `vat_category` | `text` | ✔ | `'standard'` |  |
 | `exemption_reason` | `text` |  |  |  |
 | `taxable_base` | `numeric` |  |  |  |
+| `is_complimentary` | `boolean` | ✔ | `false` |  |
+| `complimentary_reason` | `text` |  |  |  |
+| `granted_by` | `uuid` |  |  | `auth.users(id)` |
+| `discount_reason` | `text` |  |  |  |
+| `discount_granted_by` | `uuid` |  |  | `auth.users(id)` |
 
 **قيود:**
 
 - `constraint sii_source_type_check check ( source_type is null or source_type in ('visit_service','lab_order','radiology_order','dispensing','package','manual') )` — *(0091)*
 - `constraint sii_vat_category_check check ( vat_category in ('standard','zero_rated','exempt','out_of_scope') )` — *(0091)*
 - `constraint sii_exemption_reason_check check ( vat_category in ('standard','out_of_scope') or exemption_reason is not null ) not valid` — *(0091)*
+- `constraint sales_invoice_items_complimentary_check check ( is_complimentary = false or (coalesce(btrim(complimentary_reason), '') <> '' and coalesce(price, 0) = 0 and coalesce(net_amount, 0) = 0 and coalesce(vat_amount, 0) = 0) )` — *(0167)*
 
 **فهارس:**
 
+- `idx_invoice_items_complimentary` على (`organization_id, created_at`) — *(0167)*
 - `idx_invoice_items_visit_service` على (`visit_service_id`) — *(0053)*
 - `idx_sales_invoice_items_agreement` على (`agreement_item_id`) — *(0003)*
 - `idx_sales_invoice_items_invoice` على (`invoice_id`) — *(0003)*
@@ -6867,7 +6907,7 @@
 | `csr_config` | `jsonb` |  |  |  |
 | `created_at` | `timestamptz` | ✔ | `now()` |  |
 
-## المنظورات (191)
+## المنظورات (195)
 
 | المنظور | نوعه | عُرِّف في |
 | --- | --- | --- |
@@ -6897,6 +6937,7 @@
 | `v_claim_register` | منظور | `0089` |
 | `v_claim_settlement` | منظور | `0093` |
 | `v_clinic_summary` | منظور | `0080` |
+| `v_complimentary_lines` | منظور | `0167` |
 | `v_cost_center_performance` | منظور | `0099` |
 | `v_critical_results` | منظور | `0105` |
 | `v_daily_revenue` | منظور | `0010`، `0044` |
@@ -6908,6 +6949,7 @@
 | `v_dental_treatment_plan` | منظور | `0141` |
 | `v_department_summary` | منظور | `0080` |
 | `v_doctor_inbox` | منظور | `0138`، `0155` |
+| `v_doctor_issued_invoices` | منظور | `0170` |
 | `v_doctor_lab_inbox` | منظور | `0155` |
 | `v_doctor_license_status` | منظور | `0081` |
 | `v_doctor_open_visits` | منظور | `0105` |
@@ -6947,11 +6989,13 @@
 | `v_invoice_print` | منظور | `0157` |
 | `v_invoice_profitability` | منظور | `0010`، `0143` |
 | `v_invoice_register` | منظور | `0091`، `0144` |
+| `v_item_offers` | منظور | `0167` |
 | `v_item_picker` | منظور | `0159` |
 | `v_item_price_history` | منظور | `0072` |
 | `v_lab_pending_orders` | منظور | `0013`، `0144` |
 | `v_lab_worklist` | منظور | `0083` |
 | `v_leave_balances_current_year` | منظور | `0020` |
+| `v_line_discounts` | منظور | `0167` |
 | `v_locale_settings` | منظور | `0109` |
 | `v_maintenance_history` | منظور | `0101` |
 | `v_medical_record_access_log_detail` | منظور | `0126` |
@@ -7030,7 +7074,7 @@
 | `v_revenue_by_doctor` | منظور | `0010`، `0143` |
 | `v_sales_by_item` | منظور | `0010`، `0143` |
 | `v_security_advisor` | منظور | `0095`، `0136` |
-| `v_service_catalog` | منظور | `0076` |
+| `v_service_catalog` | منظور | `0076`، `0169` |
 | `v_service_category_tree` | منظور | `0140` |
 | `v_services_by_specialty` | منظور | `0140` |
 | `v_session_history` | منظور | `0142` |
@@ -7065,4 +7109,4 @@
 
 ## الدوالّ
 
-توقيعات الدوالّ الـ438 في ملفّ مستقلّ: [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md).
+توقيعات الدوالّ الـ440 في ملفّ مستقلّ: [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md).

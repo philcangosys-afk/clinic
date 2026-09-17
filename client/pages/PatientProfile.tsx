@@ -16,6 +16,7 @@ import {
   LineChart,
   FileSignature,
   FileStack,
+  Gift,
   HeartPulse,
   Image as ImageIcon,
   Pencil,
@@ -79,6 +80,8 @@ import {
   type IdentityField,
 } from "@/components/patients/PatientFileShell";
 import NewInvoiceDialog from "@/components/billing/NewInvoiceDialog";
+import PatientBenefitsTab from "@/components/patients/PatientBenefitsTab";
+import InvoiceActions from "@/components/billing/InvoiceActions";
 import InvoiceDetailsDialog from "@/components/billing/InvoiceDetailsDialog";
 import { RecordPaymentDialog } from "@/components/billing/RecordPaymentDialog";
 import { INVOICE_STATUS_BADGE, INVOICE_STATUS_LABELS, invoiceAcceptsPayment } from "@/lib/invoice-status";
@@ -334,6 +337,8 @@ export default function PatientProfile() {
       label: "المالي",
       items: [
         { key: "invoices", label: "فواتير المريض", icon: Receipt },
+        /* المجانيّ والخصم قرارٌ ماليّ يُسأل عنه، فموضعه المجموعة المالية */
+        { key: "benefits", label: "المجانيّات والخصومات", icon: Gift },
         { key: "agreements", label: "الاتفاقيات", icon: FileSignature },
         { key: "sessions", label: "الجلسات", icon: CalendarClock },
         { key: "wallet", label: "المحفظة", icon: Wallet },
@@ -412,6 +417,7 @@ export default function PatientProfile() {
       {section === "sessions" && <SessionsTab patientId={patient.data.id} />}
       {section === "cbahi" && <CbahiTab patientId={patient.data.id} />}
       {section === "invoices" && <InvoicesTab patientId={patient.data.id} />}
+      {section === "benefits" && <PatientBenefitsTab patientId={patient.data.id} />}
       {section === "agreements" && <PatientAgreementsTab patientId={patient.data.id} />}
       {section === "wallet" && <WalletTab patientId={patient.data.id} />}
       {section === "appointments" && <AppointmentsTab patientId={patient.data.id} />}
@@ -1880,6 +1886,14 @@ function InvoicesTab({ patientId }: { patientId: string }) {
   const { calendarDisplay } = useLocaleSettings();
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [payTarget, setPayTarget] = useState<SalesInvoiceWithPatient | null>(null);
+  /**
+   * اسم من يطبع يظهر في تذييل الورقة — «من أصدرها؟» جوابه على الورقة نفسها.
+   */
+  const { session: printSession } = useOrganizationAccess();
+  const memberNames = useMemberNames();
+  const printedByName = printSession?.user.id
+    ? memberNames.data?.[printSession.user.id] ?? null
+    : null;
   /** الكل / الآجل / المدفوع — المرشّحات الثلاثة نفسها في النظام المرجعيّ. */
   const [scope, setScope] = useState<"all" | "credit" | "settled">("all");
 
@@ -1993,6 +2007,7 @@ function InvoicesTab({ patientId }: { patientId: string }) {
                   <TableHead className="whitespace-nowrap">المتبقّي</TableHead>
                   <TableHead className="whitespace-nowrap">الطبيب</TableHead>
                   <TableHead className="w-24 whitespace-nowrap">إجراء</TableHead>
+                  <TableHead className="w-28 whitespace-nowrap">الورقة</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -2057,6 +2072,14 @@ function InvoicesTab({ patientId }: { patientId: string }) {
                             سداد
                           </Button>
                         )}
+                      </TableCell>
+                      {/* الضغط على الصفّ يفتح التفاصيل، فالأزرار توقف الانتشار
+                          وإلّا فُتحت النافذة مع كل طباعة. */}
+                      <TableCell onClick={(event) => event.stopPropagation()}>
+                        <InvoiceActions
+                          invoiceId={invoice.id}
+                          printedByName={printedByName}
+                        />
                       </TableCell>
                     </TableRow>
                   );
