@@ -27,6 +27,10 @@
 --
 --   ومعرّفات منشآتك:  select id, name from organizations;
 --
+-- ⚠ إن ردّت القاعدة «بنود الفاتورة الصادرة لا تُعدَّل ولا تُحذف» فذلك حُرّاسُ
+--   المنع لا علّةٌ هنا — نفِّذ `PURGE_force.sql` واستعمل
+--   `app_purge_patients_force` بدل هذه الدالّة.
+--
 -- الحذف كلّه داخل **عبارةٍ واحدة** — أي معاملة واحدة: إن تعثّر جدولٌ واحد لم
 -- يتغيّر شيء. والتجربة تُنفِّذ الحذف فعلًا ثمّ تتراجع عنه، فالتقرير حقيقةٌ لا
 -- تقدير: ما تراه هو ما سيقع.
@@ -126,12 +130,15 @@ begin
     delete from patient_wallet_transactions where patient_id = any(v_ids);
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'patient_wallet_transactions'::text; v_counts := v_counts || v_n; end if;
-    delete from payroll_item_details where payroll_run_item_id in (select id from payroll_run_items where patient_id = any(v_ids));
+    -- رواتب الموظفين ليست من ملفّ المريض. `payroll_run_items` لا عمود
+    -- `patient_id` فيه أصلًا، و`paid_voucher_id` اختياريّ بلا مفتاحٍ أجنبيّ —
+    -- فيبقى صفّ الراتب ويُنزع منه الربط بالسند المحذوف. وحذفُ راتب موظّفٍ لأنّ
+    -- مريضًا حُذف خطأٌ لا تنظيف. (وسندُ المريض ليس سندَ راتبٍ أصلًا، فالغالب
+    -- ألّا يمسّ هذا صفًّا واحدًا — يبقى للاكتمال لا للأثر.)
+    update payroll_run_items set paid_voucher_id = null
+     where paid_voucher_id in (select id from financial_vouchers where patient_id = any(v_ids));
     get diagnostics v_n = row_count;
-    if v_n > 0 then v_names := v_names || 'payroll_item_details'::text; v_counts := v_counts || v_n; end if;
-    delete from payroll_run_items where paid_voucher_id in (select id from financial_vouchers where patient_id = any(v_ids));
-    get diagnostics v_n = row_count;
-    if v_n > 0 then v_names := v_names || 'payroll_run_items'::text; v_counts := v_counts || v_n; end if;
+    if v_n > 0 then v_names := v_names || 'payroll_run_items.paid_voucher_id (تُفرَّغ)'::text; v_counts := v_counts || v_n; end if;
     delete from voucher_invoice_allocations where voucher_id in (select id from financial_vouchers where patient_id = any(v_ids));
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'voucher_invoice_allocations'::text; v_counts := v_counts || v_n; end if;
@@ -153,7 +160,7 @@ begin
     delete from insurance_eligibility_checks where patient_id = any(v_ids);
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'insurance_eligibility_checks'::text; v_counts := v_counts || v_n; end if;
-    delete from lab_result_amendments where lab_order_item_id in (select id from lab_order_items where patient_id = any(v_ids));
+    delete from lab_result_amendments where lab_order_item_id in (select id from lab_order_items where lab_order_id in (select id from lab_orders where patient_id = any(v_ids)));
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'lab_result_amendments'::text; v_counts := v_counts || v_n; end if;
     delete from lab_order_items where lab_order_id in (select id from lab_orders where patient_id = any(v_ids));
@@ -204,7 +211,7 @@ begin
     delete from prescriptions where patient_id = any(v_ids);
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'prescriptions'::text; v_counts := v_counts || v_n; end if;
-    delete from radiology_images where radiology_order_item_id in (select id from radiology_order_items where patient_id = any(v_ids));
+    delete from radiology_images where radiology_order_item_id in (select id from radiology_order_items where radiology_order_id in (select id from radiology_orders where patient_id = any(v_ids)));
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'radiology_images'::text; v_counts := v_counts || v_n; end if;
     delete from radiology_order_items where radiology_order_id in (select id from radiology_orders where patient_id = any(v_ids));

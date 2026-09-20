@@ -89,6 +89,7 @@ declare
   v_names  text[] := '{}';
   v_counts int[]  := '{}';
   i        int;
+  r        record;
 begin
   perform app_assert_purge_allowed(p_organization_id);
 
@@ -99,6 +100,28 @@ begin
     table_name := 'لا صفوف مطابقة في هذه المنشأة'; affected := 0;
     return next; return;
   end if;
+
+  -- الحُرّاس تُعطَّل داخل هذه المعاملة وحدها ثمّ تعود.
+  --
+  -- `trg_guard_issued_invoice_lines` وأخواته يمنعون المساس بفاتورةٍ صادرة —
+  -- وهو صوابٌ في التشغيل: سطرٌ يُحذف من فاتورةٍ مُصدَرة تزويرٌ محاسبيّ. أمّا هنا
+  -- فالفاتورة كلّها تُحذف مع مريضها، فلا سطرَ يُيتَّم.
+  --
+  -- والتعطيل معاملةٌ لا حالة: DDL في PostgreSQL يخضع للمعاملة، فإن تعثّر جدولٌ
+  -- أو كانت تجربةً عاد كلّ حارسٍ مكانه بلا تدخّل. ويُعاد تمكينها صراحةً في
+  -- المسار الناجح أيضًا حتى لا تُترك قاعدةٌ بلا حُرّاس بعد `commit`.
+  --
+  -- وحُرّاس المفاتيح الأجنبية (`tgisinternal`) لا تُمَسّ: ترتيب الحذف يبقى
+  -- محروسًا، فجدولٌ نُسي في السلسلة يُوقف العملية ولا يترك صفًّا يتيمًا.
+  for r in
+    select distinct c.relname
+      from pg_trigger   t
+      join pg_class     c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind = 'r' and not t.tgisinternal
+  loop
+    execute format('alter table public.%I disable trigger user', r.relname);
+  end loop;
 
   -- كتلةٌ متداخلة = نقطة حفظ: التجربة تُنفّذ فعلًا ثمّ تتراجع، فالعدد حقيقيّ.
   begin
@@ -163,12 +186,15 @@ begin
     delete from patient_wallet_transactions where patient_id = any(v_ids);
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'patient_wallet_transactions'::text; v_counts := v_counts || v_n; end if;
-    delete from payroll_item_details where payroll_run_item_id in (select id from payroll_run_items where patient_id = any(v_ids));
+    -- رواتب الموظفين ليست من ملفّ المريض. `payroll_run_items` لا عمود
+    -- `patient_id` فيه أصلًا، و`paid_voucher_id` اختياريّ بلا مفتاحٍ أجنبيّ —
+    -- فيبقى صفّ الراتب ويُنزع منه الربط بالسند المحذوف. وحذفُ راتب موظّفٍ لأنّ
+    -- مريضًا حُذف خطأٌ لا تنظيف. (وسندُ المريض ليس سندَ راتبٍ أصلًا، فالغالب
+    -- ألّا يمسّ هذا صفًّا واحدًا — يبقى للاكتمال لا للأثر.)
+    update payroll_run_items set paid_voucher_id = null
+     where paid_voucher_id in (select id from financial_vouchers where patient_id = any(v_ids));
     get diagnostics v_n = row_count;
-    if v_n > 0 then v_names := v_names || 'payroll_item_details'::text; v_counts := v_counts || v_n; end if;
-    delete from payroll_run_items where paid_voucher_id in (select id from financial_vouchers where patient_id = any(v_ids));
-    get diagnostics v_n = row_count;
-    if v_n > 0 then v_names := v_names || 'payroll_run_items'::text; v_counts := v_counts || v_n; end if;
+    if v_n > 0 then v_names := v_names || 'payroll_run_items.paid_voucher_id (تُفرَّغ)'::text; v_counts := v_counts || v_n; end if;
     delete from voucher_invoice_allocations where voucher_id in (select id from financial_vouchers where patient_id = any(v_ids));
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'voucher_invoice_allocations'::text; v_counts := v_counts || v_n; end if;
@@ -190,7 +216,7 @@ begin
     delete from insurance_eligibility_checks where patient_id = any(v_ids);
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'insurance_eligibility_checks'::text; v_counts := v_counts || v_n; end if;
-    delete from lab_result_amendments where lab_order_item_id in (select id from lab_order_items where patient_id = any(v_ids));
+    delete from lab_result_amendments where lab_order_item_id in (select id from lab_order_items where lab_order_id in (select id from lab_orders where patient_id = any(v_ids)));
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'lab_result_amendments'::text; v_counts := v_counts || v_n; end if;
     delete from lab_order_items where lab_order_id in (select id from lab_orders where patient_id = any(v_ids));
@@ -241,7 +267,7 @@ begin
     delete from prescriptions where patient_id = any(v_ids);
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'prescriptions'::text; v_counts := v_counts || v_n; end if;
-    delete from radiology_images where radiology_order_item_id in (select id from radiology_order_items where patient_id = any(v_ids));
+    delete from radiology_images where radiology_order_item_id in (select id from radiology_order_items where radiology_order_id in (select id from radiology_orders where patient_id = any(v_ids)));
     get diagnostics v_n = row_count;
     if v_n > 0 then v_names := v_names || 'radiology_images'::text; v_counts := v_counts || v_n; end if;
     delete from radiology_order_items where radiology_order_id in (select id from radiology_orders where patient_id = any(v_ids));
@@ -342,6 +368,17 @@ begin
     end if;
   end;
 
+  -- عودة الحُرّاس في المسار الناجح — لا تُترك قاعدةٌ مكشوفة بعد `commit`.
+  for r in
+    select distinct c.relname
+      from pg_trigger   t
+      join pg_class     c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind = 'r' and not t.tgisinternal
+  loop
+    execute format('alter table public.%I enable trigger user', r.relname);
+  end loop;
+
   for i in 1 .. coalesce(array_length(v_names, 1), 0) loop
     table_name := v_names[i];
     affected   := v_counts[i];
@@ -377,6 +414,7 @@ declare
   v_names  text[] := '{}';
   v_counts int[]  := '{}';
   i        int;
+  r        record;
 begin
   perform app_assert_purge_allowed(p_organization_id);
 
@@ -387,6 +425,28 @@ begin
     table_name := 'لا صفوف مطابقة في هذه المنشأة'; affected := 0;
     return next; return;
   end if;
+
+  -- الحُرّاس تُعطَّل داخل هذه المعاملة وحدها ثمّ تعود.
+  --
+  -- `trg_guard_issued_invoice_lines` وأخواته يمنعون المساس بفاتورةٍ صادرة —
+  -- وهو صوابٌ في التشغيل: سطرٌ يُحذف من فاتورةٍ مُصدَرة تزويرٌ محاسبيّ. أمّا هنا
+  -- فالفاتورة كلّها تُحذف مع مريضها، فلا سطرَ يُيتَّم.
+  --
+  -- والتعطيل معاملةٌ لا حالة: DDL في PostgreSQL يخضع للمعاملة، فإن تعثّر جدولٌ
+  -- أو كانت تجربةً عاد كلّ حارسٍ مكانه بلا تدخّل. ويُعاد تمكينها صراحةً في
+  -- المسار الناجح أيضًا حتى لا تُترك قاعدةٌ بلا حُرّاس بعد `commit`.
+  --
+  -- وحُرّاس المفاتيح الأجنبية (`tgisinternal`) لا تُمَسّ: ترتيب الحذف يبقى
+  -- محروسًا، فجدولٌ نُسي في السلسلة يُوقف العملية ولا يترك صفًّا يتيمًا.
+  for r in
+    select distinct c.relname
+      from pg_trigger   t
+      join pg_class     c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind = 'r' and not t.tgisinternal
+  loop
+    execute format('alter table public.%I disable trigger user', r.relname);
+  end loop;
 
   -- كتلةٌ متداخلة = نقطة حفظ: التجربة تُنفّذ فعلًا ثمّ تتراجع، فالعدد حقيقيّ.
   begin
@@ -526,6 +586,17 @@ begin
     end if;
   end;
 
+  -- عودة الحُرّاس في المسار الناجح — لا تُترك قاعدةٌ مكشوفة بعد `commit`.
+  for r in
+    select distinct c.relname
+      from pg_trigger   t
+      join pg_class     c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind = 'r' and not t.tgisinternal
+  loop
+    execute format('alter table public.%I enable trigger user', r.relname);
+  end loop;
+
   for i in 1 .. coalesce(array_length(v_names, 1), 0) loop
     table_name := v_names[i];
     affected   := v_counts[i];
@@ -561,6 +632,7 @@ declare
   v_names  text[] := '{}';
   v_counts int[]  := '{}';
   i        int;
+  r        record;
 begin
   perform app_assert_purge_allowed(p_organization_id);
 
@@ -571,6 +643,28 @@ begin
     table_name := 'لا صفوف مطابقة في هذه المنشأة'; affected := 0;
     return next; return;
   end if;
+
+  -- الحُرّاس تُعطَّل داخل هذه المعاملة وحدها ثمّ تعود.
+  --
+  -- `trg_guard_issued_invoice_lines` وأخواته يمنعون المساس بفاتورةٍ صادرة —
+  -- وهو صوابٌ في التشغيل: سطرٌ يُحذف من فاتورةٍ مُصدَرة تزويرٌ محاسبيّ. أمّا هنا
+  -- فالفاتورة كلّها تُحذف مع مريضها، فلا سطرَ يُيتَّم.
+  --
+  -- والتعطيل معاملةٌ لا حالة: DDL في PostgreSQL يخضع للمعاملة، فإن تعثّر جدولٌ
+  -- أو كانت تجربةً عاد كلّ حارسٍ مكانه بلا تدخّل. ويُعاد تمكينها صراحةً في
+  -- المسار الناجح أيضًا حتى لا تُترك قاعدةٌ بلا حُرّاس بعد `commit`.
+  --
+  -- وحُرّاس المفاتيح الأجنبية (`tgisinternal`) لا تُمَسّ: ترتيب الحذف يبقى
+  -- محروسًا، فجدولٌ نُسي في السلسلة يُوقف العملية ولا يترك صفًّا يتيمًا.
+  for r in
+    select distinct c.relname
+      from pg_trigger   t
+      join pg_class     c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind = 'r' and not t.tgisinternal
+  loop
+    execute format('alter table public.%I disable trigger user', r.relname);
+  end loop;
 
   -- كتلةٌ متداخلة = نقطة حفظ: التجربة تُنفّذ فعلًا ثمّ تتراجع، فالعدد حقيقيّ.
   begin
@@ -730,6 +824,17 @@ begin
       raise;
     end if;
   end;
+
+  -- عودة الحُرّاس في المسار الناجح — لا تُترك قاعدةٌ مكشوفة بعد `commit`.
+  for r in
+    select distinct c.relname
+      from pg_trigger   t
+      join pg_class     c on c.oid = t.tgrelid
+      join pg_namespace n on n.oid = c.relnamespace
+     where n.nspname = 'public' and c.relkind = 'r' and not t.tgisinternal
+  loop
+    execute format('alter table public.%I enable trigger user', r.relname);
+  end loop;
 
   for i in 1 .. coalesce(array_length(v_names, 1), 0) loop
     table_name := v_names[i];
