@@ -8,7 +8,6 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
-  Trash2,
   Upload,
   UserRound,
   X,
@@ -19,8 +18,6 @@ import { useSessionDoctor } from "@/lib/session-doctor";
 import type { PatientRow } from "@/lib/database.types";
 import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
 import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
-import { Checkbox } from "@/components/ui/checkbox";
-import DeleteRowsDialog, { useRowSelection } from "@/components/shared/DeleteRowsDialog";
 import {
   buildPatientSearchOr,
   patientSearchPlaceholder,
@@ -295,16 +292,7 @@ const PATIENT_IMPORT_COLUMNS: CsvColumn[] = [
 
 export default function Patients() {
   const { calendarDisplay } = useLocaleSettings();
-  const { organization, session, membership, legacyMode } = useOrganizationAccess();
-  /**
-   * الحذف النهائيّ لصاحب المنشأة ومسؤولها وحدهما — والقاعدة تفرضه (0171)،
-   * فإخفاء الزرّ راحةٌ للعين لا حراسة.
-   */
-  const canPurge =
-    legacyMode || ["owner", "organization_admin"].includes(membership?.role_key ?? "");
-  const selection = useRowSelection();
-  const [deleteIds, setDeleteIds] = useState<string[]>([]);
-
+  const { organization, session } = useOrganizationAccess();
   const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
@@ -405,31 +393,6 @@ export default function Patients() {
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 p-4 sm:p-6">
-      {canPurge && selection.selected.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-sm">
-          <span>
-            المحدَّد: <span className="font-semibold tabular-nums">{selection.selected.length}</span>
-          </span>
-          <div className="flex gap-2">
-            <Button size="sm" variant="ghost" onClick={selection.clear}>
-              إلغاء التحديد
-            </Button>
-            <Button size="sm" variant="destructive" onClick={() => setDeleteIds(selection.selected)}>
-              <Trash2 className="h-3.5 w-3.5" />
-              حذف المحدَّد
-            </Button>
-          </div>
-        </div>
-      )}
-      <DeleteRowsDialog
-        entity="patients"
-        ids={deleteIds}
-        names={(list ?? []).filter((row: any) => deleteIds.includes(row.id)).map((row: any) => row.name_ar)}
-        open={deleteIds.length > 0}
-        onOpenChange={(next) => !next && setDeleteIds([])}
-        onDeleted={selection.clear}
-      />
-
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">المرضى</h1>
@@ -730,15 +693,6 @@ export default function Patients() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  {canPurge && (
-                    <TableHead className="w-10">
-                      <Checkbox
-                        checked={list.length > 0 && list.every((row: any) => selection.isSelected(row.id))}
-                        onCheckedChange={() => selection.toggleAll(list.map((row: any) => row.id))}
-                        aria-label="تحديد الكل"
-                      />
-                    </TableHead>
-                  )}
                   <TableHead>#الملف</TableHead>
                   <TableHead>الاسم</TableHead>
                   <TableHead>الجوال</TableHead>
@@ -752,15 +706,6 @@ export default function Patients() {
               <TableBody>
                 {list.map((patient) => (
                   <TableRow key={patient.id}>
-                    {canPurge && (
-                      <TableCell>
-                        <Checkbox
-                          checked={selection.isSelected(patient.id)}
-                          onCheckedChange={() => selection.toggle(patient.id)}
-                          aria-label={`تحديد ${patient.name_ar}`}
-                        />
-                      </TableCell>
-                    )}
                     <TableCell className="font-mono text-xs">#{patient.file_number}</TableCell>
                     <TableCell className="font-medium">{patient.name_ar}</TableCell>
                     <TableCell>{patient.mobile_number ?? "—"}</TableCell>
@@ -781,31 +726,18 @@ export default function Patients() {
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1">
-                        <Button size="sm" variant="outline" asChild>
-                          <Link to={`/patients/${patient.id}`}>
-                            <UserRound className="h-3.5 w-3.5" />
-                            فتح الملف
-                          </Link>
-                        </Button>
-                        {canPurge && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive"
-                            title="حذف نهائيّ"
-                            onClick={() => setDeleteIds([patient.id])}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                      </div>
+                      <Button size="sm" variant="outline" asChild>
+                        <Link to={`/patients/${patient.id}`}>
+                          <UserRound className="h-3.5 w-3.5" />
+                          فتح الملف
+                        </Link>
+                      </Button>
                     </TableCell>
                   </TableRow>
                 ))}
                 {list.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={canPurge ? 9 : 8} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
                       لا توجد نتائج مطابقة.
                     </TableCell>
                   </TableRow>

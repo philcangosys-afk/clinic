@@ -11,7 +11,6 @@ import {
   Package,
   Pencil,
   Plus,
-  Trash2,
   RefreshCw,
   Upload,
 } from "lucide-react";
@@ -40,8 +39,6 @@ import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDi
 import { LookupTree, useCategorySubtree } from "@/components/shared/LookupTree";
 import { TreeGridLayout } from "@/components/shell/TreeGridLayout";
 import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
-import { Checkbox } from "@/components/ui/checkbox";
-import DeleteRowsDialog, { useRowSelection } from "@/components/shared/DeleteRowsDialog";
 import ServiceEditorDialog, {
   ITEM_TYPE_LABELS,
   MEDICAL_SERVICE_TYPES,
@@ -247,15 +244,6 @@ const ITEM_IMPORT_COLUMNS: CsvColumn[] = [
 
 export default function Services() {
   const { organization, membership, legacyMode } = useOrganizationAccess();
-  /**
-   * الحذف النهائيّ لصاحب المنشأة ومسؤولها وحدهما — والقاعدة تفرضه (0171)،
-   * فإخفاء الزرّ راحةٌ للعين لا حراسة.
-   */
-  const canPurge =
-    legacyMode || ["owner", "organization_admin"].includes(membership?.role_key ?? "");
-  const selection = useRowSelection();
-  const [deleteIds, setDeleteIds] = useState<string[]>([]);
-
   const { can } = usePermissions();
   const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState("");
@@ -320,31 +308,6 @@ export default function Services() {
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 p-4 sm:p-6">
-      {canPurge && selection.selected.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-sm">
-          <span>
-            المحدَّد: <span className="font-semibold tabular-nums">{selection.selected.length}</span>
-          </span>
-          <div className="flex gap-2">
-            <Button size="sm" variant="ghost" onClick={selection.clear}>
-              إلغاء التحديد
-            </Button>
-            <Button size="sm" variant="destructive" onClick={() => setDeleteIds(selection.selected)}>
-              <Trash2 className="h-3.5 w-3.5" />
-              حذف المحدَّد
-            </Button>
-          </div>
-        </div>
-      )}
-      <DeleteRowsDialog
-        entity="items"
-        ids={deleteIds}
-        names={(items.data ?? []).filter((row: any) => deleteIds.includes(row.id)).map((row: any) => row.name_ar)}
-        open={deleteIds.length > 0}
-        onOpenChange={(next) => !next && setDeleteIds([])}
-        onDeleted={selection.clear}
-      />
-
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">أصناف المركز والخدمات</h1>
@@ -516,20 +479,6 @@ export default function Services() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  {canPurge && (
-                    <TableHead className="w-10">
-                      <Checkbox
-                        checked={
-                          (items.data ?? []).length > 0 &&
-                          (items.data ?? []).every((row: any) => selection.isSelected(row.id))
-                        }
-                        onCheckedChange={() =>
-                          selection.toggleAll((items.data ?? []).map((row: any) => row.id))
-                        }
-                        aria-label="تحديد الكل"
-                      />
-                    </TableHead>
-                  )}
                   <TableHead>الكود</TableHead>
                   <TableHead>الاسم</TableHead>
                   <TableHead>نوع الخدمة</TableHead>
@@ -545,15 +494,6 @@ export default function Services() {
                 {(items.data ?? []).map((item) => {
                   return (
                     <TableRow key={item.id}>
-                      {canPurge && (
-                        <TableCell>
-                          <Checkbox
-                            checked={selection.isSelected(item.id)}
-                            onCheckedChange={() => selection.toggle(item.id)}
-                            aria-label={`تحديد ${item.name_ar}`}
-                          />
-                        </TableCell>
-                      )}
                       <TableCell className="font-mono text-xs">{item.code}</TableCell>
                       <TableCell className="font-medium">
                         <div className="flex items-center gap-2">
@@ -659,20 +599,6 @@ export default function Services() {
                               ) : (
                                 <Archive className="h-4 w-4" />
                               )}
-                            </Button>
-                          )}
-                          {/* الأرشفة تُخفي الصنف وتُبقي تاريخه، والحذف يُزيله.
-                              الاثنان معًا لأنّ التنظيف قبل التشغيل غير
-                              الإخفاء أثناءه. */}
-                          {canPurge && (
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              className="text-destructive"
-                              title="حذف نهائيّ"
-                              onClick={() => setDeleteIds([item.id])}
-                            >
-                              <Trash2 className="h-4 w-4" />
                             </Button>
                           )}
                         </div>

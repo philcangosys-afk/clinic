@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Stethoscope, Pencil, CalendarClock, Network, Trash2 } from "lucide-react";
+import { Plus, Stethoscope, Pencil, CalendarClock, Network } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,8 +10,6 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Checkbox } from "@/components/ui/checkbox";
-import DeleteRowsDialog, { useRowSelection } from "@/components/shared/DeleteRowsDialog";
 import {
   Dialog,
   DialogContent,
@@ -95,16 +93,7 @@ function useClinicsList(organizationId: string | undefined) {
 }
 
 export default function Doctors() {
-  const { organization, membership, legacyMode } = useOrganizationAccess();
-  /**
-   * الحذف النهائيّ لصاحب المنشأة ومسؤولها وحدهما — والقاعدة تفرضه (0171)،
-   * فإخفاء الزرّ راحةٌ للعين لا حراسة.
-   */
-  const canPurge =
-    legacyMode || ["owner", "organization_admin"].includes(membership?.role_key ?? "");
-  const selection = useRowSelection();
-  const [deleteIds, setDeleteIds] = useState<string[]>([]);
-
+  const { organization } = useOrganizationAccess();
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<DoctorFormRow | null>(null);
   const [relationsTarget, setRelationsTarget] = useState<{ id: string; name_ar: string; initialTab?: string } | null>(null);
@@ -133,31 +122,6 @@ export default function Doctors() {
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
-      {canPurge && selection.selected.length > 0 && (
-        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-sm">
-          <span>
-            المحدَّد: <span className="font-semibold tabular-nums">{selection.selected.length}</span>
-          </span>
-          <div className="flex gap-2">
-            <Button size="sm" variant="ghost" onClick={selection.clear}>
-              إلغاء التحديد
-            </Button>
-            <Button size="sm" variant="destructive" onClick={() => setDeleteIds(selection.selected)}>
-              <Trash2 className="h-3.5 w-3.5" />
-              حذف المحدَّد
-            </Button>
-          </div>
-        </div>
-      )}
-      <DeleteRowsDialog
-        entity="doctors"
-        ids={deleteIds}
-        names={(doctors.data ?? []).filter((row: any) => deleteIds.includes(row.id)).map((row: any) => row.name_ar)}
-        open={deleteIds.length > 0}
-        onOpenChange={(next) => !next && setDeleteIds([])}
-        onDeleted={selection.clear}
-      />
-
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">الأطباء</h1>
@@ -188,20 +152,6 @@ export default function Doctors() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  {canPurge && (
-                    <TableHead className="w-10">
-                      <Checkbox
-                        checked={
-                          (doctors.data ?? []).length > 0 &&
-                          (doctors.data ?? []).every((row: any) => selection.isSelected(row.id))
-                        }
-                        onCheckedChange={() =>
-                          selection.toggleAll((doctors.data ?? []).map((row: any) => row.id))
-                        }
-                        aria-label="تحديد الكل"
-                      />
-                    </TableHead>
-                  )}
                   <TableHead>#الملف</TableHead>
                   <TableHead>الاسم</TableHead>
                   <TableHead>الاسم الإنجليزي</TableHead>
@@ -216,15 +166,6 @@ export default function Doctors() {
               <TableBody>
                 {(doctors.data ?? []).map((doctor: any) => (
                   <TableRow key={doctor.id}>
-                    {canPurge && (
-                      <TableCell>
-                        <Checkbox
-                          checked={selection.isSelected(doctor.id)}
-                          onCheckedChange={() => selection.toggle(doctor.id)}
-                          aria-label={`تحديد ${doctor.name_ar}`}
-                        />
-                      </TableCell>
-                    )}
                     <TableCell className="font-mono text-xs">#{doctor.file_number}</TableCell>
                     <TableCell className="font-medium">د. {doctor.name_ar}</TableCell>
                     <TableCell className="text-muted-foreground">{doctor.name_en ?? "—"}</TableCell>
@@ -269,17 +210,6 @@ export default function Doctors() {
                         >
                           <Network className="h-3.5 w-3.5" />
                         </Button>
-                        {canPurge && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive"
-                            title="حذف نهائيّ"
-                            onClick={() => setDeleteIds([doctor.id])}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
                         <Button
                           size="sm"
                           variant="outline"

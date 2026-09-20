@@ -1,4 +1,4 @@
-# دوالّ قاعدة ZainCare (440)
+# دوالّ قاعدة ZainCare (444)
 
 > **مُولَّد آليًّا — لا يُحرَّر يدويًّا:** `python scripts/schema-doc.py`
 
@@ -323,6 +323,16 @@ app_archive_document(
 app_archive_item(
   p_item_id uuid,
   p_reason text
+) returns void
+```
+
+### app_assert_purge_allowed(1)
+
+عُرِّفت في: `0171`
+
+```sql
+app_assert_purge_allowed(
+  p_organization_id uuid
 ) returns void
 ```
 
@@ -2987,6 +2997,42 @@ app_public_doctor_slots(
   p_from date default current_date,
   p_days int default 30
 ) returns jsonb
+```
+
+### app_purge_doctors(3)
+
+عُرِّفت في: `0172`
+
+```sql
+app_purge_doctors(
+  p_organization_id uuid,
+  p_ids uuid[] default null,
+  p_dry_run boolean default true
+) returns table (table_name text, affected int)
+```
+
+### app_purge_items(3)
+
+عُرِّفت في: `0172`
+
+```sql
+app_purge_items(
+  p_organization_id uuid,
+  p_ids uuid[] default null,
+  p_dry_run boolean default true
+) returns table (table_name text, affected int)
+```
+
+### app_purge_patients(3)
+
+عُرِّفت في: `0172`
+
+```sql
+app_purge_patients(
+  p_organization_id uuid,
+  p_ids uuid[] default null,
+  p_dry_run boolean default true
+) returns table (table_name text, affected int)
 ```
 
 ### app_pvs_status_on_claim(0)

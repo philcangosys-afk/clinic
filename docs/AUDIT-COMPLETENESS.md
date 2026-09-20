@@ -15,7 +15,7 @@
 | جداول تُقرأ ولا مسار كتابة لها ولا بذرة | 1 |
 | جداول تُقرأ وتملؤها بذرة فقط | 3 |
 | جداول يُكتب إليها ولا تُقرأ | 0 |
-| دوالّ لا يستدعيها أحد | 15 من 439 |
+| دوالّ لا يستدعيها أحد | 15 من 443 |
 | منظورات لا يقرؤها العميل | 36 من 195 |
 | نداءات العميل إلى جداول غير موجودة | 0 |
 | نداءات العميل إلى دوالّ غير موجودة | 0 |
@@ -55,56 +55,56 @@
 
 | الجدول | تكتبه دالّة | تملؤه بذرة |
 | --- | --- | --- |
-| `appointment_reminder_jobs` | 0050، 0054، 0069 | — |
+| `appointment_reminder_jobs` | 0050، 0054، 0069، 0171، 0172 | — |
 | `asset_depreciation_lines` | 0101 | — |
 | `asset_disposals` | 0101 | — |
 | `asset_transfers` | 0101 | — |
-| `bank_reconciliation_lines` | — | — |
+| `bank_reconciliation_lines` | 0171، 0172 | — |
 | `business_days` | 0147 | — |
-| `critical_result_notifications` | 0105، 0107 | — |
+| `critical_result_notifications` | 0105، 0107، 0171، 0172 | — |
 | `departments` | 0080، 0118، 0132 | — |
 | `document_number_sequences` | 0092 | — |
 | `document_signatures` | 0102 | — |
-| `einvoice_documents` | 0092، 0110 | — |
+| `einvoice_documents` | 0092، 0110، 0171، 0172 | — |
 | `employee_position_history` | 0100 | — |
 | `entity_documents` | 0102 | — |
-| `insurance_eligibility_checks` | 0093 | — |
-| `insurance_settlement_claims` | 0093 | — |
-| `insurance_settlements` | 0093 | — |
-| `inventory_reservations` | 0088 | — |
-| `lab_reference_ranges` | 0119 | — |
-| `lab_result_amendments` | 0083 | — |
-| `lab_result_attachments` | — | — |
-| `lab_test_components` | 0119 | — |
-| `maintenance_order_parts` | 0101 | — |
-| `medical_record_access_log` | 0095، 0125 | — |
-| `medical_reports` | 0154 | — |
+| `insurance_eligibility_checks` | 0093، 0171، 0172 | — |
+| `insurance_settlement_claims` | 0093، 0171، 0172 | — |
+| `insurance_settlements` | 0093، 0171، 0172 | — |
+| `inventory_reservations` | 0088، 0171، 0172 | — |
+| `lab_reference_ranges` | 0119، 0171، 0172 | — |
+| `lab_result_amendments` | 0083، 0171، 0172 | — |
+| `lab_result_attachments` | 0171، 0172 | — |
+| `lab_test_components` | 0119، 0171، 0172 | — |
+| `maintenance_order_parts` | 0101، 0171، 0172 | — |
+| `medical_record_access_log` | 0095، 0125، 0171، 0172 | — |
+| `medical_reports` | 0154، 0171، 0172 | — |
 | `notifications` | 0103، 0120 | — |
-| `nphies_messages` | 0093، 0110 | — |
+| `nphies_messages` | 0093، 0110، 0171، 0172 | — |
 | `organization_locale_settings` | 0109 | — |
 | `organization_policies` | 0107 | — |
-| `patient_package_usages` | 0075، 0096 | — |
-| `patient_packages` | 0096 | — |
-| `patient_tooth_status` | 0141 | — |
-| `patient_visit_services` | 0061، 0073، 0091، 0096، 0141، 0143 | — |
-| `payroll_run_items` | 0100، 0145 | — |
-| `price_list_items` | 0072، 0118، 0119 | — |
+| `patient_package_usages` | 0075، 0096، 0171، 0172 | — |
+| `patient_packages` | 0096، 0171، 0172 | — |
+| `patient_tooth_status` | 0141، 0171، 0172 | — |
+| `patient_visit_services` | 0061، 0073، 0091، 0096، 0141، 0143 … | — |
+| `payroll_run_items` | 0100، 0145، 0171، 0172 | — |
+| `price_list_items` | 0072، 0118، 0119، 0171، 0172 | — |
 | `public_booking_rate_limits` | 0128، 0133، 0134 | — |
 | `public_booking_settings` | — | 0128 |
 | `purchase_approval_rules` | — | — |
-| `purchase_invoice_items` | 0097 | — |
+| `purchase_invoice_items` | 0097، 0171، 0172 | — |
 | `purchase_orders` | 0097 | — |
-| `quality_incidents` | 0106 | — |
+| `quality_incidents` | 0106، 0171، 0172 | — |
 | `quality_indicators` | 0106 | — |
 | `quality_measurements` | 0106 | — |
-| `radiology_images` | 0138 | — |
+| `radiology_images` | 0138، 0171، 0172 | — |
 | `reception_settings` | — | — |
-| `resource_bookings` | 0084 | — |
+| `resource_bookings` | 0084، 0171، 0172 | — |
 | `role_default_permissions` | — | 0062، 0071، 0079، 0080، 0081، 0083 … |
-| `staff_requests` | 0138 | — |
-| `stock_count_items` | 0098 | — |
-| `tooth_procedures` | 0141، 0143، 0154 | — |
-| `vital_sign_requests` | 0139 | — |
+| `staff_requests` | 0138، 0171، 0172 | — |
+| `stock_count_items` | 0098، 0171، 0172 | — |
+| `tooth_procedures` | 0141، 0143، 0154، 0171، 0172 | — |
+| `vital_sign_requests` | 0139، 0171، 0172 | — |
 
 ## ⚪ دوالّ لا يستدعيها أحد (15)
 
