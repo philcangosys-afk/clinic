@@ -33,6 +33,8 @@ const Pharmacy = lazy(() => import("./pages/Pharmacy"));
 const Packages = lazy(() => import("./pages/Packages"));
 const Accounting = lazy(() => import("./pages/Accounting"));
 const Procurement = lazy(() => import("./pages/Procurement"));
+const CashExpenses = lazy(() => import("./pages/CashExpenses"));
+const PurchaseReports = lazy(() => import("./pages/PurchaseReports"));
 const Inventory = lazy(() => import("./pages/Inventory"));
 const DentalLab = lazy(() => import("./pages/DentalLab"));
 const Messaging = lazy(() => import("./pages/Messaging"));
@@ -117,7 +119,16 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   dispensing: Pharmacy,
   packages: Packages,
   accounting: Accounting,
-  procurement: Procurement,
+  // المشتريات: شاشةٌ واحدة تقرأ خطوتها من المسار (0177) — الطلب والأمر
+  // والاستلام والفاتورة والمرتجع والموردون يتشاركون لوحاتهم ومرشّح الجهة
+  "purchase-requests": Procurement,
+  "purchase-orders": Procurement,
+  "goods-receipts": Procurement,
+  "purchase-invoices": Procurement,
+  "purchase-returns": Procurement,
+  suppliers: Procurement,
+  "cash-expenses": CashExpenses,
+  "purchase-reports": PurchaseReports,
   inventory: Inventory,
   assets: Assets,
   documents: Documents,

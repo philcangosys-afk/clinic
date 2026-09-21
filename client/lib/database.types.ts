@@ -51,6 +51,8 @@ export interface WarehouseRow {
   zatca_company_id: UUID | null;
   is_disabled: boolean;
   created_at: string;
+  /** نوع المستودع (0177): عام يقبل كلّ الجهات، أو مخصّص لجهة شراءٍ واحدة */
+  purpose: "general" | "pharmacy" | "medical" | "administrative";
 }
 
 export interface ClinicRow {

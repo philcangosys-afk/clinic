@@ -23,6 +23,10 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
+import {
+  WAREHOUSE_PURPOSE_LABELS,
+  type WarehousePurpose,
+} from "@/components/purchasing/purchase-purpose";
 
 /**
  * إدارة المستودعات (لقطة 67 من النظام القديم).
@@ -85,6 +89,7 @@ function WarehouseFormDialog({
   const [name, setName] = useState(initial?.name ?? "");
   const [note, setNote] = useState(initial?.note ?? "");
   const [zatcaId, setZatcaId] = useState(initial?.zatca_company_id ?? NO_ZATCA);
+  const [purpose, setPurpose] = useState<WarehousePurpose>(initial?.purpose ?? "general");
 
   const save = useMutation({
     mutationFn: async () => {
@@ -97,6 +102,7 @@ function WarehouseFormDialog({
         name: name.trim(),
         note: note.trim() || null,
         zatca_company_id: zatcaId === NO_ZATCA ? null : zatcaId,
+        purpose,
       };
       if (initial) {
         const { data: affectedRows, error } = await supabase.from("warehouses").update(payload).eq("id", initial.id)
@@ -118,6 +124,7 @@ function WarehouseFormDialog({
       // جديد لا يظهر في المشتريات ولا المخزون حتى إعادة تحميل الصفحة.
       queryClient.invalidateQueries({ queryKey: ["warehouses-list"] });
       queryClient.invalidateQueries({ queryKey: ["warehouses-for-clinics"] });
+      queryClient.invalidateQueries({ queryKey: ["pc-warehouses"] });
       toast({ title: initial ? "تم تحديث المستودع" : "تمت إضافة المستودع" });
       onOpenChange(false);
     },
@@ -150,6 +157,24 @@ function WarehouseFormDialog({
           <div className="flex flex-col gap-1.5">
             <Label>الاسم *</Label>
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="المستودع الرئيسي" />
+          </div>
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label>نوع المستودع</Label>
+            <Select value={purpose} onValueChange={(v) => setPurpose(v as WarehousePurpose)}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(WAREHOUSE_PURPOSE_LABELS) as WarehousePurpose[]).map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {WAREHOUSE_PURPOSE_LABELS[key]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              المخصّص لجهةٍ يقبل مشترياتها وحدها: أدوية الصيدلية لا تدخل مستودعًا إداريًّا. والعامّ يقبل الكلّ.
+            </p>
           </div>
           <div className="flex flex-col gap-1.5 sm:col-span-2">
             <Label>شركة زاتكا المرتبطة</Label>
@@ -212,6 +237,7 @@ export default function Warehouses() {
       queryClient.invalidateQueries({ queryKey: ["warehouses-admin"] });
       queryClient.invalidateQueries({ queryKey: ["warehouses-list"] });
       queryClient.invalidateQueries({ queryKey: ["warehouses-for-clinics"] });
+      queryClient.invalidateQueries({ queryKey: ["pc-warehouses"] });
       toast({ title: "تم تحديث حالة المستودع" });
     },
     onError: (error: unknown) =>
@@ -263,6 +289,7 @@ export default function Warehouses() {
                 <TableRow>
                   <TableHead>الكود</TableHead>
                   <TableHead>الاسم</TableHead>
+                  <TableHead>النوع</TableHead>
                   <TableHead>شركة زاتكا</TableHead>
                   <TableHead>ملاحظة</TableHead>
                   <TableHead>الحالة</TableHead>
@@ -274,6 +301,7 @@ export default function Warehouses() {
                   <TableRow key={row.id}>
                     <TableCell className="font-mono text-xs">{row.code}</TableCell>
                     <TableCell className="font-medium">{row.name}</TableCell>
+                    <TableCell className="text-xs">{WAREHOUSE_PURPOSE_LABELS[row.purpose] ?? "—"}</TableCell>
                     <TableCell className="text-sm text-muted-foreground">
                       {zatcaName(row.zatca_company_id)}
                     </TableCell>
@@ -306,7 +334,7 @@ export default function Warehouses() {
                 ))}
                 {(warehouses.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
                       لا توجد مستودعات بعد — أضف المستودع الأول لتتمكن من تسجيل المشتريات وحركات المخزون.
                     </TableCell>
                   </TableRow>

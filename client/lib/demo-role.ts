@@ -100,7 +100,7 @@ export const DEMO_ROLES: DemoRoleDefinition[] = [
      * والمشتريات لأنّ المعامل مورّدون تُدار بياناتهم هناك. وما زاد على ذلك
      * فتحٌ لا يحتاجه عمله.
      */
-    modules: ["dental-lab", "patients", "procurement"],
+    modules: ["dental-lab", "patients", "suppliers"],
   },
   {
     key: "accountant",
@@ -116,6 +116,11 @@ export const DEMO_ROLES: DemoRoleDefinition[] = [
       "price-lists",
       "packages",
       "offers",
+      // المحاسب يسجّل فواتير الموردين والمصروفات ويسدّد، ولا يطلب الشراء
+      "purchase-invoices",
+      "cash-expenses",
+      "suppliers",
+      "purchase-reports",
       // المحاسب يرى أرصدة المعامل ولا يُنشئ طلبيات — والقاعدة تمنحه
       // `dental_lab.view` دون `dental_lab.manage`.
       "dental-lab",

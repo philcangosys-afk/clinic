@@ -233,12 +233,25 @@ async function fetchLiveBadges(
       ),
     ],
     [
-      "procurement",
+      // ما ينتظر السداد لا عدد كلّ الفواتير: العدد الذي يستدعي عملًا
+      "purchase-invoices",
       safeCount(
         supabase
           .from("purchase_invoices")
           .select("id", { count: "exact", head: true })
-          .eq("organization_id", organizationId) as any,
+          .eq("organization_id", organizationId)
+          .in("status", ["unpaid", "partial"]) as any,
+      ),
+    ],
+    [
+      // طلبات تنتظر الاعتماد
+      "purchase-requests",
+      safeCount(
+        supabase
+          .from("purchase_requests")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .eq("status", "submitted") as any,
       ),
     ],
     [

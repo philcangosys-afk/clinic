@@ -14,13 +14,16 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { errorMessage } from "@/lib/error-message";
+import {
+  PurposeBadge, PurposePicker, matchesPurpose, usePurposeFilter, warehouseAccepts,
+  type PurchasePurpose,
+} from "@/components/purchasing/purchase-purpose";
 
 /**
  * دورة الشراء — المرحلة 17.
@@ -54,50 +57,14 @@ const PO_STATUS: Record<string, { label: string; variant: any }> = {
 };
 
 /**
- * التبويب الداخلي يقبل التحكّم من الخارج (`tab`/`onTabChange`) ويعمل بلا ذلك.
+ * لوحات دورة الشراء — كلّ لوحةٍ شاشةٌ مستقلّة في مجموعة «المشتريات» بالقائمة
+ * الجانبية (0177): طلبات الشراء، أوامر الشراء، استلام البضاعة، المرتجعات،
+ * أرصدة الموردين. كانت تبويباتٍ داخل تبويب «دورة الشراء» داخل شاشة واحدة،
+ * فلا يعرف المستخدم أين يبدأ ولا أين وصل.
  *
- * السبب: شاشة المشتريات صارت تُوجّه المستخدم إلى **مستند الاستلام** كمسارٍ
- * وحيد لإدخال بضاعة الشراء إلى المخزون، بعد إزالة الاستلام المباشر من نافذة
- * فاتورة الشراء. توجيهٌ لا ينقل المستخدم إلى الموضع الصحيح هو نصٌّ يُقرأ ثم
- * يُهمَل، فيبحث المستخدم عن الاستلام في التبويب الخطأ.
+ * وجهة الشراء (صيدلية / طبي / إداري) تُختار في طلب الشراء وحده، وتُعرض في
+ * كلّ لوحة، وتُصفّى بها من شريط الجهة أعلى الشاشة.
  */
-export default function PurchaseCycle({
-  tab,
-  onTabChange,
-}: {
-  tab?: string;
-  onTabChange?: (next: string) => void;
-}) {
-  const [innerTab, setInnerTab] = useState("requests");
-  const value = tab ?? innerTab;
-  const setValue = (next: string) => {
-    setInnerTab(next);
-    onTabChange?.(next);
-  };
-
-  return (
-    <Tabs value={value} onValueChange={setValue}>
-      <TabsList>
-        <TabsTrigger value="requests">طلبات الشراء</TabsTrigger>
-        <TabsTrigger value="orders">أوامر الشراء والاستلام</TabsTrigger>
-        <TabsTrigger value="returns">المرتجعات والتكلفة الواصلة</TabsTrigger>
-        <TabsTrigger value="suppliers">أرصدة الموردين</TabsTrigger>
-      </TabsList>
-      <TabsContent value="requests" className="mt-4">
-        <RequestsPanel />
-      </TabsContent>
-      <TabsContent value="orders" className="mt-4">
-        <OrdersPanel />
-      </TabsContent>
-      <TabsContent value="returns" className="mt-4">
-        <ReturnsAndCostsPanel />
-      </TabsContent>
-      <TabsContent value="suppliers" className="mt-4">
-        <SupplierBalancesPanel />
-      </TabsContent>
-    </Tabs>
-  );
-}
 
 /* ── مساعدات مشتركة ─────────────────────────────────────────────────────── */
 function useBranches(orgId: string | undefined) {
@@ -118,7 +85,7 @@ function useWarehouses(orgId: string | undefined) {
     enabled: Boolean(orgId),
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("warehouses").select("id, name, branch_id, is_disabled")
+        .from("warehouses").select("id, name, branch_id, is_disabled, purpose")
         .eq("organization_id", orgId).eq("is_disabled", false).order("name");
       if (error) throw error;
       return (data ?? []) as any[];
@@ -164,8 +131,9 @@ function useStockItems(orgId: string | undefined) {
 /* ══════════════════════════════════════════════════════════════════════════
  * طلبات الشراء
  * ════════════════════════════════════════════════════════════════════════ */
-function RequestsPanel() {
+export function RequestsPanel() {
   const { organization } = useOrganizationAccess();
+  const purposeFilter = usePurposeFilter();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { can } = usePermissions();
@@ -249,13 +217,14 @@ function RequestsPanel() {
       setExpected("");
       toast({
         title: "صدر أمر الشراء",
-        description: "بالكمّيات المعتمَدة لا المطلوبة — راجعه في تبويب الأوامر",
+        description: "بالكمّيات المعتمَدة لا المطلوبة — تجده في «أوامر الشراء»",
       });
     },
     onError: fail("تعذر إصدار الأمر"),
   });
 
   const suppliers = useSuppliers(organization?.id);
+  const rows = (requests.data ?? []).filter((r) => matchesPurpose(purposeFilter, r.purchase_purpose));
 
   return (
     <div className="flex flex-col gap-4">
@@ -291,6 +260,7 @@ function RequestsPanel() {
               <TableHeader>
                 <TableRow>
                   <TableHead>الرقم</TableHead>
+                  <TableHead>الجهة</TableHead>
                   <TableHead>الحالة</TableHead>
                   <TableHead>البنود</TableHead>
                   <TableHead>القيمة التقديرية</TableHead>
@@ -300,9 +270,10 @@ function RequestsPanel() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(requests.data ?? []).map((r) => (
+                {rows.map((r) => (
                   <TableRow key={r.id}>
                     <TableCell className="font-mono text-xs">{r.request_number ?? "—"}</TableCell>
+                    <TableCell><PurposeBadge purpose={r.purchase_purpose} /></TableCell>
                     <TableCell>
                       <Badge variant={REQ_STATUS[r.status]?.variant ?? "secondary"}>
                         {REQ_STATUS[r.status]?.label ?? r.status}
@@ -372,10 +343,10 @@ function RequestsPanel() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {(requests.data ?? []).length === 0 && (
+                {rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
-                      لا طلبات شراء بعد.
+                    <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                      لا طلبات شراء لهذه الجهة.
                     </TableCell>
                   </TableRow>
                 )}
@@ -438,6 +409,7 @@ function NewRequestDialog({
   const items = useStockItems(organization?.id);
 
   const [number, setNumber] = useState("");
+  const [purpose, setPurpose] = useState<PurchasePurpose | "">("");
   const [branchId, setBranchId] = useState("");
   const [warehouseId, setWarehouseId] = useState("");
   const [neededBy, setNeededBy] = useState("");
@@ -447,6 +419,10 @@ function NewRequestDialog({
   const create = useMutation({
     mutationFn: async () => {
       if (!organization?.id) throw new Error("لا منشأة");
+      if (!purpose) throw new Error("اختر جهة الشراء: الصيدلية، أو المستلزمات الطبية، أو الإدارية");
+      // المستودع إلزاميّ: الاستلام يُدخل البضاعة مستودعًا بعينه، وطلبٌ بلا
+      // مستودع كان يصير أمرًا يتعذّر استلامه.
+      if (!warehouseId) throw new Error("اختر المستودع الذي تدخله البضاعة");
       const valid = lines.filter((l) => l.itemId && Number(l.qty) > 0);
       if (valid.length === 0) throw new Error("أضف بندًا واحدًا على الأقل");
 
@@ -456,6 +432,7 @@ function NewRequestDialog({
           organization_id: organization.id,
           branch_id: branchId || null,
           warehouse_id: warehouseId || null,
+          purchase_purpose: purpose,
           request_number: number.trim() || null,
           needed_by: neededBy || null,
           justification: justification.trim() || null,
@@ -479,7 +456,7 @@ function NewRequestDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["purchase-requests", organization?.id] });
       toast({ title: "حُفظ الطلب كمسوّدة", description: "قدّمه للاعتماد من القائمة" });
-      setNumber(""); setBranchId(""); setWarehouseId("");
+      setNumber(""); setPurpose(""); setBranchId(""); setWarehouseId("");
       setNeededBy(""); setJustification(""); setLines([]);
       onOpenChange(false);
     },
@@ -500,6 +477,18 @@ function NewRequestDialog({
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>جهة الشراء *</Label>
+            <PurposePicker
+              value={purpose}
+              onChange={(next) => {
+                setPurpose(next);
+                // مستودعٌ اختير لجهةٍ أخرى لا يبقى مختارًا بصمت
+                const current = (warehouses.data ?? []).find((w) => w.id === warehouseId);
+                if (current && !warehouseAccepts(current.purpose, next)) setWarehouseId("");
+              }}
+            />
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
               <Label>رقم الطلب</Label>
@@ -521,12 +510,15 @@ function NewRequestDialog({
               </Select>
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label>المستودع</Label>
-              <Select value={warehouseId} onValueChange={setWarehouseId}>
-                <SelectTrigger><SelectValue placeholder="اختر مستودعًا" /></SelectTrigger>
+              <Label>المستودع *</Label>
+              <Select value={warehouseId} onValueChange={setWarehouseId} disabled={!purpose}>
+                <SelectTrigger>
+                  <SelectValue placeholder={purpose ? "اختر مستودعًا" : "اختر جهة الشراء أوّلًا"} />
+                </SelectTrigger>
                 <SelectContent>
                   {(warehouses.data ?? [])
                     .filter((w) => !branchId || w.branch_id === branchId)
+                    .filter((w) => warehouseAccepts(w.purpose, purpose))
                     .map((w) => (
                       <SelectItem key={w.id} value={w.id}>{w.name}</SelectItem>
                     ))}
@@ -578,7 +570,8 @@ function NewRequestDialog({
           )}
         </div>
         <DialogFooter>
-          <Button disabled={lines.length === 0 || create.isPending} onClick={() => create.mutate()}>
+          <Button disabled={lines.length === 0 || !purpose || !warehouseId || create.isPending}
+                  onClick={() => create.mutate()}>
             {create.isPending ? "جارٍ الحفظ..." : "حفظ كمسوّدة"}
           </Button>
         </DialogFooter>
@@ -590,11 +583,12 @@ function NewRequestDialog({
 /* ══════════════════════════════════════════════════════════════════════════
  * أوامر الشراء والاستلام
  * ════════════════════════════════════════════════════════════════════════ */
-function OrdersPanel() {
+export function OrdersPanel({ view }: { view: "orders" | "receipts" }) {
   const { organization } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { can } = usePermissions();
+  const purposeFilter = usePurposeFilter();
   const [receiving, setReceiving] = useState<any | null>(null);
 
   const orders = useQuery({
@@ -612,9 +606,29 @@ function OrdersPanel() {
     },
   });
 
+  // جهة كلّ أمر من جدوله: منظور المسار لا يحملها، وإعادة بنائه تمسّ منظوراتٍ
+  // مبنيّةً فوقه — فتُقرأ الجهة وحدها وتُضمّ هنا.
+  const orderPurposes = useQuery({
+    queryKey: ["purchase-order-purposes", organization?.id],
+    enabled: Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("purchase_orders")
+        .select("id, purchase_purpose")
+        .eq("organization_id", organization!.id);
+      if (error) throw error;
+      const map: Record<string, string | null> = {};
+      for (const row of (data ?? []) as { id: string; purchase_purpose: string | null }[]) {
+        map[row.id] = row.purchase_purpose;
+      }
+      return map;
+    },
+  });
+  const purposeOf = (orderId: string) => orderPurposes.data?.[orderId] ?? null;
+
   const pending = useQuery({
     queryKey: ["pending-receipts", organization?.id],
-    enabled: Boolean(organization?.id),
+    enabled: Boolean(organization?.id) && view === "orders",
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_pending_receipts")
@@ -641,7 +655,9 @@ function OrdersPanel() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["purchase-orders", organization?.id] });
       queryClient.invalidateQueries({ queryKey: ["goods-receipts", organization?.id] });
-      toast({ title: "أُنشئت فاتورة المورد", description: "تاريخ استحقاقها من مهلة المورد" });
+      queryClient.invalidateQueries({ queryKey: ["receipt-invoices", organization?.id] });
+      queryClient.invalidateQueries({ queryKey: ["purchase-invoices", organization?.id] });
+      toast({ title: "أُنشئت فاتورة المورد", description: "تجدها في «فواتير الشراء» — تاريخ استحقاقها من مهلة المورد" });
     },
     onError: (error: unknown) =>
       toast({
@@ -650,17 +666,28 @@ function OrdersPanel() {
       }),
   });
 
+  const openStatuses = ["draft", "sent", "partially_received"];
+  const allOrders = (orders.data ?? []).filter((o) =>
+    matchesPurpose(purposeFilter, purposeOf(o.purchase_order_id)),
+  );
+  // شاشة الاستلام تعرض ما ينتظر الاستلام وحده؛ شاشة الأوامر تعرض الكلّ
+  const shownOrders = view === "receipts" ? allOrders.filter((o) => openStatuses.includes(o.status)) : allOrders;
+  const pendingRows = (pending.data ?? []).filter((p) =>
+    matchesPurpose(purposeFilter, purposeOf(p.purchase_order_id)),
+  );
+
   return (
     <div className="flex flex-col gap-4">
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
             <Truck className="h-4 w-4" />
-            أوامر الشراء
+            {view === "receipts" ? "أوامر بانتظار الاستلام" : "أوامر الشراء"}
           </CardTitle>
           <CardDescription>
-            نسبة المستلَم من المطلوب تُظهر ما لم يصل بعد. الاستلام مستندٌ قائم بذاته،
-            والفاتورة تُبنى عليه لا العكس.
+            {view === "receipts"
+              ? "اختر الأمر الذي وصلت بضاعته واضغط «استلام»: تدخل البضاعة مستودع الجهة وتُسجَّل تشغيلاتها وصلاحيتها."
+              : "الأمر يصدر من طلب شراءٍ معتمَد. نسبة المستلَم من المطلوب تُظهر ما لم يصل بعد، والاستلام من شاشة «استلام البضاعة»."}
           </CardDescription>
         </CardHeader>
         <CardContent className="overflow-x-auto">
@@ -670,7 +697,9 @@ function OrdersPanel() {
               <TableHeader>
                 <TableRow>
                   <TableHead>الأمر</TableHead>
+                  <TableHead>الجهة</TableHead>
                   <TableHead>المورد</TableHead>
+                  <TableHead>المستودع</TableHead>
                   <TableHead>الحالة</TableHead>
                   <TableHead>القيمة</TableHead>
                   <TableHead>المستلَم</TableHead>
@@ -679,7 +708,7 @@ function OrdersPanel() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(orders.data ?? []).map((o) => (
+                {shownOrders.map((o) => (
                   <TableRow key={o.purchase_order_id}>
                     <TableCell className="font-mono text-xs">
                       {o.order_number ?? "—"}
@@ -687,7 +716,9 @@ function OrdersPanel() {
                         {o.request_number ? `من الطلب ${o.request_number}` : ""}
                       </span>
                     </TableCell>
+                    <TableCell><PurposeBadge purpose={purposeOf(o.purchase_order_id)} /></TableCell>
                     <TableCell className="text-sm">{o.supplier_name ?? "—"}</TableCell>
+                    <TableCell className="text-xs">{o.warehouse_name ?? "—"}</TableCell>
                     <TableCell>
                       <Badge variant={PO_STATUS[o.status]?.variant ?? "secondary"}>
                         {PO_STATUS[o.status]?.label ?? o.status}
@@ -706,79 +737,19 @@ function OrdersPanel() {
                     </TableCell>
                     <TableCell className="font-mono text-xs">{o.expected_date ?? "—"}</TableCell>
                     <TableCell className="text-end">
-                      {can("purchasing.receive") &&
-                        ["draft", "sent", "partially_received"].includes(o.status) && (
-                          <Button size="sm" variant="outline" onClick={() => setReceiving(o)}>
-                            <PackageCheck className="h-3.5 w-3.5" />
-                            استلام
-                          </Button>
-                        )}
-                    </TableCell>
-                  </TableRow>
-                ))}
-                {(orders.data ?? []).length === 0 && (
-                  <TableRow>
-                    <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
-                      لا أوامر شراء بعد.
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
-      <DraftReceiptsCard />
-
-      <PostedReceiptsCard onInvoice={(id) => {
-        const number = window.prompt("رقم فاتورة المورد؟") ?? "";
-        if (!number.trim()) return;
-        invoiceIt.mutate({ receiptId: id, number: number.trim() });
-      }} />
-
-      <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base">ما طُلب ولم يصل</CardTitle>
-          <CardDescription>مرتَّبًا بالأكثر تأخّرًا عن الموعد المتوقَّع.</CardDescription>
-        </CardHeader>
-        <CardContent className="overflow-x-auto">
-          {pending.isLoading && <Skeleton className="h-32 w-full" />}
-          {!pending.isLoading && (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>الأمر</TableHead>
-                  <TableHead>المورد</TableHead>
-                  <TableHead>الصنف</TableHead>
-                  <TableHead>المطلوب</TableHead>
-                  <TableHead>المستلَم</TableHead>
-                  <TableHead>المتبقّي</TableHead>
-                  <TableHead>التأخّر</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {(pending.data ?? []).map((p) => (
-                  <TableRow key={p.purchase_order_item_id}>
-                    <TableCell className="font-mono text-xs">{p.order_number ?? "—"}</TableCell>
-                    <TableCell className="text-sm">{p.supplier_name ?? "—"}</TableCell>
-                    <TableCell className="text-sm">{p.item_name}</TableCell>
-                    <TableCell className="font-mono text-xs">{p.qty_ordered}</TableCell>
-                    <TableCell className="font-mono text-xs">{p.qty_received}</TableCell>
-                    <TableCell className="font-mono text-xs">{p.qty_pending}</TableCell>
-                    <TableCell>
-                      {p.days_late ? (
-                        <Badge variant="destructive">{p.days_late} يومًا</Badge>
-                      ) : (
-                        "—"
+                      {view === "receipts" && can("purchasing.receive") && openStatuses.includes(o.status) && (
+                        <Button size="sm" variant="outline" onClick={() => setReceiving(o)}>
+                          <PackageCheck className="h-3.5 w-3.5" />
+                          استلام
+                        </Button>
                       )}
                     </TableCell>
                   </TableRow>
                 ))}
-                {(pending.data ?? []).length === 0 && (
+                {shownOrders.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
-                      لا مطلوبات معلّقة.
+                    <TableCell colSpan={9} className="py-8 text-center text-sm text-muted-foreground">
+                      {view === "receipts" ? "لا أوامر تنتظر الاستلام." : "لا أوامر شراء لهذه الجهة."}
                     </TableCell>
                   </TableRow>
                 )}
@@ -787,6 +758,70 @@ function OrdersPanel() {
           )}
         </CardContent>
       </Card>
+
+      {view === "receipts" && (
+        <>
+          <DraftReceiptsCard />
+          <PostedReceiptsCard onInvoice={(id) => {
+            const number = window.prompt("رقم فاتورة المورد؟") ?? "";
+            if (!number.trim()) return;
+            invoiceIt.mutate({ receiptId: id, number: number.trim() });
+          }} />
+        </>
+      )}
+
+      {view === "orders" && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base">ما طُلب ولم يصل</CardTitle>
+            <CardDescription>مرتَّبًا بالأكثر تأخّرًا عن الموعد المتوقَّع.</CardDescription>
+          </CardHeader>
+          <CardContent className="overflow-x-auto">
+            {pending.isLoading && <Skeleton className="h-32 w-full" />}
+            {!pending.isLoading && (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>الأمر</TableHead>
+                    <TableHead>المورد</TableHead>
+                    <TableHead>الصنف</TableHead>
+                    <TableHead>المطلوب</TableHead>
+                    <TableHead>المستلَم</TableHead>
+                    <TableHead>المتبقّي</TableHead>
+                    <TableHead>التأخّر</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pendingRows.map((p) => (
+                    <TableRow key={p.purchase_order_item_id}>
+                      <TableCell className="font-mono text-xs">{p.order_number ?? "—"}</TableCell>
+                      <TableCell className="text-sm">{p.supplier_name ?? "—"}</TableCell>
+                      <TableCell className="text-sm">{p.item_name}</TableCell>
+                      <TableCell className="font-mono text-xs">{p.qty_ordered}</TableCell>
+                      <TableCell className="font-mono text-xs">{p.qty_received}</TableCell>
+                      <TableCell className="font-mono text-xs">{p.qty_pending}</TableCell>
+                      <TableCell>
+                        {p.days_late ? (
+                          <Badge variant="destructive">{p.days_late} يومًا</Badge>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {pendingRows.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
+                        لا مطلوبات معلّقة.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <ReceiveDialog order={receiving} onClose={() => setReceiving(null)} />
     </div>
@@ -811,6 +846,7 @@ function OrdersPanel() {
  */
 function DraftReceiptsCard() {
   const { organization } = useOrganizationAccess();
+  const purposeFilter = usePurposeFilter();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { can } = usePermissions();
@@ -821,7 +857,7 @@ function DraftReceiptsCard() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("goods_receipts")
-        .select("id, receipt_number, received_at, delivery_note_ref, distributor:distributors(name_ar), goods_receipt_items(id, qty_received, item:items(name_ar))")
+        .select("id, receipt_number, received_at, delivery_note_ref, purchase_purpose, distributor:distributors(name_ar), goods_receipt_items(id, qty_received, item:items(name_ar))")
         .eq("organization_id", organization!.id)
         .eq("status", "draft")
         .order("received_at", { ascending: false })
@@ -859,7 +895,8 @@ function DraftReceiptsCard() {
       }),
   });
 
-  if (drafts.isLoading || (drafts.data ?? []).length === 0) return null;
+  const draftRows = (drafts.data ?? []).filter((g) => matchesPurpose(purposeFilter, g.purchase_purpose));
+  if (drafts.isLoading || draftRows.length === 0) return null;
 
   return (
     <Card className="border-amber-300">
@@ -875,6 +912,7 @@ function DraftReceiptsCard() {
           <TableHeader>
             <TableRow>
               <TableHead>المستند</TableHead>
+              <TableHead>الجهة</TableHead>
               <TableHead>المورد</TableHead>
               <TableHead>التاريخ</TableHead>
               <TableHead>البنود</TableHead>
@@ -882,7 +920,7 @@ function DraftReceiptsCard() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(drafts.data ?? []).map((g) => (
+            {draftRows.map((g) => (
               <TableRow key={g.id}>
                 <TableCell className="font-mono text-xs">
                   {g.receipt_number ?? g.id.slice(0, 8)}
@@ -892,6 +930,7 @@ function DraftReceiptsCard() {
                     </span>
                   )}
                 </TableCell>
+                <TableCell><PurposeBadge purpose={g.purchase_purpose} /></TableCell>
                 <TableCell className="text-sm">{g.distributor?.name_ar ?? "—"}</TableCell>
                 <TableCell className="font-mono text-xs">
                   {new Date(g.received_at).toLocaleDateString("ar-SA")}
@@ -933,6 +972,7 @@ function DraftReceiptsCard() {
  */
 function PostedReceiptsCard({ onInvoice }: { onInvoice: (receiptId: string) => void }) {
   const { organization } = useOrganizationAccess();
+  const purposeFilter = usePurposeFilter();
   const { can } = usePermissions();
 
   const receipts = useQuery({
@@ -971,6 +1011,8 @@ function PostedReceiptsCard({ onInvoice }: { onInvoice: (receiptId: string) => v
     return map;
   }, [invoiced.data]);
 
+  const postedRows = (receipts.data ?? []).filter((g) => matchesPurpose(purposeFilter, g.purchase_purpose));
+
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -986,6 +1028,7 @@ function PostedReceiptsCard({ onInvoice }: { onInvoice: (receiptId: string) => v
             <TableHeader>
               <TableRow>
                 <TableHead>المستند</TableHead>
+                <TableHead>الجهة</TableHead>
                 <TableHead>المورد</TableHead>
                 <TableHead>التاريخ</TableHead>
                 <TableHead>البنود</TableHead>
@@ -994,11 +1037,12 @@ function PostedReceiptsCard({ onInvoice }: { onInvoice: (receiptId: string) => v
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(receipts.data ?? []).map((g) => {
+              {postedRows.map((g) => {
                 const inv = byReceipt[g.id];
                 return (
                   <TableRow key={g.id}>
                     <TableCell className="font-mono text-xs">{g.receipt_number ?? "—"}</TableCell>
+                    <TableCell><PurposeBadge purpose={g.purchase_purpose} /></TableCell>
                     <TableCell className="text-sm">{g.distributor?.name_ar ?? "—"}</TableCell>
                     <TableCell className="font-mono text-xs">
                       {new Date(g.received_at).toLocaleDateString("ar-SA")}
@@ -1023,9 +1067,9 @@ function PostedReceiptsCard({ onInvoice }: { onInvoice: (receiptId: string) => v
                   </TableRow>
                 );
               })}
-              {(receipts.data ?? []).length === 0 && (
+              {postedRows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-6 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
                     لا استلامات مرحَّلة.
                   </TableCell>
                 </TableRow>
@@ -1239,7 +1283,7 @@ function ReceiveDialog({ order, onClose }: { order: any | null; onClose: () => v
 /* ══════════════════════════════════════════════════════════════════════════
  * أرصدة الموردين
  * ════════════════════════════════════════════════════════════════════════ */
-function SupplierBalancesPanel() {
+export function SupplierBalancesPanel() {
   const { organization } = useOrganizationAccess();
   const { can } = usePermissions();
   const [selected, setSelected] = useState<any | null>(null);
@@ -1638,8 +1682,9 @@ function PaySupplierDialog({ invoice, onClose }: { invoice: any | null; onClose:
  * بضاعةً دخلت، والمصروف يرفع تكلفة ما بقي. إهمالهما يجعل هامش الربح يبدو
  * أكبر ممّا هو.
  */
-function ReturnsAndCostsPanel() {
+export function ReturnsAndCostsPanel() {
   const { organization } = useOrganizationAccess();
+  const purposeFilter = usePurposeFilter();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { can } = usePermissions();
@@ -1715,6 +1760,8 @@ function ReturnsAndCostsPanel() {
     onError: fail("تعذر التوزيع"),
   });
 
+  const returnRows = (returns.data ?? []).filter((r) => matchesPurpose(purposeFilter, r.purchase_purpose));
+
   const EXPENSE_TYPES: Record<string, string> = {
     shipping: "شحن", customs: "تخليص جمركي", insurance: "تأمين نقل",
     handling: "مناولة", other: "أخرى",
@@ -1744,6 +1791,7 @@ function ReturnsAndCostsPanel() {
               <TableHeader>
                 <TableRow>
                   <TableHead>الرقم</TableHead>
+                  <TableHead>الجهة</TableHead>
                   <TableHead>المورد</TableHead>
                   <TableHead>السبب</TableHead>
                   <TableHead>البنود</TableHead>
@@ -1753,9 +1801,10 @@ function ReturnsAndCostsPanel() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(returns.data ?? []).map((r) => (
+                {returnRows.map((r) => (
                   <TableRow key={r.id}>
                     <TableCell className="font-mono text-xs">{r.return_number ?? "—"}</TableCell>
+                    <TableCell><PurposeBadge purpose={r.purchase_purpose} /></TableCell>
                     <TableCell className="text-sm">{r.distributor?.name_ar ?? "—"}</TableCell>
                     <TableCell className="max-w-48 truncate text-sm">{r.reason}</TableCell>
                     <TableCell className="text-xs">
@@ -1784,10 +1833,10 @@ function ReturnsAndCostsPanel() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {(returns.data ?? []).length === 0 && (
+                {returnRows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={7} className="py-6 text-center text-sm text-muted-foreground">
-                      لا مرتجعات مسجّلة.
+                    <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
+                      لا مرتجعات مسجّلة لهذه الجهة.
                     </TableCell>
                   </TableRow>
                 )}

@@ -1,6 +1,7 @@
-import { useState } from "react";
+import { Fragment, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, PackageCheck, Pencil, Plus, Truck, Upload } from "lucide-react";
+import { Building2, ChevronLeft, PackageCheck, Pencil, Plus, Truck, Upload } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -18,7 +19,21 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import PurchaseCycle from "@/components/purchasing/PurchaseCycle";
+import {
+  OrdersPanel,
+  RequestsPanel,
+  ReturnsAndCostsPanel,
+  SupplierBalancesPanel,
+} from "@/components/purchasing/PurchaseCycle";
+import {
+  PurposeBadge,
+  PurposeFilterBar,
+  PurposeFilterProvider,
+  matchesPurpose,
+  usePurposeFilter,
+  type PurposeFilterValue,
+} from "@/components/purchasing/purchase-purpose";
+import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDialog";
 import LookupSelect from "@/components/shared/LookupSelect";
@@ -60,55 +75,140 @@ export type DistributorEditRow = {
   is_disabled: boolean;
 };
 
-export default function Procurement() {
-  /**
-   * التبويبات مُدارة بالحالة لا `defaultValue` وحده.
-   *
-   * كان في الشاشة **مسارَان متوازيان يُدخلان بضاعة الشراء نفسها إلى المخزون**:
-   * نافذة «فاتورة شراء جديدة» هنا كانت تكتب بنفسها `inventory_lots` و
-   * `inventory_movements` من نوع `purchase_in`، بينما مستند الاستلام في «دورة
-   * الشراء» يفعل ذلك عبر `app_post_goods_receipt`. أي بضاعةٍ سُجّلت في المسارين
-   * تدخل المخزون **مرّتين**، ولا يرتبط استلام المسار المباشر بأمر شراء ولا
-   * بتشغيلة ولا تصله التكلفة الواصلة ولا يقبل مرتجعًا.
-   *
-   * المسار الوحيد للاستلام صار مستند الاستلام. وحتى يكون ذلك عمليًّا لا مجرّد
-   * نصّ، الزرّ في تبويب الفواتير ينقل المستخدم إلى «دورة الشراء ← أوامر الشراء
-   * والاستلام» — وهذا يقتضي التحكّم في التبويب الخارجي والداخلي معًا.
-   */
-  const [tab, setTab] = useState("invoices");
-  const [cycleTab, setCycleTab] = useState("requests");
+/**
+ * المشتريات — شاشةٌ لكلّ خطوة في مجموعة «المشتريات» بالقائمة الجانبية (0177).
+ *
+ * كانت كلّها شاشةً واحدة: تبويب «دورة الشراء» وفيه أربعة تبويبات، وبجانبه
+ * «فواتير الشراء» و«الموردون». فلا يعرف المستخدم أين يبدأ الشراء ولا أين
+ * تُستلم البضاعة، ولا لمن اشتُري هذا.
+ *
+ * الآن كلّ عنصرٍ في القائمة شاشةٌ بعنوانها، بترتيب العمل نفسه:
+ *   طلب الشراء ← أمر الشراء ← استلام البضاعة ← فاتورة الشراء ← المرتجع
+ * وفوق كلّ شاشةٍ شريطُ الخطوات يُظهر أين أنت منها، وشريطُ الجهة (صيدلية /
+ * مستلزمات طبية / إدارية) يصفّي ما تراه.
+ *
+ * المصروفات النقدية وتقارير المشتريات شاشتان مستقلّتان بملفّيهما.
+ */
 
-  const goToReceiving = () => {
-    setCycleTab("orders");
-    setTab("cycle");
-  };
+type SectionKey =
+  | "purchase-requests"
+  | "purchase-orders"
+  | "goods-receipts"
+  | "purchase-invoices"
+  | "purchase-returns"
+  | "suppliers";
+
+const CYCLE_STEPS: { key: SectionKey; label: string }[] = [
+  { key: "purchase-requests", label: "طلب الشراء" },
+  { key: "purchase-orders", label: "أمر الشراء" },
+  { key: "goods-receipts", label: "استلام البضاعة" },
+  { key: "purchase-invoices", label: "فاتورة الشراء" },
+  { key: "purchase-returns", label: "المرتجع" },
+];
+
+const SECTION_META: Record<SectionKey, { title: string; description: string }> = {
+  "purchase-requests": {
+    title: "طلبات الشراء",
+    description:
+      "أوّل خطوة: من يحتاج شيئًا يطلبه ويحدّد لمن هو (الصيدلية، المستلزمات الطبية، الإدارة) وأيّ مستودعٍ يدخله. يُقدَّم الطلب فيُعتمد، ثمّ يصدر منه أمر الشراء.",
+  },
+  "purchase-orders": {
+    title: "أوامر الشراء",
+    description:
+      "الأمر يصدر لموردٍ من طلبٍ معتمَد، بالكمّيات المعتمَدة. هنا تتابع ما طُلب وما وصل وما تأخّر.",
+  },
+  "goods-receipts": {
+    title: "استلام البضاعة",
+    description:
+      "حين تصل البضاعة: اختر أمرها واضغط «استلام» فتدخل مستودع جهتها بتشغيلاتها وصلاحيتها. ثمّ سجّل فاتورة المورد على الاستلام.",
+  },
+  "purchase-invoices": {
+    title: "فواتير الشراء",
+    description:
+      "فواتير الموردين، كلّ فاتورةٍ مبنيّة على استلامٍ مرحَّل — البضاعة تدخل المخزون بالاستلام لا بالفاتورة. والسداد من «الموردون ← الأرصدة والسداد».",
+  },
+  "purchase-returns": {
+    title: "مرتجعات المشتريات",
+    description:
+      "ما يُعاد إلى المورد يخرج من التشغيلة نفسها التي دخلت وينقص حسابه. ومصروفات الشحن والتخليص تُوزَّع هنا على التشغيلات.",
+  },
+  suppliers: {
+    title: "الموردون",
+    description: "بيانات الموردين، وأرصدتهم وما استحقّ لهم، وسداد فواتيرهم.",
+  },
+};
+
+export default function Procurement() {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const current = location.pathname.slice(1).split("/")[0] as SectionKey;
+  const section: SectionKey = current in SECTION_META ? current : "purchase-requests";
+  const meta = SECTION_META[section];
+  const [purposeFilter, setPurposeFilter] = useState<PurposeFilterValue>("all");
+  const stepIndex = CYCLE_STEPS.findIndex((step) => step.key === section);
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
+    <div className="mx-auto flex max-w-6xl flex-col gap-4 p-4 sm:p-6">
       <div>
-        <h1 className="text-2xl font-bold">المشتريات والموردون</h1>
-        <p className="text-sm text-muted-foreground">
-          إدارة الموردين والمشتريات — البضاعة تدخل المخزون بمستند استلام في «دورة الشراء»، وفاتورة
-          المورد تُبنى على المستند المرحَّل
-        </p>
+        <p className="text-xs font-medium text-muted-foreground">المشتريات</p>
+        <h1 className="text-2xl font-bold">{meta.title}</h1>
+        <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{meta.description}</p>
       </div>
 
-      <Tabs value={tab} onValueChange={setTab}>
-        <TabsList>
-          <TabsTrigger value="cycle">دورة الشراء</TabsTrigger>
-          <TabsTrigger value="invoices">فواتير الشراء</TabsTrigger>
-          <TabsTrigger value="distributors">الموردون</TabsTrigger>
-        </TabsList>
-        <TabsContent value="cycle" className="mt-4">
-          <PurchaseCycle tab={cycleTab} onTabChange={setCycleTab} />
-        </TabsContent>
-        <TabsContent value="invoices" className="mt-4">
-          <PurchaseInvoicesTab onGoToReceiving={goToReceiving} />
-        </TabsContent>
-        <TabsContent value="distributors" className="mt-4">
-          <DistributorsTab />
-        </TabsContent>
-      </Tabs>
+      {/* شريط الخطوات: أين أنت من دورة الشراء، وكلّ خطوةٍ رابطٌ إلى شاشتها */}
+      {section !== "suppliers" && (
+        <nav aria-label="دورة الشراء" className="flex flex-wrap items-center gap-1 rounded-lg border bg-muted/30 p-1.5">
+          {CYCLE_STEPS.map((step, index) => (
+            <Fragment key={step.key}>
+              {index > 0 && <ChevronLeft className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />}
+              <button
+                type="button"
+                onClick={() => navigate(`/${step.key}`)}
+                aria-current={step.key === section ? "step" : undefined}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs transition-colors",
+                  step.key === section
+                    ? "bg-primary font-semibold text-primary-foreground"
+                    : index < stepIndex
+                      ? "text-foreground hover:bg-muted"
+                      : "text-muted-foreground hover:bg-muted",
+                )}
+              >
+                <span className="grid h-4 w-4 place-items-center rounded-full border text-[10px] tabular-nums">
+                  {index + 1}
+                </span>
+                {step.label}
+              </button>
+            </Fragment>
+          ))}
+        </nav>
+      )}
+
+      {section !== "suppliers" && <PurposeFilterBar value={purposeFilter} onChange={setPurposeFilter} />}
+
+      <PurposeFilterProvider value={purposeFilter}>
+        {section === "purchase-requests" && <RequestsPanel />}
+        {section === "purchase-orders" && <OrdersPanel view="orders" />}
+        {section === "goods-receipts" && <OrdersPanel view="receipts" />}
+        {section === "purchase-invoices" && (
+          <PurchaseInvoicesTab onGoToReceiving={() => navigate("/goods-receipts")} />
+        )}
+        {section === "purchase-returns" && <ReturnsAndCostsPanel />}
+        {section === "suppliers" && (
+          <Tabs defaultValue="distributors">
+            <TabsList>
+              <TabsTrigger value="distributors">بيانات الموردين</TabsTrigger>
+              <TabsTrigger value="balances">الأرصدة والسداد</TabsTrigger>
+            </TabsList>
+            <TabsContent value="distributors" className="mt-4">
+              <DistributorsTab />
+            </TabsContent>
+            <TabsContent value="balances" className="mt-4">
+              <SupplierBalancesPanel />
+            </TabsContent>
+          </Tabs>
+        )}
+      </PurposeFilterProvider>
     </div>
   );
 }
@@ -642,10 +742,10 @@ function usePurchaseInvoices(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("purchase_invoices")
-        .select("id, invoice_number, invoice_date, payment_term, net_amount, goods_receipt_id, distributor:distributors(name_ar)")
+        .select("id, invoice_number, invoice_date, payment_term, net_amount, paid_amount, status, goods_receipt_id, purchase_purpose, distributor:distributors(name_ar), warehouse:warehouses(name)")
         .eq("organization_id", organizationId)
         .order("invoice_date", { ascending: false })
-        .limit(50);
+        .limit(200);
       if (error) throw error;
       return data ?? [];
     },
@@ -669,14 +769,16 @@ function usePurchaseInvoices(organizationId: string | undefined) {
  *   • وانقطاعُ التنفيذ في منتصف الحلقة (خطأ في بندٍ بعد ترحيل بنود قبله) كان
  *     يترك فاتورةً ببعض بنودها ومخزونًا نصفيًّا بلا أي تراجع.
  *
- * فأُزيل المسار المباشر، وصار الزرّ ينقل إلى «دورة الشراء ← أوامر الشراء
- * والاستلام». الفواتير المسجَّلة سابقًا **تبقى كما هي** ويبقى مخزونها — لا
+ * فأُزيل المسار المباشر، وصار الزرّ ينقل إلى شاشة «استلام البضاعة». الفواتير المسجَّلة سابقًا **تبقى كما هي** ويبقى مخزونها — لا
  * يُحذف شيء، والجدول أدناه يُبيّن أيّها مبنيّ على مستند استلام وأيّها من
  * المسار المباشر القديم.
  */
 function PurchaseInvoicesTab({ onGoToReceiving }: { onGoToReceiving: () => void }) {
   const { organization } = useOrganizationAccess();
   const invoices = usePurchaseInvoices(organization?.id);
+  const purposeFilter = usePurposeFilter();
+  const rows = (invoices.data ?? []).filter((inv: any) => matchesPurpose(purposeFilter, inv.purchase_purpose));
+  const total = rows.reduce((sum: number, inv: any) => sum + Number(inv.net_amount ?? 0), 0);
 
   return (
     <Card>
@@ -684,8 +786,8 @@ function PurchaseInvoicesTab({ onGoToReceiving }: { onGoToReceiving: () => void 
         <div>
           <CardTitle>فواتير الشراء</CardTitle>
           <CardDescription>
-            سجلّ فواتير المورد. الفاتورة تُسجَّل على <strong>مستند استلام مرحَّل</strong> من «دورة
-            الشراء» — البضاعة تدخل المخزون بالاستلام لا بالفاتورة.
+            الفاتورة تُسجَّل على <strong>مستند استلام مرحَّل</strong> من شاشة «استلام البضاعة» —
+            البضاعة تدخل المخزون بالاستلام لا بالفاتورة.
           </CardDescription>
         </div>
         <Button size="sm" onClick={onGoToReceiving}>
@@ -697,9 +799,9 @@ function PurchaseInvoicesTab({ onGoToReceiving }: { onGoToReceiving: () => void 
         <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           <p className="font-semibold">أين تُستلم البضاعة؟</p>
           <p className="mt-1">
-            من تبويب <strong>«دورة الشراء» ← «أوامر الشراء والاستلام»</strong>: اختر أمر الشراء ثم
-            «استلام» فيُنشأ مستند استلام بكمّياته وتشغيلاته وتواريخ صلاحيتها، ويُرحَّل فيدخل المخزون
-            مرّة واحدة. ثم «تسجيل الفاتورة» على المستند المرحَّل من البطاقة نفسها.
+            من شاشة <strong>«استلام البضاعة»</strong>: اختر أمر الشراء ثم «استلام» فيُنشأ مستند استلام
+            بكمّياته وتشغيلاته وتواريخ صلاحيتها، ويُرحَّل فيدخل المخزون مرّة واحدة. ثم «تسجيل الفاتورة»
+            على المستند المرحَّل من الشاشة نفسها.
           </p>
           <Button size="sm" variant="outline" className="mt-2" onClick={onGoToReceiving}>
             <PackageCheck className="h-3.5 w-3.5" />
@@ -713,25 +815,34 @@ function PurchaseInvoicesTab({ onGoToReceiving }: { onGoToReceiving: () => void 
               <TableRow>
                 <TableHead>رقم الفاتورة</TableHead>
                 <TableHead>التاريخ</TableHead>
+                <TableHead>الجهة</TableHead>
                 <TableHead>المورد</TableHead>
+                <TableHead>المستودع</TableHead>
                 <TableHead>طريقة السداد</TableHead>
                 <TableHead>الصافي</TableHead>
+                <TableHead>المسدَّد</TableHead>
                 <TableHead>المصدر</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(invoices.data ?? []).map((inv) => {
+              {rows.map((inv: any) => {
                 const distributor = Array.isArray(inv.distributor) ? inv.distributor[0] : inv.distributor;
+                const warehouse = Array.isArray(inv.warehouse) ? inv.warehouse[0] : inv.warehouse;
                 return (
                   <TableRow key={inv.id}>
                     <TableCell className="font-mono text-xs">{inv.invoice_number ?? "—"}</TableCell>
                     <TableCell>{inv.invoice_date}</TableCell>
+                    <TableCell><PurposeBadge purpose={inv.purchase_purpose} /></TableCell>
                     <TableCell className="flex items-center gap-2">
                       <Building2 className="h-4 w-4 text-muted-foreground" />
                       {distributor?.name_ar ?? "—"}
                     </TableCell>
+                    <TableCell className="text-xs">{warehouse?.name ?? "—"}</TableCell>
                     <TableCell>{inv.payment_term === "credit" ? "آجل" : "نقدي"}</TableCell>
                     <TableCell>{Number(inv.net_amount).toLocaleString("ar-SA")} ر.س</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {Number(inv.paid_amount ?? 0).toLocaleString("ar-SA")}
+                    </TableCell>
                     <TableCell>
                       {/* بلا هذا العمود لا يعرف المدقّق أيّ الفواتير مخزونها من مستند
                           استلام وأيّها من المسار المباشر القديم. */}
@@ -744,12 +855,18 @@ function PurchaseInvoicesTab({ onGoToReceiving }: { onGoToReceiving: () => void 
                   </TableRow>
                 );
               })}
-              {(invoices.data ?? []).length === 0 && (
+              {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
-                    لا توجد فواتير شراء بعد — استلم البضاعة أوّلًا ثم سجّل فاتورة المورد على مستند
-                    الاستلام.
+                  <TableCell colSpan={9} className="py-8 text-center text-sm text-muted-foreground">
+                    لا توجد فواتير شراء لهذه الجهة — استلم البضاعة أوّلًا ثم سجّل فاتورة المورد على
+                    مستند الاستلام.
                   </TableCell>
+                </TableRow>
+              )}
+              {rows.length > 0 && (
+                <TableRow className="bg-muted/40 font-semibold">
+                  <TableCell colSpan={6}>الإجمالي ({rows.length} فاتورة)</TableCell>
+                  <TableCell colSpan={3}>{total.toLocaleString("ar-SA")} ر.س</TableCell>
                 </TableRow>
               )}
             </TableBody>
