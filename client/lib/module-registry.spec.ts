@@ -54,6 +54,7 @@ const databaseFeatureKeys: FeatureKey[] = [
   "inpatient",
   "procedures",
   "referrals",
+  "follow_up_center",
 ];
 
 function accessFor(role: OrganizationRole, enabledFeatures: FeatureKey[], legacyMode = false) {
@@ -74,7 +75,7 @@ describe("organization module access", () => {
       expect(databaseFeatureKeys).toContain(module.featureKey);
       expect(module.requiredPermission).toBe(`${module.featureKey}.view`);
     });
-    expect(new Set(databaseFeatureKeys).size).toBe(43);
+    expect(new Set(databaseFeatureKeys).size).toBe(44);
   });
 
   it("allows a doctor only the configured clinical modules", () => {
@@ -116,7 +117,7 @@ describe("organization module access", () => {
   });
 
   it("keeps the shared core modules in the unified center", () => {
-    expect(CLINIC_DEFAULT_FEATURES).toHaveLength(23);
+    expect(CLINIC_DEFAULT_FEATURES).toHaveLength(24);
     expect(getOrganizationPlanDefaultFeatures("medical_center")).toEqual(
       expect.arrayContaining(CLINIC_DEFAULT_FEATURES),
     );
@@ -131,7 +132,7 @@ describe("organization module access", () => {
       enabledFeatures: [],
       permissions: [],
     });
-    expect(getOrganizationPlanDefaultFeatures("medical_center")).toHaveLength(43);
+    expect(getOrganizationPlanDefaultFeatures("medical_center")).toHaveLength(44);
     expect(canAccessFeature({ ...configuration, featureKey: "laboratory", permissionKey: "laboratory.view" })).toBe(true);
     expect(canAccessFeature({ ...configuration, featureKey: "pharmacy", permissionKey: "pharmacy.view" })).toBe(true);
     expect(canAccessFeature({ ...configuration, featureKey: "accounting", permissionKey: "accounting.view" })).toBe(true);

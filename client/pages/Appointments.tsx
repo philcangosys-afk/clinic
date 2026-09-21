@@ -26,7 +26,7 @@ import { checkDoctorAvailability } from "@/lib/doctor-availability";
 import { PatientSearchInput } from "@/components/shared/PatientSearchInput";
 import { matchesPatientSearch, type PatientSearchScope } from "@/lib/patient-search";
 import type { AppointmentStatus, AppointmentWithRelations } from "@/lib/database.types";
-import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
+import { STATUS_GROUPS, statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { localDayRange } from "@/lib/date-range";
 import { formatAmount, formatDate, formatDateTime, formatTime, useLocaleSettings, type CalendarDisplay } from "@/lib/locale";
 import { useMemberNames } from "@/lib/member-names";
@@ -73,6 +73,13 @@ import ItemPicker from "@/components/shared/ItemPicker";
 import LookupSelect from "@/components/shared/LookupSelect";
 import CannedTextPicker, { appendCannedText } from "@/components/shared/CannedTextPicker";
 import QuickAddPatientDialog from "@/components/shared/QuickAddPatientDialog";
+import {
+  OverlapConfirmDialog,
+  OverlapNotice,
+  parseOverlapError,
+  useAppointmentOverlap,
+  type OverlapInfo,
+} from "@/components/appointments/OverlapGuard";
 
 /** Radix Select يرفض قيمة فارغة، فيُستخدم رمز صريح لـ"بدون". */
 const NONE_VALUE = "__none__";
@@ -208,16 +215,22 @@ const isDateParam = (value: string | null): value is string => /^\d{4}-\d{2}-\d{
  * بياناتنا يميّز «مريضًا خارجيًّا». الأقرب صدقًا **الحضور المباشر**
  * (`walk_in`) — من جاء بلا موعدٍ سابق — وهو ما تعرضه الخانة باسمها.
  */
-const SUMMARY_BUCKETS: { key: string; label: string; statuses: AppointmentStatus[] }[] = [
+/**
+ * شريط الحالات — مفتاح الألوان والمرشّح معًا (0176).
+ *
+ * المجموعات التسع نفسها بألوانها في التقويم والقائمة والاستقبال، فالنقطة
+ * هنا هي لون الكتلة هناك. والضغط على مجموعةٍ يحصر **كلّ** أنماط العرض —
+ * كان يحصر القائمة ويترك التقويم، وكانت إلى جانبه قائمة منسدلة ثانية
+ * للحالة تعمل على التقويم وحده: مرشِّحان لسؤالٍ واحد.
+ */
+const SUMMARY_BUCKETS: { key: string; label: string; statuses: AppointmentStatus[]; dot?: string }[] = [
   { key: "all", label: "كل المواعيد", statuses: [] },
-  { key: "new", label: "جديدة", statuses: ["new", "scheduled"] },
-  { key: "confirmed", label: "مؤكَّدة", statuses: ["confirmed"] },
-  { key: "unconfirmed", label: "غير مؤكَّدة", statuses: ["unconfirmed"] },
-  { key: "attended", label: "حضرت", statuses: ["arrived", "checked_in", "called", "in_progress", "completed"] },
-  { key: "waiting", label: "في الانتظار", statuses: ["waiting"] },
-  { key: "walk_in", label: "حضور مباشر", statuses: ["walk_in"] },
-  { key: "no_show", label: "لم تحضر", statuses: ["no_show"] },
-  { key: "cancelled", label: "ألغيت", statuses: ["cancelled_by_patient", "cancelled_by_staff"] },
+  ...STATUS_GROUPS.map((group) => ({
+    key: group.key,
+    label: group.label,
+    statuses: group.statuses,
+    dot: group.dot,
+  })),
 ];
 
 export default function Appointments() {
@@ -469,7 +482,7 @@ export default function Appointments() {
     ? reportStatuses
     : summaryKey !== "all"
       ? (SUMMARY_BUCKETS.find((bucket) => bucket.key === summaryKey)?.statuses ?? [])
-      : statusFilter === "all" ? [] : [statusFilter];
+      : [];
 
   /**
    * البحث أوّلًا، ثمّ الحالة — **وشريط الملخّص يُحسب من الأولى.**
@@ -706,19 +719,6 @@ export default function Appointments() {
             onScopesChange={setSearchScopes}
             className="min-w-56 flex-1"
           />
-          {/* قائمة الحالة تُخفى حين يأتي المرشّح من العنوان: قائمة تعرض «كل
-              الحالات» بينما المطبَّق «ملغاة» تكذب على من يقرأها. */}
-          {!urlFilterActive && (
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">كل الحالات</SelectItem>
-                {(["scheduled", "confirmed", "arrived", "checked_in", "called", "in_progress", "completed", "no_show", "cancelled_by_patient", "cancelled_by_staff"] as AppointmentStatus[]).map((status) => (
-                  <SelectItem key={status} value={status}>{statusLabel(status)}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
           {!urlFilterActive && (
             <div className="flex rounded-md border p-0.5">
               <button
@@ -744,7 +744,7 @@ export default function Appointments() {
               </button>
             </div>
           )}
-          <Button variant="outline" onClick={() => navigate("/waitlist")}>قائمة الانتظار</Button>
+          <Button variant="outline" onClick={() => navigate("/waitlist")}>قائمة انتظار المواعيد</Button>
         </CardContent>
       </Card>
 
@@ -843,6 +843,41 @@ export default function Appointments() {
         </Card>
       )}
 
+      {/* شريط الحالات — يقيس الفترة كلّها، ولونه مفتاح ألوان التقويم، ويحصر كلّ العروض بالضغط (0176) */}
+      {!appointments.isLoading && searchedAppointments.length > 0 && (
+        <Card>
+          <CardContent className="flex flex-wrap gap-2 p-3">
+            {summary.map((bucket) => {
+              const active = summaryKey === bucket.key;
+              return (
+                <button
+                  key={bucket.key}
+                  type="button"
+                  disabled={urlFilterActive}
+                  onClick={() => setSummaryKey(active ? "all" : bucket.key)}
+                  className={`rounded-md border px-3 py-1.5 text-start transition disabled:opacity-50 ${
+                    active ? "border-primary bg-primary/5" : "hover:border-primary/40"
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    {bucket.dot && <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${bucket.dot}`} />}
+                    {bucket.label}
+                  </div>
+                  <div className="font-mono text-lg font-bold leading-tight tabular-nums">
+                    {bucket.value}
+                  </div>
+                </button>
+              );
+            })}
+            {urlFilterActive && (
+              <span className="self-center text-[11px] text-muted-foreground">
+                المرشّح يأتي من التقرير — امسحه لتفعيل الشريط.
+              </span>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
       {/* مرشّح متعدّد الحالات أو فترة أطول من يوم لا يعبّر عنهما التقويم
           (يعرض يومًا واحدًا وحالةً واحدة)، فتُعرض بطاقات الأطباء التي تطبّقهما
           فعلًا — بدل تقويمٍ يتجاهل المرشّح ويبدو كأنه يطبّقه. */}
@@ -854,7 +889,7 @@ export default function Appointments() {
           doctors={visibleDoctors}
           clinics={clinicList.data ?? []}
           search={search}
-          statusFilter={statusFilter}
+          statusFilter={activeStatuses}
           onCreateAt={(start, doctorId, clinicId) => {
             if (!canSchedule) return;
             const day = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
@@ -910,37 +945,6 @@ export default function Appointments() {
         </div>
       )}
 
-      {/* شريط الملخّص — يقيس اليوم كلّه ويحصر القائمة بالضغط */}
-      {!appointments.isLoading && searchedAppointments.length > 0 && (
-        <Card>
-          <CardContent className="flex flex-wrap gap-2 p-3">
-            {summary.map((bucket) => {
-              const active = summaryKey === bucket.key;
-              return (
-                <button
-                  key={bucket.key}
-                  type="button"
-                  disabled={urlFilterActive}
-                  onClick={() => setSummaryKey(active ? "all" : bucket.key)}
-                  className={`rounded-md border px-3 py-1.5 text-start transition disabled:opacity-50 ${
-                    active ? "border-primary bg-primary/5" : "hover:border-primary/40"
-                  }`}
-                >
-                  <div className="text-xs text-muted-foreground">{bucket.label}</div>
-                  <div className="font-mono text-lg font-bold leading-tight tabular-nums">
-                    {bucket.value}
-                  </div>
-                </button>
-              );
-            })}
-            {urlFilterActive && (
-              <span className="self-center text-[11px] text-muted-foreground">
-                المرشّح يأتي من التقرير — امسحه لتفعيل الشريط.
-              </span>
-            )}
-          </CardContent>
-        </Card>
-      )}
 
       {(urlFilterActive || mode === "classic") && !appointments.isLoading && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -1104,6 +1108,20 @@ function ManageAppointmentDialog({
         end.getTime() !== new Date(appointment.scheduled_end).getTime() ||
         targetClinicId !== (appointment.clinic_id ?? null)),
   );
+  /**
+   * النقل إلى وقتٍ محجوز يُرى هنا قبل الحفظ (0174). والتجاوز لا يُعرض: النقل
+   * يمرّ بدالّة إعادة الجدولة وهي لا تحمله — ومن أصرّ ألغى وحجز من جديد.
+   * والموعد نفسه مستثنًى: لا يتعارض الموعد مع مكانه القديم.
+   */
+  const manageOverlap = useAppointmentOverlap({
+    organizationId,
+    doctorId: doctorId || null,
+    start,
+    end,
+    excludeId: appointment?.id ?? null,
+    enabled: scheduleChanged,
+  });
+
   const detailsChanged = Boolean(
     appointment &&
       ((appointment.priority ?? "normal") !== priority || (appointment.note ?? "") !== note),
@@ -1223,6 +1241,16 @@ function ManageAppointmentDialog({
           <div><Label>الوقت</Label><Input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></div>
           <div><Label>المدة</Label><Input type="number" min={5} step={5} value={duration} onChange={(event) => setDuration(event.target.value)} /></div>
         </div>
+        {scheduleChanged && (
+          <OverlapNotice
+            info={manageOverlap.data}
+            requestedStart={start}
+            onMove={(next) => {
+              setDate(toDateInputValue(next));
+              setTime(`${String(next.getHours()).padStart(2, "0")}:${String(next.getMinutes()).padStart(2, "0")}`);
+            }}
+          />
+        )}
         <div><Label>الأولوية</Label><Select value={priority} onValueChange={setPriority}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="normal">عادي</SelectItem><SelectItem value="urgent">عاجل</SelectItem><SelectItem value="emergency">طارئ</SelectItem><SelectItem value="elderly">كبار السن</SelectItem><SelectItem value="accessibility">ذوو الإعاقة</SelectItem></SelectContent></Select></div>
         <div><Label>ملاحظة</Label><Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} /></div>
         {scheduleChanged && (
@@ -1326,6 +1354,36 @@ function CreateAppointmentDialog({
    */
   const [branchId, setBranchId] = useState("");
   const [warnings, setWarnings] = useState<string[]>([]);
+  /**
+   * تعارض الوقت مع موعدٍ آخر للطبيب (0174).
+   *
+   * يُفحص **قبل** الضغط على «حجز» فيظهر الوقت محجوبًا ومتى يُحجز بعده. وإن
+   * أصرّ الموظّف فالتجاهل بخطوتين، ويُرسل مع الإدراج فتسجّله القاعدة باسمه.
+   * وأيّ تغييرٍ في الطبيب أو الوقت أو المدّة يُسقط تجاهلًا سابقًا: التأكيد
+   * كان على تعارضٍ بعينه لا على كلّ تعارض.
+   */
+  const [overrideConfirmed, setOverrideConfirmed] = useState(false);
+  const [conflict, setConflict] = useState<OverlapInfo | null>(null);
+  const plannedStart = date && time ? new Date(`${date}T${time}:00`) : null;
+  const plannedEnd =
+    plannedStart && Number(duration) > 0
+      ? new Date(plannedStart.getTime() + Number(duration) * 60_000)
+      : null;
+  const overlap = useAppointmentOverlap({
+    organizationId,
+    doctorId: doctorId || null,
+    start: plannedStart,
+    end: plannedEnd,
+    enabled: open,
+  });
+  useEffect(() => {
+    setOverrideConfirmed(false);
+  }, [doctorId, date, time, duration]);
+  const moveToFreeTime = (next: Date) => {
+    setDate(next.toLocaleDateString("en-CA"));
+    setTime(next.toTimeString().slice(0, 5));
+    setOverrideConfirmed(false);
+  };
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   /**
    * العيادة ونوع الزيارة والملاحظة أعمدة في `appointments` منذ 0002 لم تكن
@@ -1499,7 +1557,7 @@ function CreateAppointmentDialog({
   });
 
   const createAppointment = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (vars?: { override?: boolean }) => {
       if (!organizationId || !patient || !doctorId) throw new Error("أكمل بيانات المريض والطبيب والوقت");
       // حظر المواعيد في ملف المريض كان معروضًا بلا فرض — يُفرض هنا قبل أي كتابة
       await assertPatientNotBlocked(patient.id, "appointments");
@@ -1542,6 +1600,8 @@ function CreateAppointmentDialog({
         priority,
         note: note.trim() || null,
         created_by: session?.user.id ?? null,
+        // يُستهلك في القاعدة ويعود false؛ ويبقى من تجاوز ومتى (0174)
+        overlap_override: Boolean(vars?.override),
       });
       if (error) throw error;
     },
@@ -1562,16 +1622,39 @@ function CreateAppointmentDialog({
       setVisitTypeValueId("");
       setPriority("normal");
       setAllowOutsideHours(false);
+      setOverrideConfirmed(false);
       setNote("");
       onOpenChange(false);
     },
-    onError: (error: unknown) =>
+    onError: (error: unknown) => {
+      // التعارض نافذةُ قرارٍ لا رسالةُ خطأ: انقل أو تجاهل — وقد يقع هنا وإن لم
+      // يظهر في الفحص المسبق، إن حجز زميلٌ الوقت نفسه في اللحظة ذاتها.
+      const info = parseOverlapError(error);
+      if (info) {
+        setOverrideConfirmed(false);
+        setConflict(info);
+        return;
+      }
       toast({
         variant: "destructive",
         title: "تعذر حجز الموعد",
         description: errorMessage(error),
-      }),
+      });
+    },
   });
+
+  /**
+   * «حجز»: إن كان الوقت محجوزًا ولم يُؤكَّد تجاهله تُفتح نافذة القرار بدل
+   * الإرسال. وحجز طلب المتابعة يمرّ بدالّةٍ لا تحمل التجاوز، فنافذته بلا
+   * زرّ «تجاهل».
+   */
+  const submitBooking = () => {
+    if (overlap.data && !overrideConfirmed) {
+      setConflict(overlap.data);
+      return;
+    }
+    createAppointment.mutate({ override: overrideConfirmed && !followUpRequest });
+  };
 
   return (
     <>
@@ -1770,6 +1853,14 @@ function CreateAppointmentDialog({
               {findNextSlot.isPending ? "جارٍ البحث..." : "أقرب موعد"}
             </Button>
 
+            <OverlapNotice
+              info={overlap.data}
+              requestedStart={plannedStart}
+              onMove={moveToFreeTime}
+              overrideConfirmed={overrideConfirmed}
+              onUndoOverride={() => setOverrideConfirmed(false)}
+            />
+
             {/* الأوقات المتاحة تُحسب في القاعدة من جدول الطبيب ومواعيده
                 واستثناءاته — لا في المتصفّح، حيث قد تكون البيانات تغيّرت
                 بين التحميل والضغط. */}
@@ -1864,7 +1955,7 @@ function CreateAppointmentDialog({
           <DialogFooter>
             <Button
               disabled={!patient || !doctorId || createAppointment.isPending}
-              onClick={() => createAppointment.mutate()}
+              onClick={submitBooking}
             >
               {createAppointment.isPending ? "جارٍ الحجز..." : "حجز الموعد"}
             </Button>
@@ -1876,6 +1967,19 @@ function CreateAppointmentDialog({
         open={quickAddOpen}
         onOpenChange={setQuickAddOpen}
         onCreated={(created) => setPatient({ id: created.id, name_ar: created.name_ar })}
+      />
+
+      <OverlapConfirmDialog
+        info={conflict}
+        requestedStart={plannedStart}
+        onClose={() => setConflict(null)}
+        onMove={moveToFreeTime}
+        allowOverride={!followUpRequest}
+        onOverrideConfirmed={() => {
+          setOverrideConfirmed(true);
+          setConflict(null);
+          createAppointment.mutate({ override: true });
+        }}
       />
     </>
   );
@@ -1901,13 +2005,14 @@ const TRANSITION_ACTIONS: {
   needsReason?: boolean;
 }[] = [
   { action: "confirm", label: "تأكيد الموعد", from: ["new", "scheduled", "unconfirmed"] },
-  { action: "arrive", label: "تسجيل الوصول", from: ["confirmed", "scheduled", "new", "unconfirmed"] },
-  { action: "check_in", label: "تسجيل الدخول", from: ["arrived"] },
-  { action: "call", label: "النداء", from: ["arrived", "checked_in", "waiting", "walk_in"] },
+  // الخطوات الأربع بأسمائها في كلّ شاشة (0175): وصل ← نداء ← دخل ← خرج.
+  // «تسجيل الدخول» (استقبال ٢) دُمج في «وصل» — كان يُقرأ «دخل الغرفة».
+  { action: "arrive", label: "وصل", from: ["confirmed", "scheduled", "new", "unconfirmed"] },
+  { action: "call", label: "نداء", from: ["arrived", "checked_in", "waiting", "walk_in"] },
   { action: "recall", label: "إعادة النداء", from: ["called"] },
   { action: "uncall", label: "إلغاء النداء", from: ["called"] },
-  { action: "start", label: "بدء الزيارة", from: ["called", "checked_in", "arrived", "waiting", "walk_in"] },
-  { action: "finish", label: "إنهاء الزيارة", from: ["in_progress"] },
+  { action: "start", label: "دخل", from: ["called", "checked_in", "arrived", "waiting", "walk_in"] },
+  { action: "finish", label: "خرج", from: ["in_progress"] },
   {
     action: "no_show",
     label: "لم يحضر",

@@ -190,7 +190,7 @@ const MODULE_LABELS: Record<string, string> = {
   settings: "الإعدادات والسياسات",
   structure: "الفروع والأقسام",
   patients: "ملفات المرضى",
-  reception: "الاستقبال والانتظار",
+  reception: "الاستقبال",
   appointments: "المواعيد",
   visits: "الزيارات",
   vitals: "العلامات الحيوية",

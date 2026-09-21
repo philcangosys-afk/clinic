@@ -167,7 +167,7 @@ function AddToWaitlistDialog({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["waitlist"] });
-      toast({ title: "تمت إضافة المريض لقائمة الانتظار" });
+      toast({ title: "تمت إضافة المريض لقائمة انتظار المواعيد" });
       setPatient(null);
       setDoctorId(ANY_DOCTOR);
       setSpecialtyId("");
@@ -188,7 +188,7 @@ function AddToWaitlistDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>إضافة لقائمة الانتظار</DialogTitle>
+          <DialogTitle>إضافة لقائمة انتظار المواعيد</DialogTitle>
           <DialogDescription>
             يُسجَّل المريض بانتظار شاغر لدى طبيب معيّن أو ضمن تخصص، ويمكن تحويله لموعد لاحقًا
           </DialogDescription>
@@ -300,9 +300,10 @@ export default function Waitlist() {
     <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">قوائم الانتظار</h1>
+          <h1 className="text-2xl font-bold">قائمة انتظار المواعيد</h1>
           <p className="text-sm text-muted-foreground">
-            مرضى بانتظار شاغر — يُحوَّلون إلى مواعيد عند توفر وقت لدى الطبيب
+            مرضى يريدون موعدًا ولم يجدوا وقتًا — يُحوَّلون إلى مواعيد عند توفّر شاغر. ليست طابور
+            اليوم: من حضر اليوم مكانه «الاستقبال».
           </p>
         </div>
       </div>

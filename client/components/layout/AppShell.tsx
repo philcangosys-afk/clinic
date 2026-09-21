@@ -13,6 +13,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
+import FollowUpAlerts from "@/components/follow-up/FollowUpAlerts";
 import SectionGuideButton from "./SectionGuideButton";
 import { guideKeyForPath } from "@/lib/section-guides";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
@@ -544,6 +545,10 @@ export default function AppShell() {
       {/* زرّ «شرح القسم» — مرّة واحدة هنا فيظهر في كل الشاشات، ويقرأ نصّه من
           المسار الحالي. لو وُضع في كل صفحة على حدة لنُسي في الصفحات الجديدة. */}
       <SectionGuideButton />
+
+      {/* ما يرسله الأطباء يلحق موظّف الاستقبال في أيّ شاشةٍ كان — لذلك هنا
+          في الإطار لا في شاشة مركز المتابعة (0173). */}
+      <FollowUpAlerts />
     </div>
   );
 }

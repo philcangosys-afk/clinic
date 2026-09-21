@@ -100,6 +100,10 @@ export type PermissionKey =
   | "portal.manage"
   | "portal.requests"
   | "doctor_workspace.view"
+  /* الطبيب يرسل ملاحظةً عن مريضه إلى الاستقبال من مركز المتابعة (0173) */
+  | "follow_up_center.send"
+  /* استقبال طلبات الأطباء: الاطّلاع عليها وإقفالها (0138) */
+  | "reception.requests"
   | "critical.acknowledge"
   | "critical.oversee"
   | "quality.view"
@@ -152,8 +156,6 @@ export type PermissionKey =
   | "billing.complimentary"
   /* الخصم على سطر الفاتورة بسببٍ مكتوب (0167) */
   | "billing.line_discount"
-  /* إصدار الطبيب فاتورةَ مريضه من شاشته، ويُحصّلها الاستقبال (0170) */
-  | "billing.doctor_invoice"
   | "cashier.receive"
   | "cashier.open"
   | "cashier.close"

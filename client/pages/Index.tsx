@@ -95,7 +95,7 @@ function useDashboardStats(organizationId: string | undefined) {
 }
 
 const QUICK_LINKS = [
-  { to: "/reception", label: "الاستقبال والانتظار", icon: Activity, hint: "طابور اليوم الحي" },
+  { to: "/reception", label: "الاستقبال", icon: Activity, hint: "طابور اليوم الحي" },
   { to: "/patients", label: "المرضى", icon: UsersRound, hint: "البحث والملف الطبي" },
   { to: "/appointments", label: "المواعيد", icon: CalendarDays, hint: "جدول الأطباء" },
   { to: "/billing", label: "الفوترة والمدفوعات", icon: WalletCards, hint: "الفواتير والسندات" },

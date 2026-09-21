@@ -1,4 +1,4 @@
-# دوالّ قاعدة ZainCare (444)
+# دوالّ قاعدة ZainCare (450)
 
 > **مُولَّد آليًّا — لا يُحرَّر يدويًّا:** `python scripts/schema-doc.py`
 
@@ -202,6 +202,21 @@ app_apply_voucher_allocation(
 ```sql
 app_apply_wallet_transaction(
 ) returns trigger
+```
+
+### app_appointment_busy_range(6)
+
+عُرِّفت في: `0174`
+
+```sql
+app_appointment_busy_range(
+  p_status text,
+  p_start timestamptz,
+  p_end timestamptz,
+  p_entered_at timestamptz,
+  p_left_at timestamptz,
+  p_expected_minutes integer
+) returns tstzrange
 ```
 
 ### app_appointment_service_guard(0)
@@ -602,6 +617,20 @@ app_cancel_vital_request(
 app_cash_shift_expected(
   p_shift_id uuid
 ) returns numeric
+```
+
+### app_check_appointment_overlap(5)
+
+عُرِّفت في: `0174`
+
+```sql
+app_check_appointment_overlap(
+  p_organization_id uuid,
+  p_doctor_id uuid,
+  p_start timestamptz,
+  p_end timestamptz,
+  p_exclude_id uuid default null
+) returns jsonb
 ```
 
 ### app_check_contact_block(4)
@@ -1296,7 +1325,7 @@ app_dispose_lot(
 
 ### app_doctor_available_slots(4)
 
-عُرِّفت في: `0082`، `0135`
+عُرِّفت في: `0082`، `0135`، `0174`
 
 ```sql
 app_doctor_available_slots(
@@ -1315,6 +1344,35 @@ app_doctor_available_slots(
 app_doctor_booking_warnings(
   p_doctor_id uuid
 ) returns text[]
+```
+
+### app_doctor_busy_ranges(5)
+
+عُرِّفت في: `0174`
+
+```sql
+app_doctor_busy_ranges(
+  p_organization_id uuid,
+  p_doctor_id uuid,
+  p_exclude_id uuid,
+  p_from timestamptz,
+  p_to timestamptz
+) returns table ( appointment_id uuid, busy tstzrange, in_session boolean, status text, patient_name text, service_name text )
+```
+
+### app_doctor_overlap_info(6)
+
+عُرِّفت في: `0174`
+
+```sql
+app_doctor_overlap_info(
+  p_organization_id uuid,
+  p_doctor_id uuid,
+  p_start timestamptz,
+  p_end timestamptz,
+  p_exclude_id uuid default null,
+  p_with_names boolean default false
+) returns jsonb
 ```
 
 ### app_doctor_request_followup(8)
@@ -2342,6 +2400,18 @@ app_mark_all_notifications_read(
 ) returns integer
 ```
 
+### app_mark_follow_up_seen(3)
+
+عُرِّفت في: `0173`
+
+```sql
+app_mark_follow_up_seen(
+  p_organization_id uuid,
+  p_staff_ids uuid[] default '{}',
+  p_appointment_ids uuid[] default '{}'
+) returns int
+```
+
 ### app_mark_integration_attempt(4)
 
 عُرِّفت في: `0110`
@@ -2455,7 +2525,7 @@ app_merge_patients(
 
 ### app_next_available_slot(6)
 
-عُرِّفت في: `0154`
+عُرِّفت في: `0154`، `0174`
 
 ```sql
 app_next_available_slot(
@@ -2926,7 +2996,7 @@ app_prescription_status_allowed(
 
 ### app_prevent_appointment_overlap(0)
 
-عُرِّفت في: `0050`
+عُرِّفت في: `0050`، `0174`
 
 ```sql
 app_prevent_appointment_overlap(
@@ -4340,6 +4410,21 @@ app_sell_package(
 app_send_appointment_confirmation(
   p_appointment_id uuid
 ) returns bigint
+```
+
+### app_send_follow_up_note(6)
+
+عُرِّفت في: `0173`
+
+```sql
+app_send_follow_up_note(
+  p_organization_id uuid,
+  p_patient_id uuid,
+  p_body text,
+  p_doctor_id uuid default null,
+  p_priority text default 'routine',
+  p_branch_id uuid default null
+) returns uuid
 ```
 
 ### app_send_patient_to_doctor(9)

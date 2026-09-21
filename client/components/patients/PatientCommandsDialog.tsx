@@ -20,6 +20,7 @@ import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount } from "@/lib/locale";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { useSessionDoctor } from "@/lib/session-doctor";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -88,6 +89,8 @@ export function usePatientOpenAgreements(patientId: string | null | undefined) {
   });
 }
 
+const DOCTOR_HIDDEN_COMMANDS = new Set(["new-invoice", "new-quote", "quotes"]);
+
 export default function PatientCommandsDialog({
   patient,
   open,
@@ -109,6 +112,7 @@ export default function PatientCommandsDialog({
 }) {
   const navigate = useNavigate();
   const agreements = usePatientOpenAgreements(open ? patient?.id : null);
+  const { isDoctorRole } = useSessionDoctor();
 
   if (!patient) return null;
 
@@ -230,6 +234,15 @@ export default function PatientCommandsDialog({
     },
   ];
 
+  /**
+   * الطبيب لا يُصدر فاتورة ولا عرض سعر (0173). وقائمة العروض تُفتح في شاشة
+   * الفواتير التي لا يدخلها — فزرُّها للطبيب طريقٌ إلى «لا تملك صلاحية».
+   * وما يريده في الحساب يكتبه في مركز المتابعة.
+   */
+  const visibleCommands = isDoctorRole
+    ? commands.filter((command) => !DOCTOR_HIDDEN_COMMANDS.has(command.key))
+    : commands;
+
   const open_ = agreements.data;
 
   return (
@@ -246,7 +259,7 @@ export default function PatientCommandsDialog({
         </DialogHeader>
 
         <div className="grid gap-1.5 sm:grid-cols-2">
-          {commands.map((command) => {
+          {visibleCommands.map((command) => {
             const Icon = command.icon;
             const disabled = Boolean(command.disabledReason) || !command.run;
             return (

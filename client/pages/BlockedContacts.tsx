@@ -165,7 +165,7 @@ export default function BlockedContacts() {
           </h1>
           <p className="text-sm text-muted-foreground">
             الحظر مفروض في قاعدة البيانات لا في الشاشة — يشمل الحجز العادي والمريض الحضوري
-            وتحويل قائمة الانتظار.
+            وتحويل قائمة انتظار المواعيد.
           </p>
         </div>
         {can("blocked_contacts.manage") && (

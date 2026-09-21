@@ -45,6 +45,9 @@ export const CLINIC_DEFAULT_FEATURES: FeatureKey[] = [
   "quality",
   // التكاملات (المرحلة 30): زاتكا ونفيس قائمتان في كل منشأة سعودية.
   "integrations",
+  // مركز المتابعة (0173): ما يقوله الطبيب للاستقبال — وبه وحده، بعد أن صارت
+  // الفوترة للاستقبال لا للطبيب.
+  "follow_up_center",
 ];
 
 export const MEDICAL_CENTER_ADDED_FEATURES: FeatureKey[] = [
@@ -118,6 +121,7 @@ const allFeatureKeys: FeatureKey[] = [
   "inpatient",
   "procedures",
   "referrals",
+  "follow_up_center",
 ];
 
 const viewPermissions = (features: FeatureKey[]) =>
@@ -138,6 +142,7 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "notifications",
     "doctor_workspace",
     "quality",
+    "follow_up_center",
   ]),
   nurse: viewPermissions([
     "core_dashboard",
@@ -163,6 +168,7 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "documents",
     "notifications",
     "patient_portal",
+    "follow_up_center",
   ]),
   // فنّيو المختبر والأشعة يبلّغون عن أعطال أجهزتهم، فيحتاجون رؤية سجل الأصول.
   lab_technician: viewPermissions(["core_dashboard", "patients", "laboratory", "assets", "notifications"]),

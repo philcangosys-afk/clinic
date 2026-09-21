@@ -241,6 +241,29 @@ async function fetchLiveBadges(
           .eq("organization_id", organizationId) as any,
       ),
     ],
+    [
+      "follow-up-center",
+      // للاستقبال: ما وصل اليوم ولم يُطَّلع عليه — العدد الذي ينتظر عملًا.
+      // وللطبيب: ما أرسله اليوم.
+      safeCount(
+        (scopedDoctorId
+          ? supabase
+              .from("v_follow_up_center")
+              .select("id", { count: "exact", head: true })
+              .eq("organization_id", organizationId)
+              .eq("doctor_id", scopedDoctorId)
+              .gte("requested_at", startIso)
+              .lt("requested_at", endIso)
+          : supabase
+              .from("v_follow_up_center")
+              .select("id", { count: "exact", head: true })
+              .eq("organization_id", organizationId)
+              .is("seen_at", null)
+              .eq("status", "pending")
+              .gte("requested_at", startIso)
+              .lt("requested_at", endIso)) as any,
+      ),
+    ],
   ];
 
   if (userId) {

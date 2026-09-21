@@ -16,6 +16,7 @@ import {
   Printer,
   Receipt,
   RefreshCw,
+  StickyNote,
   Undo2,
   UserCheck,
   UserRound,
@@ -26,7 +27,18 @@ import {
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount, formatDateTime, formatTime } from "@/lib/locale";
-import { usePermissions } from "@/lib/permissions";
+import { usePermissions, type PermissionKey } from "@/lib/permissions";
+import {
+  QUEUE_ACTION_HINT,
+  QUEUE_ACTION_LABEL,
+  QUEUE_ACTION_PERMISSION,
+  primaryQueueAction,
+  queueActionsFor,
+  type QueueAction,
+} from "@/lib/queue-steps";
+import { useAppointmentsLive } from "@/hooks/use-appointments-live";
+import { usePatientNoteCounts } from "@/components/patients/PatientNotesButton";
+import { statusBadgeClass, statusGroup, statusLabel } from "@/lib/appointment-status";
 import { printHtml } from "@/lib/document-merge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -58,43 +70,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-
-/**
- * ما أصدره الأطباء اليوم من غرفهم (0170).
- *
- * استعلامٌ واحد لكل الطابور لا استعلامٌ لكل صفّ: قراءةُ فاتورةٍ لكل مريضٍ في
- * طابورٍ من ثلاثين تُرسل ثلاثين طلبًا في كل تحديث، والتحديث يجري كل دقيقة.
- *
- * والمفتاح `appointment_id`: الفاتورة تُربط بالموعد الذي أُصدرت فيه لا
- * بالمريض، وإلّا ظهرت فاتورة زيارةٍ سابقة على صفّ اليوم.
- */
-function useDoctorIssuedInvoices(organizationId: string | undefined) {
-  return useQuery({
-    queryKey: ["doctor-issued-invoices", organizationId],
-    enabled: Boolean(organizationId),
-    refetchInterval: 60 * 1000,
-    queryFn: async () => {
-      const today = new Date();
-      const from = new Date(today.getFullYear(), today.getMonth(), today.getDate()).toISOString();
-      const { data, error } = await supabase
-        .from("v_doctor_issued_invoices")
-        .select(
-          "id, appointment_id, patient_id, gross_amount, discount_total, net_amount, remaining_amount, complimentary_count, complimentary_value, discount_reasons, complimentary_reasons, status, doctor_name",
-        )
-        .eq("organization_id", organizationId)
-        .gte("created_at", from)
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      const byAppointment = new Map<string, any>();
-      for (const row of data ?? []) {
-        const key = (row as any).appointment_id;
-        // الأحدث أوّلًا في الترتيب، فأوّل ما يُسجَّل لكل موعدٍ هو الأحدث
-        if (key && !byAppointment.has(key)) byAppointment.set(key, row);
-      }
-      return byAppointment;
-    },
-  });
-}
 
 /**
  * لوحة الاستقبال.
@@ -153,7 +128,7 @@ type QueueRow = {
  * الطبيب وصفّ «لا مرضى» أقصر من الجدول فينكسر المحاذاة في RTL. أيّ تغييرٍ
  * في الأعمدة يُغيَّر هنا وحده.
  */
-const QUEUE_COLUMN_COUNT = 26;
+const QUEUE_COLUMN_COUNT = 24;
 
 /**
  * تصنيف الصفّ: حضوريّ (زيارة جديدة) أم موعدٌ محجوز.
@@ -182,39 +157,21 @@ const ROW_KIND_BADGE: Record<string, { label: string; className: string }> = {
 };
 
 /**
- * الخطوة التالية المشروعة من الحالة الحالية.
+ * الخطوة التالية في الصفّ — من `queue-steps` (0175)، المصدر نفسه الذي تقرؤه
+ * قائمة الطبيب، فلا يُسمّى الفعل الواحد باسمين.
  *
- * الترتيب هو ترتيب الطابور نفسه: وصول ← تسجيل ← نداء ← دخول ← خروج. والقاعدة
- * هي التي تفرضه (`app_reception_transition`)، وهذه تختار **ما يُعرض** منه لا
- * ما يصحّ — فلا تعريفان للطابور.
+ * «دخل» و«خرج» بارزان: هما ما ينتظره الطبيب والمحاسبة. و«وصل» و«نداء»
+ * عاديّان: عملُ الاستقبال اليوميّ.
  */
 function nextQueueStep(
   row: QueueRow,
-  can: (key: string) => boolean,
-): { action: string; label: string; primary: boolean } | null {
-  if (row.status === "confirmed" && can("reception.check_in"))
-    return { action: "arrive", label: "وصول", primary: false };
-  if (row.status === "arrived" && can("reception.check_in"))
-    return { action: "check_in", label: "تسجيل", primary: false };
-  if (["checked_in", "waiting", "walk_in"].includes(row.status) && can("reception.call"))
-    return { action: "call", label: "نداء", primary: false };
-  if (["called", "checked_in", "arrived", "waiting", "walk_in"].includes(row.status)
-      && can("reception.start_visit"))
-    return { action: "start", label: "دخول", primary: true };
-  if (row.status === "in_progress" && can("reception.finish"))
-    return { action: "finish", label: "خروج", primary: true };
-  return null;
+  can: (key: PermissionKey) => boolean,
+): { action: QueueAction; label: string; primary: boolean } | null {
+  const action = primaryQueueAction(row.status, "reception");
+  if (!action || !can(QUEUE_ACTION_PERMISSION[action])) return null;
+  return { action, label: QUEUE_ACTION_LABEL[action], primary: action === "start" || action === "finish" };
 }
 
-const STATUS_LABELS: Record<string, string> = {
-  confirmed: "مؤكد",
-  arrived: "وصل",
-  checked_in: "مسجَّل",
-  called: "نودي",
-  in_progress: "في الزيارة",
-  walk_in: "حضوري",
-  waiting: "بالانتظار",
-};
 
 const PRIORITY_LABELS: Record<string, string> = {
   normal: "عادي",
@@ -239,6 +196,8 @@ export default function ReceptionBoard({
   doctorFilter,
   onDoctorFilterChange,
   highlightAppointmentId,
+  day,
+  readOnly = false,
 }: {
   organizationId: string | undefined;
   organizationName: string;
@@ -262,11 +221,21 @@ export default function ReceptionBoard({
   onDoctorFilterChange?: (doctorId: string) => void;
   /** صفّ الموعد القادم من `?appointmentId=` يُبرَز حتى يُعثَر عليه بلا بحث. */
   highlightAppointmentId?: string | null;
+  /** اليوم المعروض (YYYY-MM-DD) — اليوم افتراضًا (0176). */
+  day?: string;
+  /** يومٌ سابق: للاطّلاع، كلّ الأفعال معطّلة. */
+  readOnly?: boolean;
 }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const { can } = usePermissions();
+  const { can: canBase } = usePermissions();
+  /**
+   * طابور يومٍ سابق للاطّلاع: كلّ ما تحرسه صلاحيةٌ يُعطَّل بسطرٍ واحد هنا
+   * بدل شرطٍ في كلّ زرّ — فلا يُنسى زرٌّ يبقى فعّالًا على طابور أمس.
+   */
+  const can = (key: PermissionKey) => !readOnly && canBase(key);
+  const shownDay = day ?? new Date().toLocaleDateString("en-CA");
   const [transferTarget, setTransferTarget] = useState<QueueRow | null>(null);
   const [priorityTarget, setPriorityTarget] = useState<QueueRow | null>(null);
   const [undoTarget, setUndoTarget] = useState<QueueRow | null>(null);
@@ -292,25 +261,43 @@ export default function ReceptionBoard({
   const [noteTarget, setNoteTarget] = useState<QueueRow | null>(null);
 
   const queue = useQuery({
-    queryKey: ["reception-board", organizationId],
+    queryKey: ["reception-board", organizationId, shownDay],
     enabled: Boolean(organizationId),
     // التحديث الدوري لا التحديث اليدوي: الطابور يتغيّر بفعل زملاء آخرين،
     // وشاشة لا تتحدّث تجعل الموظف ينادي مريضًا نُودي قبل دقيقة.
     refetchInterval: 20_000,
     queryFn: async () => {
+      // يومٌ واحد بتوقيت العيادة (0176): المنظور يحمل كلّ الأيام
+      const start = new Date(`${shownDay}T00:00:00`);
+      const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
       const { data, error } = await supabase
         .from("v_reception_queue_ordered")
         .select("*")
-        .eq("organization_id", organizationId);
+        .eq("organization_id", organizationId)
+        .gte("scheduled_start", start.toISOString())
+        .lt("scheduled_start", end.toISOString());
       if (error) throw error;
       return (data ?? []) as QueueRow[];
     },
   });
 
+  // ما يضغطه الطبيب («دخل»، «خرج») يظهر هنا خلال ثانية (0175)
+  useAppointmentsLive(
+    organizationId,
+    [["reception-board"], ["reception-doctor-pressure"], ["reception-queue"]],
+    "reception-board",
+  );
+
   const rows = useMemo(
     () => (queue.data ?? []).filter((row) => doctorFilter === "all" || row.doctor_id === doctorFilter),
     [queue.data, doctorFilter],
   );
+
+  /**
+   * ملاحظات الملفّ على اسم المريض: ما يكتبه الطبيب في «الملاحظات» يراه
+   * الاستقبال هنا دون أن يفتح كلّ ملفّ — والضغط على الإشارة يفتحها.
+   */
+  const noteCounts = usePatientNoteCounts((queue.data ?? []).map((row) => row.patient_id));
 
   const transition = useMutation({
     mutationFn: async ({ id, action, reason }: { id: string; action: string; reason?: string }) => {
@@ -326,7 +313,9 @@ export default function ReceptionBoard({
       queryClient.invalidateQueries({ queryKey: ["reception-board"] });
       queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
       queryClient.invalidateQueries({ queryKey: ["calendar-appointments"] });
-      if (action === "start") navigate(`/medical-records?appointmentId=${id}`);
+      // «دخل» من الاستقبال تسجيلٌ لا انتقال: كان يفتح السجلّ الطبّي لموظّف
+      // الاستقبال — شاشةٌ لا يكتب فيها. الطبيب يُفتح له السجلّ من قائمته.
+      toast({ title: `تمّ: ${QUEUE_ACTION_LABEL[action as QueueAction] ?? action}` });
     },
     onError: (error: unknown) =>
       toast({
@@ -391,9 +380,6 @@ export default function ReceptionBoard({
     },
   });
 
-  /** ما أصدره الأطباء اليوم — مفتاحه رقم الموعد (0170). */
-  const doctorInvoices = useDoctorIssuedInvoices(organizationId);
-
   /**
    * الصفوف مُجمَّعة بالطبيب مع عنوانٍ فوق كل مجموعة — كما في نظام العيادات
    * المرجعيّ. الترتيب داخل المجموعة يبقى كما جاء من القاعدة (الدور).
@@ -434,7 +420,16 @@ export default function ReceptionBoard({
     <div className="flex flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <span>{rows.length} مريض في الطابور</span>
+          {readOnly ? (
+            <span>{rows.length} في سجلّ هذا اليوم</span>
+          ) : (
+            <span>{rows.filter((row) => row.status !== "completed").length} في الطابور</span>
+          )}
+          {rows.some((row) => row.status === "completed") && (
+            <span className="text-emerald-700">
+              · {rows.filter((row) => row.status === "completed").length} خرج
+            </span>
+          )}
           {rows.some((row) => row.waiting_state === "critical") && (
             <Badge variant="destructive" className="gap-1">
               <AlertTriangle className="h-3 w-3" />
@@ -456,7 +451,7 @@ export default function ReceptionBoard({
         * الترقية كان الشريط يختفي بصمت، فيظنّ من يقرأ الشاشة أنّ الميزة لم
         * تُبنَ — وهو أسوأ من خطأٍ ظاهر: يُرسل الشكوى إلى الجهة الخطأ.
         */}
-      {pressure.isError && (
+      {!readOnly && pressure.isError && (
         <p className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
           تعذّر قراءة ضغط الأطباء: {errorMessage(pressure.error)} — إن لم تُنفَّذ
           الترقية <span className="font-mono">0158</span> على القاعدة بعد، نفِّذها
@@ -465,7 +460,7 @@ export default function ReceptionBoard({
       )}
 
       {/* ضغط الطابور على كل طبيب — بطاقةٌ لكل طبيبٍ له منتظرون، والضغط يحصر */}
-      {pressure.isSuccess && (pressure.data ?? []).length > 0 && (
+      {!readOnly && pressure.isSuccess && (pressure.data ?? []).length > 0 && (
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
@@ -547,11 +542,10 @@ export default function ReceptionBoard({
                 <TableHead className="whitespace-nowrap">الزيارة</TableHead>
                 <TableHead className="whitespace-nowrap">الخدمة</TableHead>
                 <TableHead className="whitespace-nowrap">الموعد</TableHead>
-                <TableHead className="whitespace-nowrap">استقبال ١</TableHead>
-                <TableHead className="whitespace-nowrap">استقبال ٢</TableHead>
-                <TableHead className="whitespace-nowrap">النداء</TableHead>
-                <TableHead className="whitespace-nowrap">دخول</TableHead>
-                <TableHead className="whitespace-nowrap">خروج</TableHead>
+                <TableHead className="whitespace-nowrap">وصل</TableHead>
+                <TableHead className="whitespace-nowrap">نودي</TableHead>
+                <TableHead className="whitespace-nowrap">دخل</TableHead>
+                <TableHead className="whitespace-nowrap">خرج</TableHead>
                 <TableHead className="whitespace-nowrap">الانتظار</TableHead>
                 <TableHead className="whitespace-nowrap">المرسل</TableHead>
                 <TableHead className="whitespace-nowrap">اتفاقية</TableHead>
@@ -562,7 +556,6 @@ export default function ReceptionBoard({
                 <TableHead className="whitespace-nowrap">الحالة</TableHead>
                 <TableHead className="whitespace-nowrap">التأمين</TableHead>
                 <TableHead className="whitespace-nowrap">الفاتورة</TableHead>
-                <TableHead className="whitespace-nowrap">فاتورة الطبيب</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -592,7 +585,11 @@ export default function ReceptionBoard({
                 <TableRow
                   key={row.appointment_id}
                   className={[
-                    ROW_KIND_STYLE[rowKind(row)],
+                    // لون الحالة يغلب خلفيّة نوع الصفّ ويبقى شريط النوع (0176):
+                    // من خرج يبقى في مكانه أخضر، ومن عند الطبيب أزرق.
+                    statusGroup(row.status).row
+                      ? `${ROW_KIND_STYLE[rowKind(row)].replace(/\s?bg-\S+/g, "")} ${statusGroup(row.status).row}`
+                      : ROW_KIND_STYLE[rowKind(row)],
                     row.appointment_id === highlightAppointmentId
                       ? "ring-2 ring-inset ring-primary"
                       : "",
@@ -618,7 +615,7 @@ export default function ReceptionBoard({
                         <Button
                           size="sm"
                           variant={nextStep.primary ? "default" : "outline"}
-                          title={nextStep.label}
+                          title={QUEUE_ACTION_HINT[nextStep.action]}
                           onClick={() =>
                             transition.mutate({ id: row.appointment_id, action: nextStep.action })
                           }
@@ -644,86 +641,38 @@ export default function ReceptionBoard({
                         </DropdownMenuTrigger>
                         <DropdownMenuContent side="top" align="end" className="max-h-[70vh] w-60 overflow-y-auto">
                           <DropdownMenuLabel>الطابور</DropdownMenuLabel>
-                          {/* بنود الطابور نفسها في قائمة النظام المرجعيّ.
-                              كلٌّ منها يستدعي `app_reception_transition`
-                              فتفرض القاعدة ما يصحّ من أين وتكتب طابعه. */}
-                          <DropdownMenuItem
-                            disabled={
-                              !can("reception.call") ||
-                              !["arrived", "checked_in", "waiting", "walk_in"].includes(row.status)
-                            }
-                            onClick={() =>
-                              transition.mutate({ id: row.appointment_id, action: "call" })
-                            }
-                          >
-                            <Bell className="h-4 w-4" />
-                            النداء في غرفة الانتظار
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={
-                              !can("reception.start_visit") ||
-                              !["called", "checked_in", "arrived", "waiting", "walk_in"].includes(
-                                row.status,
-                              )
-                            }
-                            onClick={() =>
-                              transition.mutate({ id: row.appointment_id, action: "start" })
-                            }
-                          >
-                            <CheckCircle2 className="h-4 w-4" />
-                            الدخول إلى العيادة
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={!can("reception.finish") || row.status !== "in_progress"}
-                            onClick={() =>
-                              transition.mutate({ id: row.appointment_id, action: "finish" })
-                            }
-                          >
-                            <CheckCircle2 className="h-4 w-4" />
-                            الخروج من العيادة
-                          </DropdownMenuItem>
+                          {/* الخطوات بترتيبها في كلّ شاشة (0175): وصل ← نداء ← دخل ← خرج.
+                              ما لا يصحّ الآن معطَّلٌ لا محذوف، والقاعدة تفرض الترتيب. */}
+                          {(["arrive", "call", "start", "finish", "recall", "uncall"] as QueueAction[]).map(
+                            (action) => (
+                              <DropdownMenuItem
+                                key={action}
+                                title={QUEUE_ACTION_HINT[action]}
+                                disabled={
+                                  !can(QUEUE_ACTION_PERMISSION[action]) ||
+                                  !queueActionsFor(row.status).includes(action)
+                                }
+                                onClick={() => transition.mutate({ id: row.appointment_id, action })}
+                              >
+                                {action === "uncall" ? (
+                                  <BellOff className="h-4 w-4" />
+                                ) : action === "call" || action === "recall" ? (
+                                  <Bell className="h-4 w-4" />
+                                ) : action === "arrive" ? (
+                                  <UserCheck className="h-4 w-4" />
+                                ) : (
+                                  <CheckCircle2 className="h-4 w-4" />
+                                )}
+                                {QUEUE_ACTION_LABEL[action]}
+                              </DropdownMenuItem>
+                            ),
+                          )}
                           <DropdownMenuItem
                             disabled={!can("appointments.update")}
                             onClick={() => setNoteTarget(row)}
                           >
                             <Pencil className="h-4 w-4" />
                             تعديل الملاحظة المسجَّلة
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={!can("reception.check_in") || row.status !== "confirmed"}
-                            onClick={() =>
-                              transition.mutate({ id: row.appointment_id, action: "arrive" })
-                            }
-                          >
-                            <UserCheck className="h-4 w-4" />
-                            تسجيل الوصول
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={!can("reception.check_in") || row.status !== "arrived"}
-                            onClick={() =>
-                              transition.mutate({ id: row.appointment_id, action: "check_in" })
-                            }
-                          >
-                            <UserCheck className="h-4 w-4" />
-                            تسجيل في الطابور
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={!can("reception.call") || row.status !== "called"}
-                            onClick={() =>
-                              transition.mutate({ id: row.appointment_id, action: "recall" })
-                            }
-                          >
-                            <Bell className="h-4 w-4" />
-                            إعادة النداء
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            disabled={!can("reception.call") || row.status !== "called"}
-                            onClick={() =>
-                              transition.mutate({ id: row.appointment_id, action: "uncall" })
-                            }
-                          >
-                            <BellOff className="h-4 w-4" />
-                            إلغاء النداء
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
                           <DropdownMenuItem
@@ -769,7 +718,7 @@ export default function ReceptionBoard({
                             onClick={() => setCancelTarget(row)}
                           >
                             <XCircle className="h-4 w-4" />
-                            إخراج من قائمة الانتظار
+                            إخراج من الطابور
                           </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => {
@@ -836,6 +785,20 @@ export default function ReceptionBoard({
                         <span className="max-w-[11rem] truncate font-medium hover:text-primary">
                           {row.patient_name}
                         </span>
+                        {(noteCounts.data?.[row.patient_id] ?? 0) > 0 && (
+                          <span
+                            role="link"
+                            title="ملاحظات على ملفّ المريض — اضغط لقراءتها"
+                            className="inline-flex items-center gap-0.5 rounded bg-amber-100 px-1 text-[10px] font-semibold text-amber-900 hover:bg-amber-200"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              navigate(`/patients/${row.patient_id}?section=notes`);
+                            }}
+                          >
+                            <StickyNote className="h-3 w-3" />
+                            {noteCounts.data?.[row.patient_id]}
+                          </span>
+                        )}
                         {row.blood_type && (
                           <Badge variant="outline" className="px-1 py-0 text-[10px]">
                             {row.blood_type}
@@ -882,14 +845,10 @@ export default function ReceptionBoard({
                   <TableCell className="text-xs tabular-nums">
                     {formatTime(row.scheduled_start)}
                   </TableCell>
-                  {/* استقبال ١ هو الوصول، واستقبال ٢ هو تسجيل الدخول —
-                      عمودان في `appointments` منذ 0002 لم يكن يُعرض منهما إلا
-                      الأوّل، فلا يُعرف كم بقي المريض بين المكتبين. */}
+                  {/* «وصل» خطوةٌ واحدة منذ 0175 — كان «استقبال ١» و«استقبال ٢»
+                      عمودين لا يُعرف الفرق بينهما. */}
                   <TableCell className="whitespace-nowrap text-xs tabular-nums">
                     {formatTime(row.arrived_at)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums">
-                    {formatTime(row.checked_in_at)}
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs tabular-nums">
                     {formatTime(row.called_at)}
@@ -951,7 +910,9 @@ export default function ReceptionBoard({
                     </Badge>
                   </TableCell>
                   <TableCell className="whitespace-nowrap">
-                    <Badge variant="secondary">{STATUS_LABELS[row.status] ?? row.status}</Badge>
+                    <Badge variant="secondary" className={statusBadgeClass(row.status as any)}>
+                      {statusLabel(row.status as any)}
+                    </Badge>
                   </TableCell>
                   <TableCell className="whitespace-nowrap text-xs">
                     {row.insurance_company_name ? (
@@ -971,63 +932,6 @@ export default function ReceptionBoard({
                       <span className="text-muted-foreground">لا فاتورة</span>
                     )}
                   </TableCell>
-                  {/**
-                    * ما أعطاه الطبيب (0170).
-                    *
-                    * المُعلَن مشطوبًا والصافي بعده متى وُجد خصم: «بمئة والمريض
-                    * يدفع تسعين» يُقرأ في لمحة، وسببُ الخصم في التلميح. والتحصيل
-                    * على بيّنةٍ من النظام لا على ورقةٍ بيد المريض.
-                    */}
-                  <TableCell className="whitespace-nowrap text-xs">
-                    {doctorInvoices.isError ? (
-                      <span
-                        className="text-muted-foreground"
-                        title="تعذّر قراءة فواتير الأطباء — إن كانت الترقية 0170 غير منفَّذة فهذا سببها"
-                      >
-                        —
-                      </span>
-                    ) : (() => {
-                      const inv = doctorInvoices.data?.get(row.appointment_id);
-                      if (!inv) return <span className="text-muted-foreground">—</span>;
-                      const discount = Number(inv.discount_total) || 0;
-                      const comp = Number(inv.complimentary_count) || 0;
-                      return (
-                        <span
-                          className="flex items-center gap-1"
-                          title={[
-                            `أصدرها ${inv.doctor_name ?? "الطبيب"}`,
-                            discount > 0 && inv.discount_reasons
-                              ? `سبب الخصم: ${inv.discount_reasons}`
-                              : "",
-                            comp > 0 && inv.complimentary_reasons
-                              ? `مجاني: ${inv.complimentary_reasons}`
-                              : "",
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                        >
-                          {discount > 0 && (
-                            <span className="text-muted-foreground line-through">
-                              {formatAmount(inv.gross_amount ?? 0)}
-                            </span>
-                          )}
-                          <span className="font-semibold">
-                            {formatAmount(inv.net_amount ?? 0)}
-                          </span>
-                          {discount > 0 && (
-                            <Badge className="bg-rose-600 px-1 py-0 text-[10px] hover:bg-rose-600">
-                              خصم {formatAmount(discount)}
-                            </Badge>
-                          )}
-                          {comp > 0 && (
-                            <Badge className="bg-sky-600 px-1 py-0 text-[10px] hover:bg-sky-600">
-                              مجاني {comp}
-                            </Badge>
-                          )}
-                        </span>
-                      );
-                    })()}
-                  </TableCell>
                 </TableRow>
                   );
                   })}
@@ -1043,7 +947,7 @@ export default function ReceptionBoard({
             </TableBody>
           </Table>
           {/* مجاميع الذيل — الأرقام الثلاثة نفسها في الشاشة المرجعيّة.
-              «المدخلون» من سُجِّل وصوله (استقبال ١)، لا من فُتحت له زيارة:
+              «المدخلون» من سُجِّل وصوله («وصل»)، لا من فُتحت له زيارة:
               الاستقبال يقيس مَن دخل من الباب. */}
           <div className="flex flex-wrap items-center gap-4 border-t bg-muted/30 px-3 py-2 text-xs">
             <span>
@@ -1463,7 +1367,7 @@ function UndoDialog({
         <DialogHeader>
           <DialogTitle>التراجع عن الانتقال الأخير</DialogTitle>
           <DialogDescription>
-            {row?.patient_name} — الحالة الآن: {STATUS_LABELS[row?.status ?? ""] ?? row?.status}.
+            {row?.patient_name} — الحالة الآن: {statusLabel((row?.status ?? "") as any)}.
             <br />
             خطوة واحدة إلى الوراء فقط. الحالات المكتملة والجارية تُصحَّح بإجراء صريح لا بالتراجع،
             لأن الزيارة قد تكون صدرت بها فاتورة.

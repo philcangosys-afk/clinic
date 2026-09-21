@@ -16,6 +16,7 @@ import {
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { QUEUE_ACTION_HINT, QUEUE_ACTION_LABEL } from "@/lib/queue-steps";
 import { formatTime } from "@/lib/locale";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import type { AppointmentStatus, AppointmentWithRelations } from "@/lib/database.types";
@@ -23,6 +24,7 @@ import { PatientSearchInput } from "@/components/shared/PatientSearchInput";
 import { matchesPatientSearch, type PatientSearchScope } from "@/lib/patient-search";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
@@ -48,15 +50,15 @@ import QuickAddPatientDialog from "@/components/shared/QuickAddPatientDialog";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
 
-function startOfTodayIso() {
-  const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date.toISOString();
+/** تاريخ اليوم المحلّيّ بصيغة حقل التاريخ. */
+function todayInputValue() {
+  return new Date().toLocaleDateString("en-CA");
 }
-function endOfTodayIso() {
-  const date = new Date();
-  date.setHours(23, 59, 59, 999);
-  return date.toISOString();
+/** حدّا اليوم المحلّيّ — «اليوم» يوم العيادة لا يوم UTC. */
+function dayBoundsIso(day: string) {
+  const start = new Date(`${day}T00:00:00`);
+  const end = new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1);
+  return { from: start.toISOString(), to: end.toISOString() };
 }
 
 type ReceptionAppointment = AppointmentWithRelations & {
@@ -112,9 +114,9 @@ const ACTIVE_STATUSES: AppointmentStatus[] = [
   "walk_in",
 ];
 
-function useTodayQueue(organizationId: string | undefined, doctorFilter: string) {
+function useTodayQueue(organizationId: string | undefined, doctorFilter: string, day: string) {
   return useQuery({
-    queryKey: ["reception-queue", organizationId, doctorFilter],
+    queryKey: ["reception-queue", organizationId, doctorFilter, day],
     enabled: Boolean(organizationId),
     refetchInterval: 30_000,
     queryFn: async () => {
@@ -126,8 +128,8 @@ function useTodayQueue(organizationId: string | undefined, doctorFilter: string)
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
         // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
         .eq("organization_id", organizationId)
-        .gte("scheduled_start", startOfTodayIso())
-        .lte("scheduled_start", endOfTodayIso())
+        .gte("scheduled_start", dayBoundsIso(day).from)
+        .lt("scheduled_start", dayBoundsIso(day).to)
         .order("scheduled_start", { ascending: true });
       if (doctorFilter !== "all") query = query.eq("doctor_id", doctorFilter);
       const { data, error } = await query;
@@ -198,7 +200,13 @@ export default function Reception() {
 
   const canManageQueue = legacyMode || ["owner", "organization_admin", "branch_manager", "receptionist"].includes(membership?.role_key ?? "");
   const canEditClinical = legacyMode || ["owner", "organization_admin", "doctor", "nurse"].includes(membership?.role_key ?? "");
-  const queue = useTodayQueue(organization?.id, doctorFilter);
+  /**
+   * اليوم افتراضًا، والأيام السابقة بتغيير التاريخ (0176) — للاطّلاع لا للعمل:
+   * لا «وصل» ولا «نداء» على طابور أمس.
+   */
+  const [day, setDay] = useState(todayInputValue);
+  const isToday = day === todayInputValue();
+  const queue = useTodayQueue(organization?.id, doctorFilter, day);
   const doctors = useDoctorsList(organization?.id);
 
   const grouped = useMemo(() => {
@@ -252,8 +260,12 @@ export default function Reception() {
     <div className="mx-auto flex max-w-7xl flex-col gap-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold">الاستقبال والانتظار</h1>
-          <p className="text-sm text-muted-foreground">طابور اليوم الحي — يتحدّث تلقائيًا كل 30 ثانية.</p>
+          <h1 className="text-2xl font-bold">الاستقبال</h1>
+          <p className="text-sm text-muted-foreground">
+            {isToday
+              ? "طابور اليوم: وصل ← نداء ← دخل ← خرج. ومن خرج يبقى في مكانه باللون الأخضر."
+              : "سجلّ يومٍ سابق — للاطّلاع فقط."}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <PatientSearchInput
@@ -264,6 +276,21 @@ export default function Reception() {
             className="w-full sm:w-auto"
             inputClassName="sm:w-64"
           />
+          <div className="flex items-center gap-1">
+            <Input
+              type="date"
+              value={day}
+              max={todayInputValue()}
+              onChange={(event) => event.target.value && setDay(event.target.value)}
+              className="w-40"
+              aria-label="تاريخ الطابور"
+            />
+            {!isToday && (
+              <Button variant="ghost" size="sm" onClick={() => setDay(todayInputValue())}>
+                اليوم
+              </Button>
+            )}
+          </div>
           <Select value={doctorFilter} onValueChange={setDoctorFilter}>
             <SelectTrigger className="w-44">
               <SelectValue placeholder="كل الأطباء" />
@@ -293,7 +320,7 @@ export default function Reception() {
               بطاقات
             </button>
           </div>
-          {canManageQueue && <Button onClick={() => setAddOpen(true)}>
+          {canManageQueue && isToday && <Button onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" />
             إضافة للطابور
           </Button>}
@@ -301,7 +328,7 @@ export default function Reception() {
       </div>
 
       {/* ما يرسله الأطباء يظهر فوق الطابور: طلبٌ ينتظر لا يجوز أن يُدفن
-          تحت قوائم الانتظار حتى يسأل عنه الطبيب. */}
+          تحت الطابور حتى يسأل عنه الطبيب. */}
       <DoctorRequests />
 
       {highlightMissing && (
@@ -316,7 +343,14 @@ export default function Reception() {
           العرض `v_reception_queue` يستبعد `new/scheduled/unconfirmed` ولا
           يُعدَّل من هنا، فتُعرض هذه المواعيد في قسم خاص بأزرار «تأكيد» و«حضر»
           و«لم يحضر» — كلّها عبر `app_reception_transition` التي تدعمها. */}
-      {mode === "board" && grouped.preQueue.length > 0 && (
+      {!isToday && (
+        <Card className="border-slate-300 bg-slate-50">
+          <CardContent className="p-3 text-sm text-slate-800">
+            تعرض طابور يومٍ سابق كما انتهى — الأزرار معطّلة. للعودة إلى طابور اليوم اضغط «اليوم».
+          </CardContent>
+        </Card>
+      )}
+      {mode === "board" && isToday && grouped.preQueue.length > 0 && (
         <Card className="border-amber-200">
           <CardHeader className="pb-3">
             <CardTitle className="text-base">مواعيد اليوم غير المؤكّدة ({grouped.preQueue.length})</CardTitle>
@@ -368,6 +402,8 @@ export default function Reception() {
           doctorFilter={doctorFilter}
           onDoctorFilterChange={setDoctorFilter}
           highlightAppointmentId={highlightAppointmentId}
+          day={day}
+          readOnly={!isToday}
         />
       )}
 
@@ -381,13 +417,14 @@ export default function Reception() {
           {queue.isLoading &&
             Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-16 w-full" />)}
           {!queue.isLoading && grouped.active.length === 0 && (
-            <p className="py-8 text-center text-sm text-muted-foreground">لا يوجد أحد في الطابور حاليًا.</p>
+            <p className="py-8 text-center text-sm text-muted-foreground">{isToday ? "لا يوجد أحد في الطابور حاليًا." : "لا أحد في طابور هذا اليوم."}</p>
           )}
           {grouped.active.map((appointment) => (
             <QueueRow
               key={appointment.id}
               appointment={appointment}
               highlighted={appointment.id === highlightAppointmentId}
+              readOnly={!isToday}
               onUpdate={(action) => action === "no_show"
                 ? setNoShowTarget(appointment)
                 : updateStatus.mutate({ id: appointment.id, action })}
@@ -492,7 +529,6 @@ function QueueTimeline({ appointment }: { appointment: ReceptionAppointment }) {
 
   const stamps = [
     { label: "وصل", value: fmt(appointment.checked_in_1_at) },
-    { label: "استقبال 2", value: fmt(appointment.checked_in_2_at) },
     { label: "نودي", value: fmt(appointment.called_at) },
     { label: "دخل", value: fmt(appointment.entered_at) },
     { label: "خرج", value: fmt(appointment.left_at) },
@@ -578,19 +614,16 @@ function QueueRow({
       {!readOnly && (
         <div className="flex flex-wrap items-center gap-1">
           {["new", "scheduled", "confirmed", "unconfirmed"].includes(appointment.status) && (
-            <Button size="sm" variant="outline" onClick={() => onUpdate("arrive")}><LogIn className="h-3.5 w-3.5" />حضر</Button>
-          )}
-          {appointment.status === "arrived" && appointment.checked_in_1_at && !appointment.checked_in_2_at && (
-            <Button size="sm" variant="outline" onClick={() => onUpdate("check_in")}><LogIn className="h-3.5 w-3.5" />استقبال 2</Button>
+            <Button size="sm" variant="outline" onClick={() => onUpdate("arrive")} title={QUEUE_ACTION_HINT.arrive}><LogIn className="h-3.5 w-3.5" />{QUEUE_ACTION_LABEL.arrive}</Button>
           )}
           {["arrived", "checked_in", "waiting", "walk_in"].includes(appointment.status) && (
-            <Button size="sm" variant="outline" onClick={() => onUpdate("call")}><Megaphone className="h-3.5 w-3.5" />نداء</Button>
+            <Button size="sm" variant="outline" onClick={() => onUpdate("call")} title={QUEUE_ACTION_HINT.call}><Megaphone className="h-3.5 w-3.5" />{QUEUE_ACTION_LABEL.call}</Button>
           )}
           {["arrived", "checked_in", "called", "waiting", "walk_in"].includes(appointment.status) && (
-            <Button size="sm" variant="outline" onClick={() => onUpdate("start")}><Stethoscope className="h-3.5 w-3.5" />دخول</Button>
+            <Button size="sm" variant="outline" onClick={() => onUpdate("start")} title={QUEUE_ACTION_HINT.start}><Stethoscope className="h-3.5 w-3.5" />{QUEUE_ACTION_LABEL.start}</Button>
           )}
           {appointment.status === "in_progress" && (
-            <Button size="sm" variant="outline" onClick={() => onUpdate("finish")}><CheckCircle2 className="h-3.5 w-3.5" />إنهاء</Button>
+            <Button size="sm" variant="outline" onClick={() => onUpdate("finish")} title={QUEUE_ACTION_HINT.finish}><CheckCircle2 className="h-3.5 w-3.5" />{QUEUE_ACTION_LABEL.finish}</Button>
           )}
           {["new", "scheduled", "confirmed", "unconfirmed", "arrived"].includes(appointment.status) && (
             <Button size="sm" variant="ghost" className="text-destructive" onClick={() => onUpdate("no_show")}><UserX className="h-3.5 w-3.5" />لم يحضر</Button>

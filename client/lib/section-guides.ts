@@ -47,6 +47,7 @@ export const SECTION_GUIDE_KEYS = [
   "dashboard",
   "services",
   "reception",
+  "follow-up-center",
   "patient-profile",
   "appointments",
   "patients",

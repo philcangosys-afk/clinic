@@ -74,6 +74,11 @@ import GrowthChartTab from "@/components/patients/GrowthChartTab";
 import AllergiesTab from "@/components/patients/AllergiesTab";
 import Odontogram from "@/components/medical/Odontogram";
 import SendToDoctorDialog from "@/components/patients/SendToDoctorDialog";
+import PatientNotesButton, {
+  PATIENT_NOTES_KEY,
+  useMemberNames,
+  usePatientNotes,
+} from "@/components/patients/PatientNotesButton";
 import {
   PatientFileShell,
   type FileSectionGroup,
@@ -102,6 +107,7 @@ import {
 } from "@/lib/arabic-name";
 import { useUnsavedGuard } from "@/hooks/use-unsaved-guard";
 import { useToast } from "@/hooks/use-toast";
+import { useSessionDoctor } from "@/lib/session-doctor";
 
 function usePatient(id: string | undefined) {
   return useQuery({
@@ -194,6 +200,9 @@ export default function PatientProfile() {
   /* الاتفاقية ذات المتبقّي لا تُرى إلّا بفتح قسمها، فيخرج المريض وعليه رصيد
      لم يره أحد. التنبيه يظهر فور فتح الملفّ ويقود إلى القسم بضغطة. */
   const [agreementsAlertDismissed, setAgreementsAlertDismissed] = useState(false);
+  /** عدد الملاحظات النشطة — على قسم «الملاحظات» في القائمة كما على زرّ الرأس */
+  const patientNotes = usePatientNotes(id);
+  const activeNotesCount = (patientNotes.data ?? []).filter((note) => !note.is_disabled).length;
 
   /** عدد الحالات الصحية المؤشَّرة — يظهر في شريط الهوية */
   /**
@@ -351,7 +360,7 @@ export default function PatientProfile() {
         { key: "overview", label: "المعلومات الشخصية", icon: UserRound, badge: overviewDirty ? "•" : null },
         { key: "appointments", label: "عرض المواعيد", icon: CalendarDays },
         { key: "contacts", label: "المرافقون", icon: Contact2 },
-        { key: "notes", label: "الملاحظات", icon: StickyNote },
+        { key: "notes", label: "الملاحظات", icon: StickyNote, badge: activeNotesCount || null },
         { key: "blocking", label: "الحجب", icon: Ban },
       ],
     },
@@ -383,6 +392,12 @@ export default function PatientProfile() {
             {patient.data.block_sms && <Badge variant="secondary">محجوب عن SMS</Badge>}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {/* الملاحظات أوّل الأزرار ولكلّ الأدوار: الطبيب يكتب، والاستقبال يرى */}
+            <PatientNotesButton
+              patientId={patient.data.id}
+              patientName={patient.data.name_ar}
+              onOpenAll={() => setSection("notes")}
+            />
             <PatientQuickActions patient={patient.data} />
             <MergeButton patientId={patient.data.id} patientName={patient.data.name_ar} />
           </div>
@@ -546,11 +561,17 @@ function PatientQuickActions({ patient }: { patient: PatientRow }) {
     ["owner", "organization_admin", "branch_manager", "receptionist"].includes(
       membership?.role_key ?? "",
     );
+  /**
+   * والطبيب لا يُصدر فاتورة (0173) — ولو كان الداخلُ مالكًا يعاين بصفته:
+   * المعاينة التي تُظهر ما لا يراه الطبيب الحقيقيّ تكذب على من يجرّبها.
+   */
+  const { isDoctorRole } = useSessionDoctor();
   const canBill =
-    legacyMode ||
-    ["owner", "organization_admin", "accountant", "receptionist"].includes(
-      membership?.role_key ?? "",
-    );
+    !isDoctorRole &&
+    (legacyMode ||
+      ["owner", "organization_admin", "accountant", "receptionist"].includes(
+        membership?.role_key ?? "",
+      ));
 
   /**
    * `?action=send-to-doctor` — يصل من قائمة أوامر الملفّ حين تُفتح من شاشةٍ
@@ -1289,33 +1310,6 @@ function MedicalHistoryTab({ patientId }: { patientId: string }) {
 }
 
 /**
- * أسماء أعضاء المنشأة — لعرض كاتب الملاحظة بدل معرّف مستخدم.
- *
- * `patient_notes.created_by` يشير إلى `auth.users`، وPostgREST لا يصل إلى
- * ذلك المخطّط، فالاسم يأتي من `v_organization_members_directory` (0026).
- */
-function useMemberNames() {
-  const { organization } = useOrganizationAccess();
-  return useQuery({
-    queryKey: ["members-directory-names", organization?.id],
-    enabled: Boolean(organization?.id),
-    staleTime: 5 * 60_000,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("v_organization_members_directory")
-        .select("user_id, display_name")
-        .eq("organization_id", organization!.id);
-      if (error) throw error;
-      const map: Record<string, string> = {};
-      for (const row of (data ?? []) as { user_id: string; display_name: string }[]) {
-        map[row.user_id] = row.display_name;
-      }
-      return map;
-    },
-  });
-}
-
-/**
  * ملاحظات المريض — شبكةٌ فوق ولوحُ تحريرٍ تحت، بنمط بقيّة الشاشات.
  *
  * كانت الملاحظات بطاقاتٍ متتالية بحقل إضافةٍ دائم فوقها: مريضٌ له عشرون
@@ -1340,24 +1334,17 @@ function NotesTab({ patientId }: { patientId: string }) {
   const [draftBody, setDraftBody] = useState("");
   const [showDisabled, setShowDisabled] = useState(false);
 
-  const notes = useQuery({
-    queryKey: ["patient-notes", patientId],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("patient_notes")
-        .select("*")
-        .eq("patient_id", patientId)
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return (data ?? []) as PatientNoteRow[];
-    },
-  });
+  // المفتاح نفسه الذي يقرؤه زرّ «الملاحظات» في رأس الملفّ
+  const notes = usePatientNotes(patientId);
 
   const all = notes.data ?? [];
   const rows = showDisabled ? all : all.filter((note) => !note.is_disabled);
   const selected = all.find((note) => note.id === selectedId) ?? null;
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["patient-notes", patientId] });
+  const invalidate = () => {
+    queryClient.invalidateQueries({ queryKey: PATIENT_NOTES_KEY(patientId) });
+    queryClient.invalidateQueries({ queryKey: ["patient-note-counts"] });
+  };
   const fail = (title: string) => (error: unknown) =>
     toast({ variant: "destructive", title, description: errorMessage(error) });
 

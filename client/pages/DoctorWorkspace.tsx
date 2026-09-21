@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { AlertOctagon, ClipboardList, PhoneCall, Play, Stethoscope } from "lucide-react";
+import { AlertOctagon, ClipboardList, LogOut, PhoneCall, Play, Stethoscope } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { usePermissions } from "@/lib/permissions";
@@ -26,6 +26,17 @@ import {
 } from "@/components/ui/dialog";
 import { errorMessage } from "@/lib/error-message";
 import { formatTime } from "@/lib/locale";
+import {
+  QUEUE_ACTION_HINT,
+  QUEUE_ACTION_LABEL,
+  QUEUE_ACTION_PERMISSION,
+  QUEUE_TIME_COLUMNS,
+  primaryQueueAction,
+  queueStage,
+  type QueueAction,
+} from "@/lib/queue-steps";
+import { useAppointmentsLive } from "@/hooks/use-appointments-live";
+import { statusBadgeClass, statusGroup, statusLabel } from "@/lib/appointment-status";
 
 /**
  * مساحة عمل الطبيب — المرحلة 25.
@@ -60,7 +71,7 @@ export default function DoctorWorkspace() {
           <TabsTrigger value="lab">نتائج المختبر</TabsTrigger>
           <TabsTrigger value="request">إرسال طلب</TabsTrigger>
           <TabsTrigger value="mine">طلباتي</TabsTrigger>
-          <TabsTrigger value="today">يومي</TabsTrigger>
+          <TabsTrigger value="today">مرضى اليوم</TabsTrigger>
           <TabsTrigger value="open">زيارات لم تُغلق</TabsTrigger>
         </TabsList>
         <TabsContent value="critical" className="mt-4"><CriticalPanel /></TabsContent>
@@ -405,7 +416,7 @@ function CriticalPanel() {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
- * يومي
+ * مرضى اليوم — «دخل» و«خرج» من الطبيب (0175)
  * ════════════════════════════════════════════════════════════════════════ */
 function TodayPanel() {
   const { organization, session } = useOrganizationAccess();
@@ -413,52 +424,55 @@ function TodayPanel() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const { doctorId: myDoctorId } = useSessionDoctorId();
   const [mineOnly, setMineOnly] = useState(true);
 
+  // ما يضغطه الاستقبال («وصل»، «نداء») يظهر هنا خلال ثانية (0175)
+  useAppointmentsLive(organization?.id, [["doctor-worklist"], ["doctor-open-visits"]], "doctor-worklist");
+
   /**
-   * **بدء الزيارة من قائمة اليوم.**
+   * «دخل» و«خرج» من قائمة الطبيب (0175).
    *
-   * كان العمود يعرض نصًّا ميتًا: `r.visit_id ? <Link…> : "لم تُفتح"` — فالطبيب
-   * الذي يرى مريضه أمامه بلا زيارة مفتوحة لا يملك من هذه الشاشة ما يفتحها، بل
-   * يطلب من الاستقبال أن يضغط «بدء» عنده. والزيارة هي ما تُعلَّق به الطلبات
-   * والوصفة والفاتورة، فتأخّرها يؤخّر كل ما بعدها.
+   * الفعلان نفساهما في لوحة الاستقبال، بالدالّة نفسها (`app_reception_transition`)
+   * — أيّهما سبق سُجِّل، وظهر عند الآخر فورًا. «دخل» يفتح الزيارة ثمّ السجلّ
+   * الطبّي، فما يكتبه الطبيب يُعلَّق بالزيارة الصحيحة.
    *
-   * ولا يُبنى مسارٌ جديد: `app_reception_transition` هي نفسها التي يستدعيها
-   * الاستقبال، وتفحص الصلاحية والفرع وتنقل الموعد إلى `in_progress` وتُنشئ
-   * الزيارة في معاملةٍ واحدة.
+   * والطبيب لا يملك «وصل» ولا «نداء»: هما للاستقبال (قرار المالك).
    */
-  const startVisit = useMutation({
-    mutationFn: async (appointmentId: string) => {
-      const { data, error } = await supabase.rpc("app_reception_transition", {
+  const step = useMutation({
+    mutationFn: async ({ appointmentId, action }: { appointmentId: string; action: QueueAction }) => {
+      const { error } = await supabase.rpc("app_reception_transition", {
         p_appointment_id: appointmentId,
-        p_action: "start",
+        p_action: action,
         p_reason: null,
       });
       if (error) throw error;
-      const row = (Array.isArray(data) ? data[0] : data) as { visit_id?: string } | null;
-      return { appointmentId, visitId: row?.visit_id ?? null };
+      return { appointmentId, action };
     },
-    onSuccess: ({ appointmentId }) => {
+    onSuccess: ({ appointmentId, action }) => {
       queryClient.invalidateQueries({ queryKey: ["doctor-worklist"] });
       queryClient.invalidateQueries({ queryKey: ["doctor-open-visits"] });
       queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
       queryClient.invalidateQueries({ queryKey: ["reception-board"] });
-      toast({ title: "فُتحت الزيارة" });
-      navigate(`/medical-records?appointmentId=${appointmentId}`);
+      if (action === "start") {
+        toast({ title: "دخل المريض — فُتحت الزيارة" });
+        navigate(`/medical-records?appointmentId=${appointmentId}`);
+      } else {
+        toast({ title: "خرج المريض" });
+      }
     },
     onError: (error: unknown) =>
       toast({
         variant: "destructive",
-        title: "تعذّر بدء الزيارة",
+        title: "تعذّر تنفيذ الخطوة",
         description: errorMessage(error),
       }),
   });
 
-  const canStart = can("medical_records.write");
-
   const worklist = useQuery({
     queryKey: ["doctor-worklist", organization?.id],
     enabled: Boolean(organization?.id),
+    // البثّ الفوريّ يُبطل المفتاح عند كلّ تغيير؛ والدورة احتياط
     refetchInterval: 60_000,
     queryFn: async () => {
       const today = new Date();
@@ -476,9 +490,9 @@ function TodayPanel() {
   });
 
   const userId = session?.user.id;
-  const rows = (worklist.data ?? []).filter(
-    (r) => !mineOnly || !userId || r.doctor_user_id === userId,
-  );
+  // «مرضاي»: بطاقة الطبيب إن عُرفت (حسابه أو طبيب المعاينة)، وإلّا حسابه
+  const isMine = (r: any) => (myDoctorId ? r.doctor_id === myDoctorId : !userId || r.doctor_user_id === userId);
+  const rows = (worklist.data ?? []).filter((r) => !mineOnly || isMine(r));
 
   return (
     <Card>
@@ -489,7 +503,8 @@ function TodayPanel() {
             مرضى اليوم
           </CardTitle>
           <CardDescription>
-            بحالة كل موعد وزمن انتظار المريض منذ تسجيل حضوره.
+            وصل ← نداء ← دخل ← خرج. الاستقبال يسجّل الوصول والنداء، و«دخل» و«خرج» منك أو منه —
+            وما يسجّله أحدكما يظهر عند الآخر فورًا.
           </CardDescription>
         </div>
         <Button variant="ghost" onClick={() => setMineOnly((v) => !v)}>
@@ -498,67 +513,100 @@ function TodayPanel() {
       </CardHeader>
       <CardContent className="overflow-x-auto">
         {worklist.isLoading && <Skeleton className="h-40 w-full" />}
-        {!worklist.isLoading && (
+        {worklist.isError && (
+          <p className="py-6 text-center text-sm text-destructive">
+            تعذّر التحميل: {errorMessage(worklist.error)}
+          </p>
+        )}
+        {!worklist.isLoading && !worklist.isError && (
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>الوقت</TableHead>
+                <TableHead>الموعد</TableHead>
                 <TableHead>المريض</TableHead>
-                <TableHead>العيادة</TableHead>
                 <TableHead>الحالة</TableHead>
+                {QUEUE_TIME_COLUMNS.map((column) => (
+                  <TableHead key={column.key} className="whitespace-nowrap">
+                    {column.label}
+                  </TableHead>
+                ))}
                 <TableHead>الانتظار</TableHead>
-                <TableHead>الزيارة</TableHead>
+                <TableHead>الخطوة</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((r) => (
-                <TableRow key={r.appointment_id}>
-                  <TableCell className="font-mono text-xs">
-                    {formatTime(r.scheduled_start)}
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    <Link to={`/patients/${r.patient_id}`} className="hover:underline">
-                      {r.patient_name}
-                    </Link>
-                    {r.file_number && (
-                      <span className="block font-mono text-[10px] text-muted-foreground">
-                        {r.file_number}
-                      </span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-sm">{r.clinic_name ?? "—"}</TableCell>
-                  <TableCell className="text-xs">{r.status}</TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {r.waiting_minutes != null ? (
-                      <Badge variant={r.waiting_minutes > 30 ? "destructive" : "secondary"}>
-                        {r.waiting_minutes} د
-                      </Badge>
-                    ) : "—"}
-                  </TableCell>
-                  <TableCell className="text-xs">
-                    {r.visit_id ? (
-                      <Link to="/patient-visits" className="hover:underline">
-                        {r.visit_status}
+              {rows.map((r) => {
+                const stage = queueStage(r.status);
+                const action = primaryQueueAction(r.status, "doctor");
+                // أزرار الطبيب على مرضاه وحدهم — «عرض كل الأطباء» للاطّلاع
+                const allowed =
+                  action !== null && isMine(r) && can(QUEUE_ACTION_PERMISSION[action]);
+                const times: Record<string, string | null> = {
+                  arrived: r.checked_in_1_at,
+                  called: r.called_at,
+                  entered: r.entered_at,
+                  left: r.left_at ?? null,
+                };
+                return (
+                  <TableRow key={r.appointment_id} className={statusGroup(r.status).row}>
+                    <TableCell className="font-mono text-xs">{formatTime(r.scheduled_start)}</TableCell>
+                    <TableCell className="text-sm">
+                      <Link to={`/patients/${r.patient_id}`} className="hover:underline">
+                        {r.patient_name}
                       </Link>
-                    ) : canStart ? (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={startVisit.isPending}
-                        onClick={() => startVisit.mutate(r.appointment_id)}
-                      >
-                        <Play className="h-3.5 w-3.5" />
-                        بدء الزيارة
-                      </Button>
-                    ) : (
-                      "لم تُفتح"
-                    )}
-                  </TableCell>
-                </TableRow>
-              ))}
+                      {r.file_number && (
+                        <span className="block font-mono text-[10px] text-muted-foreground">
+                          {r.file_number}
+                          {r.clinic_name ? ` · ${r.clinic_name}` : ""}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="secondary" className={statusBadgeClass(r.status)}>
+                        {statusLabel(r.status)}
+                      </Badge>
+                    </TableCell>
+                    {QUEUE_TIME_COLUMNS.map((column) => (
+                      <TableCell key={column.key} className="whitespace-nowrap font-mono text-xs">
+                        {times[column.key] ? formatTime(times[column.key]) : "—"}
+                      </TableCell>
+                    ))}
+                    <TableCell className="font-mono text-xs">
+                      {r.waiting_minutes != null && stage !== "left" ? (
+                        <Badge variant={r.waiting_minutes > 30 ? "destructive" : "secondary"}>
+                          {r.waiting_minutes} د
+                        </Badge>
+                      ) : "—"}
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs">
+                      <div className="flex items-center gap-1.5">
+                        {allowed && action ? (
+                          <Button
+                            size="sm"
+                            variant={action === "start" ? "default" : "outline"}
+                            title={QUEUE_ACTION_HINT[action]}
+                            disabled={step.isPending}
+                            onClick={() => step.mutate({ appointmentId: r.appointment_id, action })}
+                          >
+                            {action === "start" ? <Play className="h-3.5 w-3.5" /> : <LogOut className="h-3.5 w-3.5" />}
+                            {QUEUE_ACTION_LABEL[action]}
+                          </Button>
+                        ) : stage === "booked" ? (
+                          <span className="text-muted-foreground">لم يصل بعد</span>
+                        ) : null}
+                        {r.visit_id && (
+                          <Button asChild size="sm" variant="ghost" className="h-7 text-xs">
+                            <Link to={`/medical-records?appointmentId=${r.appointment_id}`}>السجلّ</Link>
+                          </Button>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
               {rows.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                  <TableCell colSpan={9} className="py-8 text-center text-sm text-muted-foreground">
                     لا مواعيد اليوم.
                   </TableCell>
                 </TableRow>

@@ -5,8 +5,8 @@
 
 ## كيف قُرئ
 
-قُرئت 170 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
-`migrations/0013…0172` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
+قُرئت 174 ملفّ ترقية بترتيبها الرقميّ — `supabase/migrations/0001–0012` ثم
+`migrations/0013…0176` — وحوكي أثرها تراكميًّا: كل `create table` تُنشئ،
 وكل `alter table` تعدّل، وكل `drop` تحذف. فما تراه هنا هو المخطط **بعد آخر
 ترقية**، لا كما كان يوم إنشائه. ودخل المولّد إلى أجسام `do $$ … $$` لأنّ
 معظم قيود المفاتيح تُضاف داخلها بحارس `if not exists`.
@@ -16,10 +16,10 @@
 | | من الترقيات (هنا) | من فحص الإنتاج (`docs/deep-gap-probe.sql`) |
 | --- | ---: | ---: |
 | جداول | 236 | 232 |
-| دوالّ | 444 | 420 |
+| دوالّ | 450 | 420 |
 | منظورات | 195 | 175 |
-| مفاتيح ربط | 1076 | 1076 |
-| فهارس | 401 | — |
+| مفاتيح ربط | 1079 | 1076 |
+| فهارس | 403 | — |
 
 **الجداول والمنظورات تطابق الإنتاج عددًا بعد `0149`** التي تبنّت ستّة كائنات
 كانت تعمل في الإنتاج ولا يُنشئها أيّ ملفّ. الفرق الباقي في المفاتيح يعود إلى
@@ -178,7 +178,7 @@
 
 ### appointment_requests
 
-أُنشئ في `0104` · عُدِّل في: `0155`
+أُنشئ في `0104` · عُدِّل في: `0155`، `0173`
 
 | العمود | النوع | إلزامي | افتراضي | يشير إلى |
 | --- | --- | :-: | --- | --- |
@@ -200,11 +200,14 @@
 | `created_at` | `timestamptz` | ✔ | `now()` |  |
 | `updated_at` | `timestamptz` | ✔ | `now()` |  |
 | `referred_by_doctor_id` | `uuid` |  |  | `doctors(id)` |
+| `seen_at` | `timestamptz` |  |  |  |
+| `seen_by` | `uuid` |  |  | `auth.users(id)` |
 
 **فهارس:**
 
 - `idx_appointment_requests_pending` على (`organization_id, status, preferred_date`) — *(0104)*
 - `idx_appointment_requests_referrer` على (`referred_by_doctor_id, status`) — *(0155)*
+- `idx_appt_requests_doctor_created` على (`organization_id, created_at desc`) — *(0173)*
 
 ### appointment_waitlist
 
@@ -241,7 +244,7 @@
 
 ### appointments
 
-أُنشئ في `0002` · عُدِّل في: `0050`، `0062`، `0074`، `0077`، `0154`
+أُنشئ في `0002` · عُدِّل في: `0050`، `0062`، `0074`، `0077`، `0154`، `0174`
 
 | العمود | النوع | إلزامي | افتراضي | يشير إلى |
 | --- | --- | :-: | --- | --- |
@@ -273,6 +276,9 @@
 | `item_id` | `uuid` |  |  | `items(id)` |
 | `sent_by_user_id` | `uuid` |  |  | `auth.users(id)` |
 | `expected_duration_minutes` | `integer` |  |  |  |
+| `overlap_override` | `boolean` | ✔ | `false` |  |
+| `overlap_overridden_by` | `uuid` |  |  | `auth.users(id)` |
+| `overlap_overridden_at` | `timestamptz` |  |  |  |
 
 **قيود:**
 
@@ -6435,7 +6441,7 @@
 
 ### staff_requests
 
-أُنشئ في `0138`
+أُنشئ في `0138` · عُدِّل في: `0173`
 
 | العمود | النوع | إلزامي | افتراضي | يشير إلى |
 | --- | --- | :-: | --- | --- |
@@ -6458,10 +6464,13 @@
 | `resolution_note` | `text` |  |  |  |
 | `created_at` | `timestamptz` | ✔ | `now()` |  |
 | `updated_at` | `timestamptz` | ✔ | `now()` |  |
+| `seen_at` | `timestamptz` |  |  |  |
+| `seen_by` | `uuid` |  |  | `auth.users(id)` |
 
 **فهارس:**
 
 - `idx_staff_requests_open` على (`organization_id, status, requested_at desc`) — *(0138)*
+- `idx_staff_requests_org_requested` على (`organization_id, requested_at desc`) — *(0173)*
 - `idx_staff_requests_patient` على (`patient_id, requested_at desc`) — *(0138)*
 
 ### stock_count_items
@@ -6949,7 +6958,6 @@
 | `v_dental_treatment_plan` | منظور | `0141` |
 | `v_department_summary` | منظور | `0080` |
 | `v_doctor_inbox` | منظور | `0138`، `0155` |
-| `v_doctor_issued_invoices` | منظور | `0170` |
 | `v_doctor_lab_inbox` | منظور | `0155` |
 | `v_doctor_license_status` | منظور | `0081` |
 | `v_doctor_open_visits` | منظور | `0105` |
@@ -6957,7 +6965,7 @@
 | `v_doctor_referrals_in` | منظور | `0155` |
 | `v_doctor_requests` | منظور | `0155` |
 | `v_doctor_vitals_inbox` | منظور | `0139` |
-| `v_doctor_worklist` | منظور | `0105` |
+| `v_doctor_worklist` | منظور | `0105`، `0175` |
 | `v_document_expiry_alerts` | منظور | `0102` |
 | `v_document_signatures` | منظور | `0102` |
 | `v_documents` | منظور | `0102` |
@@ -6971,6 +6979,7 @@
 | `v_employee_training_summary` | منظور | `0023` |
 | `v_exam_templates` | منظور | `0085` |
 | `v_fiscal_period_status` | منظور | `0099` |
+| `v_follow_up_center` | منظور | `0173` |
 | `v_gl_lines` | منظور | `0099` |
 | `v_hr_attendance_monthly` | منظور | `0024` |
 | `v_hr_dashboard_summary` | منظور | `0024` |
@@ -7043,9 +7052,9 @@
 | `v_radiology_console_queue` | منظور | `0138` |
 | `v_radiology_unreported_orders` | منظور | `0138`، `0144` |
 | `v_radiology_worklist` | منظور | `0084` |
-| `v_reception_queue` | منظور | `0163` |
-| `v_reception_queue_by_doctor` | منظور | `0163` |
-| `v_reception_queue_ordered` | منظور | `0163` |
+| `v_reception_queue` | منظور | `0176` |
+| `v_reception_queue_by_doctor` | منظور | `0176` |
+| `v_reception_queue_ordered` | منظور | `0176` |
 | `v_reception_requests` | منظور | `0138` |
 | `v_recruitment_pipeline` | منظور | `0022` |
 | `v_reference_categories` | منظور | `0086` |
@@ -7109,4 +7118,4 @@
 
 ## الدوالّ
 
-توقيعات الدوالّ الـ444 في ملفّ مستقلّ: [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md).
+توقيعات الدوالّ الـ450 في ملفّ مستقلّ: [`SCHEMA-FUNCTIONS.md`](SCHEMA-FUNCTIONS.md).

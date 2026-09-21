@@ -56,7 +56,8 @@ export type FeatureKey =
   | "dental_lab"
   | "inpatient"
   | "procedures"
-  | "referrals";
+  | "referrals"
+  | "follow_up_center";
 
 export type OrganizationRole =
   | "owner"

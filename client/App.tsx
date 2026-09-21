@@ -52,6 +52,7 @@ const CustomReports = lazy(() => import("./pages/CustomReports"));
 const Warehouses = lazy(() => import("./pages/Warehouses"));
 const Licenses = lazy(() => import("./pages/Licenses"));
 const Waitlist = lazy(() => import("./pages/Waitlist"));
+const FollowUpCenter = lazy(() => import("./pages/FollowUpCenter"));
 const Users = lazy(() => import("./pages/Users"));
 const ExamTemplates = lazy(() => import("./pages/ExamTemplates"));
 const Offers = lazy(() => import("./pages/Offers"));
@@ -144,6 +145,7 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   warehouses: Warehouses,
   licenses: Licenses,
   waitlist: Waitlist,
+  "follow-up-center": FollowUpCenter,
   users: Users,
   "exam-templates": ExamTemplates,
   offers: Offers,

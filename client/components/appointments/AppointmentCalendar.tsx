@@ -26,6 +26,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
+import { APPOINTMENT_STATUS_LABELS, statusGroup } from "@/lib/appointment-status";
 
 /**
  * تقويم المواعيد.
@@ -88,22 +89,16 @@ const VIEW_LABELS: Record<CalendarView, string> = {
   list: "قائمة",
 };
 
-const STATUS_STYLES: Record<string, { label: string; className: string }> = {
-  new:                  { label: "جديد",          className: "bg-slate-100 border-slate-400 text-slate-900" },
-  scheduled:            { label: "مجدول",         className: "bg-slate-100 border-slate-400 text-slate-900" },
-  unconfirmed:          { label: "غير مؤكد",      className: "bg-amber-100 border-amber-500 text-amber-900" },
-  confirmed:            { label: "مؤكد",          className: "bg-sky-100 border-sky-500 text-sky-900" },
-  arrived:              { label: "وصل",           className: "bg-indigo-100 border-indigo-500 text-indigo-900" },
-  checked_in:           { label: "مسجَّل",         className: "bg-indigo-100 border-indigo-500 text-indigo-900" },
-  called:               { label: "نودي",          className: "bg-violet-100 border-violet-500 text-violet-900" },
-  in_progress:          { label: "في الزيارة",    className: "bg-emerald-100 border-emerald-500 text-emerald-900" },
-  completed:            { label: "مكتمل",         className: "bg-emerald-50 border-emerald-300 text-emerald-800" },
-  no_show:              { label: "لم يحضر",       className: "bg-rose-100 border-rose-500 text-rose-900" },
-  cancelled_by_patient: { label: "ألغاه المريض",  className: "bg-rose-50 border-rose-300 text-rose-800 line-through" },
-  cancelled_by_staff:   { label: "ألغته المنشأة", className: "bg-rose-50 border-rose-300 text-rose-800 line-through" },
-  walk_in:              { label: "حضوري",         className: "bg-teal-100 border-teal-500 text-teal-900" },
-  waiting:              { label: "بالانتظار",     className: "bg-teal-100 border-teal-500 text-teal-900" },
-};
+/**
+ * اسم الحالة ولونها من المصدر الواحد (0176) — كانت هنا خريطةٌ ثالثة بألوانٍ
+ * تخالف القائمة والاستقبال: «مؤكَّد» أزرق هنا وأخضر هناك.
+ */
+const STATUS_STYLES: Record<string, { label: string; className: string }> = Object.fromEntries(
+  Object.entries(APPOINTMENT_STATUS_LABELS).map(([status, label]) => [
+    status,
+    { label, className: statusGroup(status).block },
+  ]),
+);
 
 const PRIORITY_MARKS: Record<string, { label: string; className: string }> = {
   emergency:     { label: "طارئ", className: "bg-red-600 text-white" },
@@ -188,7 +183,8 @@ export default function AppointmentCalendar({
    * من غياب المرشِّح.
    */
   search?: string;
-  statusFilter?: string;
+  /** حالةٌ واحدة، أو قائمة حالات (مجموعةٌ من شريط الحالات)، أو فارغ للكلّ. */
+  statusFilter?: string | string[];
   onCreateAt: (start: Date, doctorId: string | null, clinicId: string | null) => void;
   onOpenAppointment: (appointmentId: string) => void;
   /**
@@ -301,13 +297,17 @@ export default function AppointmentCalendar({
       (row) =>
         (doctorFilter === "all" || row.doctor_id === doctorFilter) &&
         (clinicFilter === "all" || row.clinic_id === clinicFilter) &&
-        (!statusFilter || statusFilter === "all" || row.status === statusFilter) &&
+        (!statusFilter ||
+          statusFilter === "all" ||
+          (Array.isArray(statusFilter)
+            ? statusFilter.length === 0 || statusFilter.includes(row.status)
+            : row.status === statusFilter)) &&
         (!needle ||
           Boolean(row.patient?.name_ar?.includes(needle)) ||
           String(row.patient?.file_number ?? "").includes(needle) ||
           Boolean(row.patient?.mobile_number?.includes(needle))),
     );
-  }, [appointments.data, doctorFilter, clinicFilter, search, statusFilter]);
+  }, [appointments.data, doctorFilter, clinicFilter, search, Array.isArray(statusFilter) ? statusFilter.join(",") : statusFilter]);
 
   const columns = useMemo(() => {
     if (view !== "day") return [];
@@ -357,7 +357,8 @@ export default function AppointmentCalendar({
           </span>
           {/* تقويم فارغ بسبب التصفية يبدو كتقويم بلا مواعيد: الشارة تفرّق
               بين الحالتين حتى لا يظنّ الموظف أن مواعيد اليوم اختفت. */}
-          {(Boolean((search ?? "").trim()) || (Boolean(statusFilter) && statusFilter !== "all")) && (
+          {(Boolean((search ?? "").trim()) ||
+            (Array.isArray(statusFilter) ? statusFilter.length > 0 : Boolean(statusFilter) && statusFilter !== "all")) && (
             <Badge variant="outline">تصفية نشطة · {visible.length}</Badge>
           )}
         </div>

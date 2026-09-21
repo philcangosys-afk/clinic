@@ -65,7 +65,8 @@ export type ModuleRegistryItem = {
 
 export const moduleRegistry: ModuleRegistryItem[] = [
   { id: "dashboard", label: "الرئيسية", icon: LayoutDashboard, featureKey: "core_dashboard", requiredPermission: "core_dashboard.view", category: "لوحة التحكم", order: 10 },
-  { id: "reception", label: "الاستقبال والانتظار", icon: Activity, badge: "12", featureKey: "reception", requiredPermission: "reception.view", category: "الاستقبال والمواعيد", order: 20 },
+  { id: "reception", label: "الاستقبال", icon: Activity, badge: "12", featureKey: "reception", requiredPermission: "reception.view", category: "الاستقبال والمواعيد", order: 20 },
+  { id: "follow-up-center", label: "مركز المتابعة", icon: BellRing, featureKey: "follow_up_center", requiredPermission: "follow_up_center.view", category: "الاستقبال والمواعيد", order: 21 },
   { id: "appointments", label: "المواعيد", icon: CalendarDays, featureKey: "appointments", requiredPermission: "appointments.view", category: "الاستقبال والمواعيد", order: 30 },
   { id: "patients", label: "المرضى", icon: UsersRound, badge: "1,248", featureKey: "patients", requiredPermission: "patients.view", category: "الاستقبال والمواعيد", order: 40 },
   { id: "medical-records", label: "السجل الطبي", icon: ClipboardList, badge: "24", featureKey: "medical_records", requiredPermission: "medical_records.view", category: "الاستقبال والمواعيد", order: 50 },
@@ -119,7 +120,7 @@ export const moduleRegistry: ModuleRegistryItem[] = [
   { id: "exam-templates", label: "تصميم شاشات العيادات", icon: LayoutTemplate, featureKey: "medical_records", requiredPermission: "medical_records.view", category: "الكتالوج الطبي", order: 115 },
   { id: "users", label: "المستخدمون والصلاحيات", icon: UserCog, featureKey: "settings", requiredPermission: "settings.view", category: "التشغيل والإدارة", order: 352 },
   { id: "licenses", label: "تراخيص المنشأة", icon: ShieldCheck, featureKey: "settings", requiredPermission: "settings.view", category: "التشغيل والإدارة", order: 355 },
-  { id: "waitlist", label: "قوائم الانتظار", icon: CalendarClock, featureKey: "appointments", requiredPermission: "appointments.view", category: "الاستقبال والمواعيد", order: 35 },
+  { id: "waitlist", label: "قائمة انتظار المواعيد", icon: CalendarClock, featureKey: "appointments", requiredPermission: "appointments.view", category: "الاستقبال والمواعيد", order: 35 },
   { id: "alerts", label: "التنبيهات", icon: BellRing, featureKey: "notifications", requiredPermission: "notifications.view", category: "لوحة التحكم", order: 15 },
   { id: "patient-visits", label: "سجل زيارات المرضى", icon: History, featureKey: "medical_records", requiredPermission: "medical_records.view", category: "الكتالوج الطبي", order: 119 },
   { id: "blocked-contacts", label: "الجهات المحجوبة", icon: ShieldBan, featureKey: "patients", requiredPermission: "patients.view", category: "الاستقبال والمواعيد", order: 45 },

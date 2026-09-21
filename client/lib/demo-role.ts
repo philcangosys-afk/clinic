@@ -59,6 +59,8 @@ export const DEMO_ROLES: DemoRoleDefinition[] = [
     home: "/doctor-workspace",
     modules: [
       "doctor-workspace",
+      // يكتب للاستقبال ما يخصّ مريضه — بدل الفاتورة التي لم تعد له (0173)
+      "follow-up-center",
       "patients",
       "appointments",
       "medical-records",
