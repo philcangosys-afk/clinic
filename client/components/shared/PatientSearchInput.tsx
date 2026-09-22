@@ -90,7 +90,7 @@ export function PatientSearchScopeChips({
 
   return (
     <div
-      className={cn("flex items-center gap-1", className)}
+      className={cn("flex shrink-0 items-center gap-1", className)}
       role="group"
       aria-label="نطاق البحث"
       title={all ? "البحث في الاسم والجوال والهوية — اضغط زرًّا لحصره" : undefined}
@@ -107,7 +107,7 @@ export function PatientSearchScopeChips({
             onClick={() => toggle(scope)}
             title={active ? `البحث محصور بـ${patientScopeLabel[scope]} — اضغط للإلغاء` : `احصر البحث بـ${patientScopeLabel[scope]}`}
             className={cn(
-              "h-7 rounded-md border px-2 text-xs font-medium transition-colors disabled:opacity-50",
+              "h-7 shrink-0 whitespace-nowrap rounded-md border px-2 text-xs font-medium leading-none transition-colors disabled:opacity-50",
               active
                 ? "border-primary bg-primary text-primary-foreground"
                 : "border-input bg-background text-muted-foreground hover:bg-accent hover:text-accent-foreground",

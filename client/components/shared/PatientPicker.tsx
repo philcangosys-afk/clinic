@@ -76,7 +76,7 @@ export default function PatientPicker({
   return (
     <div className="relative">
       <div className="flex items-center gap-2 rounded-md border bg-background px-3 py-1.5">
-        <Search className="h-4 w-4 text-muted-foreground" />
+        <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
         <Input
           value={term}
           onChange={(event) => {
@@ -85,7 +85,7 @@ export default function PatientPicker({
           }}
           onFocus={() => setOpen(true)}
           placeholder={placeholder ?? patientSearchPlaceholder(searchScopes)}
-          className="h-7 border-0 p-0 shadow-none focus-visible:ring-0"
+          className="h-7 min-w-0 flex-1 border-0 p-0 shadow-none focus-visible:ring-0"
         />
         <PatientSearchScopeChips scopes={searchScopes} onScopesChange={setSearchScopes} />
       </div>
