@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarCheck, Lock } from "lucide-react";
+import { CalendarCheck, FileDown, FileSpreadsheet, Lock, Settings2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
@@ -19,7 +19,23 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
+import {
+  hhmm,
+  useBusinessDaySettings,
+  useCurrentBusinessDate,
+  type BusinessDaySettings,
+} from "@/lib/business-day";
+import { downloadDayPdf, downloadDayXlsx } from "@/lib/business-day-export";
 
 type DaySummary = {
   business_day_id: string;
@@ -39,6 +55,8 @@ type DaySummary = {
   refunded_amount: number;
   net_collected_amount: number;
   outstanding_amount: number;
+  scheduled_close_at: string | null;
+  auto_closed: boolean | null;
 };
 
 type DayCollection = {
@@ -64,45 +82,59 @@ type DayInvoice = {
   doctor_name: string | null;
 };
 
+const MANAGER_ROLES = ["owner", "organization_admin", "branch_manager", "accountant"];
+
 /**
- * اليومية المالية — ما جرى منذ الفتح، وزرّ الإغلاق.
+ * اليومية المالية — يوم العمل الحالي وحده، والسابق بفلتر التاريخ.
  *
  * **لماذا يومية لا «تقرير اليوم»؟** لأن اليوم التقويميّ لا يطابق يوم العمل:
  * العيادة تُغلق بعد منتصف الليل، فتقع فواتير السهرة في يومٍ تالٍ لا أحد يعمل
- * فيه، ولا يطابق جردُ الصندوق شيئًا. فاليومية تُفتح بأوّل فاتورة وتُغلق بقرار،
- * وكل ما يأتي بعد الإغلاق يقع في يومية جديدة ولو في التاريخ نفسه.
+ * فيه. فاليومية تُفتح بأوّل فاتورة وتُقفل عند نهاية يوم العمل المضبوطة في
+ * «ضبط اليومية» (0181) — أو يدويًا لمن لم يضبطها.
  *
  * والمحصَّل يُقرأ من سندات القبض لا من خانة «المدفوع» في الفاتورة: السند هو
  * ما يقابله نقدٌ في الصندوق أو إشعارٌ من الشبكة.
  */
 export default function BusinessDayPanel() {
-  const { organization } = useOrganizationAccess();
+  const { organization, membership, legacyMode } = useOrganizationAccess();
   const { calendarDisplay } = useLocaleSettings();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const organizationId = organization?.id;
+  const canManage = legacyMode || MANAGER_ROLES.includes(membership?.role_key ?? "");
   const [note, setNote] = useState("");
-  const [openedDayId, setOpenedDayId] = useState<string | null>(null);
+  const [pickedDayId, setPickedDayId] = useState<string | null>(null);
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [exporting, setExporting] = useState<"xlsx" | "pdf" | null>(null);
+
+  const settings = useBusinessDaySettings(organizationId);
+  const currentDate = useCurrentBusinessDate(organizationId);
+  // التاريخ المعروض: ما اختاره المستخدم، وإلّا يوم العمل الحالي
+  const date = selectedDate ?? currentDate.data ?? null;
 
   const days = useQuery({
-    queryKey: ["business-days", organizationId],
-    enabled: Boolean(organizationId),
+    queryKey: ["business-days", organizationId, date],
+    enabled: Boolean(organizationId && date),
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_business_day_summary")
         .select("*")
         .eq("organization_id", organizationId)
-        .order("day_number", { ascending: false })
-        .limit(30);
+        .eq("business_date", date)
+        .order("day_number", { ascending: false });
       if (error) throw error;
       return (data ?? []) as DaySummary[];
     },
   });
 
-  const current = (days.data ?? []).find((row) => row.is_open) ?? null;
-  /** اليومية المعروضة: المفتوحة افتراضًا، أو ما يختاره المستخدم من السجل. */
-  const shownId = openedDayId ?? current?.business_day_id ?? days.data?.[0]?.business_day_id ?? null;
-  const shown = (days.data ?? []).find((row) => row.business_day_id === shownId) ?? null;
+  const dayRows = days.data ?? [];
+  /** اليومية المعروضة: ما اختاره المستخدم من يوميات التاريخ، وإلّا أحدثها. */
+  const shownId =
+    (pickedDayId && dayRows.some((row) => row.business_day_id === pickedDayId) ? pickedDayId : null) ??
+    dayRows[0]?.business_day_id ??
+    null;
+  const shown = dayRows.find((row) => row.business_day_id === shownId) ?? null;
 
   const collections = useQuery({
     queryKey: ["business-day-collections", shownId],
@@ -132,6 +164,15 @@ export default function BusinessDayPanel() {
     },
   });
 
+  const refreshAll = () => {
+    queryClient.invalidateQueries({ queryKey: ["business-days"] });
+    queryClient.invalidateQueries({ queryKey: ["business-day-collections"] });
+    queryClient.invalidateQueries({ queryKey: ["business-day-invoices"] });
+    queryClient.invalidateQueries({ queryKey: ["current-business-date"] });
+    queryClient.invalidateQueries({ queryKey: ["business-day-settings"] });
+    queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+  };
+
   const closeDay = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
@@ -145,92 +186,177 @@ export default function BusinessDayPanel() {
       if (error) throw error;
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["business-days"] });
-      queryClient.invalidateQueries({ queryKey: ["business-day-collections"] });
-      queryClient.invalidateQueries({ queryKey: ["business-day-invoices"] });
+      refreshAll();
       setNote("");
-      setOpenedDayId(null);
-      toast({ title: "أُغلقت اليومية — ما بعدها يبدأ يومية جديدة" });
+      setPickedDayId(null);
+      toast({ title: "أُقفلت اليومية — ما بعدها يبدأ يومية جديدة" });
     },
     onError: (error: unknown) =>
       toast({
         variant: "destructive",
-        title: "تعذر إغلاق اليومية",
+        title: "تعذر إقفال اليومية",
         description: errorMessage(error),
       }),
   });
 
-  if (days.isLoading) {
-    return <Skeleton className="h-64 w-full" />;
-  }
+  const runExport = async (format: "xlsx" | "pdf") => {
+    if (!shown) return;
+    setExporting(format);
+    try {
+      const data = {
+        organizationName: organization?.name ?? "",
+        day: shown,
+        collections: collections.data ?? [],
+        invoices: invoices.data ?? [],
+      };
+      if (format === "xlsx") downloadDayXlsx(data);
+      else await downloadDayPdf(data);
+    } catch (error) {
+      toast({ variant: "destructive", title: "تعذّر تنزيل الملف", description: errorMessage(error) });
+    } finally {
+      setExporting(null);
+    }
+  };
+
+  const s = settings.data;
+  const exportReady = Boolean(shown) && !collections.isLoading && !invoices.isLoading;
 
   return (
     <div className="flex flex-col gap-4">
+      {/* ── الشريط: التاريخ، الضبط، التنزيل */}
       <Card>
-        <CardHeader>
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <CalendarCheck className="h-5 w-5" />
-                {shown
-                  ? `اليومية رقم ${shown.day_number}${shown.is_open ? " — مفتوحة" : ""}`
-                  : "لا توجد يومية بعد"}
-              </CardTitle>
-              <CardDescription>
-                {shown ? (
-                  <>
-                    فُتحت {formatDateTime(shown.opened_at, calendarDisplay)}
-                    {shown.closed_at
-                      ? ` · أُغلقت ${formatDateTime(shown.closed_at, calendarDisplay)}`
-                      : " · لم تُغلق بعد"}
-                  </>
-                ) : (
-                  "تُفتح اليومية تلقائيًا بأوّل فاتورة."
-                )}
-              </CardDescription>
+        <CardContent className="flex flex-wrap items-end justify-between gap-3 pt-4">
+          <div className="flex flex-wrap items-end gap-2">
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs">تاريخ يوم العمل</Label>
+              <Input
+                type="date"
+                className="w-44"
+                value={date ?? ""}
+                onChange={(event) => {
+                  setSelectedDate(event.target.value || null);
+                  setPickedDayId(null);
+                }}
+              />
             </div>
-            {shown?.is_open && (
-              <div className="flex flex-wrap items-end gap-2">
-                <div className="flex flex-col gap-1">
-                  <Label className="text-xs">ملاحظة الإغلاق (اختيارية)</Label>
-                  <Input
-                    className="w-56"
-                    value={note}
-                    onChange={(event) => setNote(event.target.value)}
-                    placeholder="مثال: تسليم الوردية المسائية"
-                  />
-                </div>
-                <Button
-                  disabled={closeDay.isPending}
-                  onClick={() => {
-                    if (
-                      window.confirm(
-                        "سيُغلق يوم العمل الحالي. كل فاتورة بعد الإغلاق تُحسب في يومية جديدة ولو في التاريخ نفسه. متابعة؟",
-                      )
-                    )
-                      closeDay.mutate();
-                  }}
-                >
-                  <Lock className="h-4 w-4" />
-                  {closeDay.isPending ? "جارٍ الإغلاق..." : "تقفيل اليومية"}
-                </Button>
-              </div>
+            {selectedDate && selectedDate !== currentDate.data && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSelectedDate(null);
+                  setPickedDayId(null);
+                }}
+              >
+                اليوم
+              </Button>
             )}
+            <p className="pb-2 text-xs text-muted-foreground">
+              {s
+                ? `يوم العمل من ${hhmm(s.day_start)} إلى ${hhmm(s.day_end)} — الإقفال التلقائي ${s.auto_close ? "مفعّل" : "معطّل"}`
+                : "لم تُضبط اليومية بعد — الإقفال يدوي"}
+            </p>
           </div>
-        </CardHeader>
-        {shown && (
+          <div className="flex flex-wrap gap-2">
+            {canManage && (
+              <Button variant="outline" onClick={() => setSettingsOpen(true)} disabled={settings.isError}>
+                <Settings2 className="h-4 w-4" />
+                ضبط اليومية
+              </Button>
+            )}
+            <Button variant="outline" disabled={!exportReady || exporting !== null} onClick={() => void runExport("xlsx")}>
+              <FileSpreadsheet className="h-4 w-4" />
+              {exporting === "xlsx" ? "جارٍ التجهيز…" : "تنزيل Excel"}
+            </Button>
+            <Button variant="outline" disabled={!exportReady || exporting !== null} onClick={() => void runExport("pdf")}>
+              <FileDown className="h-4 w-4" />
+              {exporting === "pdf" ? "جارٍ التجهيز…" : "تنزيل PDF"}
+            </Button>
+          </div>
+        </CardContent>
+        {dayRows.length > 1 && (
+          <CardContent className="flex flex-wrap items-center gap-2 pt-0">
+            <span className="text-xs text-muted-foreground">يوميات هذا التاريخ:</span>
+            {dayRows.map((row) => (
+              <Button
+                key={row.business_day_id}
+                size="sm"
+                variant={row.business_day_id === shownId ? "default" : "outline"}
+                onClick={() => setPickedDayId(row.business_day_id)}
+              >
+                رقم {row.day_number}
+                {row.is_open ? " — مفتوحة" : ""}
+              </Button>
+            ))}
+          </CardContent>
+        )}
+      </Card>
+
+      {(days.isLoading || currentDate.isLoading) && <Skeleton className="h-40 w-full" />}
+
+      {!days.isLoading && !currentDate.isLoading && !shown && (
+        <Card>
+          <CardContent className="py-10 text-center text-sm text-muted-foreground">
+            {date === currentDate.data
+              ? "لم تُفتح يومية اليوم بعد — تُفتح تلقائيًا مع أوّل فاتورة."
+              : "لا يومية في هذا التاريخ."}
+          </CardContent>
+        </Card>
+      )}
+
+      {shown && (
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <CalendarCheck className="h-5 w-5" />
+                  {`اليومية رقم ${shown.day_number}${shown.is_open ? " — مفتوحة" : ""}`}
+                </CardTitle>
+                <CardDescription>
+                  يوم العمل {shown.business_date} · فُتحت {formatDateTime(shown.opened_at, calendarDisplay)}
+                  {shown.closed_at
+                    ? ` · أُقفلت ${formatDateTime(shown.closed_at, calendarDisplay)}${shown.auto_closed ? " تلقائيًا" : ""}`
+                    : shown.scheduled_close_at
+                      ? ` · تُقفل تلقائيًا ${formatDateTime(shown.scheduled_close_at, calendarDisplay)}`
+                      : " · لم تُقفل بعد"}
+                </CardDescription>
+              </div>
+              {shown.is_open && canManage && (
+                <div className="flex flex-wrap items-end gap-2">
+                  <div className="flex flex-col gap-1">
+                    <Label className="text-xs">ملاحظة الإقفال (اختيارية)</Label>
+                    <Input
+                      className="w-56"
+                      value={note}
+                      onChange={(event) => setNote(event.target.value)}
+                      placeholder="مثال: تسليم الوردية المسائية"
+                    />
+                  </div>
+                  <Button
+                    disabled={closeDay.isPending}
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          "سيُقفل يوم العمل الحالي الآن قبل موعده. كل فاتورة بعد الإقفال تُحسب في يومية جديدة. متابعة؟",
+                        )
+                      )
+                        closeDay.mutate();
+                    }}
+                  >
+                    <Lock className="h-4 w-4" />
+                    {closeDay.isPending ? "جارٍ الإقفال..." : "تقفيل اليومية الآن"}
+                  </Button>
+                </div>
+              )}
+            </div>
+          </CardHeader>
           <CardContent className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <Metric label="عدد الفواتير" value={String(shown.invoices_count)} />
             <Metric label="الإجمالي قبل الخصم" value={formatAmount(shown.gross_amount)} />
             <Metric label="الخصومات" value={formatAmount(shown.discount_amount)} />
             <Metric label="الضريبة" value={formatAmount(shown.vat_amount)} />
             <Metric label="صافي الفواتير" value={formatAmount(shown.net_amount)} strong />
-            <Metric
-              label="المحصَّل فعليًا"
-              value={formatAmount(shown.net_collected_amount)}
-              strong
-              tone="emerald"
-            />
+            <Metric label="المحصَّل فعليًا" value={formatAmount(shown.net_collected_amount)} strong tone="emerald" />
             {Number(shown.exemption_amount) > 0 && (
               <Metric label="المعفى من الضريبة" value={formatAmount(shown.exemption_amount)} />
             )}
@@ -243,9 +369,11 @@ export default function BusinessDayPanel() {
               tone={Number(shown.outstanding_amount) > 0 ? "rose" : undefined}
             />
           </CardContent>
-        )}
-      </Card>
+        </Card>
+      )}
 
+      {shown && (
+        <>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">المحصَّل بحسب طريقة الدفع</CardTitle>
@@ -358,72 +486,102 @@ export default function BusinessDayPanel() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">اليوميات السابقة</CardTitle>
-          <CardDescription>اختر يومية لعرض تفاصيلها.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="whitespace-nowrap">اليومية</TableHead>
-                <TableHead className="whitespace-nowrap">من</TableHead>
-                <TableHead className="whitespace-nowrap">إلى</TableHead>
-                <TableHead className="whitespace-nowrap">فواتير</TableHead>
-                <TableHead className="whitespace-nowrap text-end">الصافي</TableHead>
-                <TableHead className="whitespace-nowrap text-end">المحصَّل</TableHead>
-                <TableHead />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(days.data ?? []).map((row) => (
-                <TableRow
-                  key={row.business_day_id}
-                  className={row.business_day_id === shownId ? "bg-muted/50" : ""}
-                >
-                  <TableCell className="whitespace-nowrap tabular-nums">
-                    {row.day_number}
-                    {row.is_open && (
-                      <Badge className="ms-2 bg-emerald-100 text-[10px] text-emerald-800">مفتوحة</Badge>
-                    )}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
-                    {formatDateTime(row.opened_at, calendarDisplay)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
-                    {row.closed_at ? formatDateTime(row.closed_at, calendarDisplay) : "—"}
-                  </TableCell>
-                  <TableCell className="tabular-nums">{row.invoices_count}</TableCell>
-                  <TableCell className="whitespace-nowrap text-end tabular-nums">
-                    {formatAmount(row.net_amount)}
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-end tabular-nums text-emerald-700">
-                    {formatAmount(row.net_collected_amount)}
-                  </TableCell>
-                  <TableCell>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setOpenedDayId(row.business_day_id)}
-                    >
-                      عرض
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {(days.data ?? []).length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
-                    لم تُفتح يومية بعد — تُفتح تلقائيًا مع أوّل فاتورة.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+        </>
+      )}
+
+      {settingsOpen && organizationId && (
+        <BusinessDaySettingsDialog
+          organizationId={organizationId}
+          current={s ?? null}
+          onClose={() => setSettingsOpen(false)}
+          onSaved={() => {
+            setSettingsOpen(false);
+            refreshAll();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * ضبط اليومية: متى يبدأ يوم العمل ومتى ينتهي، وهل تُقفل اليومية وحدها.
+ * النهاية قبل البداية أو مساويةٌ لها تعني أنّ اليوم يمتدّ بعد منتصف الليل.
+ */
+function BusinessDaySettingsDialog({
+  organizationId,
+  current,
+  onClose,
+  onSaved,
+}: {
+  organizationId: string;
+  current: BusinessDaySettings | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { toast } = useToast();
+  const [start, setStart] = useState(hhmm(current?.day_start) || "08:00");
+  const [end, setEnd] = useState(hhmm(current?.day_end) || "00:00");
+  const [autoClose, setAutoClose] = useState(current?.auto_close ?? true);
+  const crossesMidnight = end <= start;
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.rpc("app_set_business_day_settings", {
+        p_organization_id: organizationId,
+        p_day_start: start,
+        p_day_end: end,
+        p_auto_close: autoClose,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast({ title: "حُفظ ضبط اليومية", description: "يسري على اليومية المفتوحة وما بعدها" });
+      onSaved();
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حفظ الضبط", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>ضبط اليومية</DialogTitle>
+          <DialogDescription>
+            وقت بداية يوم العمل ونهايته بتوقيت الرياض. عند النهاية تُقفل اليومية تلقائيًا، وأوّل فاتورة بعدها
+            تفتح يومية جديدة.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>بداية يوم العمل</Label>
+            <Input type="time" value={start} onChange={(event) => setStart(event.target.value)} dir="ltr" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>نهاية يوم العمل</Label>
+            <Input type="time" value={end} onChange={(event) => setEnd(event.target.value)} dir="ltr" />
+          </div>
+        </div>
+        <p className="rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">
+          {crossesMidnight
+            ? `يمتدّ يوم العمل بعد منتصف الليل: من ${start} حتى ${end} من اليوم التالي، وفواتير ما بعد منتصف الليل تُحسب لليوم السابق.`
+            : `يوم العمل من ${start} حتى ${end}. ما يُسجَّل بعد ${end} وقبل ${start} يُحسب ليوم العمل التالي.`}
+        </p>
+        <label className="flex items-center gap-2 text-sm">
+          <Checkbox checked={autoClose} onCheckedChange={(checked) => setAutoClose(Boolean(checked))} />
+          إقفال اليومية تلقائيًا عند نهاية يوم العمل
+        </label>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            إلغاء
+          </Button>
+          <Button disabled={!start || !end || save.isPending} onClick={() => save.mutate()}>
+            {save.isPending ? "جارٍ الحفظ…" : "حفظ الضبط"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

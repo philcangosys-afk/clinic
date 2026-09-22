@@ -112,6 +112,7 @@ export const SECTION_GUIDE_KEYS = [
   "users",
   "licenses",
   "integrations",
+  "zatca-settings",
   "launch-readiness",
   "system-control",
   "device-settings",

@@ -11,6 +11,7 @@ import {
 } from "@/lib/invoice-status";
 import { useInvoicePayments } from "@/components/billing/RecordPaymentDialog";
 import InvoiceActions from "@/components/billing/InvoiceActions";
+import ZatcaInvoicePanel from "@/components/billing/ZatcaInvoicePanel";
 import { printPaymentReceipt } from "@/lib/payment-receipt";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import type { SalesInvoiceStatus, SalesInvoiceWithPatient } from "@/lib/database.types";
@@ -197,6 +198,10 @@ export function InvoiceDetailsDialog({
             تعذّر تحميل الفاتورة: {errorMessage(details.error)}
           </p>
         )}
+
+        {/* حالة ZATCA والإرسال — مكوّنٌ مستقلّ باستعلامه: لو لم تُنفَّذ ترقيات
+            الربط بعد تعطّل هو وحده، لا تفاصيل الفاتورة كلّها */}
+        {invoiceId && invoice && <ZatcaInvoicePanel invoiceId={invoiceId} />}
 
         {invoice && (
           <div className="flex flex-col gap-4">

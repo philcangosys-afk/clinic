@@ -241,10 +241,27 @@ function SidebarLink({
   badge?: string;
   onNavigate?: () => void;
 }) {
+  const navigate = useNavigate();
+  const to = id === "dashboard" ? "/" : `/${id}`;
   return (
     <NavLink
-      to={id === "dashboard" ? "/" : `/${id}`}
-      onClick={onNavigate}
+      to={to}
+      onClick={(event) => {
+        /**
+         * الضغط على القسم يعيده إلى واجهته الرئيسية دائمًا.
+         *
+         * كان الضغط على القسم المفتوح نفسه لا يفعل شيئًا: من دخل «الفوترة ←
+         * اليومية» ثم ضغط «الفوترة» بقي في اليومية، ولا يعود إلى الواجهة إلا
+         * بالذهاب إلى قسمٍ آخر والرجوع. كل ضغطةٍ الآن تحمل علامةً جديدة
+         * (`navReset`) تُعيد بناء الشاشة من أوّلها (App.tsx). والضغط مع Ctrl
+         * أو الزرّ الأوسط يبقى فتحًا في تبويبٍ جديد.
+         */
+        if (event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
+          event.preventDefault();
+          navigate(to, { state: { navReset: Date.now() } });
+        }
+        onNavigate?.();
+      }}
       className={({ isActive }) =>
         cn(
           "relative flex min-h-11 flex-row-reverse items-center gap-3 rounded-md border bg-card px-3 py-2.5 text-[14px] font-semibold transition-all duration-200",

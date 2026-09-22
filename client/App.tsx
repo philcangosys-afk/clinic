@@ -1,12 +1,12 @@
 import "./global.css";
 
-import { lazy, Suspense, type ComponentType } from "react";
+import { Fragment, lazy, Suspense, useState, type ComponentType, type ReactNode } from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { createRoot } from "react-dom/client";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 const Index = lazy(() => import("./pages/Index"));
 const Onboarding = lazy(() => import("./pages/Onboarding"));
 const ComingSoon = lazy(() => import("./pages/ComingSoon"));
@@ -33,6 +33,7 @@ const Pharmacy = lazy(() => import("./pages/Pharmacy"));
 const Packages = lazy(() => import("./pages/Packages"));
 const Accounting = lazy(() => import("./pages/Accounting"));
 const Procurement = lazy(() => import("./pages/Procurement"));
+const ZATCASettings = lazy(() => import("./pages/ZATCASettings"));
 const CashExpenses = lazy(() => import("./pages/CashExpenses"));
 const PurchaseReports = lazy(() => import("./pages/PurchaseReports"));
 const Inventory = lazy(() => import("./pages/Inventory"));
@@ -83,6 +84,22 @@ import { OrganizationAccessProvider } from "./contexts/OrganizationAccessContext
 import { DemoRoleProvider } from "./contexts/DemoRoleContext";
 import AppShell from "./components/layout/AppShell";
 import RouteGuard from "./components/layout/RouteGuard";
+
+/**
+ * يعيد بناء الشاشة من أوّلها حين يُضغط قسمها في القائمة الجانبية وهي مفتوحة.
+ *
+ * الشاشات تحفظ تبويبها الداخلي في حالتها (الفوترة ← اليومية، المشتريات…)،
+ * والضغط على الرابط نفسه لا يغيّر المسار فلا تتغيّر الحالة. القائمة ترسل مع
+ * كل ضغطة علامة `navReset` جديدة، وهنا تصير مفتاحًا للشاشة فتُبنى من جديد.
+ * أمّا التنقّل داخل الشاشة (معاملات العنوان) فلا يحمل العلامة فلا يمسّها.
+ */
+function ScreenResetBoundary({ children }: { children: ReactNode }) {
+  const location = useLocation();
+  const incoming = (location.state as { navReset?: number } | null)?.navReset;
+  const [key, setKey] = useState<number>(incoming ?? 0);
+  if (incoming !== undefined && incoming !== key) setKey(incoming);
+  return <Fragment key={key}>{children}</Fragment>;
+}
 import { moduleRegistry, settingsModule } from "./lib/module-registry";
 
 const queryClient = new QueryClient();
@@ -128,6 +145,7 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   "purchase-returns": Procurement,
   suppliers: Procurement,
   "cash-expenses": CashExpenses,
+  "zatca-settings": ZATCASettings,
   "purchase-reports": PurchaseReports,
   inventory: Inventory,
   assets: Assets,
@@ -205,15 +223,17 @@ const App = () => (
                 </RouteGuard>
               }
             >
-              <Route path="/" element={<Index />} />
+              <Route path="/" element={<ScreenResetBoundary><Index /></ScreenResetBoundary>} />
               <Route path="/patients/:id" element={<PatientProfile />} />
+              {/* المسار المذكور في مواصفة الربط — يقود إلى شاشة القائمة */}
+              <Route path="/zatca/settings" element={<Navigate to="/zatca-settings" replace />} />
               {routedModules.map((item) => {
                 const RealScreen = REAL_SCREENS[item.id];
                 return (
                   <Route
                     key={item.id}
                     path={`/${item.id}`}
-                    element={RealScreen ? <RealScreen /> : <ComingSoon />}
+                    element={<ScreenResetBoundary>{RealScreen ? <RealScreen /> : <ComingSoon />}</ScreenResetBoundary>}
                   />
                 );
               })}

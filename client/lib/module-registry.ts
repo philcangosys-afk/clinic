@@ -139,6 +139,8 @@ export const moduleRegistry: ModuleRegistryItem[] = [
   { id: "patient-visits", label: "سجل زيارات المرضى", icon: History, featureKey: "medical_records", requiredPermission: "medical_records.view", category: "الكتالوج الطبي", order: 119 },
   { id: "blocked-contacts", label: "الجهات المحجوبة", icon: ShieldBan, featureKey: "patients", requiredPermission: "patients.view", category: "الاستقبال والمواعيد", order: 45 },
   { id: "integrations", label: "التكاملات", icon: PlugZap, featureKey: "integrations", requiredPermission: "integrations.view", category: "التشغيل والإدارة", order: 356 },
+  // الفوترة الإلكترونية المرحلة الثانية (0178): التهيئة والشهادات عبر دالّة طرفية
+  { id: "zatca-settings", label: "الربط مع ZATCA", icon: ShieldCheck, featureKey: "integrations", requiredPermission: "integrations.view", category: "التشغيل والإدارة", order: 356.5 },
   { id: "launch-readiness", label: "جاهزية الإطلاق", icon: ShieldCheck, featureKey: "settings", requiredPermission: "settings.view", category: "التشغيل والإدارة", order: 357 },
   { id: "system-control", label: "التحكم بالنظام", icon: SlidersHorizontal, featureKey: "settings", requiredPermission: "settings.view", category: "التشغيل والإدارة", order: 358 },
   { id: "device-settings", label: "إعدادات الجهاز والنسخ", icon: MonitorCog, featureKey: "settings", requiredPermission: "settings.view", category: "التشغيل والإدارة", order: 362 },

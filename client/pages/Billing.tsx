@@ -10,6 +10,8 @@ import NewInvoiceDialog, {
   type BillingAppointmentContext,
 } from "@/components/billing/NewInvoiceDialog";
 import BusinessDayPanel from "@/components/billing/BusinessDayPanel";
+import CashRegistersDialog from "@/components/billing/CashRegistersDialog";
+import { useCurrentBusinessDate } from "@/lib/business-day";
 import {
   RecordPaymentDialog,
   useCashRegisters,
@@ -55,22 +57,33 @@ import { INVOICE_STATUS_BADGE, INVOICE_STATUS_LABELS } from "@/lib/invoice-statu
 const STATUS_LABELS = INVOICE_STATUS_LABELS;
 const STATUS_BADGE = INVOICE_STATUS_BADGE;
 
-function useInvoices(organizationId: string | undefined, status: string, quotesOnly: boolean) {
+/**
+ * فواتير يوم عملٍ واحد (0181): يوم العمل الحالي افتراضًا، والسابق بفلتر
+ * التاريخ. كانت القائمة «آخر 50 فاتورة» بلا تاريخ، فتختلط فواتير اليوم
+ * بفواتير الأمس ولا يُعرف أين ينتهي يوم الصندوق.
+ */
+function useInvoices(
+  organizationId: string | undefined,
+  status: string,
+  quotesOnly: boolean,
+  businessDate: string | null,
+) {
   return useQuery({
-    queryKey: ["invoices-list", organizationId, status, quotesOnly],
-    enabled: Boolean(organizationId),
+    queryKey: ["invoices-list", organizationId, status, quotesOnly, businessDate],
+    enabled: Boolean(organizationId && businessDate),
     queryFn: async () => {
       let query = supabase
         .from("sales_invoices")
         .select(
-          "id, invoice_number, document_number, document_type, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, insurance_share_amount, patient_share_amount, insurance_company_name, external_customer_name, zatca_invoice_number, zatca_qr, is_insurance_invoice, created_by, nationality_value_id, patient:patients!sales_invoices_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!sales_invoices_doctor_tenant_fk(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar)",
+          "id, invoice_number, document_number, document_type, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, insurance_share_amount, patient_share_amount, insurance_company_name, external_customer_name, zatca_invoice_number, zatca_qr, is_insurance_invoice, created_by, nationality_value_id, patient:patients!sales_invoices_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!sales_invoices_doctor_tenant_fk(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar), business_day:business_days!inner(business_date)",
         )
         // التصفية بالمؤسسة إلزامية: سياسة RLS تسمح بكل مؤسسة **ينتمي إليها**
         // المستخدم، لا بالمؤسسة النشطة وحدها — فبدونها كانت قائمة عضو في
         // منشأتين تخلط فواتيرهما ويجمع الرأس إجماليَّ الاثنتين معًا.
         .eq("organization_id", organizationId)
+        .eq("business_day.business_date", businessDate)
         .order("created_at", { ascending: false })
-        .limit(50);
+        .limit(500);
       if (status !== "all") query = query.eq("status", status);
       query = query.eq("is_temporary", quotesOnly);
       const { data, error } = await query;
@@ -165,7 +178,11 @@ export default function Billing() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const canManageBilling = legacyMode || ["owner", "organization_admin", "accountant", "receptionist"].includes(membership?.role_key ?? "");
-  const invoices = useInvoices(organization?.id, statusFilter, quotesOnly);
+  const currentBusinessDate = useCurrentBusinessDate(organization?.id);
+  /** تاريخ يوم العمل المعروض: الحالي افتراضًا، وما يُختار من الفلتر للسابق. */
+  const [pickedDate, setPickedDate] = useState<string | null>(null);
+  const listDate = pickedDate ?? currentBusinessDate.data ?? null;
+  const invoices = useInvoices(organization?.id, statusFilter, quotesOnly, listDate);
   const appointment = useQuery({
     queryKey: ["billing-appointment", organization?.id, appointmentId],
     enabled: Boolean(organization?.id && appointmentId),
@@ -438,8 +455,32 @@ export default function Billing() {
 
       {!showShifts && !showTax && !showDay && <Card>
         <CardHeader>
-          <CardTitle>{quotesOnly ? "عروض الأسعار" : "الفواتير"}</CardTitle>
-          <CardDescription>آخر 50 {quotesOnly ? "عرض سعر" : "فاتورة"}</CardDescription>
+          <div className="flex flex-wrap items-end justify-between gap-3">
+            <div>
+              <CardTitle>{quotesOnly ? "عروض الأسعار" : "الفواتير"}</CardTitle>
+              <CardDescription>
+                {listDate === currentBusinessDate.data
+                  ? `يوم العمل الحالي (${listDate ?? "…"}) — الأيام السابقة من فلتر التاريخ`
+                  : `يوم العمل ${listDate ?? ""}`}
+              </CardDescription>
+            </div>
+            <div className="flex items-end gap-2">
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs">تاريخ يوم العمل</Label>
+                <Input
+                  type="date"
+                  className="w-44"
+                  value={listDate ?? ""}
+                  onChange={(event) => setPickedDate(event.target.value || null)}
+                />
+              </div>
+              {pickedDate && pickedDate !== currentBusinessDate.data && (
+                <Button variant="outline" onClick={() => setPickedDate(null)}>
+                  اليوم
+                </Button>
+              )}
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           {invoices.isLoading && (
@@ -1233,6 +1274,7 @@ function CashShiftsPanel({ organizationId }: { organizationId: string | undefine
   const [closeTarget, setCloseTarget] = useState<ShiftRow | null>(null);
   const [counted, setCounted] = useState("");
   const [varianceReason, setVarianceReason] = useState("");
+  const [registersOpen, setRegistersOpen] = useState(false);
 
   const shifts = useQuery({
     queryKey: ["cash-shifts", organizationId],
@@ -1329,11 +1371,16 @@ function CashShiftsPanel({ organizationId }: { organizationId: string | undefine
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>الصناديق والمناوبات</CardTitle>
-        <CardDescription>
-          لا قبض نقديّ بلا مناوبة مفتوحة — والإغلاق يحتاج جردًا فعليًا، والفرق يحتاج سببًا
-        </CardDescription>
+      <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3 space-y-0">
+        <div>
+          <CardTitle>الصناديق والمناوبات</CardTitle>
+          <CardDescription>
+            لا قبض نقديّ بلا مناوبة مفتوحة — والإغلاق يحتاج جردًا فعليًا، والفرق يحتاج سببًا
+          </CardDescription>
+        </div>
+        <Button variant="outline" onClick={() => setRegistersOpen(true)}>
+          إدارة الصناديق
+        </Button>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {can("cashier.open") && (
@@ -1461,7 +1508,7 @@ function CashShiftsPanel({ organizationId }: { organizationId: string | undefine
               {(shifts.data ?? []).length === 0 && (
                 <TableRow>
                   <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
-                    لا مناوبات بعد.
+                    لا مناوبات بعد — اختر الصندوق وافتح مناوبة برصيده الافتتاحيّ الفعلي.
                   </TableCell>
                 </TableRow>
               )}
@@ -1469,6 +1516,8 @@ function CashShiftsPanel({ organizationId }: { organizationId: string | undefine
           </Table>
         )}
       </CardContent>
+
+      <CashRegistersDialog open={registersOpen} onOpenChange={setRegistersOpen} organizationId={organizationId} />
 
       <Dialog open={Boolean(closeTarget)} onOpenChange={(next) => !next && setCloseTarget(null)}>
         <DialogContent>
