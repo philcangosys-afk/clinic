@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
 import { printInvoiceReceipt, type InvoicePrintData } from "@/lib/invoice-receipt";
-import { downloadInvoicePdf, loadInvoicePrintData } from "@/lib/invoice-pdf";
+import { downloadInvoicePdf, loadInvoicePrintData, registerInvoicePrint } from "@/lib/invoice-pdf";
 import SendInvoiceDialog from "@/components/billing/SendInvoiceDialog";
 
 /**
@@ -78,7 +78,17 @@ export default function InvoiceActions({
           title="طباعة"
           disabled={busy !== null}
           onClick={() =>
-            void run("print", "تعذّر تجهيز الفاتورة للطباعة", (data) => printInvoiceReceipt(data))
+            void run("print", "تعذّر تجهيز الفاتورة للطباعة", async (data) => {
+              // العدّاد واسم الطابع من القاعدة (0186): ورقةٌ تُطبع مرّتين
+              // تقول ذلك، ومن طبعها هو من دخل بحسابه لا اسمٌ يخمّنه المتصفّح.
+              const stamp = await registerInvoicePrint(invoiceId);
+              printInvoiceReceipt({
+                ...data,
+                printedBy: stamp?.user_name ?? data.printedBy ?? null,
+                printedByJobNumber: stamp?.job_number ?? null,
+                printCount: stamp?.print_count ?? data.printCount ?? 1,
+              });
+            })
           }
         >
           <Printer className="h-3.5 w-3.5" />

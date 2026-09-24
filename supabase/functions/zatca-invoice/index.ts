@@ -958,12 +958,27 @@ Deno.serve(async (req) => {
       }
     }
 
-    const credentials =
-      mode === "production"
-        ? { csid: clean(setup.production_csid), secret: clean(setup.production_secret) }
-        : { csid: clean(setup.compliance_csid), secret: clean(setup.compliance_secret) };
+    /**
+     * **اعتماد الإرسال شهادة البيئة لا شهادة التوافق.**
+     *
+     * شهادة التوافق (CCSID) تُقبل على `/compliance/invoices` وحدها — وهي
+     * اختبارات التهيئة. أمّا `/invoices/reporting/single` و
+     * `/invoices/clearance/single` فتطلبان شهادة البيئة (PCSID)، وتُصدَر بعد
+     * اجتياز اختبارات التوافق. وإرسالُ فاتورةٍ بشهادة التوافق يردّ 401 بلا
+     * تفسير — وهو ما كان يحدث: «لم تُقبل الفاتورة لدى ZATCA — HTTP 401».
+     *
+     * وبيئة المحاكاة كالإنتاج في هذا: لها شهادة بيئةٍ خاصّة بها.
+     */
+    const credentials = {
+      csid: clean(setup.production_csid),
+      secret: clean(setup.production_secret),
+    };
     if (!clean(setup.private_key_pem) || !credentials.csid || !credentials.secret) {
-      return await rejectBeforeSubmission("أكمل تهيئة بيانات اعتماد ZATCA قبل إرسال الفواتير");
+      return await rejectBeforeSubmission(
+        mode === "production"
+          ? "بيانات اعتماد ZATCA الإنتاجية غير مكتملة"
+          : "شهادة بيئة المحاكاة غير مُصدَرة — نفّذ «اختبارات التوافق» ثمّ «شهادة الإنتاج» في شاشة الربط مع ZATCA، فشهادة التوافق لا تصلح لإرسال الفواتير",
+      );
     }
 
     // ── حجز ICV/PIH ذرّيًا

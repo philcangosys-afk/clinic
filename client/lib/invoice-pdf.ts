@@ -21,7 +21,7 @@ export async function loadInvoicePrintData(
   invoiceId: string,
   printedBy: string | null,
 ): Promise<InvoicePrintData> {
-  const [headerRes, itemsRes, paymentsRes] = await Promise.all([
+  const [headerRes, itemsRes, paymentsRes, invoiceRes] = await Promise.all([
     supabase.from("v_invoice_print").select("*").eq("invoice_id", invoiceId).maybeSingle(),
     supabase
       .from("sales_invoice_items")
@@ -32,6 +32,12 @@ export async function loadInvoicePrintData(
       .from("v_invoice_payment_methods")
       .select("method_name, method_code, amount")
       .eq("invoice_id", invoiceId),
+    // رمز المرحلة الثانية وعدّاد الطباعة (0179/0186) خارج منظور 0157
+    supabase
+      .from("sales_invoices")
+      .select("zatca_qr_data, print_count")
+      .eq("id", invoiceId)
+      .maybeSingle(),
   ]);
   if (headerRes.error) throw headerRes.error;
   if (itemsRes.error) throw itemsRes.error;
@@ -43,13 +49,62 @@ export async function loadInvoicePrintData(
   // الشبكة قد لا تصل قبلها فتخرج الورقة بلا شعار أحيانًا وبه أحيانًا.
   const logoDataUrl = header.show_logo ? await loadLogoDataUrl(header.logo_url) : null;
 
+  /**
+   * رمز ZATCA صورةً جاهزة قبل الطباعة.
+   *
+   * يُفضَّل الرمز المستخرج من الـXML الموقّع (`zatca_qr_data`, 0179) لأنّه
+   * المعتمد بعد الإرسال، وإلّا رمز المرحلة الأولى المحسوب محليًّا. وبلا
+   * أيّهما تبقى مساحةٌ مرسومة على الورقة ولا تُطبع فاتورةٌ ناقصة الشكل.
+   */
+  const extra = (invoiceRes.data ?? null) as { zatca_qr_data?: string | null; print_count?: number | null } | null;
+  const qrPayload = extra?.zatca_qr_data || header.zatca_qr || null;
+  const qrDataUrl = await buildQrDataUrl(qrPayload);
+
   return {
     header,
     items: (itemsRes.data ?? []) as unknown as InvoicePrintItem[],
     payments: (paymentsRes.data ?? []) as unknown as InvoicePaymentMethod[],
     printedBy,
+    printCount: Number(extra?.print_count ?? 0) || null,
     logoDataUrl,
+    qrDataUrl,
   };
+}
+
+/** رمز QR صورةً — الفشل لا يمنع الطباعة، تبقى المساحة مرسومة. */
+async function buildQrDataUrl(payload: string | null): Promise<string | null> {
+  if (!payload) return null;
+  try {
+    const QRCode = (await import("qrcode")).default;
+    return await QRCode.toDataURL(payload, { margin: 0, width: 320, errorCorrectionLevel: "M" });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * تسجيل الطباعة: يزيد العدّاد في القاعدة ويعيد اسم الطابع ورقمه الوظيفي.
+ *
+ * يُستدعى عند الطباعة وحدها لا عند التحميل أو الإرسال — «Printed Count» يعني
+ * ما خرج على ورق. والفشل لا يمنع الطباعة: تخرج الورقة بالاسم المتاح وبعدّاد
+ * الفاتورة كما قرأناه.
+ */
+export async function registerInvoicePrint(
+  invoiceId: string,
+): Promise<{ print_count: number | null; user_name: string | null; job_number: string | null } | null> {
+  try {
+    const { data, error } = await supabase.rpc("app_register_invoice_print", { p_invoice_id: invoiceId });
+    if (error) return null;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) return null;
+    return {
+      print_count: Number((row as any).print_count ?? 0) || null,
+      user_name: (row as any).user_name ?? null,
+      job_number: (row as any).job_number ?? null,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** عرض الورق بالمليمتر — الحراريّ 72mm عرضَ طباعةٍ فعليًّا لا 80mm. */

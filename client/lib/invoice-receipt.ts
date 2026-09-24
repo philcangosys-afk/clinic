@@ -91,8 +91,14 @@ export type InvoicePrintData = {
   payments: InvoicePaymentMethod[];
   /** اسم المستخدم الذي يطبع — يظهر في التذييل كما في إيصال العيادات */
   printedBy?: string | null;
+  /** رقمه الوظيفي (0184) — يُطبع بجانب اسمه فيُعرف من أصدر الورقة */
+  printedByJobNumber?: string | null;
+  /** كم مرّة طُبعت هذه الفاتورة (0186) — عدّادٌ في القاعدة لا في الجهاز */
+  printCount?: number | null;
   /** شعارٌ مُحمَّل مسبقًا كـdata URI — انظر `loadLogoDataUrl` */
   logoDataUrl?: string | null;
+  /** رمز ZATCA صورةً جاهزة (data URI) — يُولَّد قبل الطباعة */
+  qrDataUrl?: string | null;
 };
 
 function esc(value: unknown): string {
@@ -162,6 +168,9 @@ const STYLE = `
   .rcpt .addr { text-align: center; font-size: 10px; font-weight: 600; }
   .rcpt .kind { text-align: center; font-weight: 700; font-size: 11px; }
   .rcpt .num { text-align: center; font-variant-numeric: tabular-nums; }
+  /* التاريخ والعمر نصٌّ لاتينيّ داخل صفحةٍ عربية: بلا عزلٍ صريح ينقلب
+     ترتيبه فيصير «PM 03:23 24/09/2026» بدل «24/09/2026 03:23 PM». */
+  .rcpt .ltr { direction: ltr; unicode-bidi: isolate; text-align: center; }
   .rcpt .items th { text-align: center; font-size: 9px; font-weight: 700; }
   .rcpt .items td { font-size: 10px; }
   .rcpt .items .nm { text-align: right; }
@@ -171,14 +180,39 @@ const STYLE = `
     display: inline-block; width: 26mm; height: 26mm; border: 1px dashed #000;
     font-size: 8px; line-height: 1.35; padding: 3mm 1mm; color: #000;
   }
+  .rcpt .qrimg { width: 26mm; height: 26mm; }
   .rcpt .qrnote { font-size: 7.5px; margin-top: 2px; }
   .rcpt .foot { text-align: center; font-size: 8.5px; line-height: 1.5; margin-top: 6px; }
   .rcpt .muted { color: #333; }
 </style>`;
 
-/** صفٌّ ثلاثيّ: العربيّ يمينًا، والقيمة وسطًا، والإنجليزيّ يسارًا. */
+/**
+ * صفٌّ ثلاثيّ: العربيّ يمينًا، والقيمة وسطًا، والإنجليزيّ يسارًا.
+ *
+ * **الصفّ يبقى ولو كانت قيمته فارغة.** ورقةٌ تُسقط «رقم الهوية» حين لا يكون
+ * مسجّلًا تخرج بطولٍ مختلفٍ كل مرّة، والموظّف الذي يقرأ عشرين فاتورة في
+ * الساعة يعرف موضع كل حقلٍ بعينه — فالفراغ أوضح من الاختفاء، وهو أيضًا
+ * يذكّر من يُدخل البيانات بما نقص.
+ */
 function row(ar: string, value: string, en: string): string {
-  return `<tr><td class="lbl-ar">${esc(ar)}</td><td class="val">${value}</td><td class="lbl-en">${esc(en)}</td></tr>`;
+  return `<tr><td class="lbl-ar">${esc(ar)}</td><td class="val">${value || "&nbsp;"}</td><td class="lbl-en">${esc(en)}</td></tr>`;
+}
+
+/** تصنيف طرق الدفع إلى خانتي الإيصال المعتمد: نقدي وصرّاف. */
+function splitPayments(payments: InvoicePaymentMethod[]) {
+  const CASH = /cash|نقد/i;
+  const CARD = /card|mada|atm|pos|network|شبك|صراف|مدى|بطاق/i;
+  let cash = 0;
+  let card = 0;
+  const others: { name: string; amount: number }[] = [];
+  for (const p of payments) {
+    const amount = Number(p.amount ?? 0);
+    const key = `${p.method_code ?? ""} ${p.method_name ?? ""}`;
+    if (CASH.test(key)) cash += amount;
+    else if (CARD.test(key)) card += amount;
+    else others.push({ name: p.method_name ?? "أخرى", amount });
+  }
+  return { cash, card, others };
 }
 
 export function buildInvoiceReceiptHtml(data: InvoicePrintData): string {
@@ -193,22 +227,20 @@ export function buildInvoiceReceiptHtml(data: InvoicePrintData): string {
 
   const infoRows = [
     row("رقم الفاتورة", esc(invoiceLabel(h)), "Invoice. N."),
-    row("التاريخ", esc(stamp(h.invoice_at)), "Date"),
-    h.doctor_name ? row("إسم الطبيب", esc(h.doctor_name), "Doctor") : "",
-    h.clinic_name ? row("إسم العيادة", esc(h.clinic_name), "Clinic") : "",
-    row("إسم المريض", esc(h.customer_name ?? "—"), "Patient"),
+    row("التاريخ", `<span class="ltr">${esc(stamp(h.invoice_at))}</span>`, "Date"),
+    row("إسم الطبيب", esc(h.doctor_name ?? ""), "Doctor"),
+    row("إسم العيادة", esc(h.clinic_name ?? ""), "Clinic"),
+    row("إسم المريض", esc(h.customer_name ?? ""), "Patient"),
     row("الرقم الضريبي للعميل", esc(h.customer_tax_number ?? ""), "Cust. VAT"),
-    ageText ? row("العمر", esc(ageText), "Age") : "",
-    h.customer_nationality || h.customer_nationality_en
-      ? row("الجنسية", esc(h.customer_nationality_en || h.customer_nationality), "Nat.")
-      : "",
-    h.customer_id_number ? row("رقم الهوية", esc(h.customer_id_number), "ID") : "",
-    h.customer_file_number !== null && h.customer_file_number !== undefined
-      ? row("رقم الملف", esc(h.customer_file_number), "File. No.")
-      : "",
-  ]
-    .filter(Boolean)
-    .join("");
+    row("العمر", ageText ? `<span class="ltr">${esc(ageText)}</span>` : "", "Age"),
+    row("الجنسية", esc(h.customer_nationality_en || h.customer_nationality || ""), "Nat."),
+    row("رقم الهوية", esc(h.customer_id_number ?? ""), "ID"),
+    row(
+      "رقم الملف",
+      esc(h.customer_file_number === null || h.customer_file_number === undefined ? "" : h.customer_file_number),
+      "File. No.",
+    ),
+  ].join("");
 
   const itemRows = data.items
     .map(
@@ -217,7 +249,9 @@ export function buildInvoiceReceiptHtml(data: InvoicePrintData): string {
         `<td class="nm">${esc(line.description ?? "—")}</td>` +
         `<td class="num">${money(line.price)}</td>` +
         `<td class="num">${esc(line.qty ?? 1)}</td>` +
-        `<td class="num">${money(line.net_amount)}</td>` +
+        // الصافي هنا **قبل الضريبة** كما في الإيصال المعتمد: عمود «الصافي»
+        // يقابل «الصافي قبل الضريبة» في الإجماليات، والضريبة سطرٌ مستقل.
+        `<td class="num">${money(Number(line.net_amount ?? 0) - Number(line.vat_amount ?? 0))}</td>` +
         `</tr>`,
     )
     .join("");
@@ -258,16 +292,19 @@ export function buildInvoiceReceiptHtml(data: InvoicePrintData): string {
     .filter(Boolean)
     .join("");
 
-  // خانةٌ لكل طريقة دفع استُعملت فعلًا، ثمّ المدفوع جملةً
+  /**
+   * خانات الدفع ثابتة كما في الإيصال المعتمد: المدفوع، ثمّ نقدي، ثمّ صرّاف.
+   * وما خرج عنها (تحويل، محفظة، تأمين) يُضاف خانةً إضافية — فلا يضيع مبلغ.
+   */
+  const split = splitPayments(data.payments);
+  const payCell = (ar: string, en: string, amount: number) =>
+    `<td class="val">${esc(ar)} - ${esc(en)}<br /><span class="num">${money(amount)}</span></td>`;
   const payCells =
-    data.payments
-      .map(
-        (p) =>
-          `<td class="val">${esc(p.method_name ?? "—")}<br /><span class="num">${money(p.amount)}</span></td>`,
-      )
-      .join("") +
-    `<td class="val">المدفوع — Paid<br /><span class="num">${money(h.paid_amount)}</span></td>`;
-  const paySpan = data.payments.length + 1;
+    payCell("المدفوع", "Paid", Number(h.paid_amount ?? 0)) +
+    payCell("نقدي", "Cash", split.cash) +
+    payCell("صراف", "ATM", split.card) +
+    split.others.map((o) => payCell(o.name, "", o.amount)).join("");
+  const paySpan = 3 + split.others.length;
 
   const policy = (h.policy_lines ?? [])
     .map((line) => `<div class="policy">${esc(line)}</div>`)
@@ -313,24 +350,24 @@ export function buildInvoiceReceiptHtml(data: InvoicePrintData): string {
     <tr><td class="val" colspan="${paySpan}">المتبقّي — Remain &nbsp; <span class="num">${money(h.remaining_amount)}</span></td></tr>
   </table>
 
-  ${
-    h.note
-      ? `<table class="bx"><tr><td class="lbl-ar">ملاحظة</td><td class="val">${esc(h.note)}</td><td class="lbl-en">Note</td></tr></table>`
-      : ""
-  }
+  <table class="bx">${row("ملاحظة", esc(h.note ?? ""), "Note")}</table>
 
   ${policy}
 
   <div class="qr">
-    <div class="qrbox">رمز زاتكا<br />ZATCA QR<br /><br />يُفعَّل عند<br />ربط المنشأة</div>
-    <div class="qrnote">لم يُربط النظام بزاتكا بعد — هذه المساحة مخصَّصة للرمز.</div>
+    ${
+      data.qrDataUrl
+        ? `<img class="qrimg" src="${esc(data.qrDataUrl)}" alt="ZATCA QR" />`
+        : `<div class="qrbox">رمز زاتكا<br />ZATCA QR<br /><br />يظهر بعد<br />اعتماد الفاتورة</div>`
+    }
   </div>
 
   <div class="foot muted">
-    ${data.printedBy ? `${esc(data.printedBy)}<br />` : ""}
-    تاريخ الطباعة: ${esc(stamp(new Date()))}<br />
-    ${esc(h.seller_name ?? "")}
-    ${h.footer_note ? `<br />${esc(h.footer_note)}` : ""}
+    <div class="ltr">User: ${esc(data.printedBy ?? "")}${data.printedByJobNumber ? ` - ${esc(data.printedByJobNumber)}` : ""}</div>
+    <div class="ltr">Printing Date: ${esc(stamp(new Date()))}</div>
+    <div class="ltr">Printed Count : ${esc(data.printCount ?? 1)}</div>
+    <div>${esc(h.seller_name ?? "")}</div>
+    ${h.footer_note ? `<div>${esc(h.footer_note)}</div>` : ""}
   </div>
 </div>`;
 }
