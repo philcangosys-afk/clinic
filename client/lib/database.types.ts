@@ -23,6 +23,8 @@ export interface OrganizationRow {
   created_by: UUID;
   legacy_full_access: boolean;
   tax_number: string | null;
+  /** بادئة الرقم الوظيفي (0184) — حرفان إلى أربعة لاتينية، ASN مثلًا */
+  employee_code_prefix: string | null;
   currency: "SAR" | "AED" | "QAR" | "KWD" | "BHD" | "OMR";
   default_vat_rate: number;
   created_at: string;

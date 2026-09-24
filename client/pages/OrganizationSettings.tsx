@@ -55,6 +55,7 @@ function OrganizationTab({ readOnly }: { readOnly: boolean }) {
   const [form, setForm] = useState({
     name: "",
     tax_number: "",
+    employee_code_prefix: "",
     currency: "SAR" as OrganizationRow["currency"],
     default_vat_rate: "15",
   });
@@ -64,6 +65,8 @@ function OrganizationTab({ readOnly }: { readOnly: boolean }) {
     setForm({
       name: organization.name ?? "",
       tax_number: organization.tax_number ?? "",
+      employee_code_prefix:
+        (organization as { employee_code_prefix?: string | null }).employee_code_prefix ?? "",
       // `HealthcareOrganization.currency` معرَّف `string` في shared/api.ts لا
       // كاتحاد القيم — الإسناد المباشر خطأ ترجمة (TS2322). التحويل هنا آمن
       // لأن القاعدة تفرض القيم الست بقيد check على العمود.
@@ -92,6 +95,10 @@ function OrganizationTab({ readOnly }: { readOnly: boolean }) {
       const name = form.name.trim();
       if (!name) throw new Error("اسم المنشأة مطلوب");
 
+      const prefix = form.employee_code_prefix.trim().toUpperCase();
+      if (prefix && !/^[A-Z]{2,4}$/.test(prefix))
+        throw new Error("رمز الرقم الوظيفي حرفان إلى أربعة لاتينية (مثل ASN)");
+
       const rate = Number(form.default_vat_rate);
       if (!Number.isFinite(rate) || rate < 0 || rate > 100)
         throw new Error("نسبة الضريبة يجب أن تكون بين 0 و100");
@@ -101,6 +108,7 @@ function OrganizationTab({ readOnly }: { readOnly: boolean }) {
         .update({
           name,
           tax_number: form.tax_number.trim() || null,
+          employee_code_prefix: prefix || null,
           currency: form.currency,
           default_vat_rate: rate,
         })
@@ -173,6 +181,21 @@ function OrganizationTab({ readOnly }: { readOnly: boolean }) {
                 بلا رقم ضريبي تُطبع الفواتير ناقصة ولا تُقبل كفاتورة ضريبية
               </span>
             )}
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label>رمز الرقم الوظيفي</Label>
+            <Input
+              dir="ltr"
+              value={form.employee_code_prefix}
+              disabled={readOnly}
+              placeholder="ASN"
+              maxLength={4}
+              onChange={(e) => set("employee_code_prefix", e.target.value.toUpperCase())}
+            />
+            <span className="text-xs text-muted-foreground">
+              منه يتولّد رقم الموظّف الجديد: ASN-1001 ثم ASN-1002
+            </span>
           </div>
 
           <div className="flex flex-col gap-1.5">

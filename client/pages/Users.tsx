@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { UserCog, ShieldCheck, Info } from "lucide-react";
+import { UserCog, ShieldCheck, Info, UserPlus } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { isOrganizationAdmin } from "@/lib/organization-access";
@@ -24,6 +24,11 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import RolesPanel, { useOrganizationRoles } from "@/components/security/RolesPanel";
+import { MemberAccountDialog, SpecialUserDialog } from "@/components/security/MemberAccountDialogs";
+import { fetchMemberAccounts, type MemberAccount } from "@/lib/member-accounts";
+import { MODULE_LABELS, ROLE_LABELS } from "@/lib/role-permissions";
 
 /**
  * بيانات المستخدمين والصلاحيات (لقطة 6).
@@ -38,25 +43,13 @@ import { errorMessage } from "@/lib/error-message";
  * المتصفح، لأن من يملكه يملك صلاحية كاملة على كل بيانات كل المؤسسات. الطريقة
  * الآمنة: يسجّل الشخص حسابه بنفسه ثم يُسنَد له دور من هذه الشاشة.
  */
-const ROLE_LABELS: Record<OrganizationRole, string> = {
-  owner: "مالك المنشأة",
-  organization_admin: "مدير النظام",
-  branch_manager: "مدير فرع",
-  doctor: "طبيب",
-  nurse: "ممرّض/ة",
-  receptionist: "موظف استقبال",
-  pharmacist: "صيدلاني",
-  lab_technician: "فني مختبر",
-  radiology_technician: "فني أشعة",
-  accountant: "محاسب",
-  hr_manager: "مدير موارد بشرية",
-  employee: "موظف",
-};
 
 type MemberRow = {
   organization_id: string;
   user_id: string;
   role_key: OrganizationRole;
+  custom_role_id: string | null;
+  member_kind: "employee" | "special";
   is_active: boolean;
   created_at: string;
   display_name: string;
@@ -76,7 +69,7 @@ function useMembers(organizationId: string | undefined) {
         supabase
           .from("organization_memberships")
           .select(
-            "organization_id, user_id, role_key, is_active, created_at, display_language, mobile_number, note",
+            "organization_id, user_id, role_key, is_active, created_at, display_language, mobile_number, note, custom_role_id, member_kind",
           )
           .eq("organization_id", organizationId),
         supabase
@@ -182,43 +175,6 @@ function usePermissionCatalog() {
   });
 }
 
-/** عناوين عربية لنطاقات الكتالوج (`module_key`) — المفتاح الخام يُعرض إن استُجدّ نطاق. */
-const MODULE_LABELS: Record<string, string> = {
-  screens: "فتح الشاشات",
-  users: "المستخدمون والصلاحيات",
-  security: "الخصوصية وسجل التدقيق",
-  settings: "الإعدادات والسياسات",
-  structure: "الفروع والأقسام",
-  patients: "ملفات المرضى",
-  reception: "الاستقبال",
-  appointments: "المواعيد",
-  visits: "الزيارات",
-  vitals: "العلامات الحيوية",
-  doctor_workspace: "مساحة عمل الطبيب",
-  doctors: "الأطباء",
-  exam_templates: "قوالب الفحص",
-  laboratory: "المختبر",
-  radiology: "الأشعة والتصوير",
-  radiology_console: "محطة الأشعة",
-  pharmacy: "الصيدلية وصرف الأدوية",
-  inventory: "المخزون",
-  purchasing: "المشتريات والموردون",
-  catalog: "الأصناف والخدمات",
-  billing: "الفوترة والمدفوعات",
-  cashier: "الصندوق",
-  accounting: "المحاسبة",
-  insurance: "التأمين والمطالبات",
-  documents: "المستندات",
-  hr: "الموارد البشرية",
-  quality: "الجودة والحوادث",
-  assets: "الأصول والصيانة",
-  messaging: "الرسائل",
-  notifications: "التنبيهات",
-  integrations: "التكاملات",
-  portal: "بوابة المريض",
-  reports: "التقارير",
-  analytics: "التحليلات",
-};
 
 function PermissionsDialog({
   member,
@@ -567,6 +523,44 @@ export default function Users() {
 
   const viewerIsAdmin = isOrganizationAdmin(membership?.role_key as OrganizationRole | undefined);
 
+  const [specialOpen, setSpecialOpen] = useState(false);
+  const [accountTarget, setAccountTarget] = useState<MemberRow | null>(null);
+  const roles = useOrganizationRoles(organization?.id);
+
+  /**
+   * البريد وآخر دخول لا يُقرآن من القاعدة: `auth.users` لا يصل إليه المتصفّح.
+   * يأتيان من الدالّة الطرفية، وتعذّرها لا يُعطّل الشاشة — يبقى عمود البريد
+   * فارغًا وتعمل بقيّة الإدارة كما هي.
+   */
+  const accounts = useQuery({
+    queryKey: ["member-accounts", organization?.id],
+    enabled: Boolean(organization?.id) && viewerIsAdmin,
+    retry: false,
+    staleTime: 60_000,
+    queryFn: async () => fetchMemberAccounts(organization!.id),
+  });
+  const accountOf = (userId: string): MemberAccount | null => accounts.data?.[userId] ?? null;
+
+  const setCustomRole = useMutation({
+    mutationFn: async ({ userId, roleId }: { userId: string; roleId: string | null }) => {
+      if (!organization?.id) throw new Error("لا توجد مؤسسة نشطة");
+      const { error } = await supabase.rpc("app_set_membership_custom_role", {
+        p_organization_id: organization.id,
+        p_user_id: userId,
+        p_role_id: roleId,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["org-members-admin"] });
+      queryClient.invalidateQueries({ queryKey: ["organization-role-holders"] });
+      queryClient.invalidateQueries({ queryKey: ["my-permissions"] });
+      toast({ title: "تم تحديث دور المستخدم" });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذر التحديث", description: errorMessage(error) }),
+  });
+
   const updateMember = useMutation({
     mutationFn: async ({
       userId,
@@ -650,7 +644,7 @@ export default function Users() {
   };
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
+    <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
       <div>
         <h1 className="text-2xl font-bold">المستخدمون والصلاحيات</h1>
         <p className="text-sm text-muted-foreground">
@@ -658,11 +652,26 @@ export default function Users() {
         </p>
       </div>
 
+      <Tabs defaultValue="members" className="flex flex-col gap-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <TabsList>
+            <TabsTrigger value="members">الأعضاء</TabsTrigger>
+            <TabsTrigger value="roles">الأدوار والصلاحيات</TabsTrigger>
+          </TabsList>
+          {viewerIsAdmin && (
+            <Button variant="outline" onClick={() => setSpecialOpen(true)}>
+              <UserPlus className="h-4 w-4" />
+              إضافة مستخدم خاص
+            </Button>
+          )}
+        </div>
+
+        <TabsContent value="members" className="m-0 flex flex-col gap-5">
       <div className="flex items-start gap-2 rounded-lg border bg-muted/40 px-4 py-3 text-sm">
         <Info className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
         <span>
-          إضافة مستخدم جديد تتم بتسجيله لحسابه بنفسه عبر صفحة الدخول، ثم يظهر هنا لتُسنَد له الصفة
-          المناسبة. لا يُنشأ الحساب من هذه الشاشة لأسباب أمنية.
+          موظّفو المنشأة تُنشأ حساباتهم من شاشة «الموظفون». و«مستخدم خاص» لمن
+          يدخل النظام ولا ملفّ له في الموظفين — محاسبٌ خارجيّ أو مراجع.
         </span>
       </div>
 
@@ -691,6 +700,8 @@ export default function Users() {
                 <TableRow>
                   <TableHead>المستخدم</TableHead>
                   <TableHead>الصفة</TableHead>
+                  <TableHead>الدور المخصّص</TableHead>
+                  <TableHead>البريد الإلكتروني</TableHead>
                   <TableHead>الجوال</TableHead>
                   <TableHead>لغة العرض</TableHead>
                   <TableHead>ملاحظة</TableHead>
@@ -739,6 +750,40 @@ export default function Users() {
                         <Badge variant="secondary">{ROLE_LABELS[row.role_key]}</Badge>
                       )}
                     </TableCell>
+                    <TableCell>
+                      {viewerIsAdmin ? (
+                        <Select
+                          value={row.custom_role_id ?? "none"}
+                          onValueChange={(value) =>
+                            setCustomRole.mutate({
+                              userId: row.user_id,
+                              roleId: value === "none" ? null : value,
+                            })
+                          }
+                        >
+                          <SelectTrigger className="w-40">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">— بلا دور مخصّص —</SelectItem>
+                            {(roles.data ?? [])
+                              .filter((role) => role.is_active)
+                              .map((role) => (
+                                <SelectItem key={role.id} value={role.id}>
+                                  {role.name_ar}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          {(roles.data ?? []).find((role) => role.id === row.custom_role_id)?.name_ar ?? "—"}
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-[11px]" dir="ltr">
+                      {accountOf(row.user_id)?.email ?? "—"}
+                    </TableCell>
                     <TableCell className="font-mono text-xs" dir="ltr">
                       {row.mobile_number ?? "—"}
                     </TableCell>
@@ -782,6 +827,9 @@ export default function Users() {
                           <Button variant="ghost" size="sm" onClick={() => setPermissionsTarget(row)}>
                             الصلاحيات
                           </Button>
+                          <Button variant="ghost" size="sm" onClick={() => setAccountTarget(row)}>
+                            الحساب
+                          </Button>
                           <Button variant="ghost" size="sm" onClick={() => setEditTarget(row)}>
                             بيانات
                           </Button>
@@ -809,7 +857,7 @@ export default function Users() {
                 ))}
                 {(members.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={8} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={10} className="py-8 text-center text-sm text-muted-foreground">
                       لا يوجد أعضاء مسجَّلون.
                     </TableCell>
                   </TableRow>
@@ -819,12 +867,31 @@ export default function Users() {
           )}
         </CardContent>
       </Card>
+        </TabsContent>
+
+        <TabsContent value="roles" className="m-0">
+          <RolesPanel organizationId={organization?.id} canManage={viewerIsAdmin} />
+        </TabsContent>
+      </Tabs>
 
       <PermissionsDialog
         member={permissionsTarget}
         onOpenChange={() => setPermissionsTarget(null)}
         organizationId={organization?.id}
       />
+
+      {specialOpen && (
+        <SpecialUserDialog organizationId={organization?.id} onOpenChange={(open) => setSpecialOpen(open)} />
+      )}
+
+      {accountTarget && (
+        <MemberAccountDialog
+          organizationId={organization?.id}
+          member={{ user_id: accountTarget.user_id, display_name: accountTarget.display_name }}
+          currentEmail={accountOf(accountTarget.user_id)?.email ?? null}
+          onOpenChange={() => setAccountTarget(null)}
+        />
+      )}
 
       <MemberDetailsDialog
         member={editTarget}

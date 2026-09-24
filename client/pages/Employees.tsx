@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, Pencil, Plus, UserCog } from "lucide-react";
+import { FileText, KeyRound, Pencil, Plus, UserCog } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,7 @@ import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount, formatDate, useLocaleSettings } from "@/lib/locale";
+import { EmployeeAccountDialog } from "@/components/security/MemberAccountDialogs";
 
 function useEmployees(organizationId: string | undefined) {
   return useQuery({
@@ -30,7 +31,7 @@ function useEmployees(organizationId: string | undefined) {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("employees")
-        .select("id, file_number, name_ar, mobile_1, phone_1, source_country_phone_code, job_number, profession_value_id, national_id, birth_date, nationality_value_id, termination_date, status, basic_salary, housing_allowance, transportation_allowance, other_allowances, total_salary, hire_date")
+        .select("id, file_number, name_ar, mobile_1, phone_1, source_country_phone_code, job_number, profession_value_id, national_id, birth_date, nationality_value_id, termination_date, status, basic_salary, housing_allowance, transportation_allowance, other_allowances, total_salary, hire_date, user_id, email")
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
         // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
         .eq("organization_id", organizationId)
@@ -47,6 +48,12 @@ export default function Employees() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<EmployeeEditRow | null>(null);
   const [documentsFor, setDocumentsFor] = useState<{ id: string; name_ar: string } | null>(null);
+  const [accountFor, setAccountFor] = useState<{
+    id: string;
+    name_ar: string;
+    user_id: string | null;
+    email: string | null;
+  } | null>(null);
   const employees = useEmployees(organization?.id);
 
   return (
@@ -84,6 +91,7 @@ export default function Employees() {
                   <TableHead>#الملف</TableHead>
                   <TableHead>الاسم</TableHead>
                   <TableHead>الرقم الوظيفي</TableHead>
+                  <TableHead>حساب الدخول</TableHead>
                   <TableHead>الجوال</TableHead>
                   <TableHead>تاريخ التعيين</TableHead>
                   <TableHead>تاريخ الخروج</TableHead>
@@ -101,6 +109,13 @@ export default function Employees() {
                       {employee.name_ar}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{employee.job_number ?? "—"}</TableCell>
+                    <TableCell className="font-mono text-[11px]" dir="ltr">
+                      {(employee as { email?: string | null }).email ??
+                        ((employee as { user_id?: string | null }).user_id ? "—" : "")}
+                      {!(employee as { user_id?: string | null }).user_id && (
+                        <span className="font-sans text-xs text-muted-foreground">بلا حساب</span>
+                      )}
+                    </TableCell>
                     <TableCell>{employee.mobile_1 ?? "—"}</TableCell>
                     <TableCell>{formatDate(employee.hire_date, calendarDisplay)}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
@@ -127,6 +142,21 @@ export default function Employees() {
                         </Button>
                         <Button
                           size="sm"
+                          variant="ghost"
+                          title="حساب الدخول وكلمة المرور"
+                          onClick={() =>
+                            setAccountFor({
+                              id: employee.id,
+                              name_ar: employee.name_ar,
+                              user_id: (employee as { user_id?: string | null }).user_id ?? null,
+                              email: (employee as { email?: string | null }).email ?? null,
+                            })
+                          }
+                        >
+                          <KeyRound className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="sm"
                           variant="outline"
                           onClick={() => setDocumentsFor({ id: employee.id, name_ar: employee.name_ar })}
                         >
@@ -139,7 +169,7 @@ export default function Employees() {
                 ))}
                 {(employees.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={9} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={10} className="py-8 text-center text-sm text-muted-foreground">
                       لا يوجد موظفون مسجّلون بعد.
                     </TableCell>
                   </TableRow>
@@ -162,6 +192,13 @@ export default function Employees() {
           initial={editing}
         />
       )}
+      {accountFor && (
+        <EmployeeAccountDialog
+          organizationId={organization?.id}
+          employee={accountFor}
+          onOpenChange={() => setAccountFor(null)}
+        />
+      )}
       <EmployeeDocumentsDialog employee={documentsFor} onOpenChange={() => setDocumentsFor(null)} organizationId={organization?.id} />
     </div>
   );
@@ -175,6 +212,7 @@ export type EmployeeEditRow = {
   phone_1: string | null;
   source_country_phone_code: string | null;
   job_number: string | null;
+  email: string | null;
   profession_value_id: string | null;
   hire_date: string | null;
   termination_date: string | null;
@@ -218,6 +256,7 @@ function NewEmployeeDialog({
   const [sourceCountryPhone, setSourceCountryPhone] = useState(initial?.source_country_phone_code ?? "");
   const [jobNumber, setJobNumber] = useState(initial?.job_number ?? "");
   const [terminationDate, setTerminationDate] = useState(initial?.termination_date ?? "");
+  const [email, setEmail] = useState(initial?.email ?? "");
 
   const createEmployee = useMutation({
     mutationFn: async () => {
@@ -237,7 +276,10 @@ function NewEmployeeDialog({
         nationality_value_id: nationalityId || null,
         phone_1: phone1.trim() || null,
         source_country_phone_code: sourceCountryPhone.trim() || null,
-        job_number: jobNumber.trim() || null,
+        // فارغًا في الإنشاء يتولّد في القاعدة (0184)؛ وفي التعديل يبقى ما
+        // كان — تفريغه كان يمحو رقمًا مولَّدًا لمجرّد أن الحقل لم يُملأ.
+        job_number: jobNumber.trim() || (initial ? initial.job_number : null),
+        email: email.trim() || null,
         // تسجيل تاريخ خروج ينهي خدمة الموظف — نُحدِّث الحالة معه حتى لا يبقى
         // "نشطًا" وله تاريخ خروج، وهو تناقض يُفسد تقارير الموارد البشرية.
         termination_date: terminationDate || null,
@@ -313,7 +355,22 @@ function NewEmployeeDialog({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>الرقم الوظيفي</Label>
-            <Input value={jobNumber} onChange={(e) => setJobNumber(e.target.value)} />
+            <Input
+              value={jobNumber}
+              onChange={(e) => setJobNumber(e.target.value)}
+              placeholder="يتولّد تلقائيًا"
+              dir="ltr"
+            />
+            <p className="text-xs text-muted-foreground">
+              اتركه فارغًا ليتولّد من رمز المنشأة ورقمٍ متسلسل (مثل ASN-1001)
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>البريد الإلكتروني</Label>
+            <Input value={email} onChange={(e) => setEmail(e.target.value)} dir="ltr" inputMode="email" />
+            <p className="text-xs text-muted-foreground">
+              حساب الدخول يُنشأ بزرّ المفتاح في قائمة الموظفين
+            </p>
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>هاتف إضافي</Label>

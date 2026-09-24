@@ -97,6 +97,11 @@ export interface OrganizationMembership {
   branch_id: string | null;
   role_key: OrganizationRole;
   is_active: boolean;
+  /** الدور المخصّص (0183) — مجموعة صلاحياته تحلّ محلّ افتراض الدور الأساس */
+  custom_role_id?: string | null;
+  /** اسمٌ مكتوب على العضوية — للمستخدم الخاصّ الذي لا ملفّ له */
+  display_name?: string | null;
+  member_kind?: "employee" | "special";
 }
 
 export interface FeatureCatalogEntry {

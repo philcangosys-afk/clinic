@@ -203,9 +203,19 @@ export function isOrganizationAdmin(role: OrganizationRole | undefined) {
 export function resolvePermissions(
   role: OrganizationRole | undefined,
   explicitPermissions: MembershipPermission[],
+  /**
+   * صلاحيات الدور المخصّص (0183). حين يُسنَد دورٌ مخصّص **تحلّ مجموعته محلّ
+   * افتراض الدور الأساس ولا تُضاف إليه**: «كاشير» مبنيٌّ على «موظف استقبال»
+   * لكن بلا إلغاء المواعيد — ولو جُمعت المجموعتان لبقي الإلغاء.
+   * والترتيب نفسه مطبَّقٌ في `app_has_permission`، فما تراه الشاشة هو ما
+   * تسمح به القاعدة.
+   */
+  customRolePermissions?: string[] | null,
 ) {
   if (isOrganizationAdmin(role)) return ["*"];
-  const permissions = new Set(role ? rolePermissions[role] : []);
+  const permissions = new Set(
+    customRolePermissions ? customRolePermissions : role ? rolePermissions[role] : [],
+  );
   explicitPermissions.forEach((permission) => {
     if (permission.granted) permissions.add(permission.permission_key);
     else permissions.delete(permission.permission_key);

@@ -59,6 +59,8 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
   const [membership, setMembership] = useState<OrganizationMembership | null>(null);
   const [enabledFeatures, setEnabledFeatures] = useState<FeatureKey[]>([]);
   const [explicitPermissions, setExplicitPermissions] = useState<MembershipPermission[]>([]);
+  /** null = لا دور مخصّص، فتُستعمل افتراضات الدور الأساس (0183) */
+  const [customRolePermissions, setCustomRolePermissions] = useState<string[] | null>(null);
 
   const clearOrganization = useCallback(() => {
     setOrganization(null);
@@ -66,6 +68,7 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
     setMembership(null);
     setEnabledFeatures([]);
     setExplicitPermissions([]);
+    setCustomRolePermissions(null);
   }, []);
 
   const loadAccess = useCallback(async (nextSession?: Session | null) => {
@@ -120,6 +123,22 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
       setBranch((branchResult.data as OrganizationBranch | null) ?? null);
       setEnabledFeatures((featuresResult.data ?? []).map((feature) => feature.feature_key as FeatureKey));
       setExplicitPermissions((permissionsResult.data as MembershipPermission[]) ?? []);
+
+      // الدور المخصّص: مجموعة صلاحياته تحلّ محلّ افتراض الدور الأساس.
+      // تعذّر قراءتها لا يُسقط الجلسة — يعود المستخدم إلى افتراض أساسه.
+      if (currentMembership.custom_role_id) {
+        const roleResult = await supabase
+          .from("organization_role_permissions")
+          .select("permission_key")
+          .eq("role_id", currentMembership.custom_role_id);
+        setCustomRolePermissions(
+          roleResult.error
+            ? null
+            : (roleResult.data ?? []).map((row: { permission_key: string }) => row.permission_key),
+        );
+      } else {
+        setCustomRolePermissions(null);
+      }
     } catch (loadError) {
       clearOrganization();
       setError(errorMessage(loadError, "تعذر تحميل صلاحيات المنظمة"));
@@ -137,8 +156,8 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
   }, [loadAccess]);
 
   const permissions = useMemo(
-    () => resolvePermissions(membership?.role_key, explicitPermissions),
-    [membership?.role_key, explicitPermissions],
+    () => resolvePermissions(membership?.role_key, explicitPermissions, customRolePermissions),
+    [membership?.role_key, explicitPermissions, customRolePermissions],
   );
   const legacyMode = !session && !error;
   const needsOnboarding = Boolean(session && !membership && !error);
