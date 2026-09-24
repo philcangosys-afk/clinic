@@ -24,10 +24,21 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const clean = (value: unknown) => String(value ?? "").trim();
 
+/**
+ * أصلُ الطلب الجاري. يُضبط أوّل كلّ نداء، وتقرؤه ترويسات CORS.
+ *
+ * **بلا `Access-Control-Allow-Origin` يرفض المتصفّح الردّ كلّه** فيظهر
+ * «Failed to fetch» بلا رسالةٍ ولا رمزِ حالة — وهو ما كان يحدث ما لم يُضبط
+ * `APP_ORIGIN` في أسرار المشروع. فالآن: `APP_ORIGIN` إن ضُبط، وإلّا أصلُ
+ * الطلب نفسه. والحماية ليست هنا أصلًا بل في رمز الجلسة وفحص الصلاحية في
+ * القاعدة — وCORS تحمي متصفّح المستخدم لا الخادم.
+ */
+let currentOrigin = "";
+
 const getCorsHeaders = () => {
   const appOrigin = clean(Deno.env.get("APP_ORIGIN"));
   return {
-    ...(appOrigin ? { "Access-Control-Allow-Origin": appOrigin } : {}),
+    "Access-Control-Allow-Origin": appOrigin || currentOrigin || "*",
     "Access-Control-Allow-Headers":
       "authorization, x-client-info, apikey, content-type, x-device-name",
     "Access-Control-Allow-Methods": "POST, OPTIONS",
@@ -75,6 +86,7 @@ function requirePassword(value: unknown) {
 Deno.serve(async (req) => {
   const appOrigin = clean(Deno.env.get("APP_ORIGIN"));
   const requestOrigin = clean(req.headers.get("Origin"));
+  currentOrigin = requestOrigin;
   if (appOrigin && requestOrigin && requestOrigin !== appOrigin) {
     return respond({ error: "Origin not allowed" }, 403);
   }
