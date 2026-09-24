@@ -165,7 +165,15 @@ const STYLE = `
   .rcpt * { box-sizing: border-box; }
   .rcpt .logo { text-align: center; margin: 0 0 4px; }
   .rcpt .logo img { width: 34mm; max-height: 26mm; object-fit: contain; }
-  .rcpt table.bx { width: 100%; border-collapse: collapse; margin: 0 0 3px; }
+  /**
+   * «table-layout: fixed» شرطُ ألّا تخرج الورقة عن عرضها.
+   *
+   * بالتخطيط التلقائيّ يتمدّد الجدول إلى أوسع محتوى فيه مهما ضاق الورق — فخلية
+   * تاريخٍ لا تنكسر كانت تدفع الجدول كلّه خارج شريط 72mm، فيُقتطع الطرف الأيسر
+   * («voice. N.» بدل «Invoice. N.»). وبالتخطيط الثابت تُحترم النسب المعلنة
+   * أدناه، وما زاد يلتفّ داخل خليّته.
+   */
+  .rcpt table.bx { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 0 0 3px; }
   .rcpt table.bx th, .rcpt table.bx td {
     border: 1px solid #000; padding: 2.5px 3px; font-size: 10px; vertical-align: middle;
   }
@@ -187,15 +195,15 @@ const STYLE = `
    */
   .rcpt .lbl-ar { text-align: right; overflow-wrap: anywhere; }
   .rcpt .lbl-en { text-align: left; direction: ltr; overflow-wrap: anywhere; }
-  .rcpt .val { text-align: center; font-weight: 600; }
-  .rcpt .seller { text-align: center; font-size: 15px; font-weight: 700; padding: 4px 3px; }
-  .rcpt .addr { text-align: center; font-size: 10px; font-weight: 600; }
-  .rcpt .kind { text-align: center; font-weight: 700; font-size: 11px; }
+  .rcpt .val { text-align: center; font-weight: 600; overflow-wrap: anywhere; }
+  .rcpt .seller { text-align: center; font-size: 14px; font-weight: 700; padding: 4px 3px; overflow-wrap: anywhere; }
+  .rcpt .addr { text-align: center; font-size: 9.5px; font-weight: 600; overflow-wrap: anywhere; }
+  .rcpt .kind { text-align: center; font-weight: 700; font-size: 10.5px; overflow-wrap: anywhere; }
   .rcpt .num { text-align: center; font-variant-numeric: tabular-nums; }
   /* التاريخ والعمر نصٌّ لاتينيّ داخل صفحةٍ عربية: بلا عزلٍ صريح ينقلب
      ترتيبه فيصير «PM 03:23 24/09/2026» بدل «24/09/2026 03:23 PM». */
   /* التاريخ والعمر سطرٌ واحد لا ينكسر: خطٌّ أصغر قليلًا يكفي لعرض الخانة */
-  .rcpt .ltr { direction: ltr; unicode-bidi: isolate; text-align: center; white-space: nowrap; font-size: 9.5px; }
+  .rcpt .ltr { direction: ltr; unicode-bidi: isolate; text-align: center; white-space: nowrap; font-size: 8.5px; }
   .rcpt .items th { text-align: center; font-size: 9px; font-weight: 700; }
   .rcpt .items td { font-size: 10px; }
   .rcpt .items .nm { text-align: right; overflow-wrap: anywhere; }

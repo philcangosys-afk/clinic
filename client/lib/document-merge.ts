@@ -141,6 +141,9 @@ const PAPER_STYLES: Record<PaperSize, string> = {
        body{font-family:Tahoma,Arial,sans-serif;padding:24px;line-height:1.8;font-size:14px}
        table{width:100%;border-collapse:collapse}`,
   thermal_80mm: `@page{size:72mm auto;margin:0}
+       /* الحاشية داخل العرض لا فوقه: بلا border-box يصير العرض 72mm + 6mm
+          حاشية = 78mm على ورقٍ 72mm، فيُقتطع الطرف الأيسر من كل سطر. */
+       *{box-sizing:border-box}
        body{font-family:Tahoma,Arial,sans-serif;width:72mm;padding:3mm;line-height:1.45;font-size:11px}
        h1,h2,h3{font-size:13px;margin:0 0 4px}
        table{width:100%;border-collapse:collapse;font-size:10px}

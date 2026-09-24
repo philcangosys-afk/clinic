@@ -112,13 +112,17 @@ const PAPER_MM: Record<string, number> = { thermal_80mm: 72, a4: 210 };
 
 /** الأنماط نفسها التي تطبع بها `printHtml`، فالـPDF لا يخرج بشكلٍ آخر. */
 const PAPER_CSS: Record<string, string> = {
-  thermal_80mm: `body{font-family:Tahoma,Arial,sans-serif;width:72mm;padding:3mm;line-height:1.45;font-size:11px;margin:0;background:#fff}
+  thermal_80mm: `*{box-sizing:border-box}
+     /* الحاشية داخل العرض: الالتقاط بعرض 72mm، وبلا هذا يصير المستند 78mm
+        فيُقتطع منه 6mm من الطرف الأيسر في الملفّ الناتج. */
+     body{font-family:Tahoma,Arial,sans-serif;width:72mm;padding:3mm;line-height:1.45;font-size:11px;margin:0;background:#fff}
      h1,h2,h3{font-size:13px;margin:0 0 4px}
      table{width:100%;border-collapse:collapse;font-size:10px}
      th,td{padding:1px 2px}
      table,th,td{border:none}
      tbody tr{border-bottom:1px dotted #999}`,
-  a4: `body{font-family:Tahoma,Arial,sans-serif;padding:24px;line-height:1.8;font-size:14px;margin:0;background:#fff}
+  a4: `*{box-sizing:border-box}
+     body{font-family:Tahoma,Arial,sans-serif;padding:24px;line-height:1.8;font-size:14px;margin:0;background:#fff}
      table{width:100%;border-collapse:collapse}`,
 };
 
