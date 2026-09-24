@@ -170,18 +170,23 @@ const STYLE = `
     border: 1px solid #000; padding: 2.5px 3px; font-size: 10px; vertical-align: middle;
   }
   /* نسب الأعمدة كما في الإيصال المعتمد: العربيّ أوسع، ثمّ القيمة، ثمّ اللاتينيّ */
-  .rcpt table.info td.lbl-ar { width: 38%; }
-  .rcpt table.info td.val { width: 38%; }
-  .rcpt table.info td.lbl-en { width: 24%; }
+  .rcpt table.info td.lbl-ar { width: 32%; }
+  .rcpt table.info td.val { width: 42%; }
+  .rcpt table.info td.lbl-en { width: 26%; }
   .rcpt table.items th:nth-child(1), .rcpt table.items td:nth-child(1) { width: 40%; }
   .rcpt table.items th:nth-child(2), .rcpt table.items td:nth-child(2) { width: 22%; }
   .rcpt table.items th:nth-child(3), .rcpt table.items td:nth-child(3) { width: 16%; }
   .rcpt table.items th:nth-child(4), .rcpt table.items td:nth-child(4) { width: 22%; }
-  .rcpt table.totals td.lbl-ar { width: 45%; }
-  .rcpt table.totals td.val { width: 30%; }
-  .rcpt table.totals td.lbl-en { width: 25%; }
-  .rcpt .lbl-ar { text-align: right; white-space: nowrap; }
-  .rcpt .lbl-en { text-align: left; white-space: nowrap; direction: ltr; }
+  .rcpt table.totals td.lbl-ar { width: 44%; }
+  .rcpt table.totals td.val { width: 32%; }
+  .rcpt table.totals td.lbl-en { width: 24%; }
+  /**
+   * **لا «nowrap» على العناوين.** عنوانٌ أطول من خانته مع منع اللفّ يخرج من
+   * حدّ الجدول فيمرّ الخطّ في وسط الكلمة — وهو ما بدا «فواصل مكسورة» في
+   * الورقة. فاللفّ مسموح، والكلمة الطويلة تُكسر عند الضرورة ولا تتجاوز حدّها.
+   */
+  .rcpt .lbl-ar { text-align: right; overflow-wrap: anywhere; }
+  .rcpt .lbl-en { text-align: left; direction: ltr; overflow-wrap: anywhere; }
   .rcpt .val { text-align: center; font-weight: 600; }
   .rcpt .seller { text-align: center; font-size: 15px; font-weight: 700; padding: 4px 3px; }
   .rcpt .addr { text-align: center; font-size: 10px; font-weight: 600; }
@@ -189,10 +194,11 @@ const STYLE = `
   .rcpt .num { text-align: center; font-variant-numeric: tabular-nums; }
   /* التاريخ والعمر نصٌّ لاتينيّ داخل صفحةٍ عربية: بلا عزلٍ صريح ينقلب
      ترتيبه فيصير «PM 03:23 24/09/2026» بدل «24/09/2026 03:23 PM». */
-  .rcpt .ltr { direction: ltr; unicode-bidi: isolate; text-align: center; }
+  /* التاريخ والعمر سطرٌ واحد لا ينكسر: خطٌّ أصغر قليلًا يكفي لعرض الخانة */
+  .rcpt .ltr { direction: ltr; unicode-bidi: isolate; text-align: center; white-space: nowrap; font-size: 9.5px; }
   .rcpt .items th { text-align: center; font-size: 9px; font-weight: 700; }
   .rcpt .items td { font-size: 10px; }
-  .rcpt .items .nm { text-align: right; }
+  .rcpt .items .nm { text-align: right; overflow-wrap: anywhere; }
   .rcpt .policy { text-align: center; font-weight: 700; font-size: 10.5px; margin: 5px 0; line-height: 1.5; }
   .rcpt .qr { text-align: center; margin: 6px 0; }
   .rcpt .qrbox {
