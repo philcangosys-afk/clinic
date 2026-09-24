@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -47,6 +48,11 @@ const DEMO_ORGANIZATION_TYPE_KEY = "zaincare-demo-organization-type";
 
 export function OrganizationAccessProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
+  /**
+   * صاحب الجلسة المحمَّلة. لا حالةٌ بل مرجع: يُقرأ داخل مستمع المصادقة الذي
+   * يُسجَّل مرّةً واحدة، فحالةٌ عادية تبقى عنده على قيمتها الأولى أبدًا.
+   */
+  const loadedUserId = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [demoOrganizationType, setDemoOrganizationTypeState] = useState<HealthcareOrganizationType | null>(() => {
@@ -84,9 +90,11 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
         : nextSession;
       setSession(activeSession);
       if (!activeSession) {
+        loadedUserId.current = null;
         clearOrganization();
         return;
       }
+      loadedUserId.current = activeSession.user.id;
 
       const membershipResult = await supabase
         .from("organization_memberships")
@@ -149,7 +157,28 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
 
   useEffect(() => {
     void loadAccess();
-    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    /**
+     * **تجديد الرمز ليس دخولًا جديدًا.**
+     *
+     * `supabase-js` يجدّد رمز الجلسة كلّما عاد التبويب إلى الواجهة (رجوعٌ من
+     * واتساب أو من تبويب آخر)، فيُطلق `TOKEN_REFRESHED` ثمّ `SIGNED_IN`
+     * للمستخدم نفسه. وكان كلّ حدثٍ يُعيد تحميل العضوية والمنشأة والمزايا
+     * والصلاحيات ويرفع `loading`، فتحلّ شاشة «جارٍ تحميل بيانات المنشأة»
+     * محلّ العمل ثوانيَ في كلّ مرّة — وما تغيّر شيءٌ يستدعي ذلك.
+     *
+     * فلا يُعاد التحميل إلّا إذا **تغيّر المستخدم** (دخولٌ أو خروج). وتجديد
+     * الرمز يُحدِّث الجلسة وحدها، فتبقى استدعاءات القاعدة بالرمز الجديد.
+     */
+    const { data } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      // التحميل الأوّل يجري في هذا التأثير نفسه — لا يُكرَّر
+      if (event === "INITIAL_SESSION") return;
+
+      const sameUser =
+        Boolean(nextSession?.user?.id) && nextSession?.user?.id === loadedUserId.current;
+      if (event === "TOKEN_REFRESHED" || event === "USER_UPDATED" || (event === "SIGNED_IN" && sameUser)) {
+        setSession(nextSession);
+        return;
+      }
       void loadAccess(nextSession);
     });
     return () => data.subscription.unsubscribe();
