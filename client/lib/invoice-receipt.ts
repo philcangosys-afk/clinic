@@ -153,14 +153,33 @@ function titleOf(header: InvoicePrintHeader): { ar: string; en: string } {
 
 const STYLE = `
 <style>
-  .rcpt { width: 100%; font-family: Tahoma, Arial, sans-serif; }
+  /**
+   * عرضٌ ثابت 76mm مهما كان الورق.
+   *
+   * الإيصال صُمِّم شريطًا حراريًّا: أعمدته ونسبها محسوبة على هذا العرض. وحين
+   * يُطبع على A4 بلا حدّ يتمدّد الجدول إلى 210mm، فيصير عمود «اسم الصنف»
+   * نصفَ الصفحة والخطّ ضائعًا في بياضٍ واسع — وهي «الفاتورة غير المنسّقة».
+   * فالعرض يبقى كما هو ويتوسّط الصفحة، والورقة واحدةٌ على الحراريّ وعلى A4.
+   */
+  .rcpt { width: 100%; max-width: 76mm; margin: 0 auto; font-family: Tahoma, Arial, sans-serif; }
   .rcpt * { box-sizing: border-box; }
   .rcpt .logo { text-align: center; margin: 0 0 4px; }
-  .rcpt .logo img { max-width: 46mm; max-height: 22mm; }
+  .rcpt .logo img { width: 34mm; max-height: 26mm; object-fit: contain; }
   .rcpt table.bx { width: 100%; border-collapse: collapse; margin: 0 0 3px; }
   .rcpt table.bx th, .rcpt table.bx td {
-    border: 1px solid #000; padding: 2px 3px; font-size: 10px; vertical-align: middle;
+    border: 1px solid #000; padding: 2.5px 3px; font-size: 10px; vertical-align: middle;
   }
+  /* نسب الأعمدة كما في الإيصال المعتمد: العربيّ أوسع، ثمّ القيمة، ثمّ اللاتينيّ */
+  .rcpt table.info td.lbl-ar { width: 38%; }
+  .rcpt table.info td.val { width: 38%; }
+  .rcpt table.info td.lbl-en { width: 24%; }
+  .rcpt table.items th:nth-child(1), .rcpt table.items td:nth-child(1) { width: 40%; }
+  .rcpt table.items th:nth-child(2), .rcpt table.items td:nth-child(2) { width: 22%; }
+  .rcpt table.items th:nth-child(3), .rcpt table.items td:nth-child(3) { width: 16%; }
+  .rcpt table.items th:nth-child(4), .rcpt table.items td:nth-child(4) { width: 22%; }
+  .rcpt table.totals td.lbl-ar { width: 45%; }
+  .rcpt table.totals td.val { width: 30%; }
+  .rcpt table.totals td.lbl-en { width: 25%; }
   .rcpt .lbl-ar { text-align: right; white-space: nowrap; }
   .rcpt .lbl-en { text-align: left; white-space: nowrap; direction: ltr; }
   .rcpt .val { text-align: center; font-weight: 600; }
@@ -329,7 +348,7 @@ export function buildInvoiceReceiptHtml(data: InvoicePrintData): string {
     <tr><td class="kind" colspan="2">${esc(kind.en)} &nbsp;—&nbsp; ${esc(kind.ar)}</td></tr>
   </table>
 
-  <table class="bx">${infoRows}</table>
+  <table class="bx info">${infoRows}</table>
 
   <table class="bx items">
     <thead>
@@ -343,14 +362,14 @@ export function buildInvoiceReceiptHtml(data: InvoicePrintData): string {
     <tbody>${itemRows || `<tr><td colspan="4" class="val">لا بنود</td></tr>`}</tbody>
   </table>
 
-  <table class="bx">${totalsRows}</table>
+  <table class="bx totals">${totalsRows}</table>
 
   <table class="bx">
     <tr>${payCells}</tr>
     <tr><td class="val" colspan="${paySpan}">المتبقّي — Remain &nbsp; <span class="num">${money(h.remaining_amount)}</span></td></tr>
   </table>
 
-  <table class="bx">${row("ملاحظة", esc(h.note ?? ""), "Note")}</table>
+  <table class="bx info">${row("ملاحظة", esc(h.note ?? ""), "Note")}</table>
 
   ${policy}
 
