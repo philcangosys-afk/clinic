@@ -294,12 +294,26 @@ export default function ZATCASettings() {
     });
     if (error || data?.error) {
       let payload = data;
-      const context = (error as { context?: Response } | null)?.context;
+      /**
+       * **جسمُ الخطأ يُقرأ بحذر:** `FunctionsHttpError.context` استجابةٌ
+       * (`Response`) في أغلب إصدارات `supabase-js`، وفي بعضها كائنٌ عاديّ.
+       * واستدعاء `clone()` عليه حين لا يكون استجابةً يرمي
+       * «t.clone is not a function» — فتُخفي رسالةُ المعالج رسالةَ الخطأ
+       * الحقيقية القادمة من الدالّة الطرفية، وهي ما يحتاجه المستخدم.
+       */
+      const context: any = (error as { context?: unknown } | null)?.context;
       if (!payload && context) {
-        payload = await context
-          .clone()
-          .json()
-          .catch(() => null);
+        payload = await (async () => {
+          try {
+            if (typeof context.clone === "function") return await context.clone().json();
+            if (typeof context.json === "function") return await context.json();
+            if (typeof context.text === "string") return JSON.parse(context.text);
+            if (typeof context === "object") return context;
+          } catch {
+            return null;
+          }
+          return null;
+        })();
       }
       const response = payload?.details?.response;
       const responseErrors = Array.isArray(response?.errors)
@@ -309,7 +323,7 @@ export default function ZATCASettings() {
             )
             .filter(Boolean)
         : [];
-      const messages = [payload?.error, response?.dispositionMessage, response?.message, ...responseErrors]
+      const messages = [payload?.error, payload?.message, response?.dispositionMessage, response?.message, ...responseErrors]
         .map((item) => String(item ?? "").trim())
         .filter(Boolean);
       const safeMessage = [...new Set(messages)].join(" — ");

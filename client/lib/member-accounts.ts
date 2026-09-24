@@ -17,11 +17,23 @@ export async function callAdminUsers<T = any>(body: Record<string, unknown>): Pr
   const { data, error } = await supabase.functions.invoke("admin-users", { body });
   if (error || (data as any)?.error) {
     let payload: any = data;
-    const context = (error as { context?: Response } | null)?.context;
+    // `context` استجابةٌ في أغلب إصدارات `supabase-js` وكائنٌ عاديّ في بعضها،
+    // واستدعاء `clone()` على غير الاستجابة يرمي خطأً يُخفي الخطأ الحقيقيّ.
+    const context: any = (error as { context?: unknown } | null)?.context;
     if (!payload && context) {
-      payload = await context.clone().json().catch(() => null);
+      payload = await (async () => {
+        try {
+          if (typeof context.clone === "function") return await context.clone().json();
+          if (typeof context.json === "function") return await context.json();
+          if (typeof context.text === "string") return JSON.parse(context.text);
+          if (typeof context === "object") return context;
+        } catch {
+          return null;
+        }
+        return null;
+      })();
     }
-    const message = String(payload?.error ?? "").trim();
+    const message = String(payload?.error ?? payload?.message ?? "").trim();
     throw new Error(
       message ||
         (error?.message?.includes("Failed to send")
