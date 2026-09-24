@@ -34,19 +34,8 @@ const clean = (value: unknown) => String(value ?? "").trim();
  */
 let currentOrigin = "";
 
-/**
- * قيمةٌ تصلح ترويسةً: محارف ASCII المطبوعة وحدها.
- *
- * **سببٌ حقيقيّ لا احتياط نظريّ:** `APP_ORIGIN` ضُبط مرّةً على نصٍّ عربيّ،
- * فصار كلّ `new Response(… headers …)` يرمي «Value is not a valid ByteString»
- * — في OPTIONS وفي كلّ ردّ — فيسقط العامل وتردّ المنصّة «Internal Server
- * Error» بلا رسالة، ولا يظهر في المتصفّح إلّا «Failed to fetch». فقيمةٌ
- * فاسدة في الأسرار تُهمَل هنا ولا تُسقط الخدمة.
- */
-const headerSafe = (value: string) => (/^[\x20-\x7E]*$/.test(value) ? value : "");
-
 const getCorsHeaders = () => {
-  const appOrigin = headerSafe(clean(Deno.env.get("APP_ORIGIN")));
+  const appOrigin = clean(Deno.env.get("APP_ORIGIN"));
   return {
     "Access-Control-Allow-Origin": appOrigin || currentOrigin || "*",
     "Access-Control-Allow-Headers":
@@ -94,7 +83,7 @@ function requirePassword(value: unknown) {
 }
 
 Deno.serve(async (req) => {
-  const appOrigin = headerSafe(clean(Deno.env.get("APP_ORIGIN")));
+  const appOrigin = clean(Deno.env.get("APP_ORIGIN"));
   const requestOrigin = clean(req.headers.get("Origin"));
   currentOrigin = requestOrigin;
   if (appOrigin && requestOrigin && requestOrigin !== appOrigin) {

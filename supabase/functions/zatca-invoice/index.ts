@@ -10,8 +10,7 @@
  * الإرسال الحقيقي لا يحدث إلا بشرطين معًا: عبارة التأكيد مع الطلب، وتفعيل
  * الإنتاج على الجهاز في القاعدة.
  */
-import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
 import { KJUR, X509 } from "npm:jsrsasign@11.1.3";
@@ -38,8 +37,19 @@ type ZatcaMode = "simulation" | "production";
  */
 let currentOrigin = "";
 
+/**
+ * قيمةٌ تصلح ترويسةً: محارف ASCII المطبوعة وحدها.
+ *
+ * **سببٌ حقيقيّ لا احتياط نظريّ:** `APP_ORIGIN` ضُبط مرّةً على نصٍّ عربيّ،
+ * فصار كلّ `new Response(… headers …)` يرمي «Value is not a valid ByteString»
+ * — في OPTIONS وفي كلّ ردّ — فيسقط العامل وتردّ المنصّة «Internal Server
+ * Error» بلا رسالة، ولا يظهر في المتصفّح إلّا «Failed to fetch». فقيمةٌ
+ * فاسدة في الأسرار تُهمَل هنا ولا تُسقط الخدمة.
+ */
+const headerSafe = (value: string) => (/^[\x20-\x7E]*$/.test(value) ? value : "");
+
 const getCorsHeaders = () => {
-  const appOrigin = clean(Deno.env.get("APP_ORIGIN"));
+  const appOrigin = headerSafe(clean(Deno.env.get("APP_ORIGIN")));
   return {
     "Access-Control-Allow-Origin": appOrigin || currentOrigin || "*",
     "Access-Control-Allow-Headers":
@@ -522,7 +532,7 @@ function composeAddress(parts: {
 }
 
 Deno.serve(async (req) => {
-  const appOrigin = clean(Deno.env.get("APP_ORIGIN"));
+  const appOrigin = headerSafe(clean(Deno.env.get("APP_ORIGIN")));
   const requestOrigin = clean(req.headers.get("Origin"));
   currentOrigin = requestOrigin;
   if (appOrigin && requestOrigin && requestOrigin !== appOrigin) {
