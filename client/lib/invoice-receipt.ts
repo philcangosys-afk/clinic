@@ -161,7 +161,9 @@ const STYLE = `
    * نصفَ الصفحة والخطّ ضائعًا في بياضٍ واسع — وهي «الفاتورة غير المنسّقة».
    * فالعرض يبقى كما هو ويتوسّط الصفحة، والورقة واحدةٌ على الحراريّ وعلى A4.
    */
-  .rcpt { width: 100%; max-width: 76mm; margin: 0 auto; font-family: Tahoma, Arial, sans-serif; }
+  /* أسود خالص ووزنٌ متوسّط: الطابعة الحرارية تُبهت الرماديّ والخطّ الرفيع */
+  .rcpt { width: 100%; max-width: 76mm; margin: 0 auto; font-family: Tahoma, Arial, sans-serif;
+          color: #000; font-weight: 500; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .rcpt * { box-sizing: border-box; }
   .rcpt .logo { text-align: center; margin: 0 0 4px; }
   .rcpt .logo img { width: 34mm; max-height: 26mm; object-fit: contain; }
@@ -193,7 +195,7 @@ const STYLE = `
    * حدّ الجدول فيمرّ الخطّ في وسط الكلمة — وهو ما بدا «فواصل مكسورة» في
    * الورقة. فاللفّ مسموح، والكلمة الطويلة تُكسر عند الضرورة ولا تتجاوز حدّها.
    */
-  .rcpt .lbl-ar { text-align: right; overflow-wrap: anywhere; }
+  .rcpt .lbl-ar { text-align: right; overflow-wrap: anywhere; font-weight: 600; }
   .rcpt .lbl-en { text-align: left; direction: ltr; overflow-wrap: anywhere; }
   .rcpt .val { text-align: center; font-weight: 600; overflow-wrap: anywhere; }
   .rcpt .seller { text-align: center; font-size: 14px; font-weight: 700; padding: 4px 3px; overflow-wrap: anywhere; }
@@ -205,9 +207,9 @@ const STYLE = `
   /* التاريخ والعمر سطرٌ واحد لا ينكسر: خطٌّ أصغر قليلًا يكفي لعرض الخانة */
   .rcpt .ltr { direction: ltr; unicode-bidi: isolate; text-align: center; white-space: nowrap; font-size: 8.5px; }
   .rcpt .items th { text-align: center; font-size: 9px; font-weight: 700; }
-  .rcpt .items td { font-size: 10px; }
+  .rcpt .items td { font-size: 10px; font-weight: 600; }
   .rcpt .items .nm { text-align: right; overflow-wrap: anywhere; }
-  .rcpt .policy { text-align: center; font-weight: 700; font-size: 10.5px; margin: 5px 0; line-height: 1.5; }
+  .rcpt .policy { text-align: center; font-weight: 700; font-size: 10px; margin: 5px 0; line-height: 1.45; }
   .rcpt .qr { text-align: center; margin: 6px 0; }
   .rcpt .qrbox {
     display: inline-block; width: 26mm; height: 26mm; border: 1px dashed #000;
@@ -215,8 +217,8 @@ const STYLE = `
   }
   .rcpt .qrimg { width: 26mm; height: 26mm; }
   .rcpt .qrnote { font-size: 7.5px; margin-top: 2px; }
-  .rcpt .foot { text-align: center; font-size: 8.5px; line-height: 1.5; margin-top: 6px; }
-  .rcpt .muted { color: #333; }
+  .rcpt .foot { text-align: center; font-size: 9px; font-weight: 600; line-height: 1.5; margin-top: 6px; }
+  .rcpt .muted { color: #000; }
 </style>`;
 
 /**

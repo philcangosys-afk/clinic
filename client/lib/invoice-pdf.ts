@@ -181,7 +181,9 @@ export async function downloadInvoicePdf(data: InvoicePrintData): Promise<void> 
     frame.style.height = `${heightPx}px`;
 
     const canvas = await html2canvas(body, {
-      scale: 3, // شريطٌ بعرض 72mm: أقلّ من ذلك يُخرج نصًّا لا يُقرأ
+      // 4 لا 3: الحدّ الفاصل بين الأسود والأبيض أدقّ كلّما زادت البكسلات،
+      // فالحرف الصغير لا يتآكل عند التحويل إلى نقطتين.
+      scale: 4,
       backgroundColor: "#ffffff",
       useCORS: true,
       width: widthPx,
@@ -189,6 +191,32 @@ export async function downloadInvoicePdf(data: InvoicePrintData): Promise<void> 
       windowWidth: widthPx,
       windowHeight: heightPx,
     });
+
+    /**
+     * **الشريط الحراريّ يُطبع بنقطةٍ سوداء أو لا شيء.**
+     *
+     * الصورة الخارجة من المتصفّح مصقولة الحواف (رماديّات)، وJPEG يزيدها
+     * ضبابًا. والطابعة الحرارية تُحوّل الرماديّ إلى نقاطٍ متباعدة، فيخرج الخطّ
+     * باهتًا كما في الورقة الممسوحة. فتُقسَّم البكسلات إلى أسود خالص وأبيض
+     * خالص قبل التصدير، ويُحفظ PNG بلا فقدٍ — فيطبع الخطّ كاملًا كما في
+     * الأنظمة الأخرى على الطابعة نفسها.
+     */
+    if (paper !== "a4") {
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const px = image.data;
+        for (let i = 0; i < px.length; i += 4) {
+          const luminance = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+          const value = luminance < 190 ? 0 : 255;
+          px[i] = value;
+          px[i + 1] = value;
+          px[i + 2] = value;
+          px[i + 3] = 255;
+        }
+        ctx.putImageData(image, 0, 0);
+      }
+    }
 
     const heightMm = (canvas.height * widthMm) / canvas.width;
     const pdf = new jsPDF({
@@ -219,14 +247,7 @@ export async function downloadInvoicePdf(data: InvoicePrintData): Promise<void> 
         offset += pageHeight;
       }
     } else {
-      pdf.addImage(
-        canvas.toDataURL("image/jpeg", 0.92),
-        "JPEG",
-        0,
-        0,
-        widthMm,
-        heightMm,
-      );
+      pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, widthMm, heightMm);
     }
 
     pdf.save(`فاتورة-${invoiceLabel(data.header)}.pdf`);
