@@ -26,7 +26,8 @@ import {
   type PatientSearchScope,
 } from "@/lib/patient-search";
 import { useLiveBadgeCounts, formatBadgeNumber } from "@/hooks/use-live-badges";
-import { demoRoleAllowsModule, demoRoleLabel } from "@/lib/demo-role";
+import { demoRoleAllowsModule } from "@/lib/demo-role";
+import { ROLE_LABELS } from "@/lib/role-permissions";
 import { useDemoRole } from "@/contexts/DemoRoleContext";
 import { useSessionDoctor } from "@/lib/session-doctor";
 import {
@@ -437,20 +438,27 @@ function HeaderSearch() {
 export default function AppShell() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const navigate = useNavigate();
-  const { organization, membership, signOut } = useOrganizationAccess();
-  const { role, name, clear } = useDemoRole();
+  const { organization, membership, session, signOut } = useOrganizationAccess();
   const moduleAccess = useCurrentModuleAccess();
+
+  /**
+   * صفة صاحب الجلسة واسمه — من العضوية والحساب، لا من اختيارٍ في المتصفّح.
+   *
+   * كان الشريط يعرض صفةً اختارها الزائر لنفسه واسمًا كتبه بيده. الآن: الدور
+   * من `organization_memberships` مترجمًا بالعربية، والاسم من `display_name`
+   * في العضوية أو من بيانات الحساب، وإلّا البريد. فما يظهر في الشريط هو ما
+   * يظهر في سجلّ التدقيق وعلى الفاتورة — شيءٌ واحد لا ثلاثة.
+   */
+  const roleLabel = membership?.role_key ? ROLE_LABELS[membership.role_key] ?? membership.role_key : "";
+  const memberName =
+    (membership as { display_name?: string | null } | null)?.display_name?.trim() ||
+    String((session?.user.user_metadata as { display_name?: unknown } | undefined)?.display_name ?? "").trim() ||
+    session?.user.email ||
+    "";
 
   const handleSignOut = async () => {
     await signOut();
-    navigate("/onboarding", { replace: true });
-  };
-
-  // «تسجيل الخروج» في وضع المعاينة يعني العودة لاختيار الصفة، لا إنهاء
-  // الجلسة: الجلسة واحدة، والصفة هي ما يتبدّل.
-  const handleExitRole = () => {
-    clear();
-    navigate("/", { replace: true });
+    navigate("/login", { replace: true });
   };
 
   return (
@@ -476,20 +484,10 @@ export default function AppShell() {
           <HeaderSearch />
           <div className="flex-1 sm:hidden" />
 
-          {role && (
-            <div className="flex items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-1.5">
+          {roleLabel && (
+            <div className="hidden items-center gap-2 rounded-lg border border-primary/40 bg-primary/5 px-2.5 py-1.5 sm:flex">
               <UserRound className="h-4 w-4 shrink-0 text-primary" />
-              <span className="hidden text-sm font-semibold sm:inline">{demoRoleLabel(role)}</span>
-              {name && <span className="hidden text-xs text-muted-foreground sm:inline">· {name}</span>}
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 gap-1 px-2 text-xs"
-                onClick={handleExitRole}
-              >
-                <LogOut className="h-3.5 w-3.5" />
-                خروج
-              </Button>
+              <span className="whitespace-nowrap text-sm font-semibold">{roleLabel}</span>
             </div>
           )}
 
@@ -507,29 +505,28 @@ export default function AppShell() {
             <DropdownMenuTrigger asChild>
               <button className="flex items-center gap-2 rounded-xl border border-transparent px-2.5 py-1.5 text-start transition-colors hover:border-border hover:bg-muted">
                 <Avatar className="h-8 w-8">
-                  <AvatarFallback>{initialsOf(organization?.name)}</AvatarFallback>
+                  <AvatarFallback>{initialsOf(memberName || organization?.name)}</AvatarFallback>
                 </Avatar>
-                <div className="hidden flex-col items-start text-start leading-tight sm:flex">
-                  <span className="text-sm font-medium">{organization?.name ?? "حسابي"}</span>
-                  <span className="text-xs text-muted-foreground">{membership?.role_key ?? ""}</span>
+                <div className="hidden max-w-[11rem] flex-col items-start text-start leading-tight sm:flex">
+                  <span className="truncate text-sm font-medium">{memberName || organization?.name || "حسابي"}</span>
+                  <span className="truncate text-xs text-muted-foreground">{roleLabel}</span>
                 </div>
                 <ChevronDown className="h-4 w-4 text-muted-foreground" />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel>{organization?.name}</DropdownMenuLabel>
+              <DropdownMenuLabel className="leading-tight">
+                <span className="block truncate">{memberName || "حسابي"}</span>
+                <span className="block truncate text-xs font-normal text-muted-foreground">
+                  {organization?.name}
+                </span>
+              </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuItem onSelect={() => navigate("/operations-settings")}>
                 <Settings2 className="h-4 w-4" />
                 إعدادات التشغيل
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              {role && (
-                <DropdownMenuItem onSelect={handleExitRole}>
-                  <UserRound className="h-4 w-4" />
-                  تبديل الصفة
-                </DropdownMenuItem>
-              )}
               <DropdownMenuItem onSelect={handleSignOut} className="text-destructive focus:text-destructive">
                 <LogOut className="h-4 w-4" />
                 تسجيل الخروج

@@ -1,6 +1,16 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FileText, KeyRound, Pencil, Plus, UserCog } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  FileText,
+  KeyRound,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  Trash2,
+  UserCog,
+} from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,25 +32,43 @@ import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount, formatDate, useLocaleSettings } from "@/lib/locale";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { EmployeeAccountDialog } from "@/components/security/MemberAccountDialogs";
 
-function useEmployees(organizationId: string | undefined) {
+function useEmployees(organizationId: string | undefined, includeArchived: boolean) {
   return useQuery({
-    queryKey: ["employees-list", organizationId],
+    queryKey: ["employees-list", organizationId, includeArchived],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase
+      let query = supabase
         .from("employees")
-        .select("id, file_number, name_ar, mobile_1, phone_1, source_country_phone_code, job_number, profession_value_id, national_id, birth_date, nationality_value_id, termination_date, status, basic_salary, housing_allowance, transportation_allowance, other_allowances, total_salary, hire_date, user_id, email")
+        .select("id, file_number, name_ar, mobile_1, phone_1, source_country_phone_code, job_number, profession_value_id, national_id, birth_date, nationality_value_id, termination_date, status, basic_salary, housing_allowance, transportation_allowance, other_allowances, total_salary, hire_date, user_id, email, is_archived, archived_at, archive_reason")
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
         // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
-        .eq("organization_id", organizationId)
-        .order("file_number");
+        .eq("organization_id", organizationId);
+      // المؤرشف لا يظهر إلّا بطلب: هذا موضع القاعدة العامة في النظام
+      // «كل قائمة تعرض النشط غير المؤرشف» — والمفتاح أعلى الشاشة يكشفه.
+      if (!includeArchived) query = query.eq("is_archived", false);
+      const { data, error } = await query.order("file_number");
       if (error) throw error;
       return data ?? [];
     },
   });
 }
+
+type EmployeeRowLite = {
+  id: string;
+  name_ar: string;
+  is_archived?: boolean | null;
+};
 
 export default function Employees() {
   const { calendarDisplay } = useLocaleSettings();
@@ -54,7 +82,11 @@ export default function Employees() {
     user_id: string | null;
     email: string | null;
   } | null>(null);
-  const employees = useEmployees(organization?.id);
+  const [showArchived, setShowArchived] = useState(false);
+  const [archiveFor, setArchiveFor] = useState<EmployeeRowLite | null>(null);
+  const [deleteFor, setDeleteFor] = useState<EmployeeRowLite | null>(null);
+  const employees = useEmployees(organization?.id, showArchived);
+  const restoreEmployee = useRestoreEmployee(organization?.id);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
@@ -63,13 +95,21 @@ export default function Employees() {
           <h1 className="text-2xl font-bold">الموظفون</h1>
           <p className="text-sm text-muted-foreground">ملفات الموظفين، الرواتب، والوثائق</p>
         </div>
-        <Button onClick={() => {
-            setEditing(null);
-            setCreateOpen(true);
-          }}>
-          <Plus className="h-4 w-4" />
-          موظف جديد
-        </Button>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Switch id="show-archived" checked={showArchived} onCheckedChange={setShowArchived} />
+            <Label htmlFor="show-archived" className="cursor-pointer text-sm text-muted-foreground">
+              إظهار المؤرشفين
+            </Label>
+          </div>
+          <Button onClick={() => {
+              setEditing(null);
+              setCreateOpen(true);
+            }}>
+            <Plus className="h-4 w-4" />
+            موظف جديد
+          </Button>
+        </div>
       </div>
 
       <Card>
@@ -122,10 +162,16 @@ export default function Employees() {
                       {formatDate(employee.termination_date, calendarDisplay)}
                     </TableCell>
                     <TableCell className="font-semibold">{formatAmount(employee.total_salary)} ر.س</TableCell>
-                    <TableCell>
-                      <Badge variant={employee.status === "active" ? "success" : "secondary"}>
-                        {employee.status === "active" ? "نشط" : "منتهي"}
-                      </Badge>
+                    <TableCell className="whitespace-nowrap">
+                      {(employee as { is_archived?: boolean | null }).is_archived ? (
+                        <Badge variant="outline" className="border-amber-400 text-amber-700">
+                          مؤرشف
+                        </Badge>
+                      ) : (
+                        <Badge variant={employee.status === "active" ? "success" : "secondary"}>
+                          {employee.status === "active" ? "نشط" : "منتهي"}
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1">
@@ -163,6 +209,43 @@ export default function Employees() {
                           <FileText className="h-3.5 w-3.5" />
                           الوثائق
                         </Button>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button size="sm" variant="ghost" title="خيارات أخرى">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-52">
+                            {(employee as { is_archived?: boolean | null }).is_archived ? (
+                              <DropdownMenuItem
+                                onSelect={() => restoreEmployee.mutate(employee.id)}
+                                disabled={restoreEmployee.isPending}
+                              >
+                                <ArchiveRestore className="h-4 w-4" />
+                                استعادة من الأرشيف
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem
+                                onSelect={() =>
+                                  setArchiveFor({ id: employee.id, name_ar: employee.name_ar })
+                                }
+                              >
+                                <Archive className="h-4 w-4" />
+                                أرشفة الملفّ
+                              </DropdownMenuItem>
+                            )}
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onSelect={() =>
+                                setDeleteFor({ id: employee.id, name_ar: employee.name_ar })
+                              }
+                            >
+                              <Trash2 className="h-4 w-4" />
+                              حذف نهائيّ
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -190,6 +273,20 @@ export default function Employees() {
           }}
           organizationId={organization?.id}
           initial={editing}
+        />
+      )}
+      {archiveFor && (
+        <ArchiveEmployeeDialog
+          organizationId={organization?.id}
+          employee={archiveFor}
+          onOpenChange={() => setArchiveFor(null)}
+        />
+      )}
+      {deleteFor && (
+        <DeleteEmployeeDialog
+          organizationId={organization?.id}
+          employee={deleteFor}
+          onOpenChange={() => setDeleteFor(null)}
         />
       )}
       {accountFor && (
@@ -545,6 +642,213 @@ function EmployeeDocumentsDialog({
           <Button disabled={addDocument.isPending} onClick={() => addDocument.mutate()}>
             <Plus className="h-4 w-4" />
             إضافة وثيقة
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+/**
+ * ═══ الأرشفة والحذف النهائيّ ═══════════════════════════════════════════════
+ *
+ * بابان لا باب واحد، ولكلٍّ حالته:
+ *
+ * **الأرشفة** لمن عمل فعلًا. راتبه مصروف وحضوره مسجَّل وتوقيعه على تقارير،
+ * فحذفه يكسر قيودًا محاسبيّة ويُفقد أثرًا لا يجوز فقده. فيُرفع من القوائم،
+ * ويُقطع دخوله في نفس المعاملة، ويبقى سجلّه.
+ *
+ * **الحذف النهائيّ** لحالةٍ واحدة: ملفٌّ أُدخل بالخطأ ولم يتعلّق به شيء.
+ * والقاعدة هي من تحكم لا الشاشة: `app_delete_employee` تسأل `pg_constraint`
+ * عن كلّ جدولٍ يشير إلى الموظّف، فإن وجدت صفًّا واحدًا رفضت **وسمَّت الجدول**.
+ * فرسالة الرفض هنا ليست «تعذّر الحذف» بل «يتعلّق به سجلّاتٌ في …».
+ */
+
+function useRestoreEmployee(organizationId: string | undefined) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  return useMutation({
+    mutationFn: async (employeeId: string) => {
+      const { error } = await supabase.rpc("app_restore_employee", { p_employee_id: employeeId });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["employees-list", organizationId] });
+      toast({
+        title: "أُعيد الملفّ",
+        description: "الدخول لم يُفتح تلقائيًّا — فعّله من «المستخدمون والصلاحيات» إن أردت",
+      });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّرت الاستعادة", description: errorMessage(error) }),
+  });
+}
+
+function ArchiveEmployeeDialog({
+  organizationId,
+  employee,
+  onOpenChange,
+}: {
+  organizationId: string | undefined;
+  employee: { id: string; name_ar: string };
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [reason, setReason] = useState("");
+
+  const archive = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.rpc("app_archive_employee", {
+        p_employee_id: employee.id,
+        p_reason: reason.trim() || null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["employees-list", organizationId] });
+      queryClient.invalidateQueries({ queryKey: ["organization-members"] });
+      toast({ title: "أُرشف الملفّ", description: "رُفع من القوائم وقُطع دخوله، وسجلّه محفوظ" });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّرت الأرشفة", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent dir="rtl" className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>أرشفة ملفّ: {employee.name_ar}</DialogTitle>
+          <DialogDescription>
+            يُرفع الملفّ من القوائم وقوائم الاختيار، ويُقطع دخوله للنظام، ويبقى كلّ سجلّه كما هو —
+            الرواتب والحضور والوثائق والتقارير. ويمكن استعادته لاحقًا.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="archive-reason">سبب الأرشفة (اختياري)</Label>
+          <Textarea
+            id="archive-reason"
+            rows={3}
+            placeholder="تركَ العمل، نهاية العقد، نُقل إلى فرعٍ آخر..."
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+          />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            إلغاء
+          </Button>
+          <Button disabled={archive.isPending} onClick={() => archive.mutate()}>
+            {archive.isPending ? "جارٍ الأرشفة..." : "أرشفة الملفّ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteEmployeeDialog({
+  organizationId,
+  employee,
+  onOpenChange,
+}: {
+  organizationId: string | undefined;
+  employee: { id: string; name_ar: string };
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [confirmation, setConfirmation] = useState("");
+
+  // ما يتعلّق بالملفّ يُقرأ قبل الضغط لا بعده: من يرى «يتعلّق به 3 صفوف في
+  // payroll_run_items» يعرف أنّ أمامه أرشفةً، فلا يضغط زرًّا ليُرَدّ.
+  const dependencies = useQuery({
+    queryKey: ["employee-dependencies", employee.id],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_employee_dependencies", {
+        p_employee_id: employee.id,
+      });
+      if (error) throw error;
+      return (data ?? []) as { table_name: string; row_count: number; blocking: boolean }[];
+    },
+  });
+
+  const blocking = (dependencies.data ?? []).filter((row) => row.blocking);
+  const canDelete = dependencies.isSuccess && blocking.length === 0;
+
+  const remove = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.rpc("app_delete_employee", { p_employee_id: employee.id });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["employees-list", organizationId] });
+      toast({ title: "حُذف الملفّ نهائيًّا" });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر الحذف", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent dir="rtl" className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-destructive">حذف نهائيّ: {employee.name_ar}</DialogTitle>
+          <DialogDescription>
+            الحذف النهائيّ لا رجعة فيه. وهو متاح فقط لملفٍّ لم يتعلّق به أيّ سجلّ مالي أو تشغيليّ —
+            ملفٍّ أُدخل بالخطأ. أمّا من عمل فعلًا فبابه الأرشفة.
+          </DialogDescription>
+        </DialogHeader>
+
+        {dependencies.isLoading && <Skeleton className="h-16 w-full" />}
+
+        {dependencies.isError && (
+          <p className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            تعذّر فحص ما يتعلّق بالملفّ: {errorMessage(dependencies.error)}
+          </p>
+        )}
+
+        {dependencies.isSuccess && blocking.length > 0 && (
+          <div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+            <p className="font-semibold">لا يُحذف هذا الملفّ — يتعلّق به سجلّات:</p>
+            <ul className="flex flex-col gap-0.5 ps-4">
+              {blocking.map((row) => (
+                <li key={row.table_name} className="list-disc font-mono text-[11px]" dir="ltr">
+                  {row.table_name} ({row.row_count})
+                </li>
+              ))}
+            </ul>
+            <p>استخدم الأرشفة: تُخفيه من القوائم وتقطع دخوله وتُبقي سجلّه.</p>
+          </div>
+        )}
+
+        {canDelete && (
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="delete-confirm">
+              للتأكيد اكتب اسم الموظّف: <span className="font-bold">{employee.name_ar}</span>
+            </Label>
+            <Input
+              id="delete-confirm"
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+              placeholder={employee.name_ar}
+            />
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            إلغاء
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={!canDelete || confirmation.trim() !== employee.name_ar.trim() || remove.isPending}
+            onClick={() => remove.mutate()}
+          >
+            {remove.isPending ? "جارٍ الحذف..." : "حذف نهائيّ"}
           </Button>
         </DialogFooter>
       </DialogContent>

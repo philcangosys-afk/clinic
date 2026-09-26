@@ -9,6 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 const Index = lazy(() => import("./pages/Index"));
 const Onboarding = lazy(() => import("./pages/Onboarding"));
+const Login = lazy(() => import("./pages/Login"));
 const ComingSoon = lazy(() => import("./pages/ComingSoon"));
 const NotFound = lazy(() => import("./pages/NotFound"));
 const Reception = lazy(() => import("./pages/Reception"));
@@ -212,6 +213,9 @@ const App = () => (
             }
           >
           <Routes>
+            {/* شاشة الدخول خارج `RouteGuard`: هي ما يُحوَّل إليه من لا جلسة له،
+                فلو كانت داخله لدارت الإحالة على نفسها. */}
+            <Route path="/login" element={<Login />} />
             <Route path="/onboarding" element={<Onboarding />} />
             {/* بوابة المريض خارج قشرة النظام: المريض ليس عضوًا في المنشأة */}
             <Route path="/portal" element={<Portal />} />

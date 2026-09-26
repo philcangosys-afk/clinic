@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { UserCog, ShieldCheck, Info, UserPlus } from "lucide-react";
+import { MoreHorizontal, UserCog, ShieldCheck, Info, UserPlus } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { isOrganizationAdmin } from "@/lib/organization-access";
@@ -14,6 +14,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -695,26 +702,28 @@ export default function Users() {
         <CardContent>
           {members.isLoading && <Skeleton className="h-40 w-full" />}
           {!members.isLoading && (
-            <Table>
+            <Table className="min-w-[1180px] [&_th]:whitespace-nowrap">
               <TableHeader>
                 <TableRow>
-                  <TableHead>المستخدم</TableHead>
-                  <TableHead>الصفة</TableHead>
-                  <TableHead>الدور المخصّص</TableHead>
-                  <TableHead>البريد الإلكتروني</TableHead>
-                  <TableHead>الجوال</TableHead>
-                  <TableHead>لغة العرض</TableHead>
-                  <TableHead>ملاحظة</TableHead>
-                  <TableHead>الحالة</TableHead>
-                  <TableHead>تاريخ الانضمام</TableHead>
-                  <TableHead className="w-52">إجراءات</TableHead>
+                  <TableHead className="w-48">المستخدم</TableHead>
+                  <TableHead className="w-48">الصفة</TableHead>
+                  <TableHead className="w-44">الدور المخصّص</TableHead>
+                  <TableHead className="w-56">البريد الإلكتروني</TableHead>
+                  <TableHead className="w-32">الجوال</TableHead>
+                  <TableHead className="w-32">لغة العرض</TableHead>
+                  <TableHead className="w-40">ملاحظة</TableHead>
+                  <TableHead className="w-24">الحالة</TableHead>
+                  <TableHead className="w-28">الانضمام</TableHead>
+                  <TableHead className="w-16 text-center">إجراءات</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {(members.data ?? []).map((row) => (
                   <TableRow key={row.user_id}>
-                    <TableCell>
-                      <p className="font-medium">{row.display_name}</p>
+                    <TableCell className="align-middle">
+                      <p className="truncate font-medium" title={row.display_name}>
+                        {row.display_name}
+                      </p>
                       {row.user_id === session?.user.id && (
                         <span className="text-[10px] text-muted-foreground">(أنت)</span>
                       )}
@@ -735,7 +744,7 @@ export default function Users() {
                             });
                           }}
                         >
-                          <SelectTrigger className="w-44">
+                          <SelectTrigger className="w-full">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -761,7 +770,7 @@ export default function Users() {
                             })
                           }
                         >
-                          <SelectTrigger className="w-40">
+                          <SelectTrigger className="w-full">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -781,10 +790,10 @@ export default function Users() {
                         </span>
                       )}
                     </TableCell>
-                    <TableCell className="font-mono text-[11px]" dir="ltr">
+                    <TableCell className="max-w-[14rem] truncate font-mono text-[11px]" dir="ltr">
                       {accountOf(row.user_id)?.email ?? "—"}
                     </TableCell>
-                    <TableCell className="font-mono text-xs" dir="ltr">
+                    <TableCell className="whitespace-nowrap font-mono text-xs" dir="ltr">
                       {row.mobile_number ?? "—"}
                     </TableCell>
                     <TableCell>
@@ -798,7 +807,7 @@ export default function Users() {
                             })
                           }
                         >
-                          <SelectTrigger className="w-28">
+                          <SelectTrigger className="w-full">
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -810,47 +819,54 @@ export default function Users() {
                         <span className="text-sm">{row.display_language === "en" ? "English" : "العربية"}</span>
                       )}
                     </TableCell>
-                    <TableCell className="max-w-[12rem] truncate text-xs text-muted-foreground">
+                    <TableCell className="max-w-[10rem] truncate text-xs text-muted-foreground" title={row.note ?? ""}>
                       {row.note ?? "—"}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={row.is_active ? "success" : "secondary"}>
+                      <Badge variant={row.is_active ? "success" : "secondary"} className="whitespace-nowrap">
                         {row.is_active ? "نشط" : "معطّل"}
                       </Badge>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
                       {new Date(row.created_at).toLocaleDateString("ar-SA")}
                     </TableCell>
-                    <TableCell>
+                    <TableCell className="text-center">
                       {viewerIsAdmin && (
-                        <div className="flex gap-1">
-                          <Button variant="ghost" size="sm" onClick={() => setPermissionsTarget(row)}>
-                            الصلاحيات
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={() => setAccountTarget(row)}>
-                            الحساب
-                          </Button>
-                          <Button variant="ghost" size="sm" onClick={() => setEditTarget(row)}>
-                            بيانات
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              const blocked = guard(row, !row.is_active, row.role_key);
-                              if (blocked) {
-                                toast({ variant: "destructive", title: "غير مسموح", description: blocked });
-                                return;
-                              }
-                              updateMember.mutate({
-                                userId: row.user_id,
-                                patch: { is_active: !row.is_active },
-                              });
-                            }}
-                          >
-                            {row.is_active ? "تعطيل" : "تفعيل"}
-                          </Button>
-                        </div>
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8" title="إجراءات العضو">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end" className="w-44">
+                            <DropdownMenuItem onSelect={() => setPermissionsTarget(row)}>
+                              الصلاحيات
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setAccountTarget(row)}>
+                              الحساب وكلمة المرور
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setEditTarget(row)}>
+                              بيانات العضو
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                              className={row.is_active ? "text-destructive focus:text-destructive" : undefined}
+                              onSelect={() => {
+                                const blocked = guard(row, !row.is_active, row.role_key);
+                                if (blocked) {
+                                  toast({ variant: "destructive", title: "غير مسموح", description: blocked });
+                                  return;
+                                }
+                                updateMember.mutate({
+                                  userId: row.user_id,
+                                  patch: { is_active: !row.is_active },
+                                });
+                              }}
+                            >
+                              {row.is_active ? "تعطيل الدخول" : "تفعيل الدخول"}
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       )}
                     </TableCell>
                   </TableRow>

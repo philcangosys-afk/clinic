@@ -1,36 +1,46 @@
 import { useEffect, type ReactNode } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Activity } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
-import { useDemoRole } from "@/contexts/DemoRoleContext";
-import RolePicker from "./RolePicker";
-
-const DEMO_HOME: Record<string, string> = {
-  organization_admin: "/",
-  receptionist: "/reception",
-  doctor: "/doctor-workspace",
-  radiology_technician: "/radiology-console",
-  lab_technician: "/laboratory",
-  accountant: "/billing",
-};
 
 /**
- * يغلّف شجرة مسارات التطبيق الرئيسية (ما بعد تسجيل الدخول). يحوّل المستخدم
- * تلقائيًا إلى /onboarding إذا كان لديه جلسة دخول لكنه بلا عضوية في أي منشأة
- * (needsOnboarding) — نفس السلوك الذي كان "يُفترض" أن يحدث في الواجهة القديمة
- * ولم يكن مفعّلًا تلقائيًا، وكان يعتمد على أن يضغط المستخدم بنفسه على رابط
- * "إعداد منشأة جديدة" من قائمة الحساب.
+ * بوّابة شجرة المسارات الداخلية — ما بعد الدخول.
+ *
+ * **ما تغيّر ولماذا.** كانت هذه البوّابة تفتح النظام لمن لا حساب له: تعرض
+ * «اختيار الصفة»، فيكتب زائرٌ اسمًا ويختار «الإدارة» ويدخل على كل الشاشات.
+ * كان ذلك مقبولًا وهو نظام عرضٍ بلا بيانات؛ وفيه اليوم مرضى وفواتير وأرقام
+ * ضريبية — فلا شاشة قبل حساب. من لا جلسة له يُحوَّل إلى `/login`.
+ *
+ * والدور لم يعد يُختار: يأتي من عضوية الحساب في المنشأة. فمن دخل بحسابه رأى
+ * ما يملكه فعلًا لا ما اختاره لنفسه. (تصفية القائمة الجانبية بحسب الدور بقيت
+ * كما هي — `DemoRoleContext` يستنبط الدور من العضوية نفسها.)
+ *
+ * والوجهة المقصودة تُمرَّر في حالة التنقّل، فمن فتح رابطًا داخليًّا ولم يكن
+ * داخلًا عاد إليه بعد الدخول لا إلى الرئيسية.
  */
 export default function RouteGuard({ children }: { children: ReactNode }) {
   const access = useOrganizationAccess();
-  const demo = useDemoRole();
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
-    if (!access.loading && access.needsOnboarding) {
-      navigate("/onboarding", { replace: true });
+    if (access.loading) return;
+    if (!access.session) {
+      navigate("/login", {
+        replace: true,
+        state: { from: `${location.pathname}${location.search}` },
+      });
+      return;
     }
-  }, [access.loading, access.needsOnboarding, navigate]);
+    if (access.needsOnboarding) navigate("/onboarding", { replace: true });
+  }, [
+    access.loading,
+    access.session,
+    access.needsOnboarding,
+    navigate,
+    location.pathname,
+    location.search,
+  ]);
 
   if (access.loading) {
     return (
@@ -43,21 +53,9 @@ export default function RouteGuard({ children }: { children: ReactNode }) {
     );
   }
 
-  if (access.needsOnboarding) return null;
-
-  // لا صفة مختارة بعد ⇒ شاشة اختيار الصفة قبل أي شاشة أخرى. تُعرض فقط بعد
-  // قراءة الاختيار المحفوظ، وإلا ومضت لحظةً لمن اختار سلفًا.
-  if (demo.ready && !demo.role) {
-    return (
-      <RolePicker
-        onPick={(state) => {
-          demo.set(state);
-          const home = DEMO_HOME[state.role];
-          if (home) navigate(home, { replace: true });
-        }}
-      />
-    );
-  }
+  // لا شيء يُرسم أثناء الإحالة: إطارٌ من الشاشة الداخلية لمن لا جلسة له تسريبٌ
+  // للبيانات وإن كان لمحةً.
+  if (!access.session || access.needsOnboarding) return null;
 
   return <>{children}</>;
 }
