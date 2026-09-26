@@ -156,6 +156,8 @@ export type PermissionKey =
   | "billing.complimentary"
   /* الخصم على سطر الفاتورة بسببٍ مكتوب (0167) */
   | "billing.line_discount"
+  /* عرض اليوميات السابقة وسجلّها (0191) */
+  | "billing.day_history"
   | "cashier.receive"
   | "cashier.open"
   | "cashier.close"

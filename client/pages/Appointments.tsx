@@ -17,6 +17,8 @@ import {
   Printer,
   RefreshCw,
   Search,
+  UserRound,
+  X,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
@@ -262,6 +264,49 @@ export default function Appointments() {
     clinicId: string | null;
     patient?: { id: string; name_ar: string } | null;
   } | null>(null);
+  /**
+   * ═══ «حجز موعد جديد» من ملفّ المريض (`?bookFor=<patientId>`) ═══════════════
+   *
+   * كان الزرّ (في «أوامر على الملفّ») يفتح نافذة الحجز فورًا على التاسعة صباحًا
+   * بلا طبيب: يكتب الموظّف الوقت ويختار الطبيب ثمّ يكتشف أنّه مشغول. الآن
+   * يُفتح **جدول اليوم أوّلًا** — عمودٌ لكلّ طبيب وربعُ ساعة لكلّ صفّ، والمتاح
+   * ملوَّن — والمريض محمولٌ في شريطٍ أعلاه. الضغط على خانةٍ فارغة يفتح النافذة
+   * بالمريض والطبيب والوقت معًا، فلا يبقى للموظّف إلّا الخدمة والتأكيد.
+   */
+  const bookForId = searchParams.get("bookFor");
+  const bookForPatient = useQuery({
+    queryKey: ["appointments-book-for", organization?.id, bookForId],
+    enabled: Boolean(organization?.id && bookForId),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patients")
+        .select("id, name_ar, file_number, mobile_number")
+        .eq("id", bookForId)
+        .eq("organization_id", organization?.id)
+        .maybeSingle();
+      if (error) throw error;
+      return (data ?? null) as {
+        id: string;
+        name_ar: string;
+        file_number: number | string | null;
+        mobile_number: string | null;
+      } | null;
+    },
+  });
+  const bookingPatient = bookForId ? bookForPatient.data ?? null : null;
+  /** الموعد المحجوز للتوّ من شريط الحجز — يُبرَز في الجدول وتُعرض خطوته التالية. */
+  const [booked, setBooked] = useState<{
+    id: string;
+    scheduled_start: string;
+    doctor_id: string;
+    patient: { id: string; name_ar: string; file_number: number | string | null };
+  } | null>(null);
+  const endBooking = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete("bookFor");
+    setSearchParams(next, { replace: true });
+  };
+
   /** الموعد الذي فُتحت عليه قائمة الزرّ الأيمن ويُطلب له سببٌ (لم يحضر/إلغاء). */
   const [reasonTarget, setReasonTarget] = useState<{
     appointment: AppointmentWithRelations;
@@ -422,20 +467,22 @@ export default function Appointments() {
   });
   useEffect(() => {
     if (!wantsNewAppointment || !prefillPatient.data || !canSchedule) return;
-    setPrefill({
-      day,
-      time: "09:00",
-      doctorId: null,
-      clinicId: null,
-      patient: prefillPatient.data,
-    });
-    setCreateOpen(true);
+    // الرابط القديم يدخل مسار الحجز نفسه: الجدول أوّلًا ثمّ النافذة — لا
+    // نافذةٌ على التاسعة صباحًا بلا طبيب.
     const next = new URLSearchParams(searchParams);
-    // المعامل يُستهلَك مرّة: إبقاؤه يُعيد فتح النافذة كلّما أُغلقت.
     next.delete("new");
     next.delete("patientId");
+    next.set("bookFor", prefillPatient.data.id);
     setSearchParams(next, { replace: true });
   }, [wantsNewAppointment, prefillPatient.data?.id, canSchedule]);
+
+  // الحجز يجري على جدول اليوم: يُفتح التقويم أيًّا كان العرض المختار قبله
+  useEffect(() => {
+    if (bookForId) {
+      setMode("calendar");
+      setBooked(null);
+    }
+  }, [bookForId]);
 
   const clearRequestParam = () => {
     if (!requestId) return;
@@ -748,6 +795,87 @@ export default function Appointments() {
         </CardContent>
       </Card>
 
+      {bookForId && (
+        <Card className="sticky top-0 z-40 border-primary/50 bg-primary/5 shadow-sm">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                <UserRound className="h-4 w-4" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold">
+                  حجز موعد جديد لـ{" "}
+                  {bookForPatient.isLoading ? "…" : bookingPatient?.name_ar ?? "مريض غير موجود"}
+                  {bookingPatient?.file_number != null && (
+                    <span className="ms-2 text-xs font-normal text-muted-foreground">
+                      ملف {bookingPatient.file_number}
+                    </span>
+                  )}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  اختر اليوم بالأسهم، ثمّ اضغط وقتًا في عمود الطبيب — الأخضر دوامه، والمخطَّط خارج دوامه أو ممنوع.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2">
+              {bookingPatient && (
+                <Button variant="outline" size="sm" onClick={() => navigate(`/patients/${bookingPatient.id}`)}>
+                  ملف المريض
+                </Button>
+              )}
+              <Button variant="ghost" size="sm" onClick={endBooking}>
+                <X className="h-4 w-4" />
+                إلغاء الحجز
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {booked && !bookForId && (
+        <Card className="border-emerald-300 bg-emerald-50/70 dark:bg-emerald-950/20">
+          <CardContent className="flex flex-wrap items-center justify-between gap-3 p-3">
+            <div className="text-sm">
+              <p className="font-semibold text-emerald-800 dark:text-emerald-300">
+                حُجز موعد {booked.patient.name_ar}
+                {booked.patient.file_number != null ? ` (ملف ${booked.patient.file_number})` : ""}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                مع {visibleDoctors.find((doctor) => doctor.id === booked.doctor_id)?.name_ar ?? "الطبيب"} ·{" "}
+                {formatDateTime(booked.scheduled_start, calendarDisplay)} — مُبرَزٌ في الجدول أدناه.{" "}
+                {toDateInputValue(new Date(booked.scheduled_start)) === toDateInputValue(new Date())
+                  ? "وهو في «نظام الدور» ضمن مواعيد اليوم بانتظار التأكيد أو الحضور."
+                  : "ويظهر في «نظام الدور» يوم الموعد."}
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {toDateInputValue(new Date(booked.scheduled_start)) === toDateInputValue(new Date()) && (
+                <Button size="sm" onClick={() => navigate(`/reception?appointmentId=${booked.id}`)}>
+                  نظام الدور
+                </Button>
+              )}
+              <Button size="sm" variant="outline" onClick={() => navigate(`/patients/${booked.patient.id}`)}>
+                العودة لملف المريض
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  const next = new URLSearchParams(searchParams);
+                  next.set("bookFor", booked.patient.id);
+                  setSearchParams(next, { replace: true });
+                }}
+              >
+                موعد آخر لنفس المريض
+              </Button>
+              <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => setBooked(null)} title="إخفاء">
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* طلب متابعة أُغلق قبل الوصول إلى هنا: بلا هذه الرسالة تُفتح الشاشة
           عادية فيظن الموظف أن الرابط لا يعمل ويحجز موعدًا ثانيًا. */}
       {requestId && followUpRequest.data && followUpRequest.data.status !== "pending" && (
@@ -894,9 +1022,16 @@ export default function Appointments() {
             if (!canSchedule) return;
             const day = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`;
             const time = `${String(start.getHours()).padStart(2, "0")}:${String(start.getMinutes()).padStart(2, "0")}`;
-            setPrefill({ day, time, doctorId, clinicId });
+            setPrefill({
+              day,
+              time,
+              doctorId,
+              clinicId,
+              patient: bookingPatient ? { id: bookingPatient.id, name_ar: bookingPatient.name_ar } : null,
+            });
             setCreateOpen(true);
           }}
+          highlightId={booked?.id ?? null}
           onOpenAppointment={(appointmentId) => {
             const found = appointmentRows.find((row) => row.id === appointmentId);
             // الموعد خارج يوم القائمة في العرض الأسبوعي والشهري: يُجلب
@@ -1034,6 +1169,21 @@ export default function Appointments() {
         onConsumePrefill={() => setPrefill(null)}
         followUpRequest={pendingRequest}
         onRequestBooked={clearRequestParam}
+        onCreated={(row) => {
+          if (!bookingPatient) return;
+          // يُعرض الحجز في جدول يومه، ويُغلق شريط الحجز فلا يُحجز للمريض
+          // موعدٌ ثانٍ بضغطةٍ عابرة على خانةٍ أخرى.
+          setBooked({
+            ...row,
+            patient: {
+              id: bookingPatient.id,
+              name_ar: bookingPatient.name_ar,
+              file_number: bookingPatient.file_number,
+            },
+          });
+          setDay(toDateInputValue(new Date(row.scheduled_start)));
+          endBooking();
+        }}
       />
     </div>
   );
@@ -1295,6 +1445,7 @@ function CreateAppointmentDialog({
   onConsumePrefill,
   followUpRequest,
   onRequestBooked,
+  onCreated,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1327,6 +1478,8 @@ function CreateAppointmentDialog({
     patient: { id: string; name_ar: string } | null;
   } | null;
   onRequestBooked?: () => void;
+  /** يُنادى بالموعد المُنشأ — لمسار «حجز موعد جديد» من ملفّ المريض. */
+  onCreated?: (row: { id: string; scheduled_start: string; doctor_id: string }) => void;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -1403,11 +1556,17 @@ function CreateAppointmentDialog({
    */
   const [allowOutsideHours, setAllowOutsideHours] = useState(false);
 
+  /**
+   * التعبئة عند الفتح — مرّةً واحدة لكلّ فتح.
+   *
+   * كان الأثر يعتمد على `defaultDay` أيضًا، و`defaultDay` هو يوم التعبئة ما
+   * دامت قائمة: فلمّا تُستهلك التعبئة يعود `defaultDay` إلى يوم الشاشة، فيعمل
+   * الأثر ثانيةً ويكتب **يوم الشاشة فوق يوم الخانة المضغوطة**. من تنقّل في
+   * التقويم بأسهمه ثمّ ضغط خانة يوم الخميس كان يجد النافذة على يوم الشاشة.
+   */
   useEffect(() => {
     if (!open) return;
-    setDate(defaultDay);
-    // التعبئة تُستهلك مرة واحدة عند الفتح: إبقاؤها كان يُعيد ضبط ما يكتبه
-    // المستخدم في كل إعادة رسم.
+    setDate(prefill?.day ?? defaultDay);
     if (prefill) {
       setTime(prefill.time);
       if (prefill.doctorId) setDoctorId(prefill.doctorId);
@@ -1415,7 +1574,7 @@ function CreateAppointmentDialog({
       if (prefill.patient) setPatient(prefill.patient);
       onConsumePrefill?.();
     }
-  }, [defaultDay, open]);
+  }, [open]);
 
   // بيانات طلب المتابعة تُعبَّأ عند فتح النافذة: المريض يأتي من الطلب ولا
   // يُختار هنا، لأن القاعدة تحجز لمريض الطلب لا لمن يُختار في الشاشة.
@@ -1583,10 +1742,10 @@ function CreateAppointmentDialog({
           p_note: note.trim() || null,
         });
         if (error) throw error;
-        return;
+        return null;
       }
 
-      const { error } = await supabase.from("appointments").insert({
+      const { data: created, error } = await supabase.from("appointments").insert({
         organization_id: organizationId,
         doctor_id: doctorId,
         patient_id: patient.id,
@@ -1602,12 +1761,18 @@ function CreateAppointmentDialog({
         created_by: session?.user.id ?? null,
         // يُستهلك في القاعدة ويعود false؛ ويبقى من تجاوز ومتى (0174)
         overlap_override: Boolean(vars?.override),
-      });
+      })
+        .select("id, scheduled_start, doctor_id")
+        .single();
       if (error) throw error;
+      return created as { id: string; scheduled_start: string; doctor_id: string };
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
       queryClient.invalidateQueries({ queryKey: ["calendar-appointments"] });
+      // الموعد الجديد يدخل مواعيد اليوم في الاستقبال («نظام الدور»)
+      queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
+      queryClient.invalidateQueries({ queryKey: ["reception-board"] });
       if (followUpRequest) {
         // قائمة طلبات الاستقبال تُحدَّث فورًا: طلبٌ أُنجز يبقى معلّقًا على
         // شاشة زميل آخر حتى يحدّث الصفحة، فيُحجز الموعد مرّتين.
@@ -1615,6 +1780,7 @@ function CreateAppointmentDialog({
         onRequestBooked?.();
       }
       toast({ title: followUpRequest ? "تم حجز موعد المتابعة وإغلاق الطلب" : "تم حجز الموعد" });
+      if (created) onCreated?.(created);
       setPatient(null);
       setDoctorId("");
       setService(null);

@@ -21,7 +21,7 @@ export async function loadInvoicePrintData(
   invoiceId: string,
   printedBy: string | null,
 ): Promise<InvoicePrintData> {
-  const [headerRes, itemsRes, paymentsRes, invoiceRes] = await Promise.all([
+  const [headerRes, itemsRes, paymentsRes, invoiceRes, issuerRes] = await Promise.all([
     supabase.from("v_invoice_print").select("*").eq("invoice_id", invoiceId).maybeSingle(),
     supabase
       .from("sales_invoice_items")
@@ -38,6 +38,15 @@ export async function loadInvoicePrintData(
       .select("zatca_qr_data, print_count")
       .eq("id", invoiceId)
       .maybeSingle(),
+    /**
+     * مُصدِر الفاتورة (0189): اسم مستخدمه ورقمه الوظيفي من `created_by`.
+     *
+     * كان «User» على الورقة اسمَ **من يضغط** — يُمرَّر من كلّ شاشة بطريقتها،
+     * فيخرج فارغًا من نافذة التفاصيل ومن ملفّ المريض، ويتغيّر إن أعاد زميلٌ
+     * الطباعة. الآن يُقرأ مع الفاتورة من القاعدة، فالتحميل والطباعة والإرسال
+     * يحملون الاسم نفسه من أيّ شاشة.
+     */
+    supabase.rpc("app_invoice_issuer", { p_invoice_id: invoiceId }),
   ]);
   if (headerRes.error) throw headerRes.error;
   if (itemsRes.error) throw itemsRes.error;
@@ -57,6 +66,18 @@ export async function loadInvoicePrintData(
    * أيّهما تبقى مساحةٌ مرسومة على الورقة ولا تُطبع فاتورةٌ ناقصة الشكل.
    */
   const extra = (invoiceRes.data ?? null) as { zatca_qr_data?: string | null; print_count?: number | null } | null;
+
+  // جوابُ القاعدة يُؤخذ كما هو ولو كان فارغًا: فاتورةٌ بلا مُصدِرٍ مسجَّل لا
+  // يُكتب عليها اسم من يطبعها الآن. والاسم المُمرَّر من الشاشة احتياطٌ فقط
+  // إن تعذّر الاستدعاء نفسه (0189 لم تُنفَّذ بعد).
+  const issuerRow = issuerRes.error
+    ? null
+    : ((Array.isArray(issuerRes.data) ? issuerRes.data[0] : issuerRes.data) as
+        | { user_name?: string | null; job_number?: string | null }
+        | null
+        | undefined) ?? { user_name: null, job_number: null };
+  const issuerName = issuerRow ? issuerRow.user_name ?? null : printedBy;
+  const issuerJobNumber = issuerRow ? issuerRow.job_number ?? null : null;
   const qrPayload = extra?.zatca_qr_data || header.zatca_qr || null;
   const qrDataUrl = await buildQrDataUrl(qrPayload);
 
@@ -64,7 +85,8 @@ export async function loadInvoicePrintData(
     header,
     items: (itemsRes.data ?? []) as unknown as InvoicePrintItem[],
     payments: (paymentsRes.data ?? []) as unknown as InvoicePaymentMethod[],
-    printedBy,
+    printedBy: issuerName,
+    printedByJobNumber: issuerJobNumber,
     printCount: Number(extra?.print_count ?? 0) || null,
     logoDataUrl,
     qrDataUrl,
@@ -83,7 +105,8 @@ async function buildQrDataUrl(payload: string | null): Promise<string | null> {
 }
 
 /**
- * تسجيل الطباعة: يزيد العدّاد في القاعدة ويعيد اسم الطابع ورقمه الوظيفي.
+ * تسجيل الطباعة: يزيد العدّاد في القاعدة. (ويُعيد اسم المُصدِر منذ 0189 —
+ * لا اسم الطابع — لكنّ الاسم يُقرأ من `loadInvoicePrintData` لا من هنا.)
  *
  * يُستدعى عند الطباعة وحدها لا عند التحميل أو الإرسال — «Printed Count» يعني
  * ما خرج على ورق. والفشل لا يمنع الطباعة: تخرج الورقة بالاسم المتاح وبعدّاد

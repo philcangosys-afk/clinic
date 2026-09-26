@@ -150,8 +150,17 @@ function NewSessionDialog({
 
   const [agreementItemId, setAgreementItemId] = useState(NONE);
   const [doctorId, setDoctorId] = useState(NONE);
-  const [scheduledDate, setScheduledDate] = useState("");
+  /**
+   * تاريخٌ لكلّ جلسة، بترتيبها.
+   *
+   * كان التاريخ للجلسة الأولى وحدها، والبقية تُنشأ بلا تاريخ ثمّ تُفتح واحدةً
+   * واحدة لتُؤرَّخ — خطة عشر جلسات = إدخالٌ ثمّ تسعة تعديلات. والتاريخ يبقى
+   * اختياريًّا لكلّ جلسة: ما لم يُحدَّد موعده بعدُ يُترك فارغًا ويُؤرَّخ لاحقًا.
+   */
+  const [sessionDates, setSessionDates] = useState<string[]>([""]);
   const [sessionCount, setSessionCount] = useState("1");
+  /** فاصلٌ يختاره الموظّف لملء التواريخ — لا يخمّنه النظام. */
+  const [intervalDays, setIntervalDays] = useState("7");
   const [note, setNote] = useState("");
 
   /** يربط بند الاتفاقية باتفاقيته — الجلسة تخزّن المعرّفين معًا. */
@@ -162,12 +171,61 @@ function NewSessionDialog({
     ),
   );
 
+  /** عدد الجلسات كما يُعرض — مقصوصًا إلى 1..60 لرسم حقول التاريخ. */
+  const visibleCount = Math.min(60, Math.max(1, Math.floor(Number(sessionCount)) || 1));
+  const dateAt = (index: number) => sessionDates[index] ?? "";
+  const setDateAt = (index: number, value: string) =>
+    setSessionDates((current) => {
+      const next = [...current];
+      while (next.length <= index) next.push("");
+      next[index] = value;
+      return next;
+    });
+
+  /** يملأ تواريخ الجلسات بعد الأولى بفاصلٍ ثابت من تاريخها. */
+  const fillFromFirst = () => {
+    const first = dateAt(0);
+    if (!first) {
+      toast({ variant: "destructive", title: "اختر تاريخ الجلسة الأولى أولًا" });
+      return;
+    }
+    const step = Number(intervalDays);
+    if (!Number.isInteger(step) || step < 1 || step > 365) {
+      toast({ variant: "destructive", title: "الفاصل بين الجلسات من 1 إلى 365 يومًا" });
+      return;
+    }
+    // حسابٌ بالتقويم المحلّيّ لا بالمللي ثانية: الإضافة بـ86400000 تنزلق
+    // يومًا حين يعبر التاريخ تغيير توقيتٍ صيفيّ في منطقة الجهاز.
+    const [y, m, d] = first.split("-").map(Number);
+    const next = Array.from({ length: visibleCount }, (_, index) => {
+      if (index === 0) return first;
+      const date = new Date(y, m - 1, d + step * index);
+      const mm = String(date.getMonth() + 1).padStart(2, "0");
+      const dd = String(date.getDate()).padStart(2, "0");
+      return `${date.getFullYear()}-${mm}-${dd}`;
+    });
+    setSessionDates(next);
+  };
+
   const create = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
       const count = Number(sessionCount);
       if (!Number.isInteger(count) || count < 1 || count > 60)
         throw new Error("عدد الجلسات يجب أن يكون رقمًا صحيحًا بين 1 و60");
+
+      // جلسةٌ لاحقة بتاريخٍ قبل سابقتها خطأُ إدخالٍ غالبًا (يومٌ وشهرٌ
+      // مقلوبان، أو سنةٌ خاطئة) — يُرفض ويُسمّى رقم الجلسة لا «تاريخ غير صالح».
+      let previous: { index: number; date: string } | null = null;
+      for (let index = 0; index < count; index += 1) {
+        const date = dateAt(index);
+        if (!date) continue;
+        if (previous && date < previous.date)
+          throw new Error(
+            `تاريخ الجلسة ${nextNumber + index} قبل تاريخ الجلسة ${nextNumber + previous.index}`,
+          );
+        previous = { index, date };
+      }
 
       /**
        * منع تجاوز عدد الجلسات المتفق عليه في بند الاتفاقية.
@@ -221,9 +279,8 @@ function NewSessionDialog({
         agreement_id: agreementItemId === NONE ? null : itemToAgreement.get(agreementItemId) ?? null,
         agreement_item_id: agreementItemId === NONE ? null : agreementItemId,
         session_number: nextNumber + index,
-        // التاريخ للجلسة الأولى فقط؛ الباقي يُجدوَل لاحقًا بلا تخمين فواصل
-        // زمنية لا يعرفها النظام (أسبوعية؟ شهرية؟ حسب استجابة المريض؟).
-        scheduled_date: index === 0 ? scheduledDate || null : null,
+        // لكلّ جلسة تاريخها كما أُدخل، والفارغ يُؤرَّخ لاحقًا.
+        scheduled_date: dateAt(index) || null,
         status: "scheduled" as const,
         note: note.trim() || null,
       }));
@@ -237,8 +294,9 @@ function NewSessionDialog({
       toast({ title: count === 1 ? "تمت إضافة الجلسة" : `تمت إضافة ${count} جلسات` });
       setAgreementItemId(NONE);
       setDoctorId(NONE);
-      setScheduledDate("");
+      setSessionDates([""]);
       setSessionCount("1");
+      setIntervalDays("7");
       setNote("");
       onOpenChange(false);
     },
@@ -252,7 +310,7 @@ function NewSessionDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-h-[92vh] max-w-lg overflow-y-auto">
         <DialogHeader>
           <DialogTitle>جدولة جلسات علاجية</DialogTitle>
           <DialogDescription>
@@ -302,21 +360,56 @@ function NewSessionDialog({
             </Select>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="flex flex-col gap-1.5">
-              <Label>تاريخ الجلسة الأولى</Label>
-              <Input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)} />
+          <div className="flex flex-col gap-1.5">
+            <Label>عدد الجلسات</Label>
+            <Input
+              type="number"
+              min={1}
+              max={60}
+              value={sessionCount}
+              onChange={(e) => setSessionCount(e.target.value)}
+            />
+          </div>
+
+          <div className="flex flex-col gap-2 rounded-lg border p-3">
+            <div className="flex items-center justify-between gap-2">
+              <Label>{visibleCount === 1 ? "تاريخ الجلسة" : "تواريخ الجلسات"}</Label>
+              <span className="text-[11px] text-muted-foreground">اختياريّ — الفارغ يُؤرَّخ لاحقًا</span>
             </div>
-            <div className="flex flex-col gap-1.5">
-              <Label>عدد الجلسات</Label>
-              <Input
-                type="number"
-                min={1}
-                max={60}
-                value={sessionCount}
-                onChange={(e) => setSessionCount(e.target.value)}
-              />
+
+            <div className="grid max-h-64 grid-cols-1 gap-2 overflow-y-auto pe-1 sm:grid-cols-2">
+              {Array.from({ length: visibleCount }, (_, index) => (
+                <div key={index} className="flex items-center gap-2">
+                  <span className="w-16 shrink-0 whitespace-nowrap text-xs font-medium text-muted-foreground">
+                    الجلسة {nextNumber + index}
+                  </span>
+                  <Input
+                    type="date"
+                    className="h-9"
+                    value={dateAt(index)}
+                    onChange={(e) => setDateAt(index, e.target.value)}
+                  />
+                </div>
+              ))}
             </div>
+
+            {visibleCount > 1 && (
+              <div className="flex flex-wrap items-center gap-2 border-t pt-2">
+                <span className="text-xs text-muted-foreground">املأ البقية كلّ</span>
+                <Input
+                  type="number"
+                  min={1}
+                  max={365}
+                  className="h-8 w-16"
+                  value={intervalDays}
+                  onChange={(e) => setIntervalDays(e.target.value)}
+                />
+                <span className="text-xs text-muted-foreground">يومًا من الجلسة الأولى</span>
+                <Button type="button" size="sm" variant="outline" className="h-8" onClick={fillFromFirst}>
+                  املأ التواريخ
+                </Button>
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col gap-1.5">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Download, Plus, Printer, Receipt, Send, WalletCards, Undo2 } from "lucide-react";
+import { Download, MoreHorizontal, Plus, Printer, Receipt, Send, WalletCards, Undo2 } from "lucide-react";
 import { useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
@@ -40,7 +40,14 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import SendInvoiceDialog from "@/components/billing/SendInvoiceDialog";
-import { downloadInvoicePdf, loadInvoicePrintData } from "@/lib/invoice-pdf";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { downloadInvoicePdf, loadInvoicePrintData, registerInvoicePrint } from "@/lib/invoice-pdf";
 import { printInvoiceReceipt, type InvoicePrintData } from "@/lib/invoice-receipt";
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/permissions";
@@ -58,19 +65,21 @@ const STATUS_LABELS = INVOICE_STATUS_LABELS;
 const STATUS_BADGE = INVOICE_STATUS_BADGE;
 
 /**
- * فواتير يوم عملٍ واحد (0181): يوم العمل الحالي افتراضًا، والسابق بفلتر
- * التاريخ. كانت القائمة «آخر 50 فاتورة» بلا تاريخ، فتختلط فواتير اليوم
- * بفواتير الأمس ولا يُعرف أين ينتهي يوم الصندوق.
+ * فواتير مدّةٍ من أيام العمل (0181): يوم العمل الحالي افتراضًا، و«من — إلى»
+ * لما سبقه. كانت القائمة يومًا واحدًا بمنتقٍ واحد، فمراجعة أسبوعٍ سبعُ
+ * عمليات بحث. والتاريخ تاريخ **يوم العمل** لا التقويم: فاتورة الواحدة فجرًا
+ * تُحسب لليوم الذي قبلها إن كان يوم العمل يمتدّ بعد منتصف الليل.
  */
 function useInvoices(
   organizationId: string | undefined,
   status: string,
   quotesOnly: boolean,
-  businessDate: string | null,
+  businessFrom: string | null,
+  businessTo: string | null,
 ) {
   return useQuery({
-    queryKey: ["invoices-list", organizationId, status, quotesOnly, businessDate],
-    enabled: Boolean(organizationId && businessDate),
+    queryKey: ["invoices-list", organizationId, status, quotesOnly, businessFrom, businessTo],
+    enabled: Boolean(organizationId && businessFrom && businessTo),
     queryFn: async () => {
       let query = supabase
         .from("sales_invoices")
@@ -81,7 +90,8 @@ function useInvoices(
         // المستخدم، لا بالمؤسسة النشطة وحدها — فبدونها كانت قائمة عضو في
         // منشأتين تخلط فواتيرهما ويجمع الرأس إجماليَّ الاثنتين معًا.
         .eq("organization_id", organizationId)
-        .eq("business_day.business_date", businessDate)
+        .gte("business_day.business_date", businessFrom)
+        .lte("business_day.business_date", businessTo)
         .order("created_at", { ascending: false })
         .limit(500);
       if (status !== "all") query = query.eq("status", status);
@@ -179,10 +189,21 @@ export default function Billing() {
   const { toast } = useToast();
   const canManageBilling = legacyMode || ["owner", "organization_admin", "accountant", "receptionist"].includes(membership?.role_key ?? "");
   const currentBusinessDate = useCurrentBusinessDate(organization?.id);
-  /** تاريخ يوم العمل المعروض: الحالي افتراضًا، وما يُختار من الفلتر للسابق. */
-  const [pickedDate, setPickedDate] = useState<string | null>(null);
-  const listDate = pickedDate ?? currentBusinessDate.data ?? null;
-  const invoices = useInvoices(organization?.id, statusFilter, quotesOnly, listDate);
+  /** مدّة أيام العمل المعروضة: يوم العمل الحالي افتراضًا، و«من — إلى» للسابق. */
+  const [pickedFrom, setPickedFrom] = useState<string | null>(null);
+  const [pickedTo, setPickedTo] = useState<string | null>(null);
+  const listFrom = pickedFrom ?? currentBusinessDate.data ?? null;
+  const listTo = pickedTo ?? currentBusinessDate.data ?? null;
+  const rangeIsToday =
+    listFrom === currentBusinessDate.data && listTo === currentBusinessDate.data;
+  const rangeInvalid = Boolean(listFrom && listTo && listTo < listFrom);
+  const invoices = useInvoices(
+    organization?.id,
+    statusFilter,
+    quotesOnly,
+    rangeInvalid ? null : listFrom,
+    rangeInvalid ? null : listTo,
+  );
   const appointment = useQuery({
     queryKey: ["billing-appointment", organization?.id, appointmentId],
     enabled: Boolean(organization?.id && appointmentId),
@@ -459,27 +480,50 @@ export default function Billing() {
             <div>
               <CardTitle>{quotesOnly ? "عروض الأسعار" : "الفواتير"}</CardTitle>
               <CardDescription>
-                {listDate === currentBusinessDate.data
-                  ? `يوم العمل الحالي (${listDate ?? "…"}) — الأيام السابقة من فلتر التاريخ`
-                  : `يوم العمل ${listDate ?? ""}`}
+                {rangeIsToday
+                  ? `يوم العمل الحالي (${listFrom ?? "…"}) — الأيام السابقة من «من — إلى»`
+                  : listFrom === listTo
+                    ? `يوم العمل ${listFrom ?? ""}`
+                    : `أيام العمل من ${listFrom ?? ""} إلى ${listTo ?? ""}`}
+                {(invoices.data ?? []).length === 500 && " — تُعرض أحدث 500 فاتورة، ضيّق المدّة لرؤية ما قبلها"}
               </CardDescription>
             </div>
-            <div className="flex items-end gap-2">
+            <div className="flex flex-wrap items-end gap-2">
               <div className="flex flex-col gap-1">
-                <Label className="text-xs">تاريخ يوم العمل</Label>
+                <Label className="text-xs">من</Label>
                 <Input
                   type="date"
-                  className="w-44"
-                  value={listDate ?? ""}
-                  onChange={(event) => setPickedDate(event.target.value || null)}
+                  className="w-40"
+                  value={listFrom ?? ""}
+                  max={listTo ?? undefined}
+                  onChange={(event) => setPickedFrom(event.target.value || null)}
                 />
               </div>
-              {pickedDate && pickedDate !== currentBusinessDate.data && (
-                <Button variant="outline" onClick={() => setPickedDate(null)}>
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs">إلى</Label>
+                <Input
+                  type="date"
+                  className="w-40"
+                  value={listTo ?? ""}
+                  min={listFrom ?? undefined}
+                  onChange={(event) => setPickedTo(event.target.value || null)}
+                />
+              </div>
+              {!rangeIsToday && (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setPickedFrom(null);
+                    setPickedTo(null);
+                  }}
+                >
                   اليوم
                 </Button>
               )}
             </div>
+            {rangeInvalid && (
+              <p className="w-full text-xs text-destructive">تاريخ «إلى» قبل تاريخ «من».</p>
+            )}
           </div>
         </CardHeader>
         <CardContent>
@@ -597,15 +641,12 @@ export default function Billing() {
                         <Badge className={STATUS_BADGE[invoice.status]}>{STATUS_LABELS[invoice.status]}</Badge>
                       )}
                     </TableCell>
-                    {/* الإجراءات في صندوق يلتفّ داخل الخلية لا خلية تُمدّد
-                        الصف: `flex` على `td` كان يُخرج الأزرار عن شبكة الجدول
-                        فتصطفّ في عمود واحد طويل ويرتفع الصف بلا داعٍ. */}
-                    <TableCell>
-                      <div className="flex max-w-[16rem] flex-wrap items-center gap-1">
-                      {/* تحميل PDF: ملفٌّ واحدٌ مهما كان جهاز الموظّف.
-                          نافذة الطابعة فيها «حفظ كـ PDF» لكنّها تُضيف ترويسة
-                          المتصفّح ورابط الصفحة وتتبع إعدادات كلّ جهاز، فورقةُ
-                          مريضٍ تخرج بحاشيةٍ وأخرى بلا حاشية. */}
+                    {/* الإجراءات في سطرٍ واحد: التحميل والطباعة والإرسال ظاهرة، ثمّ
+                        إجراءٌ رئيسيّ واحد بحسب حال الفاتورة، والباقي في «⋯».
+                        كانت كلّها أزرارًا تلتفّ داخل الخلية فيرتفع كلّ صفٍّ إلى
+                        ثلاثة أسطر أو أربعة، وجدولٌ من عشرين فاتورة يملأ صفحات. */}
+                    <TableCell className="py-1.5">
+                      <div className="flex items-center gap-0.5 whitespace-nowrap">
                       <Button
                         size="sm"
                         variant="ghost"
@@ -635,7 +676,15 @@ export default function Billing() {
                         onClick={() => {
                           setBusyInvoiceId(invoice.id);
                           loadInvoicePrintData(invoice.id, printedByName)
-                            .then((data) => printInvoiceReceipt(data))
+                            // الطباعة من هذه الشاشة كانت لا تُسجَّل، فعدّاد
+                            // «Printed Count» لا يتحرّك مهما طُبعت الفاتورة منها.
+                            .then(async (data) => {
+                              const stamp = await registerInvoicePrint(invoice.id);
+                              printInvoiceReceipt({
+                                ...data,
+                                printCount: stamp?.print_count ?? data.printCount ?? 1,
+                              });
+                            })
                             .catch((error: unknown) =>
                               toast({
                                 variant: "destructive",
@@ -675,107 +724,125 @@ export default function Billing() {
                       >
                         <Send className="h-3.5 w-3.5" />
                       </Button>
-                      {invoice.is_temporary ? (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={convertToInvoice.isPending}
-                          onClick={() => convertToInvoice.mutate(invoice.id)}
-                        >
-                          <Receipt className="h-3.5 w-3.5" />
-                          تحويل لفاتورة
-                        </Button>
-                      ) : (
-                        invoice.status !== "paid" &&
-                        invoice.status !== "void" && (
-                          <Button size="sm" variant="outline" onClick={() => setPaymentTarget(invoice)}>
-                            <WalletCards className="h-3.5 w-3.5" />
-                            تسجيل دفعة
-                          </Button>
-                        )
-                      )}
-                      {/* المرتجع لا يُرتجع، وعرض السعر لم يُبَع أصلًا */}
-                      {!invoice.is_temporary &&
-                        invoice.invoice_type !== "return" &&
-                        invoice.status !== "void" && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            title="إنشاء مرتجع"
-                            onClick={() => setReturnTarget(invoice)}
-                          >
-                            <Undo2 className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                      {/* المسوّدة: خصم ثم إصدار. الصادرة: إلغاء بسبب. */}
-                      {/*
-                        الإشعار الدائن/المدين مسوّدة كذلك، وكان زرّ الخصم يظهر عليه:
-                        فتُخصَم قيمة إشعارٍ صادرٍ لتصحيح فاتورة بلا مقابل في بنوده،
-                        ويصبح إجماليه مخالفًا لمجموع سطوره. الاستثناء هنا نفس
-                        استثناء زرّ «إشعار دائن» أدناه.
-                      */}
-                      {invoice.status === "draft" &&
-                        !["credit_note", "debit_note"].includes(
-                          (invoice as any).document_type ?? "",
-                        ) &&
-                        can("billing.discount") && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            title="خصم"
-                            onClick={() => setDiscountTarget(invoice)}
-                          >
-                            خصم
-                          </Button>
-                        )}
-                      {invoice.status === "draft" && can("billing.issue") && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          title="إصدار الفاتورة"
-                          onClick={() => issueInvoice.mutate(invoice.id)}
-                        >
-                          إصدار
-                        </Button>
-                      )}
-                      {["unpaid", "partial", "paid", "partially_refunded"].includes(invoice.status) &&
-                        !["credit_note", "debit_note"].includes(
-                          (invoice as any).document_type ?? "",
-                        ) &&
-                        can("billing.refund") && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            title="إشعار دائن"
-                            onClick={() => {
-                              const reason = window.prompt("سبب الإشعار الدائن؟");
-                              if (reason && reason.trim())
-                                creditNote.mutate({
-                                  id: invoice.id,
-                                  reason: reason.trim(),
-                                  type: "credit_note",
-                                });
-                            }}
-                          >
-                            إشعار دائن
-                          </Button>
-                        )}
-                      {["unpaid", "partial", "refunded"].includes(invoice.status) &&
-                        can("billing.void") && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-destructive"
-                            title="إلغاء الفاتورة"
-                            onClick={() => {
-                              const reason = window.prompt("سبب إلغاء الفاتورة؟");
-                              if (reason && reason.trim())
-                                voidInvoice.mutate({ id: invoice.id, reason: reason.trim() });
-                            }}
-                          >
-                            إلغاء
-                          </Button>
-                        )}
+                      {(() => {
+                        const docType = (invoice as any).document_type ?? "";
+                        const isNote = ["credit_note", "debit_note"].includes(docType);
+                        const canPay = !invoice.is_temporary && invoice.status !== "paid" && invoice.status !== "void";
+                        const canIssue = invoice.status === "draft" && can("billing.issue");
+                        const canReturn =
+                          !invoice.is_temporary && invoice.invoice_type !== "return" && invoice.status !== "void";
+                        const canDiscount = invoice.status === "draft" && !isNote && can("billing.discount");
+                        const canCredit =
+                          ["unpaid", "partial", "paid", "partially_refunded"].includes(invoice.status) &&
+                          !isNote &&
+                          can("billing.refund");
+                        const canVoid = ["unpaid", "partial", "refunded"].includes(invoice.status) && can("billing.void");
+                        // الإجراء الرئيسيّ: عرض السعر يُحوَّل، والمسوّدة تُصدَر، والصادرة تُحصَّل
+                        const primary: "convert" | "issue" | "pay" | null = invoice.is_temporary
+                          ? "convert"
+                          : canIssue
+                            ? "issue"
+                            : canPay
+                              ? "pay"
+                              : null;
+                        const menuPay = canPay && primary !== "pay";
+                        const hasMenu = menuPay || canReturn || canDiscount || canCredit || canVoid;
+                        return (
+                          <>
+                            {primary === "convert" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                disabled={convertToInvoice.isPending}
+                                onClick={() => convertToInvoice.mutate(invoice.id)}
+                              >
+                                <Receipt className="h-3.5 w-3.5" />
+                                تحويل لفاتورة
+                              </Button>
+                            )}
+                            {primary === "issue" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => issueInvoice.mutate(invoice.id)}
+                              >
+                                إصدار
+                              </Button>
+                            )}
+                            {primary === "pay" && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-7 px-2 text-xs"
+                                onClick={() => setPaymentTarget(invoice)}
+                              >
+                                <WalletCards className="h-3.5 w-3.5" />
+                                تسجيل دفعة
+                              </Button>
+                            )}
+                            {hasMenu && (
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button size="icon" variant="ghost" className="h-7 w-7" title="إجراءات أخرى">
+                                    <MoreHorizontal className="h-4 w-4" />
+                                  </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-44">
+                                  {menuPay && (
+                                    <DropdownMenuItem onSelect={() => setPaymentTarget(invoice)}>
+                                      <WalletCards className="h-4 w-4" />
+                                      تسجيل دفعة
+                                    </DropdownMenuItem>
+                                  )}
+                                  {canDiscount && (
+                                    <DropdownMenuItem onSelect={() => setDiscountTarget(invoice)}>
+                                      خصم
+                                    </DropdownMenuItem>
+                                  )}
+                                  {canReturn && (
+                                    <DropdownMenuItem onSelect={() => setReturnTarget(invoice)}>
+                                      <Undo2 className="h-4 w-4" />
+                                      إنشاء مرتجع
+                                    </DropdownMenuItem>
+                                  )}
+                                  {canCredit && (
+                                    <DropdownMenuItem
+                                      onSelect={() => {
+                                        const reason = window.prompt("سبب الإشعار الدائن؟");
+                                        if (reason && reason.trim())
+                                          creditNote.mutate({
+                                            id: invoice.id,
+                                            reason: reason.trim(),
+                                            type: "credit_note",
+                                          });
+                                      }}
+                                    >
+                                      إشعار دائن
+                                    </DropdownMenuItem>
+                                  )}
+                                  {canVoid && (
+                                    <>
+                                      <DropdownMenuSeparator />
+                                      <DropdownMenuItem
+                                        className="text-destructive focus:text-destructive"
+                                        onSelect={() => {
+                                          const reason = window.prompt("سبب إلغاء الفاتورة؟");
+                                          if (reason && reason.trim())
+                                            voidInvoice.mutate({ id: invoice.id, reason: reason.trim() });
+                                        }}
+                                      >
+                                        إلغاء الفاتورة
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            )}
+                          </>
+                        );
+                      })()}
                       </div>
                     </TableCell>
                   </TableRow>

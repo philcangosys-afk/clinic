@@ -79,13 +79,12 @@ export default function InvoiceActions({
           disabled={busy !== null}
           onClick={() =>
             void run("print", "تعذّر تجهيز الفاتورة للطباعة", async (data) => {
-              // العدّاد واسم الطابع من القاعدة (0186): ورقةٌ تُطبع مرّتين
-              // تقول ذلك، ومن طبعها هو من دخل بحسابه لا اسمٌ يخمّنه المتصفّح.
+              // العدّاد من القاعدة (0186): ورقةٌ تُطبع مرّتين تقول ذلك.
+              // والاسم والرقم الوظيفي في `data` سلفًا — مُصدِر الفاتورة (0189)،
+              // لا من ضغط الطباعة، فإعادة الطباعة لا تُغيّر من أصدرها.
               const stamp = await registerInvoicePrint(invoiceId);
               printInvoiceReceipt({
                 ...data,
-                printedBy: stamp?.user_name ?? data.printedBy ?? null,
-                printedByJobNumber: stamp?.job_number ?? null,
                 printCount: stamp?.print_count ?? data.printCount ?? 1,
               });
             })

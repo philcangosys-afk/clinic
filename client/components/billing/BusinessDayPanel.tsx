@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarCheck, FileDown, FileSpreadsheet, Lock, Settings2 } from "lucide-react";
+import { CalendarCheck, ChevronLeft, FileDown, FileSpreadsheet, History, Lock, Settings2, UserRound } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
@@ -36,6 +36,9 @@ import {
   type BusinessDaySettings,
 } from "@/lib/business-day";
 import { downloadDayPdf, downloadDayXlsx } from "@/lib/business-day-export";
+import { usePermissions } from "@/lib/permissions";
+import { useMemberNames } from "@/lib/member-names";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type DaySummary = {
   business_day_id: string;
@@ -57,6 +60,32 @@ type DaySummary = {
   outstanding_amount: number;
   scheduled_close_at: string | null;
   auto_closed: boolean | null;
+  /** 0191 — قد يغيب إن لم تُنفَّذ الترقية بعد */
+  opened_by?: string | null;
+};
+
+/** من فتح اليومية ومن أقفلها ومن أصدر فواتيرها (0191). */
+type DayPeople = {
+  opened_by_name: string | null;
+  closed_by_name: string | null;
+  issuers: string | null;
+};
+
+type HistoryRow = {
+  business_day_id: string;
+  day_number: number;
+  business_date: string;
+  opened_at: string;
+  closed_at: string | null;
+  is_open: boolean;
+  auto_closed: boolean;
+  opened_by_name: string | null;
+  closed_by_name: string | null;
+  issuers: string | null;
+  invoices_count: number;
+  net_amount: number;
+  net_collected_amount: number;
+  outstanding_amount: number;
 };
 
 type DayCollection = {
@@ -102,6 +131,14 @@ export default function BusinessDayPanel() {
   const queryClient = useQueryClient();
   const organizationId = organization?.id;
   const canManage = legacyMode || MANAGER_ROLES.includes(membership?.role_key ?? "");
+  /**
+   * اليوميات السابقة لمن يملك `billing.day_history` (0191): المالك ومدير النظام
+   * بتخطّيهما الفحص، ومدير الفرع افتراضًا، ومن مُنحها من «الأدوار والصلاحيات».
+   * ومن سواهم يرى يومية اليوم وحدها — ولا منتقي تاريخ عنده.
+   */
+  const { can } = usePermissions();
+  const canHistory = legacyMode || can("billing.day_history");
+  const topRef = useRef<HTMLDivElement>(null);
   const [note, setNote] = useState("");
   const [pickedDayId, setPickedDayId] = useState<string | null>(null);
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -164,6 +201,27 @@ export default function BusinessDayPanel() {
     },
   });
 
+  const people = useQuery({
+    queryKey: ["business-day-people", shownId],
+    enabled: Boolean(shownId),
+    retry: false,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_business_day_people", {
+        p_business_day_id: shownId,
+      });
+      if (error) throw error;
+      const row = Array.isArray(data) ? data[0] : data;
+      return (row ?? null) as DayPeople | null;
+    },
+  });
+
+  /** يفتح يوميةً من السجلّ: تاريخها ثمّ هي نفسها، ويصعد إلى بياناتها. */
+  const openDay = (row: { business_day_id: string; business_date: string }) => {
+    setSelectedDate(row.business_date);
+    setPickedDayId(row.business_day_id);
+    topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
+
   const refreshAll = () => {
     queryClient.invalidateQueries({ queryKey: ["business-days"] });
     queryClient.invalidateQueries({ queryKey: ["business-day-collections"] });
@@ -171,6 +229,8 @@ export default function BusinessDayPanel() {
     queryClient.invalidateQueries({ queryKey: ["current-business-date"] });
     queryClient.invalidateQueries({ queryKey: ["business-day-settings"] });
     queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+    queryClient.invalidateQueries({ queryKey: ["business-day-people"] });
+    queryClient.invalidateQueries({ queryKey: ["business-day-history"] });
   };
 
   const closeDay = useMutation({
@@ -222,24 +282,26 @@ export default function BusinessDayPanel() {
   const exportReady = Boolean(shown) && !collections.isLoading && !invoices.isLoading;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div ref={topRef} className="flex flex-col gap-4">
       {/* ── الشريط: التاريخ، الضبط، التنزيل */}
       <Card>
         <CardContent className="flex flex-wrap items-end justify-between gap-3 pt-4">
           <div className="flex flex-wrap items-end gap-2">
-            <div className="flex flex-col gap-1">
-              <Label className="text-xs">تاريخ يوم العمل</Label>
-              <Input
-                type="date"
-                className="w-44"
-                value={date ?? ""}
-                onChange={(event) => {
-                  setSelectedDate(event.target.value || null);
-                  setPickedDayId(null);
-                }}
-              />
-            </div>
-            {selectedDate && selectedDate !== currentDate.data && (
+            {canHistory && (
+              <div className="flex flex-col gap-1">
+                <Label className="text-xs">تاريخ يوم العمل</Label>
+                <Input
+                  type="date"
+                  className="w-44"
+                  value={date ?? ""}
+                  onChange={(event) => {
+                    setSelectedDate(event.target.value || null);
+                    setPickedDayId(null);
+                  }}
+                />
+              </div>
+            )}
+            {canHistory && selectedDate && selectedDate !== currentDate.data && (
               <Button
                 variant="outline"
                 onClick={() => {
@@ -320,6 +382,27 @@ export default function BusinessDayPanel() {
                       ? ` · تُقفل تلقائيًا ${formatDateTime(shown.scheduled_close_at, calendarDisplay)}`
                       : " · لم تُقفل بعد"}
                 </CardDescription>
+                {people.data && (
+                  <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                    <span className="flex items-center gap-1">
+                      <UserRound className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-muted-foreground">فتحها:</span>
+                      <span className="font-semibold">{people.data.opened_by_name ?? "—"}</span>
+                    </span>
+                    {shown.closed_at && (
+                      <span>
+                        <span className="text-muted-foreground">أقفلها: </span>
+                        <span className="font-semibold">
+                          {shown.auto_closed ? "تلقائيًّا" : people.data.closed_by_name ?? "—"}
+                        </span>
+                      </span>
+                    )}
+                    <span>
+                      <span className="text-muted-foreground">أصدر فواتيرها: </span>
+                      <span className="font-semibold">{people.data.issuers ?? "لا أحد بعد"}</span>
+                    </span>
+                  </div>
+                )}
               </div>
               {shown.is_open && canManage && (
                 <div className="flex flex-wrap items-end gap-2">
@@ -489,6 +572,15 @@ export default function BusinessDayPanel() {
         </>
       )}
 
+      {canHistory && organizationId && (
+        <BusinessDayHistory
+          organizationId={organizationId}
+          currentDate={currentDate.data ?? null}
+          shownId={shownId}
+          onOpen={openDay}
+        />
+      )}
+
       {settingsOpen && organizationId && (
         <BusinessDaySettingsDialog
           organizationId={organizationId}
@@ -607,5 +699,184 @@ function Metric({
         {value}
       </p>
     </div>
+  );
+}
+
+
+/** تاريخٌ بصيغة YYYY-MM-DD منزاحًا بعدد أيام — بالتقويم المحلّي لا بالمللي ثانية. */
+function shiftDate(iso: string, days: number) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const date = new Date(y, m - 1, d + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+const ALL_USERS = "__all__";
+
+/**
+ * ═══ سجلّ اليوميات ═══════════════════════════════════════════════════════════
+ *
+ * يُقرأ من `app_business_day_history` (0191) **المشروطة بالصلاحية في القاعدة**،
+ * لا من المنظور مباشرةً: إخفاء البطاقة وحده لا يمنع من يطلب البيانات بنفسه.
+ *
+ * فلتر المستخدم يطابق يوميةً **فتحها أو أقفلها أو أصدر فيها فاتورة** — اليومية
+ * على مستوى المنشأة يعمل فيها أكثر من موظّف، ومن أصدر فيها فاتورةً عمل عليها
+ * وإن لم يفتحها. والضغط على صفٍّ يفتح اليومية نفسها أعلى الشاشة بكلّ بياناتها.
+ */
+function BusinessDayHistory({
+  organizationId,
+  currentDate,
+  shownId,
+  onOpen,
+}: {
+  organizationId: string;
+  currentDate: string | null;
+  shownId: string | null;
+  onOpen: (row: { business_day_id: string; business_date: string }) => void;
+}) {
+  const { calendarDisplay } = useLocaleSettings();
+  const members = useMemberNames(organizationId);
+  const today = currentDate ?? new Date().toISOString().slice(0, 10);
+  const [from, setFrom] = useState(() => shiftDate(today, -30));
+  const [to, setTo] = useState(today);
+  const [userId, setUserId] = useState(ALL_USERS);
+  const invalid = Boolean(from && to && to < from);
+
+  const history = useQuery({
+    queryKey: ["business-day-history", organizationId, from, to, userId],
+    enabled: !invalid,
+    retry: false,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_business_day_history", {
+        p_organization_id: organizationId,
+        p_from: from || null,
+        p_to: to || null,
+        p_user_id: userId === ALL_USERS ? null : userId,
+      });
+      if (error) throw error;
+      return (data ?? []) as HistoryRow[];
+    },
+  });
+
+  const memberOptions = [...(members.data ?? new Map<string, string>()).entries()].sort((a, b) =>
+    a[1].localeCompare(b[1], "ar"),
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <History className="h-4 w-4" />
+          اليوميات السابقة
+        </CardTitle>
+        <CardDescription>اضغط أيّ يوميةٍ لتفتح بياناتها كاملة أعلى الشاشة.</CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">من</Label>
+            <Input type="date" className="w-40" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">إلى</Label>
+            <Input type="date" className="w-40" value={to} min={from || undefined} onChange={(e) => setTo(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">المستخدم</Label>
+            <Select value={userId} onValueChange={setUserId}>
+              <SelectTrigger className="w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_USERS}>كل المستخدمين</SelectItem>
+                {memberOptions.map(([id, name]) => (
+                  <SelectItem key={id} value={id}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {invalid && <p className="pb-2 text-xs text-destructive">تاريخ «إلى» قبل تاريخ «من».</p>}
+        </div>
+
+        {history.isLoading && <Skeleton className="h-24 w-full" />}
+        {history.isError && (
+          <p className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            {errorMessage(history.error)}
+          </p>
+        )}
+        {history.isSuccess && history.data.length === 0 && (
+          <p className="py-4 text-center text-sm text-muted-foreground">لا يوميات مطابقة.</p>
+        )}
+        {history.isSuccess && history.data.length > 0 && (
+          <Table className="min-w-[860px] [&_th]:whitespace-nowrap">
+            <TableHeader>
+              <TableRow>
+                <TableHead>اليومية</TableHead>
+                <TableHead>يوم العمل</TableHead>
+                <TableHead>الحالة</TableHead>
+                <TableHead>فتحها</TableHead>
+                <TableHead>أقفلها</TableHead>
+                <TableHead>أصدر فواتيرها</TableHead>
+                <TableHead className="text-end">الفواتير</TableHead>
+                <TableHead className="text-end">الصافي</TableHead>
+                <TableHead className="text-end">المحصَّل</TableHead>
+                <TableHead className="text-end">غير محصَّل</TableHead>
+                <TableHead className="w-8" />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {history.data.map((row) => (
+                <TableRow
+                  key={row.business_day_id}
+                  className={`cursor-pointer ${row.business_day_id === shownId ? "bg-primary/5" : ""}`}
+                  onClick={() => onOpen(row)}
+                >
+                  <TableCell className="whitespace-nowrap font-medium tabular-nums">رقم {row.day_number}</TableCell>
+                  <TableCell className="whitespace-nowrap tabular-nums">
+                    {row.business_date}
+                    <span className="block text-[10px] text-muted-foreground">
+                      {formatDateTime(row.opened_at, calendarDisplay)}
+                    </span>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap">
+                    <Badge variant={row.is_open ? "success" : "secondary"}>
+                      {row.is_open ? "مفتوحة" : row.auto_closed ? "أُقفلت تلقائيًّا" : "مقفلة"}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-sm">{row.opened_by_name ?? "—"}</TableCell>
+                  <TableCell className="whitespace-nowrap text-sm">
+                    {row.is_open ? "—" : row.auto_closed ? "تلقائيًّا" : row.closed_by_name ?? "—"}
+                  </TableCell>
+                  <TableCell className="max-w-[14rem] truncate text-xs text-muted-foreground" title={row.issuers ?? ""}>
+                    {row.issuers ?? "—"}
+                  </TableCell>
+                  <TableCell className="text-end tabular-nums">{row.invoices_count}</TableCell>
+                  <TableCell className="whitespace-nowrap text-end font-medium tabular-nums">
+                    {formatAmount(row.net_amount)}
+                  </TableCell>
+                  <TableCell className="whitespace-nowrap text-end tabular-nums text-emerald-700">
+                    {formatAmount(row.net_collected_amount)}
+                  </TableCell>
+                  <TableCell
+                    className={`whitespace-nowrap text-end tabular-nums ${
+                      Number(row.outstanding_amount) > 0 ? "font-semibold text-rose-600" : "text-muted-foreground"
+                    }`}
+                  >
+                    {formatAmount(row.outstanding_amount)}
+                  </TableCell>
+                  <TableCell>
+                    <ChevronLeft className="h-4 w-4 text-muted-foreground" />
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        )}
+        {history.isSuccess && history.data.length === 500 && (
+          <p className="text-xs text-muted-foreground">تُعرض أحدث 500 يومية — ضيّق المدّة لرؤية ما قبلها.</p>
+        )}
+      </CardContent>
+    </Card>
   );
 }

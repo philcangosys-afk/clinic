@@ -8,6 +8,7 @@ import {
   Ban,
   CalendarClock,
   CalendarDays,
+  CalendarPlus,
   ClipboardList,
   Contact2,
   Eye,
@@ -603,6 +604,18 @@ function PatientQuickActions({ patient }: { patient: PatientRow }) {
         <Button size="sm" variant="outline" onClick={() => setInvoiceOpen(true)}>
           <Receipt className="h-3.5 w-3.5" />
           إصدار فاتورة
+        </Button>
+      )}
+      {/* حجز موعد: يفتح جدول اليوم (عمودٌ لكلّ طبيب، والمتاح ملوَّن) والمريض
+          محمولٌ فيه — تختار الطبيب والوقت بعينك ثمّ تؤكّد، بدل نافذةٍ تُكتب
+          فيها الساعة ثمّ يُكتشف أنّ الطبيب مشغول. نفس صفات «موعد جديد» في
+          شاشة المواعيد، ويحترم حظر المواعيد في الملفّ. */}
+      {canQueue && !patient.block_appointments && !patient.block_file && (
+        <Button size="sm" variant="outline" className="border-primary/50 text-primary" asChild>
+          <Link to={`/appointments?bookFor=${patient.id}`}>
+            <CalendarPlus className="h-3.5 w-3.5" />
+            حجز موعد جديد
+          </Link>
         </Button>
       )}
       {canQueue && !patient.block_appointments && !patient.block_file && (

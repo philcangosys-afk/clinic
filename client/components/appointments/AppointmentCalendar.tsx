@@ -79,6 +79,26 @@ type WorkingWindow = {
   note: string | null;
 };
 
+/** توفّر الطبيب في اليوم من `app_doctors_day_availability` (0192). */
+type DayAvailability = {
+  doctor_id: string;
+  kind: "work" | "off" | "blocked";
+  starts_at: string;
+  ends_at: string;
+  label: string | null;
+};
+
+/**
+ * إطار شبكة اليوم: ساعة البداية والنهاية وحجم الخانة.
+ *
+ * كانت الشبكة ثابتةً من الثامنة إلى الثامنة مساءً بخانة نصف ساعة، فموعد
+ * العاشرة ليلًا لا يُرسم أصلًا، وموعد ربع ساعة يُحجز في خانةٍ ضعفه. الآن يمتدّ
+ * الإطار ليشمل أبكر دوامٍ وآخر موعدٍ في اليوم، والخانة ربع ساعة.
+ */
+type DayFrame = { startHour: number; endHour: number; slotMinutes: number; px: number };
+
+const DEFAULT_FRAME: DayFrame = { startHour: 8, endHour: 20, slotMinutes: 30, px: 1.1 };
+
 export type CalendarView = "day" | "week" | "month" | "list";
 type GroupBy = "doctor" | "clinic";
 
@@ -134,9 +154,11 @@ function addDays(date: Date, days: number) {
   return next;
 }
 
-function minutesFromDayStart(iso: string) {
+function minutesFromDayStart(iso: string, startHour: number = DAY_START_HOUR, day?: Date) {
   const date = new Date(iso);
-  return (date.getHours() - DAY_START_HOUR) * 60 + date.getMinutes();
+  // موعدٌ يعبر إلى اليوم التالي (بعد منتصف الليل) يُقاس من بداية يوم الشبكة
+  const dayOffset = day ? Math.round((startOfDay(date).getTime() - startOfDay(day).getTime()) / 86_400_000) : 0;
+  return (dayOffset * 24 + date.getHours() - startHour) * 60 + date.getMinutes();
 }
 
 function fmtTime(iso: string) {
@@ -169,9 +191,12 @@ export default function AppointmentCalendar({
   onCreateAt,
   onOpenAppointment,
   onViewChange,
+  highlightId,
 }: {
   organizationId: string | undefined;
   selectedDay: string;
+  /** موعدٌ يُبرَز في الشبكة — الموعد المحجوز للتوّ من «حجز موعد جديد». */
+  highlightId?: string | null;
   doctors: { id: string; name_ar: string }[];
   clinics: { id: string; name: string }[];
   /**
@@ -291,6 +316,26 @@ export default function AppointmentCalendar({
     },
   });
 
+  /**
+   * توفّر كلّ الأطباء في اليوم المعروض — نداءٌ واحد بقاعدة الحجز نفسها (0192):
+   * الدوام الأسبوعيّ والاستثنائيّ، ومن لا يعمل اليوم، والإجازات والمنع.
+   * إن لم تُنفَّذ الترقية بعد يُعاد الرسم القديم من `doctor_working_hours` وحده.
+   */
+  const dayKey = toDateKey(anchor);
+  const availability = useQuery({
+    queryKey: ["calendar-availability", organizationId, dayKey],
+    enabled: Boolean(organizationId) && view === "day",
+    retry: false,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_doctors_day_availability", {
+        p_organization_id: organizationId,
+        p_date: dayKey,
+      });
+      if (error) throw error;
+      return (data ?? []) as DayAvailability[];
+    },
+  });
+
   const visible = useMemo(() => {
     const needle = (search ?? "").trim();
     return (appointments.data ?? []).filter(
@@ -308,6 +353,28 @@ export default function AppointmentCalendar({
           Boolean(row.patient?.mobile_number?.includes(needle))),
     );
   }, [appointments.data, doctorFilter, clinicFilter, search, Array.isArray(statusFilter) ? statusFilter.join(",") : statusFilter]);
+
+  const frame = useMemo<DayFrame>(() => {
+    let startHour = 8;
+    let endHour = 20;
+    const dayStart = startOfDay(anchor).getTime();
+    const hourOf = (iso: string) => (new Date(iso).getTime() - dayStart) / 3_600_000;
+    for (const row of availability.data ?? []) {
+      if (row.kind !== "work") continue;
+      startHour = Math.min(startHour, Math.floor(hourOf(row.starts_at)));
+      endHour = Math.max(endHour, Math.ceil(hourOf(row.ends_at)));
+    }
+    for (const row of visible) {
+      startHour = Math.min(startHour, Math.floor(hourOf(row.scheduled_start)));
+      endHour = Math.max(endHour, Math.ceil(hourOf(row.scheduled_end)));
+    }
+    return {
+      startHour: Math.max(0, startHour),
+      endHour: Math.min(26, Math.max(endHour, startHour + 1)),
+      slotMinutes: 15,
+      px: 1.4,
+    };
+  }, [anchor, availability.data, visible]);
 
   const columns = useMemo(() => {
     if (view !== "day") return [];
@@ -425,6 +492,9 @@ export default function AppointmentCalendar({
           groupBy={groupBy}
           appointments={visible}
           windows={windows.data ?? []}
+          availability={availability.isSuccess ? availability.data : null}
+          frame={frame}
+          highlightId={highlightId ?? null}
           canReschedule={can("appointments.reschedule")}
           canCreate={can("appointments.create")}
           dragged={dragged}
@@ -486,6 +556,9 @@ function DayGrid({
   groupBy,
   appointments,
   windows,
+  availability,
+  frame,
+  highlightId,
   canReschedule,
   canCreate,
   dragged,
@@ -499,6 +572,10 @@ function DayGrid({
   groupBy: GroupBy;
   appointments: CalendarAppointment[];
   windows: WorkingWindow[];
+  /** `null` = لم يُقرأ التوفّر (الترقية لم تُنفَّذ) ⇒ الرسم القديم من `windows`. */
+  availability: DayAvailability[] | null;
+  frame: DayFrame;
+  highlightId: string | null;
   canReschedule: boolean;
   canCreate: boolean;
   dragged: CalendarAppointment | null;
@@ -507,40 +584,50 @@ function DayGrid({
   onOpenAppointment: (id: string) => void;
   onDropAt: (appointment: CalendarAppointment, start: Date, columnId: string) => void;
 }) {
+  const totalMinutes = (frame.endHour - frame.startHour) * 60;
+  const slotHeight = frame.slotMinutes * frame.px;
+
   const slots = useMemo(() => {
     const list: Date[] = [];
-    for (let minute = 0; minute < TOTAL_MINUTES; minute += SLOT_MINUTES) {
+    for (let minute = 0; minute < totalMinutes; minute += frame.slotMinutes) {
       const slot = new Date(date);
-      slot.setHours(DAY_START_HOUR, minute, 0, 0);
+      slot.setHours(frame.startHour, minute, 0, 0);
       list.push(slot);
     }
     return list;
-  }, [date]);
+  }, [date, frame.startHour, frame.slotMinutes, totalMinutes]);
 
-  const nowOffset = useNowOffset(date);
+  const nowOffset = useNowOffset(date, frame.startHour, totalMinutes);
 
   if (columns.length === 0) {
     return <p className="py-10 text-center text-sm text-muted-foreground">لا توجد أعمدة للعرض.</p>;
   }
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <div className="max-h-[70vh] overflow-auto rounded-lg border">
       <div className="flex min-w-[36rem]">
-        {/* عمود الساعات */}
-        <div className="w-16 shrink-0 border-s bg-muted/30">
-          <div className="h-10 border-b" />
-          <div className="relative" style={{ height: TOTAL_MINUTES * PX_PER_MINUTE }}>
-            {slots.map((slot, index) => (
-              <div
-                key={index}
-                className="absolute right-0 left-0 border-b border-dashed text-[10px] text-muted-foreground"
-                style={{ top: index * SLOT_MINUTES * PX_PER_MINUTE, height: SLOT_MINUTES * PX_PER_MINUTE }}
-              >
-                <span className="px-1">
-                  {slot.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
-                </span>
-              </div>
-            ))}
+        {/* عمود الساعات — الساعة كاملةً بخطٍّ واضح، والأرباع باهتة */}
+        <div className="sticky right-0 z-30 w-16 shrink-0 border-s bg-muted/60">
+          <div className="sticky top-0 z-30 h-10 border-b bg-muted" />
+          <div className="relative" style={{ height: totalMinutes * frame.px }}>
+            {slots.map((slot, index) => {
+              const isHour = slot.getMinutes() === 0;
+              return (
+                <div
+                  key={index}
+                  className={`absolute right-0 left-0 border-b text-muted-foreground ${
+                    isHour ? "border-solid" : "border-dashed"
+                  }`}
+                  style={{ top: index * slotHeight, height: slotHeight }}
+                >
+                  <span className={`px-1 ${isHour ? "text-[11px] font-semibold text-foreground" : "text-[9px]"}`}>
+                    {isHour
+                      ? slot.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })
+                      : String(slot.getMinutes()).padStart(2, "0")}
+                  </span>
+                </div>
+              );
+            })}
           </div>
         </div>
 
@@ -552,22 +639,38 @@ function DayGrid({
           );
           const columnWindows =
             groupBy === "doctor" ? windows.filter((w) => w.doctor_id === column.id) : [];
+          const columnAvailability =
+            groupBy === "doctor" && availability
+              ? availability.filter((row) => row.doctor_id === column.id)
+              : null;
+          const isOff = Boolean(columnAvailability?.some((row) => row.kind === "off"));
 
           return (
-            <div key={column.id} className="min-w-[12rem] flex-1 border-s last:border-s-0">
-              <div className="flex h-10 items-center justify-center border-b bg-muted/30 px-2 text-xs font-medium">
-                {column.name}
+            <div key={column.id} className="min-w-[11rem] flex-1 border-s last:border-s-0">
+              <div
+                className={`sticky top-0 z-20 flex h-10 flex-col items-center justify-center border-b px-2 text-xs font-semibold ${
+                  isOff ? "bg-muted text-muted-foreground" : "bg-primary/10"
+                }`}
+              >
+                <span className="truncate">{column.name}</span>
+                {isOff && <span className="text-[9px] font-normal">لا يعمل اليوم</span>}
               </div>
-              <div className="relative" style={{ height: TOTAL_MINUTES * PX_PER_MINUTE }}>
-                {/* خلفية عدم التوفّر */}
-                <UnavailableLayer date={date} windows={columnWindows} />
+              <div className="relative" style={{ height: totalMinutes * frame.px }}>
+                {/* خلفية التوفّر: المتاح مُلوَّن، وغير المتاح مخطَّط */}
+                {columnAvailability ? (
+                  <AvailabilityLayer date={date} frame={frame} rows={columnAvailability} />
+                ) : (
+                  <UnavailableLayer date={date} windows={columnWindows} frame={frame} />
+                )}
 
                 {/* خلايا الإفلات والإنشاء */}
                 {slots.map((slot, index) => (
                   <div
                     key={index}
-                    className="absolute right-0 left-0 border-b border-dashed hover:bg-primary/5"
-                    style={{ top: index * SLOT_MINUTES * PX_PER_MINUTE, height: SLOT_MINUTES * PX_PER_MINUTE }}
+                    className={`group absolute right-0 left-0 border-b ${
+                      slot.getMinutes() === 0 ? "border-solid border-border" : "border-dashed border-border/60"
+                    } ${canCreate ? "cursor-pointer hover:bg-primary/15" : ""}`}
+                    style={{ top: index * slotHeight, height: slotHeight }}
                     onDragOver={(event) => {
                       if (dragged && canReschedule) event.preventDefault();
                     }}
@@ -585,7 +688,13 @@ function DayGrid({
                         groupBy === "clinic" ? (column.id === "__none__" ? null : column.id) : null,
                       );
                     }}
-                  />
+                  >
+                    {canCreate && (
+                      <span className="pointer-events-none hidden px-1 text-[10px] font-medium text-primary group-hover:inline">
+                        + {slot.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                    )}
+                  </div>
                 ))}
 
                 {/* المواعيد */}
@@ -597,13 +706,16 @@ function DayGrid({
                     onDragStart={() => setDragged(row)}
                     onDragEnd={() => setDragged(null)}
                     onClick={() => onOpenAppointment(row.id)}
+                    frame={frame}
+                    day={date}
+                    highlighted={row.id === highlightId}
                   />
                 ))}
 
                 {nowOffset !== null && (
                   <div
                     className="pointer-events-none absolute right-0 left-0 z-20 border-t-2 border-red-500"
-                    style={{ top: nowOffset * PX_PER_MINUTE }}
+                    style={{ top: nowOffset * frame.px }}
                   >
                     <span className="absolute -top-2 right-0 rounded bg-red-500 px-1 text-[9px] text-white">الآن</span>
                   </div>
@@ -617,16 +729,90 @@ function DayGrid({
   );
 }
 
+/**
+ * خلفية التوفّر من قاعدة الحجز نفسها (0192).
+ *
+ * المتاح (`work`) أخضر فاتح — «هنا يُحجز»، كخانات «Work» في النظام المرجعيّ.
+ * وما خارجه، ويوم الراحة (`off`)، والمنع (`blocked`) مخطَّطٌ بعلامته. وطبيبٌ
+ * بلا جدولٍ أصلًا لا يُرسم له شيء: اليوم كلّه متاح، كما تحكم القاعدة تمامًا.
+ */
+function AvailabilityLayer({ date, frame, rows }: { date: Date; frame: DayFrame; rows: DayAvailability[] }) {
+  const totalMinutes = (frame.endHour - frame.startHour) * 60;
+  const frameStart = new Date(date);
+  frameStart.setHours(frame.startHour, 0, 0, 0);
+  const clamp = (value: number) => Math.max(0, Math.min(totalMinutes, value));
+  const toOffset = (iso: string) => clamp((new Date(iso).getTime() - frameStart.getTime()) / 60000);
+
+  const work = rows
+    .filter((row) => row.kind === "work")
+    .map((row) => ({ from: toOffset(row.starts_at), to: toOffset(row.ends_at) }))
+    .filter((band) => band.to > band.from)
+    .sort((a, b) => a.from - b.from);
+  const off = rows.find((row) => row.kind === "off");
+  const blocked = rows.filter((row) => row.kind === "blocked");
+
+  const hatched: { top: number; height: number; label?: string; tone: "muted" | "rose" }[] = [];
+  if (off) {
+    hatched.push({ top: 0, height: totalMinutes, label: off.label ?? "لا يعمل", tone: "muted" });
+  } else if (work.length > 0) {
+    let cursor = 0;
+    for (const band of work) {
+      if (band.from > cursor) hatched.push({ top: cursor, height: band.from - cursor, tone: "muted" });
+      cursor = Math.max(cursor, band.to);
+    }
+    if (cursor < totalMinutes) hatched.push({ top: cursor, height: totalMinutes - cursor, tone: "muted" });
+  }
+  for (const row of blocked) {
+    const from = toOffset(row.starts_at);
+    const to = toOffset(row.ends_at);
+    if (to > from) hatched.push({ top: from, height: to - from, label: row.label ?? "غير متاح", tone: "rose" });
+  }
+
+  return (
+    <>
+      {!off &&
+        work.map((band, index) => (
+          <div
+            key={`w${index}`}
+            className="pointer-events-none absolute right-0 left-0 bg-emerald-50 dark:bg-emerald-950/30"
+            style={{ top: band.from * frame.px, height: (band.to - band.from) * frame.px }}
+          />
+        ))}
+      {hatched.map((band, index) => (
+        <div
+          key={`h${index}`}
+          className={`pointer-events-none absolute right-0 left-0 ${
+            band.tone === "rose"
+              ? "bg-[repeating-linear-gradient(45deg,transparent,transparent_6px,rgba(225,29,72,0.14)_6px,rgba(225,29,72,0.14)_12px)]"
+              : "bg-[repeating-linear-gradient(45deg,transparent,transparent_6px,rgba(100,116,139,0.16)_6px,rgba(100,116,139,0.16)_12px)]"
+          }`}
+          style={{ top: band.top * frame.px, height: band.height * frame.px }}
+        >
+          {band.label && band.height > 30 && (
+            <span
+              className={`sticky top-12 block px-1 text-[10px] font-medium ${
+                band.tone === "rose" ? "text-rose-700" : "text-muted-foreground"
+              }`}
+            >
+              {band.label}
+            </span>
+          )}
+        </div>
+      ))}
+    </>
+  );
+}
+
 /** مؤشر الوقت الحالي — يُعاد حسابه كل دقيقة، و`null` إن كان اليوم غير المعروض. */
-function useNowOffset(date: Date) {
+function useNowOffset(date: Date, startHour: number = DAY_START_HOUR, totalMinutes: number = TOTAL_MINUTES) {
   const [now, setNow] = useState(() => new Date());
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 60_000);
     return () => clearInterval(timer);
   }, []);
   if (!sameDay(now, date)) return null;
-  const minutes = (now.getHours() - DAY_START_HOUR) * 60 + now.getMinutes();
-  if (minutes < 0 || minutes > TOTAL_MINUTES) return null;
+  const minutes = (now.getHours() - startHour) * 60 + now.getMinutes();
+  if (minutes < 0 || minutes > totalMinutes) return null;
   return minutes;
 }
 
@@ -637,11 +823,19 @@ function useNowOffset(date: Date) {
  * فترات عمل فما خارجها ممنوع، وإن لم تُسجَّل فاليوم كله متاح. لو اختلفت
  * الشاشة عن القاعدة هنا لظهر الوقت أبيض ثم رُفض الحجز — وهو أسوأ من تظليله.
  */
-function UnavailableLayer({ date, windows }: { date: Date; windows: WorkingWindow[] }) {
+function UnavailableLayer({
+  date,
+  windows,
+  frame = DEFAULT_FRAME,
+}: {
+  date: Date;
+  windows: WorkingWindow[];
+  frame?: DayFrame;
+}) {
+  const TOTAL_MINUTES = (frame.endHour - frame.startHour) * 60;
+  const PX_PER_MINUTE = frame.px;
   const dayStart = new Date(date);
-  dayStart.setHours(DAY_START_HOUR, 0, 0, 0);
-  const dayEnd = new Date(date);
-  dayEnd.setHours(DAY_END_HOUR, 0, 0, 0);
+  dayStart.setHours(frame.startHour, 0, 0, 0);
 
   const work = windows.filter((w) => !w.is_blocked);
   const blocked = windows.filter((w) => w.is_blocked);
@@ -693,14 +887,22 @@ function EventBlock({
   onDragStart,
   onDragEnd,
   onClick,
+  frame = DEFAULT_FRAME,
+  day,
+  highlighted = false,
 }: {
   appointment: CalendarAppointment;
   canDrag: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
   onClick: () => void;
+  frame?: DayFrame;
+  day?: Date;
+  highlighted?: boolean;
 }) {
-  const top = minutesFromDayStart(appointment.scheduled_start);
+  const TOTAL_MINUTES = (frame.endHour - frame.startHour) * 60;
+  const PX_PER_MINUTE = frame.px;
+  const top = minutesFromDayStart(appointment.scheduled_start, frame.startHour, day);
   const duration = Math.max(
     15,
     (new Date(appointment.scheduled_end).getTime() - new Date(appointment.scheduled_start).getTime()) / 60000,
@@ -716,7 +918,9 @@ function EventBlock({
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className={`absolute right-1 left-1 z-10 cursor-pointer overflow-hidden rounded border-e-4 px-1.5 py-0.5 text-[11px] shadow-sm ${style.className}`}
+      className={`absolute right-1 left-1 z-10 cursor-pointer overflow-hidden rounded border-e-4 px-1.5 py-0.5 text-[11px] shadow-sm ${style.className} ${
+        highlighted ? "animate-pulse ring-2 ring-primary ring-offset-1" : ""
+      }`}
       style={{ top: Math.max(0, top) * PX_PER_MINUTE, height: duration * PX_PER_MINUTE - 2 }}
       title={`${appointment.patient?.name_ar ?? ""} — ${fmtTime(appointment.scheduled_start)}`}
     >

@@ -60,6 +60,8 @@ type MemberRow = {
   is_active: boolean;
   created_at: string;
   display_name: string;
+  /** المكتوب في العضوية نفسها — فارغٌ إن كان الاسم مشتقًّا من ملفّ الموظّف. */
+  raw_display_name: string | null;
   display_language: "ar" | "en";
   mobile_number: string | null;
   note: string | null;
@@ -76,7 +78,7 @@ function useMembers(organizationId: string | undefined) {
         supabase
           .from("organization_memberships")
           .select(
-            "organization_id, user_id, role_key, is_active, created_at, display_language, mobile_number, note, custom_role_id, member_kind",
+            "organization_id, user_id, role_key, is_active, created_at, display_language, mobile_number, note, custom_role_id, member_kind, raw_display_name:display_name",
           )
           .eq("organization_id", organizationId),
         supabase
@@ -435,7 +437,12 @@ function MemberDetailsDialog({
 }: {
   member: MemberRow | null;
   onOpenChange: () => void;
-  onSave: (patch: { display_language: "ar" | "en"; mobile_number: string | null; note: string | null }) => void;
+  onSave: (patch: {
+    display_name: string | null;
+    display_language: "ar" | "en";
+    mobile_number: string | null;
+    note: string | null;
+  }) => void;
   saving: boolean;
 }) {
   if (!member) return null;
@@ -462,9 +469,15 @@ function MemberDetailsForm({
 }: {
   member: MemberRow;
   onCancel: () => void;
-  onSave: (patch: { display_language: "ar" | "en"; mobile_number: string | null; note: string | null }) => void;
+  onSave: (patch: {
+    display_name: string | null;
+    display_language: "ar" | "en";
+    mobile_number: string | null;
+    note: string | null;
+  }) => void;
   saving: boolean;
 }) {
+  const [userName, setUserName] = useState(member.raw_display_name ?? "");
   const [language, setLanguage] = useState<"ar" | "en">(member.display_language ?? "ar");
   const [mobile, setMobile] = useState(member.mobile_number ?? "");
   const [note, setNote] = useState(member.note ?? "");
@@ -477,6 +490,19 @@ function MemberDetailsForm({
       </DialogHeader>
 
       <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="member-user-name">اسم المستخدم</Label>
+          <Input
+            id="member-user-name"
+            value={userName}
+            onChange={(e) => setUserName(e.target.value)}
+            placeholder={member.display_name}
+          />
+          <p className="text-[11px] text-muted-foreground">
+            يظهر في شريط النظام، وفي سجلّ التدقيق، وعلى الفاتورة في خانة «User» لكلّ فاتورةٍ يُصدرها.
+            اتركه فارغًا ليُؤخذ من ملفّ الموظّف المربوط.
+          </p>
+        </div>
         <div className="flex flex-col gap-1.5">
           <Label>لغة العرض</Label>
           <Select value={language} onValueChange={(value) => setLanguage(value as "ar" | "en")}>
@@ -507,6 +533,7 @@ function MemberDetailsForm({
           disabled={saving}
           onClick={() =>
             onSave({
+              display_name: userName.trim() || null,
               display_language: language,
               mobile_number: mobile.trim() || null,
               note: note.trim() || null,
@@ -577,6 +604,7 @@ export default function Users() {
       patch: {
         role_key?: OrganizationRole;
         is_active?: boolean;
+        display_name?: string | null;
         display_language?: "ar" | "en";
         mobile_number?: string | null;
         note?: string | null;
@@ -601,9 +629,21 @@ export default function Users() {
         if (error) throw error;
       }
 
+      // الاسم بدالّته (0183): تتحقّق من `users.manage`، والكتابة المباشرة في
+      // العضوية تمرّ بسياساتٍ لا تعرف هذا العمود.
+      if (patch.display_name !== undefined) {
+        const { error } = await supabase.rpc("app_set_member_display_name", {
+          p_organization_id: organization.id,
+          p_user_id: userId,
+          p_display_name: patch.display_name ?? "",
+        });
+        if (error) throw error;
+      }
+
       const rest: Record<string, any> = { ...patch };
       delete rest.role_key;
       delete rest.is_active;
+      delete rest.display_name;
       if (Object.keys(rest).length === 0) return;
 
       const { data: affectedRows, error } = await supabase

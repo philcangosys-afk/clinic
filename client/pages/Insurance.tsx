@@ -1,6 +1,6 @@
 import { useEffect, useState, type ChangeEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, Check, FileSignature, Plus, Printer, RefreshCcw, ShieldCheck, X } from "lucide-react";
+import { Building2, Check, FileSignature, MoreHorizontal, Plus, Printer, RefreshCcw, ShieldCheck, Trash2, X } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type {
@@ -31,6 +31,13 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { usePermissions } from "@/lib/permissions";
 import PatientPicker from "@/components/shared/PatientPicker";
@@ -136,6 +143,7 @@ function CompaniesTab() {
   const [policyDialogFor, setPolicyDialogFor] = useState<string | null>(null);
   const [membershipDialogOpen, setMembershipDialogOpen] = useState(false);
   const [nphiesDialogFor, setNphiesDialogFor] = useState<any | null>(null);
+  const [deleteFor, setDeleteFor] = useState<{ id: string; name_ar: string } | null>(null);
 
   const toggleCompanyDisabled = useMutation({
     mutationFn: async ({ id, is_disabled }: { id: string; is_disabled: boolean }) => {
@@ -222,6 +230,30 @@ function CompaniesTab() {
                 <Plus className="h-3.5 w-3.5" />
                 بوليصة جديدة
               </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon" variant="ghost" className="h-8 w-8" title="خيارات الشركة">
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      toggleCompanyDisabled.mutate({ id: company.id, is_disabled: !company.is_disabled })
+                    }
+                  >
+                    {company.is_disabled ? "تفعيل الشركة" : "تعطيل الشركة"}
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive focus:text-destructive"
+                    onSelect={() => setDeleteFor({ id: company.id, name_ar: company.name_ar })}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                    حذف نهائيّ
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             </div>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
@@ -255,6 +287,9 @@ function CompaniesTab() {
       <MembershipsList organizationId={organization?.id} />
 
       <NewCompanyDialog open={companyDialogOpen} onOpenChange={setCompanyDialogOpen} organizationId={organization?.id} />
+      {deleteFor && (
+        <DeleteInsuranceCompanyDialog company={deleteFor} onClose={() => setDeleteFor(null)} />
+      )}
       <NphiesLinkDialog company={nphiesDialogFor} onClose={() => setNphiesDialogFor(null)} />
       <NewPolicyDialog
         companyId={policyDialogFor}
@@ -427,6 +462,136 @@ function NphiesLinkDialog({ company, onClose }: { company: any | null; onClose: 
         <DialogFooter>
           <Button disabled={save.isPending} onClick={() => save.mutate()}>
             {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * حذف شركة تأمين نهائيًّا (0190) — لشركةٍ لم يتعلّق بها شيء.
+ *
+ * ما يتعلّق بها يُقرأ **قبل** الضغط: من يرى «insurance_preauthorizations (3)»
+ * يعرف أنّ أمامه تعطيلًا لا حذفًا، فلا يضغط زرًّا ليُرَدّ. وتعريف الشركة
+ * نفسه (شبكاتها وبوالصها وعقودها وقواعد تغطيتها) يُعرض على أنّه يُحذف معها.
+ */
+function DeleteInsuranceCompanyDialog({
+  company,
+  onClose,
+}: {
+  company: { id: string; name_ar: string };
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [confirmation, setConfirmation] = useState("");
+
+  const dependencies = useQuery({
+    queryKey: ["insurance-company-dependencies", company.id],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_insurance_company_dependencies", {
+        p_company_id: company.id,
+      });
+      if (error) throw error;
+      return (data ?? []) as { table_name: string; column_name: string; row_count: number; blocking: boolean }[];
+    },
+  });
+
+  const DEFINITION_LABELS: Record<string, string> = {
+    insurance_networks: "الشبكات",
+    insurance_policies: "البوالص",
+    insurance_contracts: "العقود",
+    insurance_coverage_rules: "قواعد التغطية",
+  };
+  const blocking = (dependencies.data ?? []).filter((row) => row.blocking);
+  // صفوف التعريف تُعدّ مرّةً لكلّ جدول — البوليصة تُطابَق بشركتها وبشبكتها معًا
+  const definition = new Map<string, number>();
+  for (const row of dependencies.data ?? []) {
+    if (row.blocking || !DEFINITION_LABELS[row.table_name]) continue;
+    definition.set(row.table_name, Math.max(definition.get(row.table_name) ?? 0, Number(row.row_count)));
+  }
+  const canDelete = dependencies.isSuccess && blocking.length === 0;
+
+  const remove = useMutation({
+    mutationFn: async () => {
+      const { error } = await supabase.rpc("app_delete_insurance_company", { p_company_id: company.id });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["insurance-companies"] });
+      toast({ title: "حُذفت شركة التأمين نهائيًّا" });
+      onClose();
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر الحذف", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent dir="rtl" className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="text-destructive">حذف نهائيّ: {company.name_ar}</DialogTitle>
+          <DialogDescription>
+            لا رجعة فيه. متاحٌ فقط لشركةٍ لم يُربط بها مريض ولا مطالبة ولا موافقة ولا فاتورة. أمّا
+            شركةٌ عملت فعلًا فبابها التعطيل.
+          </DialogDescription>
+        </DialogHeader>
+
+        {dependencies.isLoading && <Skeleton className="h-16 w-full" />}
+
+        {dependencies.isError && (
+          <p className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            تعذّر فحص ما يتعلّق بالشركة: {errorMessage(dependencies.error)}
+          </p>
+        )}
+
+        {dependencies.isSuccess && blocking.length > 0 && (
+          <div className="flex flex-col gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900">
+            <p className="font-semibold">لا تُحذف هذه الشركة — يتعلّق بها سجلّات:</p>
+            <ul className="flex flex-col gap-0.5 ps-4">
+              {blocking.map((row) => (
+                <li key={`${row.table_name}.${row.column_name}`} className="list-disc font-mono text-[11px]" dir="ltr">
+                  {row.table_name} ({row.row_count})
+                </li>
+              ))}
+            </ul>
+            <p>عطّلها بدل ذلك: تختفي من قوائم الاختيار ويبقى أثرها.</p>
+          </div>
+        )}
+
+        {canDelete && (
+          <>
+            {definition.size > 0 && (
+              <p className="text-xs text-muted-foreground">
+                يُحذف معها تعريفها:{" "}
+                {[...definition].map(([table, count]) => `${DEFINITION_LABELS[table]} (${count})`).join("، ")}
+              </p>
+            )}
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="delete-company-confirm">
+                للتأكيد اكتب اسم الشركة: <span className="font-bold">{company.name_ar}</span>
+              </Label>
+              <Input
+                id="delete-company-confirm"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                placeholder={company.name_ar}
+              />
+            </div>
+          </>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            إلغاء
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={!canDelete || confirmation.trim() !== company.name_ar.trim() || remove.isPending}
+            onClick={() => remove.mutate()}
+          >
+            {remove.isPending ? "جارٍ الحذف..." : "حذف نهائيّ"}
           </Button>
         </DialogFooter>
       </DialogContent>
