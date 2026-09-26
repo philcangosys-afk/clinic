@@ -211,8 +211,22 @@ export function resolvePermissions(
    * تسمح به القاعدة.
    */
   customRolePermissions?: string[] | null,
+  /**
+   * **جواب القاعدة نفسها** — مفاتيح `v_my_permissions` الممنوحة، وهي ناتج
+   * `app_has_permission` لكل مفتاح في الكتالوج.
+   *
+   * حين تصل، تُستعمل وحدها. وما تحتها في هذه الدالّة (خريطة `rolePermissions`
+   * والدور المخصّص والاستثناءات) **حسابٌ ثانٍ لنفس السؤال في المتصفّح** —
+   * مصدرُ حقيقةٍ موازٍ يجب أن يُطابق القاعدة يدويًّا، وقد افترق عنها فعلًا:
+   * `branch_manager` هنا يرى كلّ الشاشات، ودورٌ مخصّص بلا صلاحية واحدة كان
+   * يُتجاوَز فيبقى الافتراض. فصار الحساب المحلّي احتياطًا لا أصلًا: لا
+   * يُستعمل إلّا إن تعذّرت قراءة المنظور، فلا يُغلق النظام في وجه الجميع
+   * لانقطاع استعلام.
+   */
+  databasePermissions?: string[] | null,
 ) {
   if (isOrganizationAdmin(role)) return ["*"];
+  if (databasePermissions) return [...new Set(databasePermissions)];
   const permissions = new Set(
     customRolePermissions ? customRolePermissions : role ? rolePermissions[role] : [],
   );
@@ -266,6 +280,10 @@ export function canAccessFeature({
 }) {
   if (legacyMode) return true;
   const featureEnabled =
+    // منشأةٌ لم تُضبط مزاياها بعد (لا صفّ في `organization_features`) ليست
+    // منشأةً بلا مزايا. ولولا هذا الشرط لأغلق رفعُ «الوصول الكامل القديم»
+    // كلَّ شاشةٍ في وجه المالك نفسه — لأنّ فحص المزية يسبق فحص الصفة.
+    enabledFeatures.length === 0 ||
     ALWAYS_ACCESSIBLE_FEATURES.includes(featureKey) ||
     enabledFeatures.includes(featureKey);
   if (!featureEnabled) return false;

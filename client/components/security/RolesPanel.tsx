@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronLeft, Archive, Pencil, Plus, ShieldCheck } from "lucide-react";
+import { ChevronDown, ChevronLeft, Archive, Copy, Eye, Pencil, Plus, ShieldCheck } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -91,6 +91,36 @@ function usePermissionCatalog() {
   });
 }
 
+/**
+ * افتراضات الصفات الجاهزة — `role_default_permissions` (0062 و0143).
+ *
+ * **لماذا شاشة لها أصلًا:** الصفة تُختار من قائمةٍ منسدلة بلا أن يُرى ما
+ * تعنيه. و«مدير فرع» مثلًا يملك في القاعدة **كلّ** الشاشات (0143 منحته `*`)،
+ * فمن أسنده ظنًّا أنّه أقلّ من مدير النظام أعطى ما لم يقصد. ما لا يُرى لا
+ * يُراجَع.
+ *
+ * الجدول مقروءٌ لكلّ من دخل (سياسة `role_default_permissions_read`)، وهو
+ * نفسه الذي تقرؤه `app_has_permission` — فما يُعرض هنا هو ما يجري فعلًا، لا
+ * وصفٌ مكتوب بجانبه.
+ */
+function useRoleDefaults() {
+  return useQuery({
+    queryKey: ["role-default-permissions"],
+    staleTime: 10 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("role_default_permissions")
+        .select("role_key, permission_key");
+      if (error) throw error;
+      const byRole: Record<string, string[]> = {};
+      for (const row of (data ?? []) as { role_key: string; permission_key: string }[]) {
+        (byRole[row.role_key] ??= []).push(row.permission_key);
+      }
+      return byRole;
+    },
+  });
+}
+
 const dateText = (value: string | null | undefined) =>
   value ? new Date(value).toLocaleDateString("en-GB", { timeZone: "Asia/Riyadh" }) : "—";
 
@@ -106,6 +136,8 @@ export default function RolesPanel({
   const roles = useOrganizationRoles(organizationId);
   const [editing, setEditing] = useState<OrganizationRoleRow | null>(null);
   const [creating, setCreating] = useState(false);
+  /** صلاحياتٌ تُملأ بها شاشة الدور الجديد — نسخةً من صفةٍ جاهزة. */
+  const [prefill, setPrefill] = useState<{ baseRole: string; permissions: string[] } | null>(null);
 
   const holders = useQuery({
     queryKey: ["organization-role-holders", organizationId],
@@ -144,12 +176,13 @@ export default function RolesPanel({
   });
 
   return (
+    <div className="flex flex-col gap-5">
     <Card>
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-3 space-y-0">
         <div>
           <CardTitle className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4" />
-            قائمة الأدوار
+            الأدوار المخصّصة
           </CardTitle>
           <CardDescription>
             الدور يحمل صلاحياته، ومن يحمله يرث تعديلها فورًا — بلا ضبطٍ لكلّ موظّف على حدة
@@ -230,18 +263,29 @@ export default function RolesPanel({
 
       {(creating || editing) && (
         <RoleEditorDialog
-          key={editing?.id ?? "new-role"}
+          key={editing?.id ?? (prefill ? `new-from-${prefill.baseRole}` : "new-role")}
           organizationId={organizationId}
           role={editing}
+          prefill={editing ? null : prefill}
           onOpenChange={(open) => {
             if (!open) {
               setCreating(false);
               setEditing(null);
+              setPrefill(null);
             }
           }}
         />
       )}
     </Card>
+
+      <BaseRolesCard
+        canManage={canManage}
+        onCopy={(baseRole, permissions) => {
+          setPrefill({ baseRole, permissions });
+          setCreating(true);
+        }}
+      />
+    </div>
   );
 }
 
@@ -292,10 +336,19 @@ function LevelButtons({
 function RoleEditorDialog({
   organizationId,
   role,
+  prefill,
   onOpenChange,
 }: {
   organizationId: string | undefined;
   role: OrganizationRoleRow | null;
+  /**
+   * دورٌ جديد يبدأ من صلاحيات صفةٍ جاهزة بدل الصفر.
+   *
+   * البدء من صفرٍ يعني تأشير عشرات المفاتيح يدويًّا لإعادة بناء ما تعرفه
+   * القاعدة سلفًا — ومن يفعل ذلك تحت الضجر يؤشّر «إدارة كاملة» للكلّ. فالبدء
+   * من الصفة ثمّ التقليم هو الطريق الذي ينتهي بدورٍ محدود فعلًا.
+   */
+  prefill?: { baseRole: string; permissions: string[] } | null;
   onOpenChange: (open: boolean) => void;
 }) {
   const queryClient = useQueryClient();
@@ -303,9 +356,9 @@ function RoleEditorDialog({
   const catalog = usePermissionCatalog();
   const [nameAr, setNameAr] = useState(role?.name_ar ?? "");
   const [nameEn, setNameEn] = useState(role?.name_en ?? "");
-  const [baseRole, setBaseRole] = useState(role?.base_role_key ?? "employee");
+  const [baseRole, setBaseRole] = useState(role?.base_role_key ?? prefill?.baseRole ?? "employee");
   const [isActive, setIsActive] = useState(role?.is_active ?? true);
-  const [granted, setGranted] = useState<Set<string>>(new Set());
+  const [granted, setGranted] = useState<Set<string>>(new Set(role ? [] : (prefill?.permissions ?? [])));
   const [openSections, setOpenSections] = useState<Set<string>>(new Set(["فتح الشاشات"]));
   const [detailed, setDetailed] = useState<Set<string>>(new Set());
 
@@ -553,6 +606,260 @@ function RoleEditorDialog({
           </Button>
           <Button disabled={save.isPending || !nameAr.trim()} onClick={() => save.mutate()}>
             {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+
+/**
+ * ═══ الصفات الجاهزة وما تعنيه ══════════════════════════════════════════════
+ *
+ * الصفات الاثنتا عشرة مثبّتة في القاعدة، وبها تُقاس سياسات الحماية. وما تمنحه
+ * كلٌّ منها كان مكتوبًا في ترقياتٍ لا يقرؤها المالك. هنا يُقرأ من الجدول نفسه.
+ *
+ * **مالك المنشأة ومدير النظام لا افتراضات لهما بالمعنى المفيد:** الأسبقية
+ * الأولى في `app_has_permission` تُرجع `true` لهما قبل النظر في أيّ جدول:
+ *
+ *     when exists (… m.role_key in ('owner','organization_admin')) then true
+ *
+ * فيُعرضان بذلك صراحةً بدل عددٍ يُوهم أنّ لهما حدًّا.
+ */
+function BaseRolesCard({
+  canManage,
+  onCopy,
+}: {
+  canManage: boolean;
+  onCopy: (baseRole: string, permissions: string[]) => void;
+}) {
+  const defaults = useRoleDefaults();
+  const catalog = usePermissionCatalog();
+  const [viewing, setViewing] = useState<string | null>(null);
+
+  const ADMIN_ROLES = ["owner", "organization_admin"];
+  const rows = Object.keys(ROLE_LABELS);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2">
+          <ShieldCheck className="h-4 w-4" />
+          الصفات الجاهزة — ماذا تمنح كلّ صفة
+        </CardTitle>
+        <CardDescription>
+          هذه صفات القاعدة الثابتة، وهي ما يسري على العضو ما لم يُسنَد له دورٌ مخصّص.
+          افتحها قبل أن تُسند صفةً لأحد.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {(defaults.isLoading || catalog.isLoading) && <Skeleton className="h-40 w-full" />}
+        {defaults.isError && (
+          <p className="rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+            تعذّرت قراءة افتراضات الصفات: {errorMessage(defaults.error)}
+          </p>
+        )}
+        {defaults.isSuccess && catalog.isSuccess && (
+          <Table className="min-w-[640px] [&_th]:whitespace-nowrap">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-56">الصفة</TableHead>
+                <TableHead className="w-40">عدد الصلاحيات</TableHead>
+                <TableHead>الشاشات المفتوحة</TableHead>
+                <TableHead className="w-56 text-center">إجراءات</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((roleKey) => {
+                const keys = defaults.data?.[roleKey] ?? [];
+                const isAdmin = ADMIN_ROLES.includes(roleKey);
+                const screenKeys = keys.filter((key) =>
+                  (catalog.data ?? []).some(
+                    (row) => row.permission_key === key && row.module_key === SCREENS_MODULE,
+                  ),
+                );
+                const screensTotal = (catalog.data ?? []).filter(
+                  (row) => row.module_key === SCREENS_MODULE,
+                ).length;
+                return (
+                  <TableRow key={roleKey}>
+                    <TableCell className="font-medium">{ROLE_LABELS[roleKey]}</TableCell>
+                    <TableCell>
+                      {isAdmin ? (
+                        <Badge variant="outline" className="whitespace-nowrap">
+                          كل شيء — تتخطّى الفحص
+                        </Badge>
+                      ) : (
+                        <span className="font-mono text-xs">{keys.length}</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-xs text-muted-foreground">
+                      {isAdmin
+                        ? "كل الشاشات"
+                        : screenKeys.length === screensTotal && screensTotal > 0
+                          ? `كل الشاشات (${screensTotal})`
+                          : `${screenKeys.length} من ${screensTotal}`}
+                    </TableCell>
+                    <TableCell className="text-center">
+                      {!isAdmin && (
+                        <div className="flex justify-center gap-1">
+                          <Button size="sm" variant="ghost" onClick={() => setViewing(roleKey)}>
+                            <Eye className="h-3.5 w-3.5" />
+                            عرض التفصيل
+                          </Button>
+                          {canManage && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              title="ابدأ دورًا مخصّصًا بنسخةٍ من صلاحيات هذه الصفة، ثمّ قلّمها"
+                              onClick={() => onCopy(roleKey, keys)}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                              نسخ إلى دور
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
+        )}
+      </CardContent>
+
+      {viewing && (
+        <BaseRoleDetailDialog
+          roleKey={viewing}
+          permissions={defaults.data?.[viewing] ?? []}
+          catalog={catalog.data ?? []}
+          onOpenChange={() => setViewing(null)}
+        />
+      )}
+    </Card>
+  );
+}
+
+/** تفصيل صفةٍ جاهزة — للقراءة وحدها؛ الصفات لا تُعدَّل من الشاشة. */
+function BaseRoleDetailDialog({
+  roleKey,
+  permissions,
+  catalog,
+  onOpenChange,
+}: {
+  roleKey: string;
+  permissions: string[];
+  catalog: CatalogRow[];
+  onOpenChange: (open: boolean) => void;
+}) {
+  const granted = useMemo(() => new Set(permissions), [permissions]);
+  const sections = useMemo(() => buildRoleSections(catalog), [catalog]);
+  const [open, setOpen] = useState<Set<string>>(new Set());
+
+  return (
+    <Dialog open onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[92vh] max-w-3xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>صلاحيات صفة: {ROLE_LABELS[roleKey] ?? roleKey}</DialogTitle>
+          <DialogDescription>
+            للقراءة فقط — الصفات ثابتة في القاعدة وبها تُقاس سياسات الحماية.
+            لتقييد أحدهم أنشئ دورًا مخصّصًا وأسنده إليه.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-2">
+          {sections.map((section) => {
+            const level = sectionLevel(section.modules, granted);
+            const isOpen = open.has(section.key);
+            return (
+              <div key={section.key} className="rounded-lg border">
+                <button
+                  type="button"
+                  className="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-start"
+                  onClick={() =>
+                    setOpen((current) => {
+                      const next = new Set(current);
+                      if (next.has(section.key)) next.delete(section.key);
+                      else next.add(section.key);
+                      return next;
+                    })
+                  }
+                >
+                  <span className="flex items-center gap-2">
+                    {isOpen ? (
+                      <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    ) : (
+                      <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    )}
+                    <span className="font-semibold">{section.key}</span>
+                    <span className="text-xs text-muted-foreground">{section.modules.length} قسم</span>
+                  </span>
+                  <Badge
+                    variant={level === "none" ? "secondary" : "outline"}
+                    className={cn(
+                      "whitespace-nowrap",
+                      level === "full" && "border-primary text-primary",
+                      level === "read" && "border-primary/50 text-primary",
+                    )}
+                  >
+                    {LEVEL_LABELS[level]}
+                  </Badge>
+                </button>
+
+                {isOpen && (
+                  <div className="flex flex-col gap-1.5 border-t px-3 py-2.5">
+                    {section.modules.map((module) => {
+                      const moduleState = moduleLevel(module.rows, granted);
+                      return (
+                        <div key={module.key} className="flex flex-col gap-1">
+                          <div className="flex items-center justify-between gap-3">
+                            <span className="text-sm">{module.label}</span>
+                            <Badge
+                              variant={moduleState === "none" ? "secondary" : "outline"}
+                              className={cn(
+                                "whitespace-nowrap text-[11px]",
+                                moduleState === "full" && "border-primary text-primary",
+                                moduleState === "read" && "border-primary/50 text-primary",
+                              )}
+                            >
+                              {LEVEL_LABELS[moduleState]}
+                            </Badge>
+                          </div>
+                          {/* «فتح الشاشات» يُفصَّل دائمًا: كلّ مفتاحٍ فيه شاشةٌ
+                              قائمة بذاتها، و«مخصّص» وحدها لا تقول أيّها. */}
+                          {(module.key === SCREENS_MODULE || moduleState === "custom") && (
+                            <div className="flex flex-wrap gap-1 pb-1 ps-3">
+                              {module.rows
+                                .filter((row) => granted.has(row.permission_key))
+                                .map((row) => (
+                                  <Badge
+                                    key={row.permission_key}
+                                    variant="secondary"
+                                    className="text-[10px] font-normal"
+                                  >
+                                    {row.name_ar}
+                                  </Badge>
+                                ))}
+                              {module.rows.every((row) => !granted.has(row.permission_key)) && (
+                                <span className="text-[11px] text-muted-foreground">لا شيء</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            إغلاق
           </Button>
         </DialogFooter>
       </DialogContent>

@@ -67,6 +67,18 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
   const [explicitPermissions, setExplicitPermissions] = useState<MembershipPermission[]>([]);
   /** null = لا دور مخصّص، فتُستعمل افتراضات الدور الأساس (0183) */
   const [customRolePermissions, setCustomRolePermissions] = useState<string[] | null>(null);
+  /**
+   * صلاحيات المستخدم كما تحسبها القاعدة — `v_my_permissions` (0062)، وهي
+   * `app_has_permission` مطبَّقةً على كلّ مفتاح في `permission_catalog`.
+   *
+   * **لماذا من القاعدة لا من الشيفرة:** الواجهة كانت تُعيد حساب الصلاحيات
+   * بخريطةٍ ثابتة في `organization-access.ts` — حسابٌ ثانٍ لنفس السؤال يجب
+   * أن يُطابق القاعدة يدويًّا. وقد افترق: دورٌ مخصّص بلا صلاحيةٍ واحدة تمنعه
+   * القاعدة من كلّ شيء، بينما الشاشة تُريه كلّ شيء. الآن جوابٌ واحد.
+   *
+   * null = لم تُقرأ (أو تعذّرت قراءتها) ⇒ يُستعمل الحساب المحلّي احتياطًا.
+   */
+  const [databasePermissions, setDatabasePermissions] = useState<string[] | null>(null);
 
   const clearOrganization = useCallback(() => {
     setOrganization(null);
@@ -75,6 +87,7 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
     setEnabledFeatures([]);
     setExplicitPermissions([]);
     setCustomRolePermissions(null);
+    setDatabasePermissions(null);
   }, []);
 
   const loadAccess = useCallback(async (nextSession?: Session | null) => {
@@ -147,6 +160,19 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
       } else {
         setCustomRolePermissions(null);
       }
+
+      // جواب القاعدة عن كلّ مفتاح. يُقرأ بعد العضوية لأنّه يحتاج
+      // `organization_id`، وتعذّرُه لا يُسقط الجلسة — يعود الحساب المحلّي.
+      const grantedResult = await supabase
+        .from("v_my_permissions")
+        .select("permission_key, granted")
+        .eq("organization_id", currentMembership.organization_id)
+        .eq("granted", true);
+      setDatabasePermissions(
+        grantedResult.error
+          ? null
+          : (grantedResult.data ?? []).map((row: { permission_key: string }) => row.permission_key),
+      );
     } catch (loadError) {
       clearOrganization();
       setError(errorMessage(loadError, "تعذر تحميل صلاحيات المنظمة"));
@@ -185,14 +211,29 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
   }, [loadAccess]);
 
   const permissions = useMemo(
-    () => resolvePermissions(membership?.role_key, explicitPermissions, customRolePermissions),
-    [membership?.role_key, explicitPermissions, customRolePermissions],
+    () =>
+      resolvePermissions(
+        membership?.role_key,
+        explicitPermissions,
+        customRolePermissions,
+        databasePermissions,
+      ),
+    [membership?.role_key, explicitPermissions, customRolePermissions, databasePermissions],
   );
   const legacyMode = !session && !error;
   const needsOnboarding = Boolean(session && !membership && !error);
   const accessConfiguration = useMemo(() => resolveOrganizationAccessConfiguration({
     authenticated: Boolean(session),
-    legacyMode: legacyMode || Boolean(organization?.legacy_full_access),
+    /**
+     * **`legacy_full_access` لا يتجاوز شيئًا بعد اليوم لمن دخل بحسابه.**
+     *
+     * `canAccessFeature` تبدأ بـ `if (legacyMode) return true` — فعمودٌ واحد
+     * على المنشأة كان يُلغي الدور والدور المخصّص والمنع الصريح جميعًا في
+     * المتصفّح: دورٌ صُفِّرت صلاحياته كلّها يُفتح له كلّ شيء. كان ذلك مفهومًا
+     * حين كان النظام يُفتح بلا حساب، وقد زال ذلك. فالتجاوز الآن مشروطٌ بألّا
+     * تكون هناك جلسة أصلًا — والقاعدة تحكم في كلّ حال.
+     */
+    legacyMode: !session && (legacyMode || Boolean(organization?.legacy_full_access)),
     demoOrganizationType,
     enabledFeatures,
     permissions,
