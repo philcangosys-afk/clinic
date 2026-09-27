@@ -212,10 +212,15 @@ type AgreementItemOption = {
   itemId: string;
   agreementItemId: string;
   agreementNumber: number;
+  /** عرض السعر الذي ينتمي إليه البند (0193) — `null` لبنود ما قبله. */
+  quoteId: string | null;
+  quoteNumber: number | null;
   description: string;
   qty: number;
   unitPrice: number;
   discountPercent: number;
+  /** الخصم بالريال على البند كلّه (0193) — المرجع إن وُجد. */
+  discountAmount: number;
   invoicedQty: number;
 };
 
@@ -238,6 +243,36 @@ function useAgreementItemsForBilling(patientId: string | undefined, organization
     queryKey: ["billing-agreement-items", patientId, organizationId],
     enabled: Boolean(patientId && organizationId),
     queryFn: async () => {
+      /**
+       * المنظور الواحد (0193): بنود اتفاقياتٍ مفعّلة وعروضٍ غير ملغاة، ومفوتَرها
+       * محسوبٌ في القاعدة بالقاعدة نفسها التي يفرضها حارس سطر الفاتورة. وإن لم
+       * تُنفَّذ الترقية بعد يُعاد الحساب القديم أدناه كما كان.
+       */
+      const viewResult = await supabase
+        .from("v_agreement_billable_items")
+        .select(
+          "agreement_item_id, agreement_number, quote_id, quote_number, item_id, description, qty, unit_price, discount_percent, discount_amount, invoiced_qty",
+        )
+        .eq("organization_id", organizationId)
+        .eq("patient_id", patientId)
+        .order("agreement_number")
+        .order("quote_number");
+      if (!viewResult.error) {
+        return ((viewResult.data ?? []) as any[]).map((row) => ({
+          itemId: row.item_id as string,
+          agreementItemId: row.agreement_item_id as string,
+          agreementNumber: Number(row.agreement_number),
+          quoteId: (row.quote_id as string | null) ?? null,
+          quoteNumber: row.quote_number == null ? null : Number(row.quote_number),
+          description: (row.description as string) ?? "بند اتفاقية",
+          qty: Number(row.qty) || 1,
+          unitPrice: Number(row.unit_price) || 0,
+          discountPercent: Number(row.discount_percent) || 0,
+          discountAmount: Number(row.discount_amount) || 0,
+          invoicedQty: Number(row.invoiced_qty) || 0,
+        })) as AgreementItemOption[];
+      }
+
       const { data, error } = await supabase
         .from("treatment_agreements")
         .select(
@@ -274,6 +309,9 @@ function useAgreementItemsForBilling(patientId: string | undefined, organization
             qty: Number(item.qty) || 1,
             unitPrice: Number(item.unit_price) || 0,
             discountPercent: Number(item.discount_percent) || 0,
+            discountAmount: 0,
+            quoteId: null,
+            quoteNumber: null,
             invoicedQty: 0,
           });
         }
@@ -416,10 +454,17 @@ export default function NewInvoiceDialog({
   vatRate: fallbackVatRate,
   isQuote,
   appointment,
+  agreementQuoteId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   organizationId: string | undefined;
+  /**
+   * «فوترة» من عرض سعر اتفاقية (0193): تُفتح النافذة وفيها ما لم يُفوتَر بعدُ
+   * من بنود ذلك العرض، بسعره وخصمه المتّفق عليهما. تُعدَّل الكمّيات لفوترة
+   * جزءٍ منه، ويبقى الباقي في الاتفاقية لزيارةٍ تالية.
+   */
+  agreementQuoteId?: string | null;
   /**
    * نسبة المنشأة الافتراضية — **تُعرض قبل اختيار المريض فقط**.
    *
@@ -732,6 +777,17 @@ export default function NewInvoiceDialog({
     if (remainingQty <= 0) return;
     // منع تكرار نفس بند الاتفاقية في الفاتورة الواحدة
     if (lines.some((line) => line.agreement_item_id === option.agreementItemId)) return;
+    /**
+     * الخصم المتّفق عليه يُنقل بمبلغه لا بنسبته إن كان مبلغًا — مقسومًا على ما
+     * يُفوتَر الآن من الكمية. والقاعدة (0167) **تشترط سببًا لكلّ خصم** على سطر
+     * فاتورة: بلا سببٍ كانت فوترة أيّ بند اتفاقيةٍ بخصمٍ تُرفض بـ«سبب الخصم
+     * مطلوب». فالسبب هنا مرجعُ الاتفاق نفسه.
+     */
+    const proratedAmount =
+      option.discountAmount > 0 && option.qty > 0
+        ? Math.round(((option.discountAmount * remainingQty) / option.qty) * 100) / 100
+        : 0;
+    const hasDiscount = proratedAmount > 0 || option.discountPercent > 0;
     setLines((prev) => [
       ...prev,
       {
@@ -740,8 +796,14 @@ export default function NewInvoiceDialog({
         description: option.description,
         price: option.unitPrice,
         qty: remainingQty,
-        discount_percent: option.discountPercent,
-        auto_discount_percent: option.discountPercent,
+        discount_percent: proratedAmount > 0 ? 0 : option.discountPercent,
+        auto_discount_percent: proratedAmount > 0 ? 0 : option.discountPercent,
+        discount_amount: proratedAmount,
+        discount_reason: hasDiscount
+          ? `خصم متّفق عليه في الاتفاقية #${option.agreementNumber}${
+              option.quoteNumber ? ` — عرض سعر ${option.quoteNumber}` : ""
+            }`
+          : undefined,
         is_vat_exempt: false,
         agreement_item_id: option.agreementItemId,
         agreement_label: `اتفاقية #${option.agreementNumber}`,
@@ -749,6 +811,23 @@ export default function NewInvoiceDialog({
       },
     ]);
   };
+
+  /** بنود عرض السعر المطلوب فوترته تُضاف مرّةً واحدة لكلّ فتح. */
+  const quotePreloadedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!open) {
+      quotePreloadedFor.current = null;
+      return;
+    }
+    if (!agreementQuoteId || quotePreloadedFor.current === agreementQuoteId) return;
+    if (!agreementItems.data) return;
+    quotePreloadedFor.current = agreementQuoteId;
+    for (const option of agreementItems.data) {
+      if (option.quoteId === agreementQuoteId && option.qty - option.invoicedQty > 0) {
+        addAgreementLine(option);
+      }
+    }
+  }, [open, agreementQuoteId, agreementItems.data]);
 
   const addLine = async (item: { id: string; name_ar: string; price: number; is_vat_exempt: boolean }) => {
     /**
@@ -1650,6 +1729,7 @@ export default function NewInvoiceDialog({
                       </Badge>
                       <span className="text-[10px] text-muted-foreground">
                         اتفاقية #{option.agreementNumber}
+                        {option.quoteNumber ? ` · عرض ${option.quoteNumber}` : ""}
                       </span>
                     </Button>
                   );

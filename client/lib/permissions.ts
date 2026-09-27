@@ -158,6 +158,9 @@ export type PermissionKey =
   | "billing.line_discount"
   /* عرض اليوميات السابقة وسجلّها (0191) */
   | "billing.day_history"
+  /* اتفاقيات العلاج وعروض أسعارها: الاطّلاع، والإنشاء والتعديل والتعطيل (0193) */
+  | "agreements.view"
+  | "agreements.manage"
   | "cashier.receive"
   | "cashier.open"
   | "cashier.close"

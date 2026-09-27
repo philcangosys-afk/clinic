@@ -60,11 +60,8 @@ import SessionsTab from "@/components/patients/SessionsTab";
 import SessionsPanel from "@/components/medical/SessionsPanel";
 import VitalsTab from "@/components/patients/VitalsTab";
 import CbahiTab from "@/components/patients/CbahiTab";
-import {
-  PatientVisitsTab,
-  PatientPrescriptionsTab,
-  PatientAgreementsTab,
-} from "@/components/patients/PatientContextTabs";
+import { PatientVisitsTab, PatientPrescriptionsTab } from "@/components/patients/PatientContextTabs";
+import AgreementsPanel from "@/components/agreements/AgreementsPanel";
 import WalletTab from "@/components/patients/WalletTab";
 import DocumentsTab from "@/components/patients/DocumentsTab";
 import RadiologyImagesTab from "@/components/patients/RadiologyImagesTab";
@@ -434,7 +431,11 @@ export default function PatientProfile() {
       {section === "cbahi" && <CbahiTab patientId={patient.data.id} />}
       {section === "invoices" && <InvoicesTab patientId={patient.data.id} />}
       {section === "benefits" && <PatientBenefitsTab patientId={patient.data.id} />}
-      {section === "agreements" && <PatientAgreementsTab patientId={patient.data.id} />}
+      {/* اتفاقيات المريض وعروض أسعارها (0193) — نفس اللوح الذي في المحاسبة
+          مقيّدًا بهذا المريض، فتُنشأ الاتفاقية من ملفّه بلا بحثٍ عنه. */}
+      {section === "agreements" && (
+        <AgreementsPanel organizationId={patient.data.organization_id} patientId={patient.data.id} />
+      )}
       {section === "wallet" && <WalletTab patientId={patient.data.id} />}
       {section === "appointments" && <AppointmentsTab patientId={patient.data.id} />}
       {section === "documents" && <DocumentsTab patientId={patient.data.id} kind="document" />}

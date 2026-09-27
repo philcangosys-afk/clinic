@@ -95,18 +95,31 @@ function useAgreementItems(patientId: string, organizationId: string | undefined
       const { data, error } = await supabase
         .from("treatment_agreements")
         .select(
-          "id, agreement_number, is_disabled, treatment_agreement_items(id, description, qty)",
+          "id, agreement_number, is_disabled, treatment_agreement_items(id, description, qty, quote:agreement_quotes(is_cancelled))",
         )
         .eq("organization_id", organizationId)
         .eq("patient_id", patientId)
         .eq("is_disabled", false)
         .order("agreement_number", { ascending: false });
       if (error) throw error;
-      return (data ?? []) as unknown as {
+      type Row = {
         id: string;
         agreement_number: number;
-        treatment_agreement_items: { id: string; description: string | null; qty: number }[];
-      }[];
+        treatment_agreement_items: {
+          id: string;
+          description: string | null;
+          qty: number;
+          quote: { is_cancelled: boolean } | { is_cancelled: boolean }[] | null;
+        }[];
+      };
+      // بنود عرض سعرٍ ملغى (0193) لا تُجدوَل لها جلسات: الإلغاء أخرجها من الاتفاق
+      return ((data ?? []) as unknown as Row[]).map((agreement) => ({
+        ...agreement,
+        treatment_agreement_items: (agreement.treatment_agreement_items ?? []).filter((item) => {
+          const quote = Array.isArray(item.quote) ? item.quote[0] : item.quote;
+          return !quote?.is_cancelled;
+        }),
+      }));
     },
   });
 }
