@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   AlertTriangle,
+  Archive,
   ArrowRight,
   Ban,
   CalendarClock,
@@ -62,6 +63,7 @@ import VitalsTab from "@/components/patients/VitalsTab";
 import CbahiTab from "@/components/patients/CbahiTab";
 import { PatientVisitsTab, PatientPrescriptionsTab } from "@/components/patients/PatientContextTabs";
 import AgreementsPanel from "@/components/agreements/AgreementsPanel";
+import LegacyArchiveTab from "@/components/patients/LegacyArchiveTab";
 import WalletTab from "@/components/patients/WalletTab";
 import DocumentsTab from "@/components/patients/DocumentsTab";
 import RadiologyImagesTab from "@/components/patients/RadiologyImagesTab";
@@ -357,6 +359,8 @@ export default function PatientProfile() {
       items: [
         { key: "overview", label: "المعلومات الشخصية", icon: UserRound, badge: overviewDirty ? "•" : null },
         { key: "appointments", label: "عرض المواعيد", icon: CalendarDays },
+        /* فواتير Kizen ومواعيده واتفاقياته وزياراته — للاطلاع فقط (0194) */
+        { key: "legacy", label: "أرشيف النظام السابق", icon: Archive },
         { key: "contacts", label: "المرافقون", icon: Contact2 },
         { key: "notes", label: "الملاحظات", icon: StickyNote, badge: activeNotesCount || null },
         { key: "blocking", label: "الحجب", icon: Ban },
@@ -438,6 +442,7 @@ export default function PatientProfile() {
       )}
       {section === "wallet" && <WalletTab patientId={patient.data.id} />}
       {section === "appointments" && <AppointmentsTab patientId={patient.data.id} />}
+      {section === "legacy" && <LegacyArchiveTab patientId={patient.data.id} />}
       {section === "documents" && <DocumentsTab patientId={patient.data.id} kind="document" />}
       {/* صور الملفّ وتواقيعه هما **نفس** الجدول برشّاحٍ مختلف، لا شاشتان:
           `patient_documents.category = 'image'` و`signed_at is not null`
