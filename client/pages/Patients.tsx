@@ -1,7 +1,11 @@
-import { useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
+import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Download,
   MessageSquareShare,
   Plus,
@@ -18,7 +22,7 @@ import { supabase } from "@/lib/supabase";
 import { useSessionDoctor } from "@/lib/session-doctor";
 import type { PatientRow } from "@/lib/database.types";
 import { PatientSearchScopeChips } from "@/components/shared/PatientSearchInput";
-import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
+import { ScreenToolbar } from "@/components/shell/ScreenToolbar";
 import { Checkbox } from "@/components/ui/checkbox";
 import DeleteRowsDialog, { useRowSelection } from "@/components/shared/DeleteRowsDialog";
 import {
@@ -58,7 +62,15 @@ import { formatDate, useLocaleSettings } from "@/lib/locale";
  * بحث في النظام القديم، بلا تصدير. هذه النسخة تضيف الفلاتر المتقدمة والتصدير
  * مع إبقاء البحث السريع كما هو للاستخدام اليومي.
  */
-const RESULT_CAP = 200;
+/**
+ * القائمة تُقرأ صفحةً صفحة من القاعدة. كانت تُقرأ أوّل 200 ملف فقط بلا طريقٍ
+ * إلى ما بعدها — مقبولٌ بمئات المرضى، وبعد استيراد Kizen (قرابة 26 ألف ملف)
+ * صار أكثر من 99% من الملفّات لا يُوصل إليه من القائمة.
+ */
+const PAGE_SIZES = [50, 100, 200] as const;
+const DEFAULT_PAGE_SIZE = 50;
+/** أقصى ما تُرجعه واجهة Supabase في الطلب الواحد — التصدير يقرأ على دفعات بهذا الحجم. */
+const EXPORT_BATCH = 1000;
 const NO_DOCTOR_FILTER = "__all__";
 
 type PatientListRow = Pick<
@@ -128,11 +140,11 @@ const PATIENT_LIST_COLUMNS =
   "id, file_number, name_ar, name_en, mobile_number, gender, birth_date, id_number, " +
   "file_date, block_appointments, block_invoices, block_file, block_sms, insurance_company_name";
 
-function usePatientsList(
-  organizationId: string | undefined,
-  search: string,
-  searchScopes: PatientSearchScope[],
-  filters: Filters,
+type PatientsQueryArgs = {
+  organizationId: string | undefined;
+  search: string;
+  searchScopes: PatientSearchScope[];
+  filters: Filters;
   /**
    * حصرُ القائمة على مرضى طبيبٍ بعينه.
    *
@@ -142,88 +154,152 @@ function usePatientsList(
    * لكل زوج (طبيب، مريض). والأعمدة نفسها لأنّ المنظور يمرّر `patients.*`،
    * فلا يتغيّر شيءٌ في بقيّة الشاشة.
    *
-   * ولا يُطبَّق الحصر في المتصفّح: القائمة محدودة بسقفٍ من الصفوف، فترشيحُ
-   * الظاهر منها يترك الطبيب يرى «لا نتائج» ومريضه في الصفحة التالية.
+   * ولا يُطبَّق الحصر في المتصفّح: القائمة تُقرأ صفحةً صفحة، فترشيحُ الظاهر
+   * منها يترك الطبيب يرى «لا نتائج» ومريضه في الصفحة التالية.
    */
-  scopedDoctorId?: string | null,
+  scopedDoctorId?: string | null;
+};
+
+/**
+ * استعلام المرضى بمرشّحاته — مصدرٌ واحد للصفحة وللعدّ وللتصدير، فلا يفترق
+ * العدد المعروض عن الصفوف التي خلفه.
+ */
+function buildPatientsQuery(
+  { organizationId, search, searchScopes, filters, scopedDoctorId }: PatientsQueryArgs,
+  columns: string,
+  options?: { count: "exact"; head: true },
 ) {
+  // الفرعان مكتوبان صراحةً لا باسمٍ محسوب: مدقّق الاكتمال يمسح
+  // `from("NAME")` حرفيًّا، واسمٌ داخل شرطٍ ثلاثيّ يجعله يُعلن المنظور
+  // ميتًا وهو مستعمَل.
+  let query = scopedDoctorId
+    ? supabase
+        .from("v_doctor_patients")
+        .select(columns, options)
+        .eq("organization_id", organizationId)
+        .eq("doctor_id", scopedDoctorId)
+    : supabase
+        .from("patients")
+        .select(columns, options)
+        .eq("organization_id", organizationId);
+  /**
+   * الملفات المدموجة تُستثنى. دالّة الدمج `app_merge_patients` تُعلّم
+   * المكرَّر بـ`merged_into_id` وتضع عليه `block_appointments` فقط — لا
+   * `block_sms` ولا `block_file` — فمرشّحا الرسائل الجماعية لا يمسّانه:
+   * كان الشخص يستقبل رسالتين ويُخصم رصيد رسالتين، ويفتح الموظف الملف
+   * الميّت فيجده فارغًا.
+   */
+  query = query.is("merged_into_id", null);
+
+  // البحث الموحَّد: الاسم والجوال والهوية — أو ما تحصره أزرار النطاق
+  const searchFilter = buildPatientSearchOr(search, searchScopes, PATIENTS_SEARCH_COLUMNS);
+  if (searchFilter) query = query.or(searchFilter);
+
+  if (filters.gender !== "all") query = query.eq("gender", filters.gender);
+  if (filters.sourceValueId) query = query.eq("source_value_id", filters.sourceValueId);
+  if (filters.nationalityValueId) query = query.eq("nationality_value_id", filters.nationalityValueId);
+  if (filters.workEntityValueId) query = query.eq("work_entity_value_id", filters.workEntityValueId);
+  if (filters.professionValueId) query = query.eq("profession_value_id", filters.professionValueId);
+  if (filters.cityValueId) query = query.eq("city_value_id", filters.cityValueId);
+  if (filters.customerTypeValueId) query = query.eq("customer_type_value_id", filters.customerTypeValueId);
+  if (filters.educationValueId)
+    query = query.eq("educational_qualification_value_id", filters.educationValueId);
+  if (filters.maritalStatus !== "all") query = query.eq("marital_status", filters.maritalStatus);
+  if (filters.doctorId) query = query.eq("treating_doctor_id", filters.doctorId);
+  if (filters.fileNumberFrom) query = query.gte("file_number", Number(filters.fileNumberFrom));
+  if (filters.fileNumberTo) query = query.lte("file_number", Number(filters.fileNumberTo));
+  // نطاق العمر يُترجم إلى نطاق تاريخ ميلاد: الأكبر سنًّا = تاريخ أقدم.
+  if (filters.ageTo) {
+    const from = new Date();
+    from.setFullYear(from.getFullYear() - Number(filters.ageTo) - 1);
+    query = query.gte("birth_date", from.toISOString().slice(0, 10));
+  }
+  if (filters.ageFrom) {
+    const to = new Date();
+    to.setFullYear(to.getFullYear() - Number(filters.ageFrom));
+    query = query.lte("birth_date", to.toISOString().slice(0, 10));
+  }
+  if (filters.fileDateFrom) query = query.gte("file_date", filters.fileDateFrom);
+  if (filters.fileDateTo) query = query.lte("file_date", filters.fileDateTo);
+  if (filters.birthFrom) query = query.gte("birth_date", filters.birthFrom);
+  if (filters.birthTo) query = query.lte("birth_date", filters.birthTo);
+  // "المحجوبة فقط" تعني أي نوع حجب — الملف أو المواعيد أو الفوترة
+  if (filters.blockedOnly)
+    query = query.or("block_file.eq.true,block_appointments.eq.true,block_invoices.eq.true");
+  return query;
+}
+
+/**
+ * ترتيبٌ ثابت لازمٌ للتقسيم إلى صفحات: الأحدث رقمَ ملفٍّ أوّلًا، ثم المعرّف
+ * لكسر أيّ تعادل. كان الترتيب بـ`created_at` وحده، وملفّات Kizen كلّها أُدخلت
+ * في معاملةٍ واحدة فتتساوى فيه — ومع التساوي تُعيد القاعدة الصفوف بأيّ ترتيب،
+ * فيظهر المريض نفسه في صفحتين ويختفي غيره.
+ */
+function orderedPage<Q extends { order: (column: string, options: { ascending: boolean }) => Q }>(
+  query: Q,
+) {
+  return query.order("file_number", { ascending: false }).order("id", { ascending: false });
+}
+
+function patientsKey(args: PatientsQueryArgs) {
+  return [
+    args.organizationId,
+    args.search,
+    args.searchScopes.join("+"),
+    args.filters,
+    args.scopedDoctorId ?? "",
+  ] as const;
+}
+
+function usePatientsPage(args: PatientsQueryArgs, page: number, pageSize: number) {
   return useQuery({
-    queryKey: [
-      "patients-list",
-      organizationId,
-      search,
-      searchScopes.join("+"),
-      filters,
-      scopedDoctorId ?? "",
-    ],
-    enabled: Boolean(organizationId),
+    queryKey: ["patients-list", ...patientsKey(args), page, pageSize],
+    enabled: Boolean(args.organizationId),
+    // تبقى الصفحة الحالية معروضةً حتى تصل التالية — لا وميض هيكلٍ فارغ بين الصفحات
+    placeholderData: keepPreviousData,
     queryFn: async () => {
-      // الفرعان مكتوبان صراحةً لا باسمٍ محسوب: مدقّق الاكتمال يمسح
-      // `from("NAME")` حرفيًّا، واسمٌ داخل شرطٍ ثلاثيّ يجعله يُعلن المنظور
-      // ميتًا وهو مستعمَل.
-      let query = scopedDoctorId
-        ? supabase
-            .from("v_doctor_patients")
-            .select(PATIENT_LIST_COLUMNS)
-            .eq("organization_id", organizationId)
-            .eq("doctor_id", scopedDoctorId)
-        : supabase
-            .from("patients")
-            .select(PATIENT_LIST_COLUMNS)
-            .eq("organization_id", organizationId);
-      query = query
-        /**
-         * الملفات المدموجة تُستثنى. دالّة الدمج `app_merge_patients` تُعلّم
-         * المكرَّر بـ`merged_into_id` وتضع عليه `block_appointments` فقط — لا
-         * `block_sms` ولا `block_file` — فمرشّحا الرسائل الجماعية لا يمسّانه:
-         * كان الشخص يستقبل رسالتين ويُخصم رصيد رسالتين، ويفتح الموظف الملف
-         * الميّت فيجده فارغًا.
-         */
-        .is("merged_into_id", null)
-        .order("created_at", { ascending: false })
-        .limit(RESULT_CAP);
-
-      // البحث الموحَّد: الاسم والجوال والهوية — أو ما تحصره أزرار النطاق
-      const searchFilter = buildPatientSearchOr(search, searchScopes, PATIENTS_SEARCH_COLUMNS);
-      if (searchFilter) query = query.or(searchFilter);
-
-      if (filters.gender !== "all") query = query.eq("gender", filters.gender);
-      if (filters.sourceValueId) query = query.eq("source_value_id", filters.sourceValueId);
-      if (filters.nationalityValueId) query = query.eq("nationality_value_id", filters.nationalityValueId);
-      if (filters.workEntityValueId) query = query.eq("work_entity_value_id", filters.workEntityValueId);
-      if (filters.professionValueId) query = query.eq("profession_value_id", filters.professionValueId);
-      if (filters.cityValueId) query = query.eq("city_value_id", filters.cityValueId);
-      if (filters.customerTypeValueId) query = query.eq("customer_type_value_id", filters.customerTypeValueId);
-      if (filters.educationValueId)
-        query = query.eq("educational_qualification_value_id", filters.educationValueId);
-      if (filters.maritalStatus !== "all") query = query.eq("marital_status", filters.maritalStatus);
-      if (filters.doctorId) query = query.eq("treating_doctor_id", filters.doctorId);
-      if (filters.fileNumberFrom) query = query.gte("file_number", Number(filters.fileNumberFrom));
-      if (filters.fileNumberTo) query = query.lte("file_number", Number(filters.fileNumberTo));
-      // نطاق العمر يُترجم إلى نطاق تاريخ ميلاد: الأكبر سنًّا = تاريخ أقدم.
-      if (filters.ageTo) {
-        const from = new Date();
-        from.setFullYear(from.getFullYear() - Number(filters.ageTo) - 1);
-        query = query.gte("birth_date", from.toISOString().slice(0, 10));
-      }
-      if (filters.ageFrom) {
-        const to = new Date();
-        to.setFullYear(to.getFullYear() - Number(filters.ageFrom));
-        query = query.lte("birth_date", to.toISOString().slice(0, 10));
-      }
-      if (filters.fileDateFrom) query = query.gte("file_date", filters.fileDateFrom);
-      if (filters.fileDateTo) query = query.lte("file_date", filters.fileDateTo);
-      if (filters.birthFrom) query = query.gte("birth_date", filters.birthFrom);
-      if (filters.birthTo) query = query.lte("birth_date", filters.birthTo);
-      // "المحجوبة فقط" تعني أي نوع حجب — الملف أو المواعيد أو الفوترة
-      if (filters.blockedOnly)
-        query = query.or("block_file.eq.true,block_appointments.eq.true,block_invoices.eq.true");
-
-      const { data, error } = await query;
+      const from = page * pageSize;
+      const { data, error } = await orderedPage(buildPatientsQuery(args, PATIENT_LIST_COLUMNS)).range(
+        from,
+        from + pageSize - 1,
+      );
       if (error) throw error;
-      return (data ?? []) as PatientListRow[];
+      return (data ?? []) as unknown as PatientListRow[];
     },
   });
+}
+
+/**
+ * العدد الكلّيّ للمطابقين، مستقلٌّ عن الصفحة: التنقّل بين الصفحات لا يعيد
+ * العدّ، والعدّ يُعاد عند تغيّر البحث أو المرشّحات فقط. المفتاح يبدأ بـ
+ * `patients-list` ليُحدَّث مع القائمة حين تُبطَل (إضافة مريض، استيراد، حذف).
+ */
+function usePatientsCount(args: PatientsQueryArgs) {
+  return useQuery({
+    queryKey: ["patients-list", "count", ...patientsKey(args)],
+    enabled: Boolean(args.organizationId),
+    placeholderData: keepPreviousData,
+    queryFn: async () => {
+      const { count, error } = await buildPatientsQuery(args, "id", { count: "exact", head: true });
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+}
+
+/** كلّ المطابقين لا الصفحة الظاهرة — على دفعاتٍ بحدّ واجهة Supabase. */
+async function fetchAllMatching(args: PatientsQueryArgs) {
+  const rows: PatientListRow[] = [];
+  for (let from = 0; ; from += EXPORT_BATCH) {
+    const { data, error } = await orderedPage(buildPatientsQuery(args, PATIENT_LIST_COLUMNS)).range(
+      from,
+      from + EXPORT_BATCH - 1,
+    );
+    if (error) throw error;
+    const batch = (data ?? []) as unknown as PatientListRow[];
+    rows.push(...batch);
+    if (batch.length < EXPORT_BATCH) return rows;
+  }
 }
 
 function exportCsv(rows: PatientListRow[]) {
@@ -315,13 +391,27 @@ export default function Patients() {
   const [importOpen, setImportOpen] = useState(false);
   const [smsText, setSmsText] = useState("");
   const { doctorId: scopeDoctorId, isDoctorScope, unresolvedDoctor } = useSessionDoctor();
-  const patients = usePatientsList(
-    organization?.id,
+  const listArgs: PatientsQueryArgs = {
+    organizationId: organization?.id,
     search,
     searchScopes,
     filters,
-    isDoctorScope ? scopeDoctorId : null,
-  );
+    scopedDoctorId: isDoctorScope ? scopeDoctorId : null,
+  };
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+  /**
+   * الصفحة مربوطةٌ بمعايير البحث التي فُتحت عليها: بحثٌ أو مرشّحٌ أو حجمُ صفحةٍ
+   * جديد يبدأ من الأولى في اللحظة نفسها — لا بعد طلبٍ ضائع للصفحة 40 من نتيجةٍ
+   * صارت صفحتين، يعرض جدولًا فارغًا ويوحي بأن لا مطابق.
+   */
+  const criteriaKey = JSON.stringify([...patientsKey(listArgs), pageSize]);
+  const [pageState, setPageState] = useState({ key: criteriaKey, page: 0 });
+  const page = pageState.key === criteriaKey ? pageState.page : 0;
+  const setPage = (next: number) => setPageState({ key: criteriaKey, page: next });
+  const [pageInput, setPageInput] = useState("1");
+  const [exporting, setExporting] = useState(false);
+  const patients = usePatientsPage(listArgs, page, pageSize);
+  const total = usePatientsCount(listArgs);
   const doctors = useQuery({
     queryKey: ["doctors-for-patient-filter", organization?.id],
     enabled: Boolean(organization?.id),
@@ -338,7 +428,33 @@ export default function Patients() {
   });
 
   const list = patients.data ?? [];
-  const atCap = list.length >= RESULT_CAP;
+  const totalCount = total.data ?? 0;
+  const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
+  const firstShown = list.length === 0 ? 0 : page * pageSize + 1;
+  const lastShown = page * pageSize + list.length;
+
+  // حُذفت ملفّات فصارت الصفحة الحالية بعد الأخيرة — يُرجَع إلى الأخيرة
+  useEffect(() => {
+    if (total.data !== undefined && page > pageCount - 1) setPage(pageCount - 1);
+  }, [total.data, page, pageCount]);
+  useEffect(() => {
+    setPageInput(String(page + 1));
+  }, [page]);
+
+  const goToPage = (target: number) => setPage(Math.min(Math.max(0, target), pageCount - 1));
+
+  const exportAll = async () => {
+    setExporting(true);
+    try {
+      const rows = await fetchAllMatching(listArgs);
+      exportCsv(rows);
+      toast({ title: `صُدِّر ${rows.length} ملف` });
+    } catch (error) {
+      toast({ variant: "destructive", title: "تعذّر التصدير", description: errorMessage(error) });
+    } finally {
+      setExporting(false);
+    }
+  };
   const activeFilterCount = Object.entries(filters).filter(([key, value]) => {
     if (key === "gender") return value !== "all";
     if (key === "blockedOnly") return value === true;
@@ -470,14 +586,22 @@ export default function Patients() {
             icon: SlidersHorizontal,
             onClick: () => setShowAdvanced((prev) => !prev),
           },
-          { key: "refresh", label: "تحديث", icon: RefreshCw, onClick: () => void patients.refetch() },
+          {
+            key: "refresh",
+            label: "تحديث",
+            icon: RefreshCw,
+            onClick: () => {
+              void patients.refetch();
+              void total.refetch();
+            },
+          },
           { key: "sep2", separator: true },
           {
             key: "export",
-            label: "تصدير",
+            label: exporting ? "جارٍ التصدير..." : `تصدير (${totalCount})`,
             icon: Download,
-            disabled: list.length === 0,
-            onClick: () => exportCsv(list),
+            disabled: totalCount === 0 || exporting,
+            onClick: () => void exportAll(),
           },
           { key: "import", label: "استيراد", icon: Upload, onClick: () => setImportOpen(true) },
           {
@@ -712,9 +836,14 @@ export default function Patients() {
           )}
 
           <CardDescription>
-            {atCap
-              ? `يُعرض أول ${RESULT_CAP} ملف مطابق — ضيّق البحث لرؤية بقية النتائج`
-              : `${list.length} ملف مطابق`}
+            {total.isLoading
+              ? "جارٍ العدّ..."
+              : total.isError
+                ? `تعذّر عدّ المطابقين: ${errorMessage(total.error)}`
+                : `${totalCount.toLocaleString("en-US")} ملف مطابق` +
+                  (totalCount > 0
+                    ? ` — يُعرض ${firstShown.toLocaleString("en-US")}–${lastShown.toLocaleString("en-US")}`
+                    : "")}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -814,7 +943,88 @@ export default function Patients() {
             </Table>
           )}
         </CardContent>
-        {!patients.isLoading && !patients.isError && <GridFooterCount count={list.length} />}
+        {!patients.isLoading && !patients.isError && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/30 px-3 py-2 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="text-muted-foreground">عدد الصفوف في الصفحة</span>
+              <Select value={String(pageSize)} onValueChange={(value) => setPageSize(Number(value))}>
+                <SelectTrigger className="h-7 w-20">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAGE_SIZES.map((size) => (
+                    <SelectItem key={size} value={String(size)}>
+                      {size}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {patients.isFetching && <span className="text-muted-foreground">جارٍ التحميل...</span>}
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                size="icon"
+                variant="outline"
+                className="h-7 w-7"
+                title="الصفحة الأولى"
+                disabled={page === 0}
+                onClick={() => goToPage(0)}
+              >
+                <ChevronsRight className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="icon"
+                variant="outline"
+                className="h-7 w-7"
+                title="السابقة"
+                disabled={page === 0}
+                onClick={() => goToPage(page - 1)}
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+              <form
+                className="flex items-center gap-1 px-1"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const target = Number(pageInput);
+                  if (Number.isFinite(target) && target >= 1) goToPage(Math.floor(target) - 1);
+                  else setPageInput(String(page + 1));
+                }}
+              >
+                <span>صفحة</span>
+                <Input
+                  value={pageInput}
+                  onChange={(event) => setPageInput(event.target.value.replace(/[^0-9]/g, ""))}
+                  onBlur={() => setPageInput(String(page + 1))}
+                  inputMode="numeric"
+                  className="h-7 w-16 text-center tabular-nums"
+                  aria-label="رقم الصفحة"
+                />
+                <span className="tabular-nums">من {pageCount.toLocaleString("en-US")}</span>
+              </form>
+              <Button
+                size="icon"
+                variant="outline"
+                className="h-7 w-7"
+                title="التالية"
+                disabled={page >= pageCount - 1}
+                onClick={() => goToPage(page + 1)}
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="icon"
+                variant="outline"
+                className="h-7 w-7"
+                title="الصفحة الأخيرة"
+                disabled={page >= pageCount - 1}
+                onClick={() => goToPage(pageCount - 1)}
+              >
+                <ChevronsLeft className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
       </Card>
 
       <CsvImportDialog
