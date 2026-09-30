@@ -1,9 +1,13 @@
-import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Archive,
   ArchiveRestore,
   BadgePercent,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Clock,
   Download,
   Gift,
@@ -39,7 +43,7 @@ import { useToast } from "@/hooks/use-toast";
 import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDialog";
 import { LookupTree, useCategorySubtree } from "@/components/shared/LookupTree";
 import { TreeGridLayout } from "@/components/shell/TreeGridLayout";
-import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
+import { ScreenToolbar } from "@/components/shell/ScreenToolbar";
 import { Checkbox } from "@/components/ui/checkbox";
 import DeleteRowsDialog, { useRowSelection } from "@/components/shared/DeleteRowsDialog";
 import ServiceEditorDialog, {
@@ -49,61 +53,114 @@ import ServiceEditorDialog, {
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount } from "@/lib/locale";
 
-const ITEMS_CAP = 200;
+/** أحجام الصفحة — كما في شاشة المرضى. */
+const PAGE_SIZES = [50, 100, 200] as const;
+const DEFAULT_PAGE_SIZE = 100;
+/** حدّ واجهة Supabase للاستعلام الواحد — التصدير يجلب على دفعاتٍ بهذا الحجم. */
+const EXPORT_BATCH = 1000;
 
-function useItems(
-  organizationId: string | undefined,
-  search: string,
-  categoryIds: string[],
-  typeFilter: string,
-  statusFilter: string,
-  serviceTypeFilter: string,
-  showArchived: boolean,
+const ITEM_COLUMNS =
+  "id, code, barcode, name_ar, name_en, item_type, medical_service_type, duration_minutes, category_value_id, category_name, price, cost_price, is_vat_exempt, is_disabled, is_archived, archive_reason, archived_at, default_clinic_id, clinic_name, requires_preauthorization, requires_consent, branch_ids, primary_claim_code, min_price, max_price, allow_complimentary, complimentary_note, offer_id, offer_title, offer_price, offer_show_before_after, offer_end_date, effective_price";
+
+type ItemsArgs = {
+  organizationId: string | undefined;
+  search: string;
+  categoryIds: string[];
+  typeFilter: string;
+  statusFilter: string;
+  serviceTypeFilter: string;
+  showArchived: boolean;
   /** "all" | "free" (تُمنَح مجانًا) | "offer" (عليها عرض نشط اليوم) */
-  featureFilter: string,
-) {
+  featureFilter: string;
+};
+
+const itemsArgsKey = (args: ItemsArgs) => [
+  args.organizationId,
+  args.search,
+  args.categoryIds.join(","),
+  args.typeFilter,
+  args.statusFilter,
+  args.serviceTypeFilter,
+  args.showArchived,
+  args.featureFilter,
+];
+
+/**
+ * الاستعلام بمرشّحاته — مشتركٌ بين الصفحة والعدد والتصدير فلا يفترق ما يُعدّ
+ * عمّا يُعرض عمّا يُصدَّر.
+ *
+ * يُقرأ من `v_service_catalog` لا من `items`: المنظور يضمّ اسم العيادة والفئة
+ * والفروع والموارد وكود المطالبة في استعلام واحد.
+ */
+function buildItemsQuery(args: ItemsArgs, columns: string, options?: { count: "exact"; head: true }) {
+  let query = supabase
+    .from("v_service_catalog")
+    .select(columns, options)
+    .eq("organization_id", args.organizationId)
+    .eq("is_archived", args.showArchived);
+  const term = args.search.trim();
+  if (term) query = query.or(`name_ar.ilike.%${term}%,code.ilike.%${term}%,barcode.ilike.%${term}%`);
+  // الفئة الرئيسية تشمل فروعها — `in` لا `eq`، وإلّا بدت الفئة الأمّ فارغة
+  if (args.categoryIds.length > 0) query = query.in("category_value_id", args.categoryIds);
+  if (args.typeFilter !== "all") query = query.eq("item_type", args.typeFilter);
+  if (args.serviceTypeFilter !== "all") query = query.eq("medical_service_type", args.serviceTypeFilter);
+  if (args.statusFilter !== "all") query = query.eq("is_disabled", args.statusFilter === "disabled");
+  if (args.featureFilter === "free") query = query.eq("allow_complimentary", true);
+  if (args.featureFilter === "offer") query = query.not("offer_id", "is", null);
+  return query;
+}
+
+/**
+ * صفحةٌ من الكتالوج.
+ *
+ * كانت القائمة مسقوفةً بـ200 صفّ بلا تنقّل: بعد إضافة خدمات الجلدية والمعامل
+ * (227) صار «كل الأصناف» أكثر من 200، فتسقط خدماتٌ من العرض ولا سبيل إليها إلّا
+ * بالبحث. الترتيب بالاسم ثمّ المعرّف ليبقى ثابتًا بين الصفحات.
+ */
+function useItems(args: ItemsArgs, page: number, pageSize: number) {
   return useQuery({
-    queryKey: [
-      "items-catalog",
-      organizationId,
-      search,
-      categoryIds.join(","),
-      typeFilter,
-      statusFilter,
-      serviceTypeFilter,
-      showArchived,
-      featureFilter,
-    ],
-    enabled: Boolean(organizationId),
+    queryKey: ["items-catalog", ...itemsArgsKey(args), page, pageSize],
+    enabled: Boolean(args.organizationId),
+    // تبقى الصفحة الحالية معروضةً حتى تصل التالية — لا وميض بين الصفحات
+    placeholderData: keepPreviousData,
     queryFn: async () => {
-      // يُقرأ من `v_service_catalog` لا من `items`: المنظور يضمّ اسم العيادة
-      // والفئة والفروع والموارد وكود المطالبة في استعلام واحد، وبقاؤه بلا
-      // قارئ كان يعني تعريفين للكتالوج يفترقان مع الوقت.
-      let query = supabase
-        .from("v_service_catalog")
-        .select(
-          "id, code, barcode, name_ar, name_en, item_type, medical_service_type, duration_minutes, category_value_id, category_name, price, cost_price, is_vat_exempt, is_disabled, is_archived, archive_reason, archived_at, default_clinic_id, clinic_name, requires_preauthorization, requires_consent, branch_ids, primary_claim_code, min_price, max_price, allow_complimentary, complimentary_note, offer_id, offer_title, offer_price, offer_show_before_after, offer_end_date, effective_price",
-        )
-        .eq("organization_id", organizationId)
-        .eq("is_archived", showArchived)
+      const from = page * pageSize;
+      const { data, error } = await buildItemsQuery(args, ITEM_COLUMNS)
         .order("name_ar")
-        .limit(ITEMS_CAP);
-      const term = search.trim();
-      if (term) query = query.or(`name_ar.ilike.%${term}%,code.ilike.%${term}%,barcode.ilike.%${term}%`);
-      // الفئة الرئيسية تشمل فروعها — `in` لا `eq`، وإلّا بدت الفئة الأمّ فارغة
-      if (categoryIds.length > 0) query = query.in("category_value_id", categoryIds);
-      if (typeFilter !== "all") query = query.eq("item_type", typeFilter);
-      if (serviceTypeFilter !== "all") query = query.eq("medical_service_type", serviceTypeFilter);
-      if (statusFilter !== "all") query = query.eq("is_disabled", statusFilter === "disabled");
-      // الترشيح في القاعدة لا بعد الجلب: القائمة مسقوفة، وترشيحٌ بعد السقف
-      // يُخفي خدماتٍ مطابقة سقطت من الحدّ فتبدو غير موجودة.
-      if (featureFilter === "free") query = query.eq("allow_complimentary", true);
-      if (featureFilter === "offer") query = query.not("offer_id", "is", null);
-      const { data, error } = await query;
+        .order("id")
+        .range(from, from + pageSize - 1);
       if (error) throw error;
       return (data ?? []) as any[];
     },
   });
+}
+
+/** عدد المطابقين كلّهم، مستقلٌّ عن الصفحة. */
+function useItemsCount(args: ItemsArgs) {
+  return useQuery({
+    queryKey: ["items-catalog", "count", ...itemsArgsKey(args)],
+    enabled: Boolean(args.organizationId),
+    queryFn: async () => {
+      const { count, error } = await buildItemsQuery(args, "id", { count: "exact", head: true });
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+}
+
+/** كلّ المطابقين لا الصفحة الظاهرة — للتصدير، على دفعات. */
+async function fetchAllItems(args: ItemsArgs) {
+  const rows: any[] = [];
+  for (let from = 0; ; from += EXPORT_BATCH) {
+    const { data, error } = await buildItemsQuery(args, ITEM_COLUMNS)
+      .order("name_ar")
+      .order("id")
+      .range(from, from + EXPORT_BATCH - 1);
+    if (error) throw error;
+    rows.push(...(data ?? []));
+    if (!data || data.length < EXPORT_BATCH) break;
+  }
+  return rows;
 }
 
 /** تصدير الكتالوج المعروض — "لائحة الأسعار" في لقطة 10. */
@@ -306,8 +363,8 @@ export default function Services() {
 
   const categorySubtree = useCategorySubtree("item_categories");
   const categoryIds = useMemo(() => categorySubtree(categoryId), [categorySubtree, categoryId]);
-  const items = useItems(
-    organization?.id,
+  const itemsArgs: ItemsArgs = {
+    organizationId: organization?.id,
     search,
     categoryIds,
     typeFilter,
@@ -315,7 +372,36 @@ export default function Services() {
     serviceTypeFilter,
     showArchived,
     featureFilter,
-  );
+  };
+  const [pageSize, setPageSize] = useState<number>(DEFAULT_PAGE_SIZE);
+  /** الصفحة مربوطةٌ بمعايير العرض: أيّ تغييرٍ في البحث أو المرشّح أو الحجم يعيدها إلى الأولى. */
+  const criteriaKey = JSON.stringify([...itemsArgsKey(itemsArgs), pageSize]);
+  const [pageState, setPageState] = useState({ key: criteriaKey, page: 0 });
+  const page = pageState.key === criteriaKey ? pageState.page : 0;
+  const setPage = (next: number) => setPageState({ key: criteriaKey, page: next });
+  const [pageInput, setPageInput] = useState("1");
+  const items = useItems(itemsArgs, page, pageSize);
+  const itemsTotal = useItemsCount(itemsArgs);
+  const pageCount = Math.max(1, Math.ceil((itemsTotal.data ?? 0) / pageSize));
+  // أُرشفت أصنافٌ فصارت الصفحة الحالية بعد الأخيرة — يُرجَع إلى الأخيرة
+  useEffect(() => {
+    if (itemsTotal.data !== undefined && page > pageCount - 1) setPage(pageCount - 1);
+  }, [itemsTotal.data, page, pageCount]);
+  useEffect(() => {
+    setPageInput(String(page + 1));
+  }, [page]);
+  const goToPage = (target: number) => setPage(Math.min(Math.max(0, target), pageCount - 1));
+  const exportAll = useMutation({
+    mutationFn: async () => {
+      const rows = await fetchAllItems(itemsArgs);
+      if (rows.length === 0) throw new Error("لا أصناف مطابقة للتصدير");
+      exportItemsCsv(rows);
+      return rows.length;
+    },
+    onSuccess: (count) => toast({ title: `صُدِّر ${count} صنفًا` }),
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر التصدير", description: errorMessage(error) }),
+  });
   const canManage = can("catalog.manage");
 
   return (
@@ -375,15 +461,18 @@ export default function Services() {
             key: "export",
             label: "تصدير",
             icon: Download,
-            disabled: (items.data ?? []).length === 0,
-            onClick: () => exportItemsCsv(items.data ?? []),
+            disabled: (itemsTotal.data ?? 0) === 0 || exportAll.isPending,
+            onClick: () => exportAll.mutate(),
           },
           { key: "sep2", separator: true },
           {
             key: "refresh",
             label: "تحديث",
             icon: RefreshCw,
-            onClick: () => void items.refetch(),
+            onClick: () => {
+              void items.refetch();
+              void itemsTotal.refetch();
+            },
           },
           {
             /**
@@ -692,10 +781,90 @@ export default function Services() {
           )}
         </CardContent>
         {!items.isLoading && !items.isError && (
-          <GridFooterCount
-            count={(items.data ?? []).length}
-            capped={(items.data ?? []).length >= ITEMS_CAP}
-          />
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/30 px-3 py-2 text-xs">
+            <div className="flex items-center gap-2">
+              <span className="rounded border bg-background px-3 py-0.5 font-mono tabular-nums">
+                {(itemsTotal.data ?? 0).toLocaleString("en-US")}
+              </span>
+              <span className="text-muted-foreground">صنفًا</span>
+              <span className="ms-2 text-muted-foreground">عدد الصفوف في الصفحة</span>
+              <Select value={String(pageSize)} onValueChange={(value) => setPageSize(Number(value))}>
+                <SelectTrigger className="h-7 w-20">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {PAGE_SIZES.map((size) => (
+                    <SelectItem key={size} value={String(size)}>
+                      {size}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {items.isFetching && <span className="text-muted-foreground">جارٍ التحميل...</span>}
+            </div>
+            <div className="flex items-center gap-1">
+              <Button
+                size="icon"
+                variant="outline"
+                className="h-7 w-7"
+                title="الصفحة الأولى"
+                disabled={page === 0}
+                onClick={() => goToPage(0)}
+              >
+                <ChevronsRight className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="icon"
+                variant="outline"
+                className="h-7 w-7"
+                title="السابقة"
+                disabled={page === 0}
+                onClick={() => goToPage(page - 1)}
+              >
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+              <form
+                className="flex items-center gap-1 px-1"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  const target = Number(pageInput);
+                  if (Number.isFinite(target) && target >= 1) goToPage(Math.floor(target) - 1);
+                  else setPageInput(String(page + 1));
+                }}
+              >
+                <span>صفحة</span>
+                <Input
+                  value={pageInput}
+                  onChange={(event) => setPageInput(event.target.value.replace(/[^0-9]/g, ""))}
+                  onBlur={() => setPageInput(String(page + 1))}
+                  inputMode="numeric"
+                  className="h-7 w-16 text-center tabular-nums"
+                  aria-label="رقم الصفحة"
+                />
+                <span className="tabular-nums">من {pageCount.toLocaleString("en-US")}</span>
+              </form>
+              <Button
+                size="icon"
+                variant="outline"
+                className="h-7 w-7"
+                title="التالية"
+                disabled={page >= pageCount - 1}
+                onClick={() => goToPage(page + 1)}
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                size="icon"
+                variant="outline"
+                className="h-7 w-7"
+                title="الصفحة الأخيرة"
+                disabled={page >= pageCount - 1}
+                onClick={() => goToPage(pageCount - 1)}
+              >
+                <ChevronsLeft className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
         )}
       </Card>
       </TreeGridLayout>
