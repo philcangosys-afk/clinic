@@ -738,7 +738,7 @@ export default function ReceptionBoard({
                             فاتورة جديدة
                           </DropdownMenuItem>
                           <DropdownMenuItem
-                            onClick={() => navigate(`/appointments?patientId=${row.patient_id}`)}
+                            onClick={() => navigate(`/appointments?bookFor=${row.patient_id}`)}
                           >
                             <CalendarPlus className="h-4 w-4" />
                             حجز موعد

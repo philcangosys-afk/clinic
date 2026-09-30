@@ -1,10 +1,30 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import AppointmentCalendar, {
+  type BlockAction,
   type CalendarView,
 } from "@/components/appointments/AppointmentCalendar";
 import AppointmentMessages from "@/components/appointments/AppointmentMessages";
+import AppointmentAuditInfo from "@/components/appointments/AppointmentAuditInfo";
+import AppointmentSearchDialog from "@/components/appointments/AppointmentSearchDialog";
+import DayNotesDialog, { useDayNotesCount } from "@/components/appointments/DayNotesDialog";
+import EarlierCandidatesDialog, { type FreedSlot } from "@/components/appointments/EarlierCandidatesDialog";
 import {
+  AssignWaitingSlotDialog,
+  SendToWaitingDialog,
+  SendToWaitingSubmenu,
+  useSendToWaiting,
+} from "@/components/appointments/WaitingControls";
+import {
+  APPOINTMENT_EXTRA_COLUMNS,
+  APPOINTMENT_QUERY_KEYS,
+  doctorDayStart,
+  extrasOf,
+  isNotArrived,
+  localDateKey,
+} from "@/lib/appointment-extras";
+import {
+  ArrowUpCircle,
   CalendarClock,
   CalendarX,
   Check,
@@ -12,12 +32,16 @@ import {
   ChevronRight,
   Edit3,
   ExternalLink,
+  Clock,
+  ListChecks,
   MoreHorizontal,
+  StickyNote,
   Plus,
   Printer,
   RefreshCw,
   Search,
   UserRound,
+  Users,
   X,
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
@@ -85,6 +109,53 @@ import {
 
 /** Radix Select يرفض قيمة فارغة، فيُستخدم رمز صريح لـ"بدون". */
 const NONE_VALUE = "__none__";
+/** أعمدة 0197 تُلحَق بقوائم الاختيار — موعد الانتظار، التقريب، التكرار، الوسم، التأكيد. */
+const APPOINTMENT_EXTRA_SELECT = `${APPOINTMENT_EXTRA_COLUMNS}, `;
+/** أعمدة الموعد الكاملة بعلاقاته — للجلب بالمعرّف. */
+const APPOINTMENT_FULL_SELECT =
+  "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, expected_duration_minutes, " +
+  APPOINTMENT_EXTRA_SELECT +
+  "patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)";
+
+/** جلب موعدٍ بمعرّفه — لما يقع خارج قائمة اليوم (العرض الأسبوعي والشهري). */
+async function fetchAppointmentById(organizationId: string, appointmentId: string) {
+  const { data, error } = await supabase
+    .from("appointments")
+    .select(APPOINTMENT_FULL_SELECT)
+    .eq("id", appointmentId)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) throw new Error("الموعد غير موجود أو لا تملك الوصول إليه");
+  return data as unknown as AppointmentWithRelations;
+}
+
+/**
+ * الخانة التي يُخليها موعدٌ يُلغى أو يُنقل أو يُرسل إلى الانتظار — تُعرض بعدها
+ * قائمة مرضى الطبيب الذين يقبلون موعدًا أبكر (أولوية التقريب P). موعد
+ * انتظارٍ لا يُخلي خانة، ولا موعدٌ مضى وقته أو حضر صاحبه.
+ */
+function freedSlotOf(appointment: AppointmentWithRelations): FreedSlot | null {
+  if (extrasOf(appointment).is_waiting) return null;
+  if (!isNotArrived(appointment.status)) return null;
+  if (new Date(appointment.scheduled_end).getTime() <= Date.now()) return null;
+  return {
+    doctorId: appointment.doctor_id,
+    doctorName: appointment.doctor?.name_ar ?? null,
+    start: appointment.scheduled_start,
+    end: appointment.scheduled_end,
+  };
+}
+
+/** المدّة الأصلية للموعد — موعد الانتظار يحفظها في `expected_duration_minutes`. */
+function appointmentMinutes(appointment: AppointmentWithRelations) {
+  const kept = (appointment as { expected_duration_minutes?: number | null }).expected_duration_minutes;
+  if (extrasOf(appointment).is_waiting && kept) return kept;
+  return Math.max(
+    5,
+    Math.round((new Date(appointment.scheduled_end).getTime() - new Date(appointment.scheduled_start).getTime()) / 60_000),
+  );
+}
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
 
@@ -130,7 +201,7 @@ function useUpcomingWebsiteAppointments(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("appointments")
         .select(
-          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
+          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, expected_duration_minutes, " + APPOINTMENT_EXTRA_SELECT + "patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
         )
         .eq("organization_id", organizationId)
         .ilike("note", "حجز من الموقع الإلكتروني%")
@@ -179,7 +250,7 @@ function useRangeAppointments(
       let query = supabase
         .from("appointments")
         .select(
-          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
+          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, expected_duration_minutes, " + APPOINTMENT_EXTRA_SELECT + "patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
           { count: "exact" },
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها
@@ -318,6 +389,21 @@ export default function Appointments() {
     name_ar: string;
     file_number: number | string | null;
   } | null>(null);
+  /* ── 0197: موعد الانتظار، التقريب، ملاحظات اليوم، البحث والطباعة ── */
+  const [createAsWaiting, setCreateAsWaiting] = useState(false);
+  const [waitingTarget, setWaitingTarget] = useState<{ id: string; patientName: string } | null>(null);
+  /** الخانة التي سيُخليها الموعد المفتوحة عليه نافذة «تاريخ آخر…». */
+  const [pendingFreed, setPendingFreed] = useState<FreedSlot | null>(null);
+  const [assignTarget, setAssignTarget] = useState<{
+    id: string;
+    patientName: string;
+    doctorId: string;
+    day: string;
+    durationMinutes: number;
+  } | null>(null);
+  const [freedSlot, setFreedSlot] = useState<FreedSlot | null>(null);
+  const [notesOpen, setNotesOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
   const doctors = useDoctorsList(organization?.id);
   const clinicList = useQuery({
     queryKey: ["appointments-clinic-list", organization?.id],
@@ -501,17 +587,7 @@ export default function Appointments() {
   const openAppointmentById = useMutation({
     mutationFn: async (appointmentId: string) => {
       if (!organization?.id) throw new Error("لا توجد منشأة نشطة");
-      const { data, error } = await supabase
-        .from("appointments")
-        .select(
-          "id, organization_id, clinic_id, scheduled_start, scheduled_end, status, priority, queue_number, cancellation_reason, no_show_reason, checked_in_1_at, checked_in_2_at, called_at, entered_at, left_at, visit_type_value_id, source_value_id, note, sms_reminder_sent, created_by, created_at, updated_at, doctor_id, patient_id, patient:patients!appointments_patient_tenant_fk(id, name_ar, mobile_number, file_number, id_number), doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), clinic:clinics!appointments_clinic_tenant_fk(id, name)",
-        )
-        .eq("id", appointmentId)
-        .eq("organization_id", organization.id)
-        .maybeSingle();
-      if (error) throw error;
-      if (!data) throw new Error("الموعد غير موجود أو لا تملك الوصول إليه");
-      return data as unknown as AppointmentWithRelations;
+      return fetchAppointmentById(organization.id, appointmentId);
     },
     onSuccess: (found) => {
       setDay(toDateInputValue(new Date(found.scheduled_start)));
@@ -638,6 +714,88 @@ export default function Appointments() {
     onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر التأكيد", description: errorMessage(error, "حدث خطأ") }),
   });
 
+  const dayNotesCount = useDayNotesCount(organization?.id, day);
+  const labelNodes = useLookupTree("appointment_labels");
+  /** أسماء وسوم المواعيد — كلّها للعرض، والنشط وحده للاختيار (LookupSelect). */
+  const labelNames = useMemo(() => {
+    const map = new Map<string, string>();
+    (labelNodes.data ?? []).forEach((node) => map.set(node.id, node.name_ar));
+    return map;
+  }, [labelNodes.data]);
+
+  const sendWaiting = useSendToWaiting();
+  /** إرسال إلى الانتظار ليومٍ من القائمة — ثمّ من يقبل التقريب إلى الخانة التي فرغت. */
+  const sendToWaiting = (appointment: AppointmentWithRelations, dayKey: string) => {
+    const freed = freedSlotOf(appointment);
+    sendWaiting.mutate(
+      { appointmentId: appointment.id, dayKey },
+      { onSuccess: () => { if (freed) setFreedSlot(freed); } },
+    );
+  };
+  const openWaitingDialog = (appointment: AppointmentWithRelations) => {
+    setPendingFreed(freedSlotOf(appointment));
+    setWaitingTarget({ id: appointment.id, patientName: appointment.patient?.name_ar ?? "المريض" });
+  };
+  const openAssignSlot = (appointment: AppointmentWithRelations) =>
+    setAssignTarget({
+      id: appointment.id,
+      patientName: appointment.patient?.name_ar ?? "المريض",
+      doctorId: appointment.doctor_id,
+      day: localDateKey(new Date(appointment.scheduled_start)),
+      durationMinutes: appointmentMinutes(appointment),
+    });
+
+  /** فتح موعدٍ من التقويم أو البحث — من قائمة اليوم إن كان فيها، وإلّا بمعرّفه. */
+  const openFromCalendar = (appointmentId: string) => {
+    const found = appointmentRows.find((row) => row.id === appointmentId);
+    if (found) setManagedAppointment(found);
+    else openAppointmentById.mutate(appointmentId);
+  };
+
+  /** قائمة الزرّ الأيمن على كتلة الموعد في التقويم — التقويم يبلّغ والشاشة تنفّذ. */
+  const handleBlockAction = async (appointmentId: string, action: BlockAction) => {
+    if (action.kind === "open") {
+      openFromCalendar(appointmentId);
+      return;
+    }
+    let appointment: AppointmentWithRelations;
+    try {
+      appointment =
+        appointmentRows.find((row) => row.id === appointmentId) ??
+        (await fetchAppointmentById(organization?.id ?? "", appointmentId));
+    } catch (error) {
+      toast({ variant: "destructive", title: "تعذّر قراءة الموعد", description: errorMessage(error) });
+      return;
+    }
+    switch (action.kind) {
+      case "confirm":
+        transition.mutate({ appointment, action: "confirm" });
+        break;
+      case "waiting":
+        sendToWaiting(appointment, action.day);
+        break;
+      case "waiting_other":
+        openWaitingDialog(appointment);
+        break;
+      case "assign_slot":
+        openAssignSlot(appointment);
+        break;
+      case "patient_file":
+        navigate(`/patients/${appointment.patient_id}`);
+        break;
+      case "patient_commands":
+        setCommandsTarget({
+          id: appointment.patient_id,
+          name_ar: appointment.patient?.name_ar ?? "—",
+          file_number: appointment.patient?.file_number ?? null,
+        });
+        break;
+      case "print":
+        printAppointmentCard(appointment, calendarDisplay);
+        break;
+    }
+  };
+
   /**
    * ملخّص اليوم — شريطٌ يقرأ منه الاستقبال حال المواعيد نظرةً واحدة، كما في
    * شريط نظام العيادات المرجعيّ.
@@ -708,7 +866,7 @@ export default function Appointments() {
         anchor.getMonth(),
         Math.min(current.getDate(), daysInMonth),
       );
-    } else if (calendarView === "week") {
+    } else if (calendarView === "week" || calendarView === "workweek") {
       next = new Date(current);
       next.setDate(next.getDate() + 7 * delta);
     } else {
@@ -750,7 +908,20 @@ export default function Appointments() {
           <Button variant="outline" size="icon" disabled={rangeActive} onClick={() => shiftDay(1)}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          {canSchedule && <Button onClick={() => setCreateOpen(true)}>
+          {canSchedule && (
+            <Button
+              variant="outline"
+              title="موعد انتظار (W.P): يومٌ وطبيب بلا خانة وقت، يُحجز له وقتٌ حين يتاح"
+              onClick={() => {
+                setCreateAsWaiting(true);
+                setCreateOpen(true);
+              }}
+            >
+              <Clock className="h-4 w-4" />
+              موعد انتظار
+            </Button>
+          )}
+          {canSchedule && <Button onClick={() => { setCreateAsWaiting(false); setCreateOpen(true); }}>
             <Plus className="h-4 w-4" />
             موعد جديد
           </Button>}
@@ -791,6 +962,23 @@ export default function Appointments() {
               </button>
             </div>
           )}
+          <Button variant="outline" onClick={() => setNotesOpen(true)} title="ملاحظات اليوم والاجتماعات">
+            <StickyNote className="h-4 w-4" />
+            ملاحظات اليوم
+            {(dayNotesCount.data ?? 0) > 0 && (
+              <Badge variant="secondary" className="ms-1 h-5 px-1.5 font-mono tabular-nums">
+                {dayNotesCount.data}
+              </Badge>
+            )}
+          </Button>
+          <Button variant="outline" onClick={() => setSearchOpen(true)} title="بحث في المواعيد بفترة ومرشّحات وطباعتها">
+            <ListChecks className="h-4 w-4" />
+            البحث والطباعة
+          </Button>
+          <Button variant="outline" onClick={() => navigate("/reception")}>
+            <Users className="h-4 w-4" />
+            نظام الدور
+          </Button>
           <Button variant="outline" onClick={() => navigate("/waitlist")}>قائمة انتظار المواعيد</Button>
         </CardContent>
       </Card>
@@ -1029,16 +1217,16 @@ export default function Appointments() {
               clinicId,
               patient: bookingPatient ? { id: bookingPatient.id, name_ar: bookingPatient.name_ar } : null,
             });
+            setCreateAsWaiting(false);
             setCreateOpen(true);
           }}
           highlightId={booked?.id ?? null}
-          onOpenAppointment={(appointmentId) => {
-            const found = appointmentRows.find((row) => row.id === appointmentId);
-            // الموعد خارج يوم القائمة في العرض الأسبوعي والشهري: يُجلب
-            // بمعرّفه بدل الانتقال إلى شاشة أخرى لا تعرفه.
-            if (found) setManagedAppointment(found);
-            else openAppointmentById.mutate(appointmentId);
-          }}
+          // الموعد خارج يوم القائمة في العرض الأسبوعي والشهري: يُجلب
+          // بمعرّفه بدل الانتقال إلى شاشة أخرى لا تعرفه.
+          onOpenAppointment={openFromCalendar}
+          onDayChange={setDay}
+          onBlockAction={handleBlockAction}
+          labels={labelNames}
         />
       )}
 
@@ -1069,6 +1257,10 @@ export default function Appointments() {
               file_number: appointment.patient?.file_number ?? null,
             })
           }
+          labels={labelNames}
+          onSendToWaiting={sendToWaiting}
+          onWaitingOther={openWaitingDialog}
+          onAssignSlot={openAssignSlot}
         />
       )}
 
@@ -1099,7 +1291,9 @@ export default function Appointments() {
                         <button type="button" className="text-start" onClick={() => navigate(`/patients/${appointment.patient_id}`)}>
                           <p className="text-sm font-medium hover:text-primary">{appointment.patient?.name_ar}</p>
                           <p className="text-xs text-muted-foreground">
-                            {new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
+                            {extrasOf(appointment).is_waiting
+                              ? "موعد انتظار"
+                              : new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
                             {appointment.clinic?.name ? ` · ${appointment.clinic.name}` : ""}
                           </p>
                         </button>
@@ -1134,11 +1328,15 @@ export default function Appointments() {
         onOpenChange={() => setReasonTarget(null)}
         onSubmit={(reason) => {
           if (!reasonTarget) return;
-          transition.mutate({
-            appointment: reasonTarget.appointment,
-            action: reasonTarget.action,
-            reason,
-          });
+          const freed = reasonTarget.action === "cancel" ? freedSlotOf(reasonTarget.appointment) : null;
+          transition.mutate(
+            {
+              appointment: reasonTarget.appointment,
+              action: reasonTarget.action,
+              reason,
+            },
+            { onSuccess: () => { if (freed) setFreedSlot(freed); } },
+          );
           setReasonTarget(null);
         }}
         pending={transition.isPending}
@@ -1155,15 +1353,66 @@ export default function Appointments() {
         onOpenChange={(open) => { if (!open) setManagedAppointment(null); }}
         organizationId={organization?.id}
         doctors={visibleDoctors}
+        onFreed={setFreedSlot}
+        onSendToWaiting={(appointment) => {
+          setManagedAppointment(null);
+          openWaitingDialog(appointment);
+        }}
+        onAssignSlot={(appointment) => {
+          setManagedAppointment(null);
+          openAssignSlot(appointment);
+        }}
+      />
+      <SendToWaitingDialog
+        target={waitingTarget}
+        onOpenChange={(open) => {
+          if (!open) setWaitingTarget(null);
+        }}
+        onSent={() => {
+          if (pendingFreed) setFreedSlot(pendingFreed);
+          setPendingFreed(null);
+        }}
+      />
+      <AssignWaitingSlotDialog
+        target={assignTarget}
+        organizationId={organization?.id}
+        onOpenChange={(open) => {
+          if (!open) setAssignTarget(null);
+        }}
+      />
+      <EarlierCandidatesDialog
+        organizationId={organization?.id}
+        slot={freedSlot}
+        onOpenChange={(open) => {
+          if (!open) setFreedSlot(null);
+        }}
+      />
+      <DayNotesDialog organizationId={organization?.id} dayKey={day} open={notesOpen} onOpenChange={setNotesOpen} />
+      <AppointmentSearchDialog
+        organizationId={organization?.id}
+        open={searchOpen}
+        onOpenChange={setSearchOpen}
+        doctors={visibleDoctors}
+        clinics={clinicList.data ?? []}
+        defaultDay={day}
+        scopedDoctorId={isDoctorScope ? scopeDoctorId : null}
+        onOpenAppointment={(appointmentId) => {
+          setSearchOpen(false);
+          openFromCalendar(appointmentId);
+        }}
       />
       <CreateAppointmentDialog
         open={createOpen}
         onOpenChange={(open) => {
           setCreateOpen(open);
-          if (!open) clearRequestParam();
+          if (!open) {
+            clearRequestParam();
+            setCreateAsWaiting(false);
+          }
         }}
         organizationId={organization?.id}
         doctors={visibleDoctors}
+        initialWaiting={createAsWaiting}
         defaultDay={prefill?.day ?? day}
         prefill={prefill}
         onConsumePrefill={() => setPrefill(null)}
@@ -1194,14 +1443,28 @@ function ManageAppointmentDialog({
   onOpenChange,
   organizationId,
   doctors,
+  onFreed,
+  onSendToWaiting,
+  onAssignSlot,
 }: {
   appointment: AppointmentWithRelations | null;
   onOpenChange: (open: boolean) => void;
   organizationId: string | undefined;
   doctors: { id: string; name_ar: string }[];
+  /** خانةٌ فرغت بإلغاءٍ أو نقل — تُعرض بعدها قائمة من يقبل التقريب. */
+  onFreed: (slot: FreedSlot) => void;
+  onSendToWaiting: (appointment: AppointmentWithRelations) => void;
+  onAssignSlot: (appointment: AppointmentWithRelations) => void;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { calendarDisplay } = useLocaleSettings();
+  const extras = extrasOf(appointment);
+  const isWaiting = Boolean(extras.is_waiting);
+  const [acceptsEarlier, setAcceptsEarlier] = useState(false);
+  const [labelValueId, setLabelValueId] = useState("");
+  /** «اعتذر عن الموعد» (Kizen): إلغاءٌ بطلب المريض قبل حضوره — يُحسب في تقاريره لا على المنشأة. */
+  const [cancelByPatient, setCancelByPatient] = useState(false);
   const [doctorId, setDoctorId] = useState("");
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
@@ -1236,6 +1499,9 @@ function ManageAppointmentDialog({
     setNote(appointment.note ?? "");
     setCancellationReason(appointment.cancellation_reason ?? "");
     setRescheduleReason("");
+    setAcceptsEarlier(Boolean(extrasOf(appointment).accepts_earlier));
+    setLabelValueId(extrasOf(appointment).label_value_id ?? "");
+    setCancelByPatient(false);
   }, [appointment]);
 
   /**
@@ -1251,7 +1517,9 @@ function ManageAppointmentDialog({
   const start = date && time ? new Date(`${date}T${time}:00`) : null;
   const end = start ? new Date(start.getTime() + Number(duration) * 60_000) : null;
   const targetClinicId = clinicId === NONE_VALUE ? null : clinicId;
-  const scheduleChanged = Boolean(
+  // موعد الانتظار لا يُعاد جدولته من هنا: يخرج من الانتظار بـ«حجز خانة وقت»
+  // فيُفحص الدوام والتداخل كأيّ حجز، ولا يُنقل وهو باقٍ في الانتظار.
+  const scheduleChanged = !isWaiting && Boolean(
     appointment && start && end &&
       (doctorId !== appointment.doctor_id ||
         start.getTime() !== new Date(appointment.scheduled_start).getTime() ||
@@ -1274,17 +1542,16 @@ function ManageAppointmentDialog({
 
   const detailsChanged = Boolean(
     appointment &&
-      ((appointment.priority ?? "normal") !== priority || (appointment.note ?? "") !== note),
+      ((appointment.priority ?? "normal") !== priority ||
+        (appointment.note ?? "") !== note ||
+        Boolean(extras.accepts_earlier) !== acceptsEarlier ||
+        (extras.label_value_id ?? "") !== labelValueId),
   );
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
-    queryClient.invalidateQueries({ queryKey: ["appointments-website-upcoming"] });
-    queryClient.invalidateQueries({ queryKey: ["calendar-appointments"] });
-    queryClient.invalidateQueries({ queryKey: ["reception-queue"] });
     // لوحة الاستقبال استعلام مستقلّ عن طابور البطاقات: نقل موعد اليوم أو
     // تغيير طبيبه يجب أن يظهر فيها أيضًا بلا انتظار الجلب الدوري.
-    queryClient.invalidateQueries({ queryKey: ["reception-board"] });
+    APPOINTMENT_QUERY_KEYS.forEach((key) => queryClient.invalidateQueries({ queryKey: [...key] }));
   };
 
   const save = useMutation({
@@ -1314,7 +1581,9 @@ function ManageAppointmentDialog({
         const { data, error } = await supabase.from("appointments").update({
           priority,
           note: note.trim() || null,
-        }).eq("id", appointment.id).eq("organization_id", organizationId)
+          accepts_earlier: acceptsEarlier,
+          label_value_id: labelValueId || null,
+        } as never).eq("id", appointment.id).eq("organization_id", organizationId)
           .not("status", "in", "(completed,no_show,cancelled_by_patient,cancelled_by_staff)").select("id");
         if (error) throw error;
         if (!data?.length) throw new Error("لم يعد الموعد قابلًا للتعديل");
@@ -1324,7 +1593,9 @@ function ManageAppointmentDialog({
     onSuccess: (result) => {
       invalidate();
       toast({ title: result?.rescheduled ? "تمت إعادة جدولة الموعد وتسجيل السبب" : "تم تحديث الموعد" });
+      const freed = result?.rescheduled && appointment ? freedSlotOf(appointment) : null;
       onOpenChange(false);
+      if (freed) onFreed(freed);
     },
     onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر التحديث", description: errorMessage(error, "حدث خطأ") }),
   });
@@ -1356,21 +1627,27 @@ function ManageAppointmentDialog({
     onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر التأكيد", description: errorMessage(error, "حدث خطأ") }),
   });
 
+  /**
+   * الإلغاء بـ`app_cancel_appointment` (0197) لا بـ`update` مباشر: تفحص
+   * صلاحية `appointments.cancel`، وتُلزم بالسبب، وتمنع إلغاء موعدٍ عليه فاتورة
+   * محصَّلة، وتفرّق بين اعتذار المريض وإلغاء المنشأة، وتكتب سطر التدقيق.
+   */
   const cancel = useMutation({
     mutationFn: async () => {
-      if (!appointment || !organizationId || !cancellationReason.trim()) throw new Error("اكتب سبب الإلغاء");
-      const { data, error } = await supabase.from("appointments").update({
-        status: "cancelled_by_staff",
-        cancellation_reason: cancellationReason.trim(),
-      }).eq("id", appointment.id).eq("organization_id", organizationId)
-        .not("status", "in", "(completed,no_show,cancelled_by_patient,cancelled_by_staff)").select("id");
+      if (!appointment || !cancellationReason.trim()) throw new Error("اكتب سبب الإلغاء");
+      const { error } = await supabase.rpc("app_cancel_appointment", {
+        p_appointment_id: appointment.id,
+        p_reason: cancellationReason.trim(),
+        p_by_patient: cancelByPatient,
+      });
       if (error) throw error;
-      if (!data?.length) throw new Error("لم يعد الموعد قابلًا للإلغاء");
     },
     onSuccess: () => {
       invalidate();
-      toast({ title: "تم إلغاء الموعد وتسجيل السبب" });
+      toast({ title: cancelByPatient ? "سُجّل اعتذار المريض عن الموعد" : "تم إلغاء الموعد وتسجيل السبب" });
+      const freed = appointment ? freedSlotOf(appointment) : null;
       onOpenChange(false);
+      if (freed) onFreed(freed);
     },
     onError: (error: unknown) => toast({ variant: "destructive", title: "تعذر الإلغاء", description: errorMessage(error, "حدث خطأ") }),
   });
@@ -1381,15 +1658,35 @@ function ManageAppointmentDialog({
         <DialogTitle>إدارة موعد {appointment?.patient?.name_ar}</DialogTitle>
         <DialogDescription>إعادة الجدولة أو تغيير الطبيب والعيادة والأولوية، مع تسجيل سبب الإلغاء.</DialogDescription>
       </DialogHeader>
-      <div className="space-y-3">
+      <div className="max-h-[70vh] space-y-3 overflow-y-auto px-0.5">
+        {appointment && isWaiting && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-sky-300 bg-sky-50/70 p-2.5 text-sm dark:bg-sky-950/20">
+            <span className="flex items-center gap-1.5">
+              <Clock className="h-4 w-4 text-sky-700" />
+              موعد انتظار (W.P) يوم {formatDate(appointment.scheduled_start, calendarDisplay)}
+              {extras.waiting_all_day ? " — طوال اليوم" : ` — من ${formatTime(appointment.scheduled_start)}`}
+            </span>
+            <Button size="sm" onClick={() => onAssignSlot(appointment)}>
+              حجز خانة وقت
+            </Button>
+          </div>
+        )}
+        {appointment && !isWaiting && isNotArrived(appointment.status) && (
+          <div className="flex justify-end">
+            <Button size="sm" variant="outline" onClick={() => onSendToWaiting(appointment)}>
+              <Clock className="h-3.5 w-3.5" />
+              إرسال إلى الانتظار
+            </Button>
+          </div>
+        )}
         <div className="grid gap-2 sm:grid-cols-2">
-          <div><Label>الطبيب</Label><Select value={doctorId} onValueChange={setDoctorId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{doctors.map((doctor) => <SelectItem key={doctor.id} value={doctor.id}>{doctor.name_ar}</SelectItem>)}</SelectContent></Select></div>
-          <div><Label>العيادة</Label><Select value={clinicId} onValueChange={setClinicId}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={NONE_VALUE}>بدون</SelectItem>{(clinics.data ?? []).map((clinic) => <SelectItem key={clinic.id} value={clinic.id}>{clinic.name}</SelectItem>)}</SelectContent></Select></div>
+          <div><Label>الطبيب</Label><Select value={doctorId} onValueChange={setDoctorId} disabled={isWaiting}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{doctors.map((doctor) => <SelectItem key={doctor.id} value={doctor.id}>{doctor.name_ar}</SelectItem>)}</SelectContent></Select></div>
+          <div><Label>العيادة</Label><Select value={clinicId} onValueChange={setClinicId} disabled={isWaiting}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value={NONE_VALUE}>بدون</SelectItem>{(clinics.data ?? []).map((clinic) => <SelectItem key={clinic.id} value={clinic.id}>{clinic.name}</SelectItem>)}</SelectContent></Select></div>
         </div>
         <div className="grid grid-cols-3 gap-2">
-          <div><Label>التاريخ</Label><Input type="date" value={date} onChange={(event) => setDate(event.target.value)} /></div>
-          <div><Label>الوقت</Label><Input type="time" value={time} onChange={(event) => setTime(event.target.value)} /></div>
-          <div><Label>المدة</Label><Input type="number" min={5} step={5} value={duration} onChange={(event) => setDuration(event.target.value)} /></div>
+          <div><Label>التاريخ</Label><Input type="date" value={date} disabled={isWaiting} onChange={(event) => setDate(event.target.value)} /></div>
+          <div><Label>الوقت</Label><Input type="time" value={time} disabled={isWaiting} onChange={(event) => setTime(event.target.value)} /></div>
+          <div><Label>المدة</Label><Input type="number" min={5} step={5} value={duration} disabled={isWaiting} onChange={(event) => setDuration(event.target.value)} /></div>
         </div>
         {scheduleChanged && (
           <OverlapNotice
@@ -1402,6 +1699,23 @@ function ManageAppointmentDialog({
           />
         )}
         <div><Label>الأولوية</Label><Select value={priority} onValueChange={setPriority}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="normal">عادي</SelectItem><SelectItem value="urgent">عاجل</SelectItem><SelectItem value="emergency">طارئ</SelectItem><SelectItem value="elderly">كبار السن</SelectItem><SelectItem value="accessibility">ذوو الإعاقة</SelectItem></SelectContent></Select></div>
+        <div className="grid gap-2 sm:grid-cols-2">
+          <div>
+            <Label>وسم الموعد</Label>
+            <LookupSelect
+              categoryKey="appointment_labels"
+              value={labelValueId}
+              onChange={setLabelValueId}
+              allowClear
+              placeholder="بدون"
+            />
+          </div>
+          <label className="flex cursor-pointer items-center gap-2 self-end rounded-md border p-2 text-sm">
+            <input type="checkbox" checked={acceptsEarlier} onChange={(event) => setAcceptsEarlier(event.target.checked)} />
+            <ArrowUpCircle className="h-4 w-4 text-primary" />
+            يقبل موعدًا أبكر إن فرغت خانة
+          </label>
+        </div>
         <div><Label>ملاحظة</Label><Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} /></div>
         {scheduleChanged && (
           <div className="flex flex-col gap-1.5 rounded-md border border-amber-300 bg-amber-50/60 p-2.5">
@@ -1413,8 +1727,18 @@ function ManageAppointmentDialog({
             </p>
           </div>
         )}
-        <div><Label>سبب الإلغاء</Label><Textarea value={cancellationReason} onChange={(event) => setCancellationReason(event.target.value)} placeholder="مطلوب عند إلغاء الموعد" rows={2} /></div>
+        <div className="flex flex-col gap-1.5">
+          <Label>سبب الإلغاء</Label>
+          <Textarea value={cancellationReason} onChange={(event) => setCancellationReason(event.target.value)} placeholder="مطلوب عند إلغاء الموعد" rows={2} />
+          {appointment && isNotArrived(appointment.status) && (
+            <label className="flex cursor-pointer items-center gap-2 text-xs">
+              <input type="checkbox" checked={cancelByPatient} onChange={(event) => setCancelByPatient(event.target.checked)} />
+              المريض اعتذر عن الموعد (إلغاء بطلبه لا من المنشأة)
+            </label>
+          )}
+        </div>
         {appointment && <AppointmentMessages appointmentId={appointment.id} />}
+        {appointment && <AppointmentAuditInfo organizationId={organizationId} appointmentId={appointment.id} />}
       </div>
       <DialogFooter className="gap-2">
         {appointment && ["new", "scheduled", "unconfirmed"].includes(appointment.status) && (
@@ -1423,7 +1747,7 @@ function ManageAppointmentDialog({
             {confirm.isPending ? "جارٍ التأكيد..." : "تأكيد الموعد"}
           </Button>
         )}
-        <Button variant="destructive" disabled={cancel.isPending || !cancellationReason.trim()} onClick={() => cancel.mutate()}><CalendarX className="h-4 w-4" />إلغاء الموعد</Button>
+        <Button variant="destructive" disabled={cancel.isPending || !cancellationReason.trim()} onClick={() => cancel.mutate()}><CalendarX className="h-4 w-4" />{cancelByPatient ? "تسجيل اعتذار المريض" : "إلغاء الموعد"}</Button>
         <Button
           disabled={save.isPending || (!scheduleChanged && !detailsChanged) || (scheduleChanged && !rescheduleReason.trim())}
           onClick={() => save.mutate()}
@@ -1446,6 +1770,7 @@ function CreateAppointmentDialog({
   followUpRequest,
   onRequestBooked,
   onCreated,
+  initialWaiting,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -1480,6 +1805,8 @@ function CreateAppointmentDialog({
   onRequestBooked?: () => void;
   /** يُنادى بالموعد المُنشأ — لمسار «حجز موعد جديد» من ملفّ المريض. */
   onCreated?: (row: { id: string; scheduled_start: string; doctor_id: string }) => void;
+  /** تُفتح النافذة على «موعد انتظار» (زرّ «موعد انتظار» في الترويسة). */
+  initialWaiting?: boolean;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -1517,6 +1844,20 @@ function CreateAppointmentDialog({
    */
   const [overrideConfirmed, setOverrideConfirmed] = useState(false);
   const [conflict, setConflict] = useState<OverlapInfo | null>(null);
+  /**
+   * موعد الانتظار (W.P، 0197): يومٌ وطبيب بلا خانة وقت. «طوال اليوم» يبدأ من
+   * بداية دوام الطبيب ذلك اليوم (`app_doctor_day_start`)، أو «من الساعة»
+   * يكتبها الموظّف. لا يدخل فحص التداخل، ويُحفظ طوله الأصليّ لحين حجز خانته.
+   */
+  const [waiting, setWaiting] = useState(false);
+  const [waitingAllDay, setWaitingAllDay] = useState(true);
+  /** أولوية التقريب (P): يقبل موعدًا أبكر إن فرغت خانةٌ عند طبيبه. */
+  const [acceptsEarlier, setAcceptsEarlier] = useState(false);
+  const [labelValueId, setLabelValueId] = useState("");
+  /** تكرار الموعد — كلّ موعدٍ يُفحص للتداخل والدوام، والكلّ يُحجز أو لا شيء. */
+  const [repeat, setRepeat] = useState(false);
+  const [repeatCount, setRepeatCount] = useState("4");
+  const [repeatEvery, setRepeatEvery] = useState("7");
   const plannedStart = date && time ? new Date(`${date}T${time}:00`) : null;
   const plannedEnd =
     plannedStart && Number(duration) > 0
@@ -1527,7 +1868,7 @@ function CreateAppointmentDialog({
     doctorId: doctorId || null,
     start: plannedStart,
     end: plannedEnd,
-    enabled: open,
+    enabled: open && !waiting,
   });
   useEffect(() => {
     setOverrideConfirmed(false);
@@ -1566,6 +1907,9 @@ function CreateAppointmentDialog({
    */
   useEffect(() => {
     if (!open) return;
+    setWaiting(Boolean(initialWaiting) && !followUpRequest);
+    setWaitingAllDay(true);
+    setRepeat(false);
     setDate(prefill?.day ?? defaultDay);
     if (prefill) {
       setTime(prefill.time);
@@ -1716,12 +2060,18 @@ function CreateAppointmentDialog({
   });
 
   const createAppointment = useMutation({
-    mutationFn: async (vars?: { override?: boolean }) => {
+    mutationFn: async (vars?: { override?: boolean; printWindow?: Window | null }) => {
       if (!organizationId || !patient || !doctorId) throw new Error("أكمل بيانات المريض والطبيب والوقت");
       // حظر المواعيد في ملف المريض كان معروضًا بلا فرض — يُفرض هنا قبل أي كتابة
       await assertPatientNotBlocked(patient.id, "appointments");
-      const start = new Date(`${date}T${time}:00`);
-      const end = new Date(start.getTime() + Number(duration) * 60_000);
+      let start = new Date(`${date}T${time}:00`);
+      if (waiting && waitingAllDay) {
+        const dayStart = await doctorDayStart(doctorId, date);
+        if (!dayStart) throw new Error("الطبيب لا يعمل في هذا اليوم حسب جدول دوامه — اختر يومًا آخر");
+        start = new Date(dayStart);
+      }
+      // موعد الانتظار يُسجَّل ربع ساعة في أوّل وقته، وطوله الأصليّ محفوظ لحين حجز خانته
+      const end = new Date(start.getTime() + (waiting ? 15 : Number(duration)) * 60_000);
 
       // دوام الطبيب كان مسجَّلًا في `doctor_working_hours` ولا تقرؤه هذه الشاشة
       const availability = await checkDoctorAvailability(doctorId, start, end);
@@ -1745,6 +2095,38 @@ function CreateAppointmentDialog({
         return null;
       }
 
+      if (repeat && !waiting) {
+        const { data: ids, error } = await supabase.rpc("app_create_appointment_series", {
+          p_appointment: {
+            organization_id: organizationId,
+            doctor_id: doctorId,
+            patient_id: patient.id,
+            scheduled_start: start.toISOString(),
+            scheduled_end: end.toISOString(),
+            branch_id: branchId || null,
+            clinic_id: clinicId === NONE_VALUE ? null : clinicId,
+            item_id: service?.id ?? null,
+            visit_type_value_id: visitTypeValueId || null,
+            label_value_id: labelValueId || null,
+            priority,
+            note: note.trim() || null,
+            accepts_earlier: acceptsEarlier,
+          },
+          p_count: Number(repeatCount),
+          p_every_days: Number(repeatEvery),
+          p_override: Boolean(vars?.override),
+        });
+        if (error) throw error;
+        const list = (ids ?? []) as string[];
+        const every = Number(repeatEvery);
+        const series = list.map((_, index) => new Date(start.getTime() + index * every * 86_400_000).toISOString());
+        if (vars?.printWindow && list[0]) {
+          const row = await fetchAppointmentById(organizationId, list[0]);
+          printAppointmentCard(row, calendarDisplay, { series, target: vars.printWindow });
+        }
+        return { id: list[0], scheduled_start: start.toISOString(), doctor_id: doctorId, count: list.length };
+      }
+
       const { data: created, error } = await supabase.from("appointments").insert({
         organization_id: organizationId,
         doctor_id: doctorId,
@@ -1761,11 +2143,21 @@ function CreateAppointmentDialog({
         created_by: session?.user.id ?? null,
         // يُستهلك في القاعدة ويعود false؛ ويبقى من تجاوز ومتى (0174)
         overlap_override: Boolean(vars?.override),
-      })
+        accepts_earlier: acceptsEarlier,
+        label_value_id: labelValueId || null,
+        is_waiting: waiting,
+        waiting_all_day: waiting && waitingAllDay,
+        expected_duration_minutes: waiting ? Number(duration) || 30 : null,
+      } as never)
         .select("id, scheduled_start, doctor_id")
         .single();
       if (error) throw error;
-      return created as { id: string; scheduled_start: string; doctor_id: string };
+      const row = created as unknown as { id: string; scheduled_start: string; doctor_id: string };
+      if (vars?.printWindow) {
+        const full = await fetchAppointmentById(organizationId, row.id);
+        printAppointmentCard(full, calendarDisplay, { target: vars.printWindow });
+      }
+      return { ...row, count: 1 };
     },
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
@@ -1779,8 +2171,16 @@ function CreateAppointmentDialog({
         queryClient.invalidateQueries({ queryKey: ["reception-requests"] });
         onRequestBooked?.();
       }
-      toast({ title: followUpRequest ? "تم حجز موعد المتابعة وإغلاق الطلب" : "تم حجز الموعد" });
-      if (created) onCreated?.(created);
+      toast({
+        title: followUpRequest
+          ? "تم حجز موعد المتابعة وإغلاق الطلب"
+          : created && created.count > 1
+            ? `حُجزت ${created.count} مواعيد متكرّرة`
+            : waiting
+              ? "حُجز موعد انتظار"
+              : "تم حجز الموعد",
+      });
+      if (created) onCreated?.({ id: created.id, scheduled_start: created.scheduled_start, doctor_id: created.doctor_id });
       setPatient(null);
       setDoctorId("");
       setService(null);
@@ -1790,9 +2190,15 @@ function CreateAppointmentDialog({
       setAllowOutsideHours(false);
       setOverrideConfirmed(false);
       setNote("");
+      setAcceptsEarlier(false);
+      setLabelValueId("");
+      setRepeat(false);
+      setWaiting(false);
       onOpenChange(false);
     },
-    onError: (error: unknown) => {
+    onError: (error: unknown, vars) => {
+      // نافذة الطباعة فُتحت مع الضغط (حاجب النوافذ لا يسمح بفتحها بعد الانتظار) — تُغلق مع الفشل
+      vars?.printWindow?.close();
       // التعارض نافذةُ قرارٍ لا رسالةُ خطأ: انقل أو تجاهل — وقد يقع هنا وإن لم
       // يظهر في الفحص المسبق، إن حجز زميلٌ الوقت نفسه في اللحظة ذاتها.
       const info = parseOverlapError(error);
@@ -1814,20 +2220,30 @@ function CreateAppointmentDialog({
    * الإرسال. وحجز طلب المتابعة يمرّ بدالّةٍ لا تحمل التجاوز، فنافذته بلا
    * زرّ «تجاهل».
    */
-  const submitBooking = () => {
-    if (overlap.data && !overrideConfirmed) {
+  const submitBooking = (withPrint = false) => {
+    if (!waiting && overlap.data && !overrideConfirmed) {
       setConflict(overlap.data);
       return;
     }
-    createAppointment.mutate({ override: overrideConfirmed && !followUpRequest });
+    // تُفتح نافذة الطباعة مع الضغط نفسه: بعد انتظار الحفظ يحجبها المتصفّح
+    const printWindow = withPrint ? window.open("", "_blank") : null;
+    createAppointment.mutate({ override: overrideConfirmed && !followUpRequest && !waiting, printWindow });
   };
+  const repeatInvalid =
+    repeat &&
+    (!Number.isInteger(Number(repeatCount)) ||
+      Number(repeatCount) < 2 ||
+      Number(repeatCount) > 52 ||
+      !Number.isInteger(Number(repeatEvery)) ||
+      Number(repeatEvery) < 1 ||
+      Number(repeatEvery) > 90);
 
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{followUpRequest ? "حجز موعد متابعة (طلب طبيب)" : "حجز موعد جديد"}</DialogTitle>
+            <DialogTitle>{followUpRequest ? "حجز موعد متابعة (طلب طبيب)" : waiting ? "حجز موعد انتظار (W.P)" : "حجز موعد جديد"}</DialogTitle>
             <DialogDescription>
               {followUpRequest
                 ? "الحجز يُغلق طلب المتابعة تلقائيًا. الأولوية والخدمة ونوع الزيارة تُضاف بعد الإنشاء من «تعديل» — القاعدة تسجّل الطبيب والعيادة والوقت والملاحظة."
@@ -1991,14 +2407,47 @@ function CreateAppointmentDialog({
                 تحديد الخدمة يضبط المدة والعيادة، ويمنع حجزًا لا يصلح للمريض.
               </p>
             </div>
+            {!followUpRequest && (
+              <div className="flex flex-col gap-2 rounded-md border border-sky-200 bg-sky-50/50 p-2.5 text-sm dark:bg-sky-950/20">
+                <label className="flex cursor-pointer items-center gap-2 font-medium">
+                  <input
+                    type="checkbox"
+                    checked={waiting}
+                    onChange={(e) => {
+                      setWaiting(e.target.checked);
+                      if (e.target.checked) setRepeat(false);
+                    }}
+                  />
+                  <Clock className="h-4 w-4 text-sky-700" />
+                  موعد انتظار (W.P) — يومٌ بلا خانة وقت، يُحجز له وقتٌ حين يتاح
+                </label>
+                {waiting && (
+                  <div className="flex flex-wrap items-center gap-4 ps-6 text-xs">
+                    <label className="flex cursor-pointer items-center gap-1.5">
+                      <input type="radio" checked={waitingAllDay} onChange={() => setWaitingAllDay(true)} />
+                      طوال اليوم (من بداية دوام الطبيب)
+                    </label>
+                    <label className="flex cursor-pointer items-center gap-1.5">
+                      <input type="radio" checked={!waitingAllDay} onChange={() => setWaitingAllDay(false)} />
+                      ينتظر من الساعة المكتوبة أدناه
+                    </label>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-2">
               <div className="flex flex-col gap-1.5">
                 <Label>التاريخ</Label>
                 <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label>الوقت</Label>
-                <Input type="time" value={time} onChange={(e) => setTime(e.target.value)} />
+                <Label>{waiting ? "من الساعة" : "الوقت"}</Label>
+                <Input
+                  type="time"
+                  value={time}
+                  disabled={waiting && waitingAllDay}
+                  onChange={(e) => setTime(e.target.value)}
+                />
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label>المدة (دقيقة)</Label>
@@ -2019,18 +2468,20 @@ function CreateAppointmentDialog({
               {findNextSlot.isPending ? "جارٍ البحث..." : "أقرب موعد"}
             </Button>
 
-            <OverlapNotice
-              info={overlap.data}
-              requestedStart={plannedStart}
-              onMove={moveToFreeTime}
-              overrideConfirmed={overrideConfirmed}
-              onUndoOverride={() => setOverrideConfirmed(false)}
-            />
+            {!waiting && (
+              <OverlapNotice
+                info={overlap.data}
+                requestedStart={plannedStart}
+                onMove={moveToFreeTime}
+                overrideConfirmed={overrideConfirmed}
+                onUndoOverride={() => setOverrideConfirmed(false)}
+              />
+            )}
 
             {/* الأوقات المتاحة تُحسب في القاعدة من جدول الطبيب ومواعيده
                 واستثناءاته — لا في المتصفّح، حيث قد تكون البيانات تغيّرت
                 بين التحميل والضغط. */}
-            {doctorId && (slots.data ?? []).length > 0 && (
+            {doctorId && !waiting && (slots.data ?? []).length > 0 && (
               <div className="flex flex-col gap-1.5">
                 <Label>الأوقات المتاحة</Label>
                 <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto rounded-md border p-2">
@@ -2076,7 +2527,59 @@ function CreateAppointmentDialog({
                   placeholder="بدون"
                 />
               </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>وسم الموعد</Label>
+                <LookupSelect
+                  categoryKey="appointment_labels"
+                  value={labelValueId}
+                  onChange={setLabelValueId}
+                  allowClear
+                  placeholder="بدون"
+                />
+              </div>
             </div>
+            {!followUpRequest && (
+              <label className="flex cursor-pointer items-center gap-2 rounded-md border p-2.5 text-sm">
+                <input type="checkbox" checked={acceptsEarlier} onChange={(e) => setAcceptsEarlier(e.target.checked)} />
+                <ArrowUpCircle className="h-4 w-4 text-primary" />
+                يقبل موعدًا أبكر إن فرغت خانة عند الطبيب (أولوية التقريب)
+              </label>
+            )}
+            {!followUpRequest && !waiting && (
+              <div className="flex flex-col gap-2 rounded-md border p-2.5 text-sm">
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input type="checkbox" checked={repeat} onChange={(e) => setRepeat(e.target.checked)} />
+                  تكرار الموعد
+                </label>
+                {repeat && (
+                  <div className="flex flex-wrap items-center gap-2 ps-6 text-xs">
+                    <span>عدد المواعيد</span>
+                    <Input
+                      type="number"
+                      min={2}
+                      max={52}
+                      value={repeatCount}
+                      onChange={(e) => setRepeatCount(e.target.value)}
+                      className="h-8 w-20"
+                    />
+                    <span>كلّ</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={repeatEvery}
+                      onChange={(e) => setRepeatEvery(e.target.value)}
+                      className="h-8 w-20"
+                    />
+                    <span>يوم</span>
+                    <span className="w-full text-muted-foreground">
+                      كلّ موعدٍ يُفحص لدوام الطبيب والتداخل؛ إن تعذّر واحدٌ لم يُحجز أيٌّ منها، والرسالة تقول أيّها.
+                    </span>
+                    {repeatInvalid && <span className="w-full text-destructive">العدد بين 2 و52، والفاصل بين يوم و90 يومًا.</span>}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex flex-col gap-1.5" hidden={Boolean(followUpRequest)}>
               <Label>أولوية الاستقبال</Label>
               <Select value={priority} onValueChange={setPriority}>
@@ -2118,12 +2621,22 @@ function CreateAppointmentDialog({
             </label>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="gap-2">
+            {!followUpRequest && (
+              <Button
+                variant="outline"
+                disabled={!patient || !doctorId || createAppointment.isPending || repeatInvalid}
+                onClick={() => submitBooking(true)}
+              >
+                <Printer className="h-4 w-4" />
+                حفظ مع طباعة
+              </Button>
+            )}
             <Button
-              disabled={!patient || !doctorId || createAppointment.isPending}
-              onClick={submitBooking}
+              disabled={!patient || !doctorId || createAppointment.isPending || repeatInvalid}
+              onClick={() => submitBooking()}
             >
-              {createAppointment.isPending ? "جارٍ الحجز..." : "حجز الموعد"}
+              {createAppointment.isPending ? "جارٍ الحجز..." : waiting ? "حجز موعد الانتظار" : "حجز الموعد"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -2208,7 +2721,24 @@ const TRANSITION_ACTIONS: {
 function printAppointmentCard(
   appointment: AppointmentWithRelations,
   calendarDisplay: CalendarDisplay,
+  options?: {
+    /** بدايات المواعيد المتكرّرة حين تُحجز معًا. */
+    series?: string[];
+    /** نافذةٌ فُتحت مع الضغط — «حفظ مع طباعة» يطبع بعد الحفظ فيها. */
+    target?: Window | null;
+  },
 ) {
+  const waitingRow = extrasOf(appointment).is_waiting
+    ? `<tr><td style="color:#555">موعد انتظار</td><td style="text-align:end">${
+        extrasOf(appointment).waiting_all_day ? "طوال اليوم — يُبلَّغ بوقته" : "من الساعة المذكورة — يُبلَّغ بوقته"
+      }</td></tr>`
+    : "";
+  const seriesRow =
+    options?.series && options.series.length > 1
+      ? `<tr><td style="color:#555">المواعيد</td><td style="text-align:end">${options.series
+          .map((at) => `${formatDate(at, calendarDisplay)} ${formatTime(at)}`)
+          .join("<br/>")}</td></tr>`
+      : "";
   const esc = (value: unknown) =>
     String(value ?? "—")
       .replace(/&/g, "&amp;")
@@ -2230,11 +2760,14 @@ function printAppointmentCard(
        ${row("النهاية", formatTime(appointment.scheduled_end))}
        ${row("الحالة", statusLabel(appointment.status))}
        ${row("ملاحظة", appointment.note)}
+       ${waitingRow}
+       ${seriesRow}
      </tbody></table>
      <p style="margin-top:8px;font-size:10px;color:#666;text-align:center">
        يُرجى الحضور قبل الموعد بعشر دقائق.
      </p>`,
     "thermal_80mm",
+    options?.target ?? undefined,
   );
 }
 
@@ -2253,6 +2786,10 @@ function AppointmentsTable({
   onPrint,
   onRefresh,
   onPatientCommands,
+  labels,
+  onSendToWaiting,
+  onWaitingOther,
+  onAssignSlot,
 }: {
   rows: AppointmentWithRelations[];
   loading: boolean;
@@ -2268,6 +2805,10 @@ function AppointmentsTable({
   onPrint: (appointment: AppointmentWithRelations) => void;
   onRefresh: () => void;
   onPatientCommands: (appointment: AppointmentWithRelations) => void;
+  labels: Map<string, string>;
+  onSendToWaiting: (appointment: AppointmentWithRelations, dayKey: string) => void;
+  onWaitingOther: (appointment: AppointmentWithRelations) => void;
+  onAssignSlot: (appointment: AppointmentWithRelations) => void;
 }) {
   const navigate = useNavigate();
   if (loading) return <Skeleton className="h-72 w-full" />;
@@ -2349,6 +2890,18 @@ function AppointmentsTable({
                     )}
                   </ContextMenuSubContent>
                 </ContextMenuSub>
+                {extrasOf(appointment).is_waiting ? (
+                  <ContextMenuItem disabled={!canSchedule} onSelect={() => onAssignSlot(appointment)}>
+                    <Clock className="h-4 w-4" />
+                    حجز خانة وقت لموعد الانتظار
+                  </ContextMenuItem>
+                ) : (
+                  <SendToWaitingSubmenu
+                    disabled={!canSchedule || !isNotArrived(appointment.status)}
+                    onPick={(dayKey) => onSendToWaiting(appointment, dayKey)}
+                    onOther={() => onWaitingOther(appointment)}
+                  />
+                )}
                 <ContextMenuSeparator />
                 <ContextMenuItem onSelect={() => onPrint(appointment)}>
                   <Printer className="h-4 w-4" />
@@ -2429,9 +2982,24 @@ function AppointmentsTable({
                         : "—"}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
-                      <Badge className={statusBadgeClass(appointment.status)}>
-                        {statusLabel(appointment.status)}
-                      </Badge>
+                      <div className="flex items-center gap-1">
+                        <Badge className={statusBadgeClass(appointment.status)}>
+                          {statusLabel(appointment.status)}
+                        </Badge>
+                        {extrasOf(appointment).is_waiting && (
+                          <Badge variant="outline" className="border-sky-300 text-sky-700" title="موعد انتظار بلا خانة وقت">
+                            انتظار
+                          </Badge>
+                        )}
+                        {extrasOf(appointment).accepts_earlier && (
+                          <span title="يقبل موعدًا أبكر"><ArrowUpCircle className="h-3.5 w-3.5 text-primary" /></span>
+                        )}
+                        {extrasOf(appointment).label_value_id && (
+                          <Badge variant="secondary" className="text-[10px]">
+                            {labels.get(extrasOf(appointment).label_value_id ?? "") ?? "وسم"}
+                          </Badge>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       <MoreHorizontal className="h-4 w-4" />

@@ -1,6 +1,31 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState, type HTMLAttributes, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarDays, ChevronLeft, ChevronRight, Clock, ShieldAlert } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowUpCircle,
+  CalendarDays,
+  CalendarClock,
+  ChevronLeft,
+  ChevronRight,
+  Clock,
+  Printer,
+  RefreshCw,
+  Settings2,
+  ShieldAlert,
+  Users,
+} from "lucide-react";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Input } from "@/components/ui/input";
+import { SendToWaitingSubmenu } from "@/components/appointments/WaitingControls";
+import { isNotArrived, isUnconfirmed } from "@/lib/appointment-extras";
 import { supabase } from "@/lib/supabase";
 import { useSessionDoctor } from "@/lib/session-doctor";
 import { usePermissions } from "@/lib/permissions";
@@ -27,6 +52,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
 import { APPOINTMENT_STATUS_LABELS, statusGroup } from "@/lib/appointment-status";
+import { printHtml } from "@/lib/document-merge";
 
 /**
  * تقويم المواعيد.
@@ -69,7 +95,109 @@ type CalendarAppointment = {
   doctor: { id: string; name_ar: string } | null;
   clinic: { id: string; name: string } | null;
   visit_type: { name_ar: string } | null;
+  /** 0197 — موعد انتظار (W.P) بلا خانة وقت، وأولوية التقريب، والوسم */
+  is_waiting?: boolean | null;
+  waiting_all_day?: boolean | null;
+  accepts_earlier?: boolean | null;
+  label_value_id?: string | null;
 };
+
+/**
+ * ما تطلبه قائمة الزرّ الأيمن على كتلة الموعد من الشاشة — الشاشة تملك نوافذ
+ * الإدارة والأوامر، والتقويم يرسم ويبلِّغ.
+ */
+export type BlockAction =
+  | { kind: "open" }
+  | { kind: "confirm" }
+  | { kind: "waiting"; day: string }
+  | { kind: "waiting_other" }
+  | { kind: "assign_slot" }
+  | { kind: "patient_file" }
+  | { kind: "patient_commands" }
+  | { kind: "print" };
+
+/**
+ * تخصيص العرض والضبط (Kizen «تخصيص العرض» و«الضبط»): مقياس الخانة، والتكبير،
+ * وتفاصيل الموعد، ومرضى الانتظار، والتحديث التلقائيّ. يُحفظ في متصفّح المستخدم
+ * نفسه — تفضيلٌ شخصيّ لا بيانات منشأة — ويعود إلى الافتراض إن تعذّر.
+ */
+type ScheduleSettings = {
+  slotMinutes: 15 | 30 | 60;
+  zoom: number;
+  showDetails: boolean;
+  showWaiting: boolean;
+  autoRefresh: boolean;
+  refreshSeconds: number;
+};
+
+const DEFAULT_SETTINGS: ScheduleSettings = {
+  slotMinutes: 15,
+  zoom: 1,
+  showDetails: true,
+  showWaiting: true,
+  autoRefresh: true,
+  refreshSeconds: 60,
+};
+const SETTINGS_KEY = "zc.schedule.settings.v1";
+
+function loadSettings(): ScheduleSettings {
+  try {
+    const raw = window.localStorage.getItem(SETTINGS_KEY);
+    if (!raw) return DEFAULT_SETTINGS;
+    const parsed = JSON.parse(raw) as Partial<ScheduleSettings>;
+    return {
+      slotMinutes: [15, 30, 60].includes(Number(parsed.slotMinutes)) ? (Number(parsed.slotMinutes) as 15 | 30 | 60) : 15,
+      zoom: Math.min(2, Math.max(0.6, Number(parsed.zoom) || 1)),
+      showDetails: parsed.showDetails ?? true,
+      showWaiting: parsed.showWaiting ?? true,
+      autoRefresh: parsed.autoRefresh ?? true,
+      refreshSeconds: Math.min(600, Math.max(15, Number(parsed.refreshSeconds) || 60)),
+    };
+  } catch {
+    return DEFAULT_SETTINGS;
+  }
+}
+
+function saveSettings(value: ScheduleSettings) {
+  try {
+    window.localStorage.setItem(SETTINGS_KEY, JSON.stringify(value));
+  } catch {
+    // المتصفّح يمنع التخزين (نافذة خاصّة): يبقى الضبط لهذه الجلسة وحدها
+  }
+}
+
+/**
+ * مسارات الأوقات المتزامنة: مواعيدُ تتقاطع في العمود نفسه تُرسم جنبًا إلى جنب
+ * لا فوق بعضها. لكلّ موعدٍ مساره وعدد مسارات مجموعته المتقاطعة.
+ */
+function laneLayout(rows: CalendarAppointment[]) {
+  const sorted = [...rows].sort(
+    (a, b) => new Date(a.scheduled_start).getTime() - new Date(b.scheduled_start).getTime(),
+  );
+  const result = new Map<string, { lane: number; lanes: number }>();
+  let cluster: { id: string; lane: number; end: number }[] = [];
+  let clusterEnd = -Infinity;
+  const flush = () => {
+    const lanes = cluster.reduce((max, item) => Math.max(max, item.lane + 1), 1);
+    cluster.forEach((item) => result.set(item.id, { lane: item.lane, lanes }));
+    cluster = [];
+  };
+  for (const row of sorted) {
+    const start = new Date(row.scheduled_start).getTime();
+    const end = Math.max(new Date(row.scheduled_end).getTime(), start + 15 * 60000);
+    if (start >= clusterEnd) {
+      flush();
+      clusterEnd = -Infinity;
+    }
+    const used = new Set(cluster.filter((item) => item.end > start).map((item) => item.lane));
+    let lane = 0;
+    while (used.has(lane)) lane += 1;
+    cluster.push({ id: row.id, lane, end });
+    clusterEnd = Math.max(clusterEnd, end);
+  }
+  flush();
+  return result;
+}
 
 type WorkingWindow = {
   doctor_id: string;
@@ -99,13 +227,14 @@ type DayFrame = { startHour: number; endHour: number; slotMinutes: number; px: n
 
 const DEFAULT_FRAME: DayFrame = { startHour: 8, endHour: 20, slotMinutes: 30, px: 1.1 };
 
-export type CalendarView = "day" | "week" | "month" | "list";
+export type CalendarView = "day" | "workweek" | "week" | "month" | "list";
 type GroupBy = "doctor" | "clinic";
 
 const VIEW_LABELS: Record<CalendarView, string> = {
-  day: "يومي",
-  week: "أسبوعي",
-  month: "شهري",
+  day: "يوم",
+  workweek: "أسبوع العمل",
+  week: "أسبوع كامل",
+  month: "شهر",
   list: "قائمة",
 };
 
@@ -192,6 +321,9 @@ export default function AppointmentCalendar({
   onOpenAppointment,
   onViewChange,
   highlightId,
+  onDayChange,
+  onBlockAction,
+  labels,
 }: {
   organizationId: string | undefined;
   selectedDay: string;
@@ -222,6 +354,15 @@ export default function AppointmentCalendar({
    * يومًا، أو أسبوعًا، أو شهرًا.
    */
   onViewChange?: (view: CalendarView) => void;
+  /**
+   * التنقّل داخل التقويم (أسهمه، «اليوم»، التقويم المصغّر، «أقرب يوم فيه
+   * مواعيد») يُبلِّغ الشاشة باليوم الجديد — كانت أسهم التقويم تحرّكه وحده
+   * وتبقى الشاشة على يومها، فيفتح «موعد جديد» على يومٍ غير المعروض.
+   */
+  onDayChange?: (dayKey: string) => void;
+  onBlockAction?: (appointmentId: string, action: BlockAction) => void;
+  /** أسماء وسوم المواعيد (لائحة appointment_labels). */
+  labels?: Map<string, string>;
 }) {
   const { can } = usePermissions();
   const [view, setView] = useState<CalendarView>("day");
@@ -234,7 +375,18 @@ export default function AppointmentCalendar({
   }, [view]);
   const [groupBy, setGroupBy] = useState<GroupBy>("doctor");
   const [anchor, setAnchor] = useState(() => startOfDay(new Date()));
-  const [doctorFilter, setDoctorFilter] = useState<string>("all");
+  /** الأطباء المختارون — فارغة = كل الأطباء، وواحد = طبيب محدد، وأكثر = عدّة أطباء. */
+  const [selectedDoctors, setSelectedDoctors] = useState<string[]>([]);
+  const doctorFilter = selectedDoctors.length === 1 ? selectedDoctors[0] : "all";
+  const [settings, setSettingsState] = useState<ScheduleSettings>(() => loadSettings());
+  const setSettings = (patch: Partial<ScheduleSettings>) =>
+    setSettingsState((prev) => {
+      const next = { ...prev, ...patch };
+      saveSettings(next);
+      return next;
+    });
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [clinicFilter, setClinicFilter] = useState<string>("all");
   const [dragged, setDragged] = useState<CalendarAppointment | null>(null);
   const [pendingMove, setPendingMove] = useState<{
@@ -248,8 +400,15 @@ export default function AppointmentCalendar({
     setAnchor(startOfDay(new Date(`${selectedDay}T00:00:00`)));
   }, [selectedDay]);
 
+  /** كلّ تنقّلٍ داخل التقويم يمرّ من هنا فيبلغ الشاشة. */
+  const goTo = (date: Date) => {
+    const next = startOfDay(date);
+    setAnchor(next);
+    onDayChange?.(toDateKey(next));
+  };
+
   const range = useMemo(() => {
-    if (view === "week") return { from: startOfWeek(anchor), to: addDays(startOfWeek(anchor), 7) };
+    if (view === "week" || view === "workweek") return { from: startOfWeek(anchor), to: addDays(startOfWeek(anchor), 7) };
     if (view === "month") {
       const from = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
       const to = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1);
@@ -275,11 +434,14 @@ export default function AppointmentCalendar({
       scopedDoctorId ?? "",
     ],
     enabled: Boolean(organizationId),
+    // «معالج التحديث التلقائي» في Kizen: ما يحجزه زميلٌ على جهازٍ آخر يظهر هنا بلا ضغط
+    refetchInterval: settings.autoRefresh ? settings.refreshSeconds * 1000 : false,
     queryFn: async () => {
       let query = supabase
         .from("appointments")
         .select(
           "id, scheduled_start, scheduled_end, status, priority, queue_number, doctor_id, clinic_id, note, " +
+            "is_waiting, waiting_all_day, accepts_earlier, label_value_id, " +
             "patient:patients!appointments_patient_tenant_fk(id, name_ar, file_number, mobile_number, insurance_company_name), " +
             "doctor:doctors!appointments_doctor_tenant_fk(id, name_ar), " +
             "clinic:clinics!appointments_clinic_tenant_fk(id, name), " +
@@ -340,7 +502,7 @@ export default function AppointmentCalendar({
     const needle = (search ?? "").trim();
     return (appointments.data ?? []).filter(
       (row) =>
-        (doctorFilter === "all" || row.doctor_id === doctorFilter) &&
+        (selectedDoctors.length === 0 || selectedDoctors.includes(row.doctor_id)) &&
         (clinicFilter === "all" || row.clinic_id === clinicFilter) &&
         (!statusFilter ||
           statusFilter === "all" ||
@@ -352,7 +514,56 @@ export default function AppointmentCalendar({
           String(row.patient?.file_number ?? "").includes(needle) ||
           Boolean(row.patient?.mobile_number?.includes(needle))),
     );
-  }, [appointments.data, doctorFilter, clinicFilter, search, Array.isArray(statusFilter) ? statusFilter.join(",") : statusFilter]);
+  }, [appointments.data, selectedDoctors.join(","), clinicFilter, search, Array.isArray(statusFilter) ? statusFilter.join(",") : statusFilter]);
+
+  /**
+   * «طباعة الجدول الحديث» (Kizen): المعروض بمرشّحاته — مجمَّعًا بالطبيب،
+   * مرتّبًا بالوقت، ومواعيد الانتظار معلَّمة.
+   */
+  const printSchedule = () => {
+    const esc = (value: unknown) =>
+      String(value ?? "—").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+    const time = (iso: string) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+    const date = (iso: string) => new Date(iso).toLocaleDateString("en-CA");
+    const groups = new Map<string, CalendarAppointment[]>();
+    [...visible]
+      .sort((a, b) => new Date(a.scheduled_start).getTime() - new Date(b.scheduled_start).getTime())
+      .forEach((row) => {
+        const list = groups.get(row.doctor_id) ?? [];
+        list.push(row);
+        groups.set(row.doctor_id, list);
+      });
+    const body = [...groups.entries()]
+      .map(([doctorId, rows]) => {
+        const name = doctors.find((doctor) => doctor.id === doctorId)?.name_ar ?? rows[0]?.doctor?.name_ar ?? "—";
+        return `<h3 style="margin:10px 0 4px">د. ${esc(name)} — ${rows.length}</h3>
+          <table><thead><tr><th>التاريخ</th><th>الوقت</th><th>النهاية</th><th>الملف</th><th>المريض</th><th>الجوال</th>
+          <th>العيادة</th><th>الزيارة</th><th>الحالة</th><th>ملاحظة</th></tr></thead><tbody>
+          ${rows
+            .map(
+              (row) => `<tr><td>${esc(date(row.scheduled_start))}</td>
+                <td>${row.is_waiting ? (row.waiting_all_day ? "انتظار — طوال اليوم" : `انتظار من ${esc(time(row.scheduled_start))}`) : esc(time(row.scheduled_start))}</td>
+                <td>${row.is_waiting ? "—" : esc(time(row.scheduled_end))}</td>
+                <td>${esc(row.patient?.file_number)}</td><td>${esc(row.patient?.name_ar)}</td><td>${esc(row.patient?.mobile_number)}</td>
+                <td>${esc(row.clinic?.name)}</td><td>${esc(row.visit_type?.name_ar)}</td>
+                <td>${esc(APPOINTMENT_STATUS_LABELS[row.status as keyof typeof APPOINTMENT_STATUS_LABELS] ?? row.status)}</td>
+                <td>${esc(row.note)}</td></tr>`,
+            )
+            .join("")}
+          </tbody></table>`;
+      })
+      .join("");
+    printHtml(
+      "جدول المواعيد",
+      `<h2 style="margin:0 0 4px">جدول المواعيد — ${esc(headerLabel)}</h2>
+       <p style="margin:0 0 6px;font-size:11px;color:#555">العدد ${visible.length}</p>${body}`,
+      "a4",
+    );
+  };
+
+  /** موعد الانتظار خارج الشبكة — يُعرض في شريط الانتظار أعلى كلّ عمود. */
+  const gridRows = useMemo(() => visible.filter((row) => !row.is_waiting), [visible]);
+  const waitingRows = useMemo(() => visible.filter((row) => row.is_waiting), [visible]);
 
   const frame = useMemo<DayFrame>(() => {
     let startHour = 8;
@@ -364,17 +575,19 @@ export default function AppointmentCalendar({
       startHour = Math.min(startHour, Math.floor(hourOf(row.starts_at)));
       endHour = Math.max(endHour, Math.ceil(hourOf(row.ends_at)));
     }
-    for (const row of visible) {
+    for (const row of gridRows) {
       startHour = Math.min(startHour, Math.floor(hourOf(row.scheduled_start)));
       endHour = Math.max(endHour, Math.ceil(hourOf(row.scheduled_end)));
     }
+    // المقياس: خانة 15 أو 30 أو 60 دقيقة، والتكبير يضاعف ارتفاع الدقيقة
+    const basePx = settings.slotMinutes === 60 ? 0.9 : settings.slotMinutes === 30 ? 1.1 : 1.4;
     return {
       startHour: Math.max(0, startHour),
       endHour: Math.min(26, Math.max(endHour, startHour + 1)),
-      slotMinutes: 15,
-      px: 1.4,
+      slotMinutes: settings.slotMinutes,
+      px: basePx * settings.zoom,
     };
-  }, [anchor, availability.data, visible]);
+  }, [anchor, availability.data, gridRows, settings.slotMinutes, settings.zoom]);
 
   const columns = useMemo(() => {
     if (view !== "day") return [];
@@ -382,25 +595,58 @@ export default function AppointmentCalendar({
       const list = clinicFilter === "all" ? clinics : clinics.filter((c) => c.id === clinicFilter);
       return [...list.map((c) => ({ id: c.id, name: c.name })), { id: "__none__", name: "بلا عيادة" }];
     }
-    const list = doctorFilter === "all" ? doctors : doctors.filter((d) => d.id === doctorFilter);
+    const list = selectedDoctors.length === 0 ? doctors : doctors.filter((d) => selectedDoctors.includes(d.id));
     return list.map((d) => ({ id: d.id, name: d.name_ar }));
-  }, [view, groupBy, doctors, clinics, doctorFilter, clinicFilter]);
+  }, [view, groupBy, doctors, clinics, selectedDoctors.join(","), clinicFilter]);
+
+  /**
+   * «أقرب موعد» في Kizen: يقفز إلى أقرب يومٍ قادم فيه مواعيد (بعد اليوم
+   * المعروض)، لا إلى أقرب خانةٍ فارغة. بمرشّح الأطباء المختار.
+   */
+  const nearestDay = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) return null;
+      let query = supabase
+        .from("appointments")
+        .select("scheduled_start")
+        .eq("organization_id", organizationId)
+        .gte("scheduled_start", addDays(startOfDay(anchor), 1).toISOString())
+        .not("status", "in", "(cancelled_by_patient,cancelled_by_staff,no_show)")
+        .order("scheduled_start")
+        .limit(1);
+      if (scopedDoctorId) query = query.eq("doctor_id", scopedDoctorId);
+      else if (selectedDoctors.length > 0) query = query.in("doctor_id", selectedDoctors);
+      const { data, error } = await query;
+      if (error) throw error;
+      return (data?.[0]?.scheduled_start as string | undefined) ?? null;
+    },
+    onSuccess: (found) => {
+      if (!found) {
+        toast({ title: "لا مواعيد قادمة بعد هذا اليوم" });
+        return;
+      }
+      goTo(new Date(found));
+      if (view === "month" || view === "list") setView("day");
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر البحث", description: errorMessage(error) }),
+  });
 
   const shift = (direction: -1 | 1) => {
     if (view === "month") {
-      setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() + direction, 1));
-    } else if (view === "week") {
-      setAnchor(addDays(anchor, 7 * direction));
+      goTo(new Date(anchor.getFullYear(), anchor.getMonth() + direction, 1));
+    } else if (view === "week" || view === "workweek") {
+      goTo(addDays(anchor, 7 * direction));
     } else {
-      setAnchor(addDays(anchor, direction));
+      goTo(addDays(anchor, direction));
     }
   };
 
   const headerLabel = useMemo(() => {
     if (view === "month") return anchor.toLocaleDateString("ar-SA", { month: "long", year: "numeric" });
-    if (view === "week") {
+    if (view === "week" || view === "workweek") {
       const from = startOfWeek(anchor);
-      return `${from.toLocaleDateString("ar-SA", { day: "numeric", month: "short" })} — ${addDays(from, 6).toLocaleDateString("ar-SA", { day: "numeric", month: "short" })}`;
+      return `${from.toLocaleDateString("ar-SA", { day: "numeric", month: "short" })} — ${addDays(from, view === "workweek" ? 5 : 6).toLocaleDateString("ar-SA", { day: "numeric", month: "short" })}`;
     }
     return anchor.toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   }, [anchor, view]);
@@ -412,16 +658,65 @@ export default function AppointmentCalendar({
           <Button size="sm" variant="outline" onClick={() => shift(1)} title="التالي">
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <Button size="sm" variant="outline" onClick={() => setAnchor(startOfDay(new Date()))}>
+          <Button size="sm" variant="outline" onClick={() => goTo(new Date())}>
             اليوم
           </Button>
           <Button size="sm" variant="outline" onClick={() => shift(-1)} title="السابق">
             <ChevronRight className="h-4 w-4" />
           </Button>
-          <span className="mr-2 flex items-center gap-1.5 text-sm font-medium">
-            <CalendarDays className="h-4 w-4 text-muted-foreground" />
-            {headerLabel}
-          </span>
+          <Popover>
+            <PopoverTrigger asChild>
+              <button
+                type="button"
+                className="mr-2 flex items-center gap-1.5 rounded px-1.5 py-1 text-sm font-medium hover:bg-muted"
+                title="تقويم الأشهر — اختر أيّ يوم"
+              >
+                <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                {headerLabel}
+              </button>
+            </PopoverTrigger>
+            <PopoverContent className="w-72 p-2" align="start">
+              <MiniMonth
+                selected={anchor}
+                onSelect={(date) => {
+                  goTo(date);
+                  if (view === "month" || view === "list") setView("day");
+                }}
+              />
+            </PopoverContent>
+          </Popover>
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={nearestDay.isPending}
+            onClick={() => nearestDay.mutate()}
+            title="أقرب يوم قادم فيه مواعيد"
+          >
+            <CalendarClock className="h-4 w-4" />
+            أقرب يوم فيه مواعيد
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8"
+            title="تحديث"
+            onClick={() => {
+              void appointments.refetch();
+              void availability.refetch();
+            }}
+          >
+            <RefreshCw className={`h-4 w-4 ${appointments.isFetching ? "animate-spin" : ""}`} />
+          </Button>
+          <Button
+            size="icon"
+            variant="ghost"
+            className="h-8 w-8"
+            title="طباعة الجدول المعروض (بمرشّحاته)"
+            disabled={visible.length === 0}
+            onClick={printSchedule}
+          >
+            <Printer className="h-4 w-4" />
+          </Button>
           {/* تقويم فارغ بسبب التصفية يبدو كتقويم بلا مواعيد: الشارة تفرّق
               بين الحالتين حتى لا يظنّ الموظف أن مواعيد اليوم اختفت. */}
           {(Boolean((search ?? "").trim()) ||
@@ -454,19 +749,70 @@ export default function AppointmentCalendar({
               </SelectContent>
             </Select>
           )}
-          <Select value={doctorFilter} onValueChange={setDoctorFilter}>
-            <SelectTrigger className="h-8 w-40">
-              <SelectValue placeholder="كل الأطباء" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">كل الأطباء</SelectItem>
-              {doctors.map((doctor) => (
-                <SelectItem key={doctor.id} value={doctor.id}>
-                  {doctor.name_ar}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button size="sm" variant="outline" className="h-8 w-44 justify-between">
+                <span className="flex items-center gap-1.5 truncate">
+                  <Users className="h-3.5 w-3.5" />
+                  {selectedDoctors.length === 0
+                    ? "كل الأطباء"
+                    : selectedDoctors.length === 1
+                      ? doctors.find((d) => d.id === selectedDoctors[0])?.name_ar ?? "طبيب"
+                      : `${selectedDoctors.length} أطباء`}
+                </span>
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-64 p-2" align="end">
+              <div className="flex items-center justify-between gap-2 border-b pb-1.5">
+                <button
+                  type="button"
+                  className="text-xs text-primary hover:underline"
+                  onClick={() => setSelectedDoctors([])}
+                >
+                  كل الأطباء
+                </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+                  onClick={() => queryClient.invalidateQueries({ queryKey: ["doctors-enabled"] })}
+                  title="إعادة قراءة قائمة الأطباء"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  تحديث الأطباء
+                </button>
+              </div>
+              <div className="flex max-h-64 flex-col gap-0.5 overflow-y-auto pt-1.5">
+                {doctors.map((doctor) => {
+                  const checked = selectedDoctors.includes(doctor.id);
+                  return (
+                    <div key={doctor.id} className="flex items-center justify-between gap-2 rounded px-1 py-0.5 hover:bg-muted">
+                      <label className="flex flex-1 cursor-pointer items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() =>
+                            setSelectedDoctors((prev) =>
+                              checked ? prev.filter((id) => id !== doctor.id) : [...prev, doctor.id],
+                            )
+                          }
+                        />
+                        {doctor.name_ar}
+                      </label>
+                      <button
+                        type="button"
+                        className="text-[10px] text-muted-foreground hover:text-primary"
+                        onClick={() => setSelectedDoctors([doctor.id])}
+                        title="هذا الطبيب وحده"
+                      >
+                        وحده
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </PopoverContent>
+          </Popover>
+          <ScheduleSettingsPopover settings={settings} onChange={setSettings} />
           <Select value={clinicFilter} onValueChange={setClinicFilter}>
             <SelectTrigger className="h-8 w-40">
               <SelectValue placeholder="كل العيادات" />
@@ -490,7 +836,11 @@ export default function AppointmentCalendar({
           date={anchor}
           columns={columns}
           groupBy={groupBy}
-          appointments={visible}
+          appointments={gridRows}
+          waiting={settings.showWaiting ? waitingRows : []}
+          showDetails={settings.showDetails}
+          onBlockAction={onBlockAction}
+          labels={labels}
           windows={windows.data ?? []}
           availability={availability.isSuccess ? availability.data : null}
           frame={frame}
@@ -512,10 +862,17 @@ export default function AppointmentCalendar({
         />
       )}
 
-      {!appointments.isLoading && view === "week" && (
+      {!appointments.isLoading && (view === "week" || view === "workweek") && (
         <WeekGrid
           anchor={anchor}
-          appointments={visible}
+          dayCount={view === "workweek" ? 6 : 7}
+          appointments={gridRows}
+          waiting={settings.showWaiting ? waitingRows : []}
+          onSelectDay={(date) => {
+            goTo(date);
+            setView("day");
+          }}
+          onBlockAction={onBlockAction}
           canReschedule={can("appointments.reschedule")}
           dragged={dragged}
           setDragged={setDragged}
@@ -532,7 +889,7 @@ export default function AppointmentCalendar({
       )}
 
       {!appointments.isLoading && view === "month" && (
-        <MonthGrid anchor={anchor} appointments={visible} onSelectDay={(date) => { setAnchor(date); setView("day"); }} />
+        <MonthGrid anchor={anchor} appointments={visible} onSelectDay={(date) => { goTo(date); setView("day"); }} />
       )}
 
       {!appointments.isLoading && view === "list" && (
@@ -555,6 +912,10 @@ function DayGrid({
   columns,
   groupBy,
   appointments,
+  waiting,
+  showDetails,
+  onBlockAction,
+  labels,
   windows,
   availability,
   frame,
@@ -571,6 +932,11 @@ function DayGrid({
   columns: { id: string; name: string }[];
   groupBy: GroupBy;
   appointments: CalendarAppointment[];
+  /** مواعيد الانتظار (W.P) لليوم — فارغة إن أُخفي «عرض مرضى الانتظار». */
+  waiting: CalendarAppointment[];
+  showDetails: boolean;
+  onBlockAction?: (appointmentId: string, action: BlockAction) => void;
+  labels?: Map<string, string>;
   windows: WorkingWindow[];
   /** `null` = لم يُقرأ التوفّر (الترقية لم تُنفَّذ) ⇒ الرسم القديم من `windows`. */
   availability: DayAvailability[] | null;
@@ -599,6 +965,22 @@ function DayGrid({
 
   const nowOffset = useNowOffset(date, frame.startHour, totalMinutes);
 
+  const columnKey = (row: CalendarAppointment) =>
+    groupBy === "doctor" ? row.doctor_id : (row.clinic_id ?? "__none__");
+  const waitingByColumn = useMemo(() => {
+    const map = new Map<string, CalendarAppointment[]>();
+    waiting.forEach((row) => {
+      const key = columnKey(row);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(row);
+    });
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [waiting, groupBy]);
+  const maxWaiting = Math.max(0, ...columns.map((c) => waitingByColumn.get(c.id)?.length ?? 0));
+  /** شريط الانتظار بارتفاعٍ واحد في كلّ الأعمدة فتبقى الساعات محاذية. */
+  const waitingStripHeight = maxWaiting === 0 ? 0 : Math.min(132, 26 + maxWaiting * 22);
+
   if (columns.length === 0) {
     return <p className="py-10 text-center text-sm text-muted-foreground">لا توجد أعمدة للعرض.</p>;
   }
@@ -609,6 +991,14 @@ function DayGrid({
         {/* عمود الساعات — الساعة كاملةً بخطٍّ واضح، والأرباع باهتة */}
         <div className="sticky right-0 z-30 w-16 shrink-0 border-s bg-muted/60">
           <div className="sticky top-0 z-30 h-10 border-b bg-muted" />
+          {waitingStripHeight > 0 && (
+            <div
+              className="flex items-center justify-center border-b bg-amber-50 text-[10px] font-medium text-amber-800 dark:bg-amber-950/30"
+              style={{ height: waitingStripHeight }}
+            >
+              انتظار
+            </div>
+          )}
           <div className="relative" style={{ height: totalMinutes * frame.px }}>
             {slots.map((slot, index) => {
               const isHour = slot.getMinutes() === 0;
@@ -632,11 +1022,9 @@ function DayGrid({
         </div>
 
         {columns.map((column) => {
-          const columnAppointments = appointments.filter((row) =>
-            groupBy === "doctor"
-              ? row.doctor_id === column.id
-              : (row.clinic_id ?? "__none__") === column.id,
-          );
+          const columnAppointments = appointments.filter((row) => columnKey(row) === column.id);
+          const lanes = laneLayout(columnAppointments);
+          const columnWaiting = waitingByColumn.get(column.id) ?? [];
           const columnWindows =
             groupBy === "doctor" ? windows.filter((w) => w.doctor_id === column.id) : [];
           const columnAvailability =
@@ -653,8 +1041,34 @@ function DayGrid({
                 }`}
               >
                 <span className="truncate">{column.name}</span>
-                {isOff && <span className="text-[9px] font-normal">لا يعمل اليوم</span>}
+                <span className="text-[9px] font-normal text-muted-foreground">
+                  {isOff ? "لا يعمل اليوم" : date.toLocaleDateString("ar-SA-u-nu-latn", { weekday: "short", day: "numeric", month: "numeric" })}
+                </span>
               </div>
+              {waitingStripHeight > 0 && (
+                <div
+                  className="flex flex-col gap-0.5 overflow-y-auto border-b bg-amber-50/60 p-1 dark:bg-amber-950/20"
+                  style={{ height: waitingStripHeight }}
+                >
+                  {columnWaiting.map((row) => (
+                    <BlockMenu key={row.id} appointment={row} onBlockAction={onBlockAction}>
+                      <button
+                        type="button"
+                        onClick={() => onOpenAppointment(row.id)}
+                        className="flex w-full items-center gap-1 truncate rounded border border-amber-300 bg-white px-1 py-0.5 text-start text-[10px] text-amber-900 hover:bg-amber-100 dark:bg-amber-950/40 dark:text-amber-100"
+                        title={row.waiting_all_day ? "ينتظر طوال اليوم" : `ينتظر من ${fmtTime(row.scheduled_start)}`}
+                      >
+                        <Clock className="h-3 w-3 shrink-0" />
+                        <span className="truncate">
+                          {row.patient?.file_number != null ? `F#${row.patient.file_number} - ` : ""}
+                          {row.patient?.name_ar ?? "بلا اسم"}
+                        </span>
+                        {!row.waiting_all_day && <span className="ms-auto shrink-0 opacity-70">{fmtTime(row.scheduled_start)}</span>}
+                      </button>
+                    </BlockMenu>
+                  ))}
+                </div>
+              )}
               <div className="relative" style={{ height: totalMinutes * frame.px }}>
                 {/* خلفية التوفّر: المتاح مُلوَّن، وغير المتاح مخطَّط */}
                 {columnAvailability ? (
@@ -699,17 +1113,21 @@ function DayGrid({
 
                 {/* المواعيد */}
                 {columnAppointments.map((row) => (
-                  <EventBlock
-                    key={row.id}
-                    appointment={row}
-                    canDrag={canReschedule}
-                    onDragStart={() => setDragged(row)}
-                    onDragEnd={() => setDragged(null)}
-                    onClick={() => onOpenAppointment(row.id)}
-                    frame={frame}
-                    day={date}
-                    highlighted={row.id === highlightId}
-                  />
+                  <BlockMenu key={row.id} appointment={row} onBlockAction={onBlockAction}>
+                    <EventBlock
+                      appointment={row}
+                      canDrag={canReschedule}
+                      onDragStart={() => setDragged(row)}
+                      onDragEnd={() => setDragged(null)}
+                      onClick={() => onOpenAppointment(row.id)}
+                      frame={frame}
+                      day={date}
+                      highlighted={row.id === highlightId}
+                      lane={lanes.get(row.id)}
+                      showDetails={showDetails}
+                      labelName={row.label_value_id ? labels?.get(row.label_value_id) : undefined}
+                    />
+                  </BlockMenu>
                 ))}
 
                 {nowOffset !== null && (
@@ -881,16 +1299,7 @@ function UnavailableLayer({
   );
 }
 
-function EventBlock({
-  appointment,
-  canDrag,
-  onDragStart,
-  onDragEnd,
-  onClick,
-  frame = DEFAULT_FRAME,
-  day,
-  highlighted = false,
-}: {
+type EventBlockProps = {
   appointment: CalendarAppointment;
   canDrag: boolean;
   onDragStart: () => void;
@@ -899,7 +1308,27 @@ function EventBlock({
   frame?: DayFrame;
   day?: Date;
   highlighted?: boolean;
-}) {
+  /** مسار الموعد بين المتزامنين معه في العمود (laneLayout). */
+  lane?: { lane: number; lanes: number };
+  showDetails?: boolean;
+  labelName?: string;
+} & Omit<HTMLAttributes<HTMLDivElement>, "onClick" | "onDragStart" | "onDragEnd">;
+
+/** يقبل مرجعًا لأنّ قائمة الزرّ الأيمن تلفّه (Radix `asChild`). */
+const EventBlock = forwardRef<HTMLDivElement, EventBlockProps>(function EventBlock({
+  appointment,
+  canDrag,
+  onDragStart,
+  onDragEnd,
+  onClick,
+  frame = DEFAULT_FRAME,
+  day,
+  highlighted = false,
+  lane,
+  showDetails = true,
+  labelName,
+  ...rest
+}, ref) {
   const TOTAL_MINUTES = (frame.endHour - frame.startHour) * 60;
   const PX_PER_MINUTE = frame.px;
   const top = minutesFromDayStart(appointment.scheduled_start, frame.startHour, day);
@@ -912,31 +1341,52 @@ function EventBlock({
 
   if (top + duration < 0 || top > TOTAL_MINUTES) return null;
 
+  // مواعيدٌ متزامنة تنقسم عرض العمود بالتساوي بدل أن يغطّي بعضها بعضًا
+  const lanes = lane?.lanes ?? 1;
+  const width = 100 / lanes;
+  const unconfirmed = isUnconfirmed(appointment.status);
+  const fileTag = appointment.patient?.file_number != null ? `F#${appointment.patient.file_number} - ` : "";
+
   return (
     <div
+      {...rest}
+      ref={ref}
       draggable={canDrag}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className={`absolute right-1 left-1 z-10 cursor-pointer overflow-hidden rounded border-e-4 px-1.5 py-0.5 text-[11px] shadow-sm ${style.className} ${
+      className={`absolute z-10 cursor-pointer overflow-hidden rounded border-e-4 px-1.5 py-0.5 text-[11px] shadow-sm ${style.className} ${
         highlighted ? "animate-pulse ring-2 ring-primary ring-offset-1" : ""
       }`}
-      style={{ top: Math.max(0, top) * PX_PER_MINUTE, height: duration * PX_PER_MINUTE - 2 }}
-      title={`${appointment.patient?.name_ar ?? ""} — ${fmtTime(appointment.scheduled_start)}`}
+      style={{
+        top: Math.max(0, top) * PX_PER_MINUTE,
+        height: duration * PX_PER_MINUTE - 2,
+        right: `calc(${(lane?.lane ?? 0) * width}% + 2px)`,
+        width: `calc(${width}% - 4px)`,
+      }}
+      title={`${fileTag}${appointment.patient?.name_ar ?? ""} — ${fmtTime(appointment.scheduled_start)}${unconfirmed ? " — غير مؤكَّد" : ""}`}
     >
       <div className="flex items-center gap-1">
+        {unconfirmed && <AlertTriangle className="h-3 w-3 shrink-0 text-amber-600" aria-label="غير مؤكَّد" />}
+        {appointment.accepts_earlier && (
+          <ArrowUpCircle className="h-3 w-3 shrink-0 text-primary" aria-label="يقبل موعدًا أبكر" />
+        )}
         {priority && (
           <span className={`rounded px-1 text-[9px] ${priority.className}`}>{priority.label}</span>
         )}
-        <span className="truncate font-medium">{appointment.patient?.name_ar ?? "بلا اسم"}</span>
+        <span className="truncate font-medium">
+          {fileTag}
+          {appointment.patient?.name_ar ?? "بلا اسم"}
+        </span>
       </div>
-      {duration >= 30 && (
+      {labelName && <div className="truncate text-[9px] font-semibold opacity-90">{labelName}</div>}
+      {showDetails && duration >= 30 && (
         <div className="truncate text-[10px] opacity-80">
           {fmtTime(appointment.scheduled_start)} · {Math.round(duration)}د
           {appointment.patient?.file_number ? ` · ملف ${appointment.patient.file_number}` : ""}
         </div>
       )}
-      {duration >= 45 && (
+      {showDetails && duration >= 45 && (
         <div className="flex items-center gap-1 truncate text-[10px] opacity-80">
           {appointment.patient?.mobile_number ?? ""}
           {appointment.visit_type?.name_ar ? ` · ${appointment.visit_type.name_ar}` : ""}
@@ -947,13 +1397,17 @@ function EventBlock({
       )}
     </div>
   );
-}
+});
 
 /* ------------------------------------------------------------------ الأسبوع */
 
 function WeekGrid({
   anchor,
+  dayCount = 7,
   appointments,
+  waiting = [],
+  onSelectDay,
+  onBlockAction,
   canReschedule,
   dragged,
   setDragged,
@@ -961,7 +1415,12 @@ function WeekGrid({
   onDropAt,
 }: {
   anchor: Date;
+  /** 7 = الأسبوع كاملًا، 6 = أسبوع العمل (السبت إلى الخميس). */
+  dayCount?: number;
   appointments: CalendarAppointment[];
+  waiting?: CalendarAppointment[];
+  onSelectDay?: (date: Date) => void;
+  onBlockAction?: (appointmentId: string, action: BlockAction) => void;
   canReschedule: boolean;
   dragged: CalendarAppointment | null;
   setDragged: (value: CalendarAppointment | null) => void;
@@ -969,7 +1428,7 @@ function WeekGrid({
   onDropAt: (appointment: CalendarAppointment, start: Date) => void;
 }) {
   const from = startOfWeek(anchor);
-  const days = Array.from({ length: 7 }, (_, index) => addDays(from, index));
+  const days = Array.from({ length: dayCount }, (_, index) => addDays(from, index));
   const slots = Array.from({ length: TOTAL_MINUTES / SLOT_MINUTES }, (_, index) => index * SLOT_MINUTES);
 
   return (
@@ -992,15 +1451,28 @@ function WeekGrid({
         </div>
         {days.map((day) => {
           const dayAppointments = appointments.filter((row) => sameDay(new Date(row.scheduled_start), day));
+          const dayWaiting = waiting.filter((row) => sameDay(new Date(row.scheduled_start), day)).length;
+          const lanes = laneLayout(dayAppointments);
           const isToday = sameDay(day, new Date());
           return (
             <div key={day.toISOString()} className="min-w-[8rem] flex-1 border-s last:border-s-0">
-              <div className={`flex h-10 flex-col items-center justify-center border-b text-xs ${isToday ? "bg-primary/10 font-bold" : "bg-muted/30"}`}>
+              <button
+                type="button"
+                onClick={() => onSelectDay?.(startOfDay(day))}
+                title="افتح هذا اليوم"
+                className={`flex h-10 w-full flex-col items-center justify-center border-b text-xs hover:bg-primary/10 ${isToday ? "bg-primary/10 font-bold" : "bg-muted/30"}`}
+              >
                 <span>{day.toLocaleDateString("ar-SA", { weekday: "short" })}</span>
-                <span className="text-[10px] text-muted-foreground">
+                <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
                   {day.toLocaleDateString("ar-SA", { day: "numeric", month: "short" })}
+                  {dayWaiting > 0 && (
+                    <span className="flex items-center gap-0.5 rounded bg-amber-100 px-1 text-amber-800">
+                      <Clock className="h-2.5 w-2.5" />
+                      {dayWaiting}
+                    </span>
+                  )}
                 </span>
-              </div>
+              </button>
               <div className="relative" style={{ height: TOTAL_MINUTES * PX_PER_MINUTE }}>
                 {slots.map((minute) => {
                   const slotDate = new Date(day);
@@ -1023,14 +1495,16 @@ function WeekGrid({
                   );
                 })}
                 {dayAppointments.map((row) => (
-                  <EventBlock
-                    key={row.id}
-                    appointment={row}
-                    canDrag={canReschedule}
-                    onDragStart={() => setDragged(row)}
-                    onDragEnd={() => setDragged(null)}
-                    onClick={() => onOpenAppointment(row.id)}
-                  />
+                  <BlockMenu key={row.id} appointment={row} onBlockAction={onBlockAction}>
+                    <EventBlock
+                      appointment={row}
+                      canDrag={canReschedule}
+                      onDragStart={() => setDragged(row)}
+                      onDragEnd={() => setDragged(null)}
+                      onClick={() => onOpenAppointment(row.id)}
+                      lane={lanes.get(row.id)}
+                    />
+                  </BlockMenu>
                 ))}
               </div>
             </div>
@@ -1093,7 +1567,7 @@ function MonthGrid({
                   const style = STATUS_STYLES[row.status] ?? STATUS_STYLES.scheduled;
                   return (
                     <span key={row.id} className={`truncate rounded border-e-2 px-1 text-[10px] ${style.className}`}>
-                      {fmtTime(row.scheduled_start)} {row.patient?.name_ar ?? ""}
+                      {row.is_waiting ? "انتظار" : fmtTime(row.scheduled_start)} {row.patient?.name_ar ?? ""}
                     </span>
                   );
                 })}
@@ -1134,7 +1608,8 @@ function ListView({
             className="flex flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-start text-sm hover:bg-muted/40"
           >
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
-              <Clock className="h-3.5 w-3.5" />
+              {row.is_waiting ? <Clock className="h-3.5 w-3.5 text-amber-600" /> : <Clock className="h-3.5 w-3.5" />}
+              {row.is_waiting && <span className="text-amber-700">انتظار ·</span>}
               {new Date(row.scheduled_start).toLocaleString("ar-SA", {
                 day: "numeric",
                 month: "short",
@@ -1158,6 +1633,212 @@ function ListView({
           </button>
         );
       })}
+    </div>
+  );
+}
+
+/* ------------------------------------------------ قائمة الزرّ الأيمن على الموعد */
+
+/**
+ * قائمة الزرّ الأيمن على كتلة الموعد (Kizen): فتح وتعديل، تأكيد، إرسال إلى
+ * الانتظار ▸، حجز خانة لموعد الانتظار، ملف المريض، أوامر الملفّ (الفاتورة
+ * والفواتير والمواعيد والإرسال إلى الطبيب…)، طباعة. كلّها تنفّذها الشاشة
+ * بمساراتها القائمة — القائمة لا تكتب شيئًا بنفسها.
+ */
+function BlockMenu({
+  appointment,
+  onBlockAction,
+  children,
+}: {
+  appointment: CalendarAppointment;
+  onBlockAction?: (appointmentId: string, action: BlockAction) => void;
+  children: ReactNode;
+}) {
+  if (!onBlockAction) return <>{children}</>;
+  const act = (action: BlockAction) => onBlockAction(appointment.id, action);
+  const notArrived = isNotArrived(appointment.status);
+  return (
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+      <ContextMenuContent className="w-60">
+        <ContextMenuLabel className="truncate text-xs">
+          {appointment.patient?.file_number != null ? `F#${appointment.patient.file_number} - ` : ""}
+          {appointment.patient?.name_ar ?? "—"}
+        </ContextMenuLabel>
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => act({ kind: "open" })}>فتح وتعديل</ContextMenuItem>
+        {isUnconfirmed(appointment.status) && (
+          <ContextMenuItem onSelect={() => act({ kind: "confirm" })}>تأكيد الموعد</ContextMenuItem>
+        )}
+        {appointment.is_waiting ? (
+          <ContextMenuItem onSelect={() => act({ kind: "assign_slot" })}>حجز خانة وقت لموعد الانتظار</ContextMenuItem>
+        ) : (
+          <SendToWaitingSubmenu
+            disabled={!notArrived}
+            onPick={(day) => act({ kind: "waiting", day })}
+            onOther={() => act({ kind: "waiting_other" })}
+          />
+        )}
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => act({ kind: "patient_file" })}>فتح الملف الشخصي</ContextMenuItem>
+        <ContextMenuItem onSelect={() => act({ kind: "patient_commands" })}>
+          أوامر ملفّ المريض (فاتورة، فواتير، مواعيد، إرسال للطبيب…)
+        </ContextMenuItem>
+        <ContextMenuItem onSelect={() => act({ kind: "print" })}>طباعة الموعد</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
+  );
+}
+
+/* ------------------------------------------------------ تخصيص العرض والضبط */
+
+function ScheduleSettingsPopover({
+  settings,
+  onChange,
+}: {
+  settings: ScheduleSettings;
+  onChange: (patch: Partial<ScheduleSettings>) => void;
+}) {
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button size="sm" variant="outline" className="h-8" title="تخصيص العرض والضبط">
+          <Settings2 className="h-3.5 w-3.5" />
+          العرض
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-3" align="end">
+        <div className="flex flex-col gap-3 text-sm">
+          <div className="flex flex-col gap-1.5">
+            <Label className="text-xs text-muted-foreground">نطاق الخانة</Label>
+            <div className="flex rounded-md border p-0.5">
+              {([15, 30, 60] as const).map((minutes) => (
+                <button
+                  key={minutes}
+                  type="button"
+                  onClick={() => onChange({ slotMinutes: minutes })}
+                  className={`flex-1 rounded px-2 py-1 text-xs ${settings.slotMinutes === minutes ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                >
+                  {minutes} دقيقة
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">التكبير</Label>
+            <div className="flex items-center gap-1">
+              <Button
+                size="icon"
+                variant="outline"
+                className="h-7 w-7"
+                title="تصغير"
+                disabled={settings.zoom <= 0.6}
+                onClick={() => onChange({ zoom: Math.max(0.6, Math.round((settings.zoom - 0.2) * 10) / 10) })}
+              >
+                <span className="text-sm font-bold leading-none">−</span>
+              </Button>
+              <span className="w-10 text-center font-mono text-xs tabular-nums">{Math.round(settings.zoom * 100)}%</span>
+              <Button
+                size="icon"
+                variant="outline"
+                className="h-7 w-7"
+                title="تكبير"
+                disabled={settings.zoom >= 2}
+                onClick={() => onChange({ zoom: Math.min(2, Math.round((settings.zoom + 0.2) * 10) / 10) })}
+              >
+                <span className="text-sm font-bold leading-none">+</span>
+              </Button>
+            </div>
+          </div>
+          <label className="flex cursor-pointer items-center gap-2">
+            <input type="checkbox" checked={settings.showDetails} onChange={(e) => onChange({ showDetails: e.target.checked })} />
+            عرض تفاصيل الموعد (الوقت والجوال ونوع الزيارة)
+          </label>
+          <label className="flex cursor-pointer items-center gap-2">
+            <input type="checkbox" checked={settings.showWaiting} onChange={(e) => onChange({ showWaiting: e.target.checked })} />
+            عرض مرضى الانتظار
+          </label>
+          <div className="flex flex-col gap-1.5 border-t pt-2">
+            <label className="flex cursor-pointer items-center gap-2">
+              <input type="checkbox" checked={settings.autoRefresh} onChange={(e) => onChange({ autoRefresh: e.target.checked })} />
+              التحديث التلقائي
+            </label>
+            <div className="flex items-center gap-2 text-xs">
+              كل
+              <Input
+                type="number"
+                min={15}
+                max={600}
+                step={15}
+                value={settings.refreshSeconds}
+                disabled={!settings.autoRefresh}
+                onChange={(e) => onChange({ refreshSeconds: Math.min(600, Math.max(15, Number(e.target.value) || 60)) })}
+                className="h-7 w-20"
+              />
+              ثانية
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">يُحفظ هذا الضبط في هذا المتصفّح لك وحدك.</p>
+        </div>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/* ------------------------------------------------------ التقويم المصغّر */
+
+function MiniMonth({ selected, onSelect }: { selected: Date; onSelect: (date: Date) => void }) {
+  const [month, setMonth] = useState(() => new Date(selected.getFullYear(), selected.getMonth(), 1));
+  useEffect(() => {
+    setMonth(new Date(selected.getFullYear(), selected.getMonth(), 1));
+  }, [selected.getFullYear(), selected.getMonth()]);
+  const gridStart = startOfWeek(month);
+  const cells = Array.from({ length: 42 }, (_, index) => addDays(gridStart, index));
+  const today = new Date();
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between">
+        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))} title="الشهر السابق">
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+        <span className="text-sm font-medium">{month.toLocaleDateString("ar-SA-u-nu-latn", { month: "long", year: "numeric" })}</span>
+        <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))} title="الشهر التالي">
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+      </div>
+      <div className="grid grid-cols-7 gap-0.5 text-center text-[10px] text-muted-foreground">
+        {["س", "ح", "ن", "ث", "ر", "خ", "ج"].map((d) => (
+          <span key={d}>{d}</span>
+        ))}
+      </div>
+      <div className="grid grid-cols-7 gap-0.5">
+        {cells.map((day) => {
+          const outside = day.getMonth() !== month.getMonth();
+          const isSelected = sameDay(day, selected);
+          const isToday = sameDay(day, today);
+          return (
+            <button
+              key={day.toISOString()}
+              type="button"
+              onClick={() => onSelect(day)}
+              className={`h-8 rounded text-xs tabular-nums ${
+                isSelected
+                  ? "bg-primary text-primary-foreground"
+                  : isToday
+                    ? "border border-primary text-primary"
+                    : outside
+                      ? "text-muted-foreground/60 hover:bg-muted"
+                      : "hover:bg-muted"
+              }`}
+            >
+              {day.getDate()}
+            </button>
+          );
+        })}
+      </div>
+      <Button size="sm" variant="outline" onClick={() => onSelect(new Date())}>
+        اليوم
+      </Button>
     </div>
   );
 }

@@ -159,8 +159,17 @@ const PAPER_STYLES: Record<PaperSize, string> = {
  *
  * `paper` يأتي عادةً من `print_settings` للمؤسسة، فلا يُثبَّت في الشاشات.
  */
-export function printHtml(title: string, bodyHtml: string, paper: PaperSize = "a4") {
-  const win = window.open("", "_blank");
+export function printHtml(
+  title: string,
+  bodyHtml: string,
+  paper: PaperSize = "a4",
+  /**
+   * نافذةٌ فُتحت مسبقًا مع ضغطة المستخدم. الطباعة بعد انتظار حفظٍ في القاعدة
+   * («حفظ مع طباعة») يحجبها المتصفّح إن فُتحت النافذة بعد الانتظار.
+   */
+  target?: Window | null,
+) {
+  const win = target ?? window.open("", "_blank");
   // حاجب النوافذ المنبثقة يُعيد null — الصمت هنا يترك المستخدم يظن أن
   // الطباعة نجحت، فنُعلمه بأن عليه السماح بالنوافذ لهذا الموقع.
   if (!win) {

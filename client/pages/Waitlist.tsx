@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CalendarClock, Plus, Check, RefreshCw, X } from "lucide-react";
+import { CalendarClock, Plus, Check, Edit3, Printer, RefreshCw, X } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { checkDoctorAvailability } from "@/lib/doctor-availability";
@@ -30,7 +30,10 @@ import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
 import LookupSelect from "@/components/shared/LookupSelect";
 import { errorMessage } from "@/lib/error-message";
-import { formatDate, useLocaleSettings } from "@/lib/locale";
+import { formatDate, formatDateTime, useLocaleSettings } from "@/lib/locale";
+import { useMemberNames } from "@/lib/member-names";
+import { printHtml } from "@/lib/document-merge";
+import { APPOINTMENT_QUERY_KEYS } from "@/lib/appointment-extras";
 
 /**
  * قوائم الانتظار (لقطة 102).
@@ -79,7 +82,19 @@ const PRIORITY_LABELS: Record<string, string> = {
 type WaitlistRowJoined = AppointmentWaitlistRow & {
   patient: { id: string; name_ar: string; file_number: number | null; mobile_number: string | null } | null;
   doctor: { id: string; name_ar: string } | null;
+  /** 0197: رقم الحجز المتسلسل في المنشأة، وسبب الإلغاء ومن ألغى ومتى. */
+  booking_number?: number | null;
+  cancel_reason?: string | null;
+  cancelled_at?: string | null;
+  cancelled_by?: string | null;
+  specialty?: { id: string; name_ar: string } | null;
+  appointment?: { id: string; scheduled_start: string; status: string } | null;
 };
+
+const ALL = "__all__";
+
+const escapeHtml = (value: unknown) =>
+  String(value ?? "—").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
 
 function useWaitlist(organizationId: string | undefined, status: string) {
   return useQuery({
@@ -89,7 +104,9 @@ function useWaitlist(organizationId: string | undefined, status: string) {
       let query = supabase
         .from("appointment_waitlist")
         .select(
-          "*, patient:patients!waitlist_patient_tenant_fk(id, name_ar, file_number, mobile_number, id_number, phone_1), doctor:doctors!waitlist_doctor_tenant_fk(id, name_ar)",
+          "*, patient:patients!waitlist_patient_tenant_fk(id, name_ar, file_number, mobile_number, id_number, phone_1), doctor:doctors!waitlist_doctor_tenant_fk(id, name_ar), " +
+            "specialty:lookup_values!appointment_waitlist_specialty_value_id_fkey(id, name_ar), " +
+            "appointment:appointments!appointment_waitlist_appointment_id_fkey(id, scheduled_start, status)",
         )
         .eq("organization_id", organizationId)
         .order("created_at", { ascending: true });
@@ -152,7 +169,7 @@ function AddToWaitlistDialog({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
       if (!patient) throw new Error("اختر المريض أولًا");
-      const { error } = await supabase.from("appointment_waitlist").insert({
+      const { data, error } = await supabase.from("appointment_waitlist").insert({
         organization_id: organizationId,
         patient_id: patient.id,
         doctor_id: doctorId === ANY_DOCTOR ? null : doctorId,
@@ -162,12 +179,19 @@ function AddToWaitlistDialog({
         priority,
         status: "waiting" as const,
         created_by: session?.user.id ?? null,
-      });
+      })
+        .select("*")
+        .single();
       if (error) throw error;
+      // رقم الحجز يعطيه مُحفِّز القاعدة (0197) — يُبلَّغ للمريض كما في Kizen
+      return (data as { booking_number?: number | null } | null)?.booking_number ?? null;
     },
-    onSuccess: () => {
+    onSuccess: (bookingNumber) => {
       queryClient.invalidateQueries({ queryKey: ["waitlist"] });
-      toast({ title: "تمت إضافة المريض لقائمة انتظار المواعيد" });
+      toast({
+        title: "تمت إضافة المريض لقائمة انتظار المواعيد",
+        description: bookingNumber ? `رقم الحجز ${bookingNumber}` : undefined,
+      });
       setPatient(null);
       setDoctorId(ANY_DOCTOR);
       setSpecialtyId("");
@@ -259,45 +283,93 @@ function AddToWaitlistDialog({
 export default function Waitlist() {
   const { calendarDisplay } = useLocaleSettings();
   const { organization, membership, legacyMode } = useOrganizationAccess();
-  const queryClient = useQueryClient();
-  const { toast } = useToast();
   const [status, setStatus] = useState("waiting");
   const [search, setSearch] = useState("");
   const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [convertTarget, setConvertTarget] = useState<WaitlistRowJoined | null>(null);
+  const [editTarget, setEditTarget] = useState<WaitlistRowJoined | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<WaitlistRowJoined | null>(null);
+  /** مرشّحات Kizen: فترة التسجيل، والتخصّص، والطبيب، ومدى رقم الحجز. */
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [specialtyId, setSpecialtyId] = useState("");
+  const [doctorFilter, setDoctorFilter] = useState(ALL);
+  const [numberFrom, setNumberFrom] = useState("");
+  const [numberTo, setNumberTo] = useState("");
   const canManageWaitlist = legacyMode || ["owner", "organization_admin", "branch_manager", "receptionist"].includes(membership?.role_key ?? "");
   const list = useWaitlist(organization?.id, status);
+  const doctors = useDoctors(organization?.id);
+  const memberNames = useMemberNames(organization?.id);
 
-  const setRowStatus = useMutation({
-    mutationFn: async ({ id, next }: { id: string; next: WaitlistStatus }) => {
-      const { data: affectedRows, error } = await supabase.from("appointment_waitlist").update({ status: next }).eq("id", id)
-        .select("id");
-      if (error) throw error;
-      // تحديث/حذف لا يطابق صفًا ليس خطأً في PostgREST: بلا هذا الفحص تظهر
-      // رسالة نجاح كاذبة بينما لم يتغيّر شيء (رفض RLS، أو صف حذفه غيرك).
-      if (!affectedRows || affectedRows.length === 0)
-        throw new Error("لم تُنفَّذ العملية — راجع صلاحيتك أو حدِّث الصفحة");
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["waitlist"] });
-      toast({ title: "تم تحديث الحالة" });
-    },
-    onError: (error: unknown) =>
-      toast({
-        variant: "destructive",
-        title: "تعذر التحديث",
-        description: errorMessage(error),
-      }),
+  // الترشيح مرّة واحدة: الشبكة والعدّاد والطباعة تقرأ القائمة نفسها فلا تختلف
+  const visibleWaitlist = (list.data ?? []).filter((row) => {
+    if (!matchesPatientSearch(row.patient, search, searchScopes)) return false;
+    const registered = new Date(row.created_at).toLocaleDateString("en-CA");
+    if (from && registered < from) return false;
+    if (to && registered > to) return false;
+    if (specialtyId && row.specialty_value_id !== specialtyId) return false;
+    if (doctorFilter !== ALL && (row.doctor_id ?? "") !== doctorFilter) return false;
+    const number = row.booking_number ?? null;
+    if (numberFrom && (number == null || number < Number(numberFrom))) return false;
+    if (numberTo && (number == null || number > Number(numberTo))) return false;
+    return true;
+  });
+  const filtersActive = Boolean(from || to || specialtyId || doctorFilter !== ALL || numberFrom || numberTo);
+
+  /**
+   * التسلسل: موقع المريض في دور تخصّصه — من ينتظر وحده، بترتيب القائمة
+   * (الأولوية ثمّ الأسبقية). «رقم الحجز» ثابتٌ يُبلَّغ للمريض، والتسلسل يتغيّر
+   * كلّما حُجز لمن قبله.
+   */
+  const sequence = new Map<string, number>();
+  const counters = new Map<string, number>();
+  (list.data ?? []).forEach((row) => {
+    if (row.status !== "waiting") return;
+    const key = row.specialty_value_id ?? row.doctor_id ?? "";
+    const next = (counters.get(key) ?? 0) + 1;
+    counters.set(key, next);
+    sequence.set(row.id, next);
   });
 
-  // الترشيح مرّة واحدة: الشبكة والعدّاد يقرآن القائمة نفسها فلا يختلفان
-  const visibleWaitlist = (list.data ?? []).filter((row) =>
-    matchesPatientSearch(row.patient, search, searchScopes),
-  );
+  const printList = () => {
+    const rows = visibleWaitlist
+      .map(
+        (row) => `<tr>
+          <td>${escapeHtml(row.booking_number)}</td>
+          <td>${escapeHtml(sequence.get(row.id) ?? "")}</td>
+          <td>${escapeHtml(row.patient?.file_number)}</td>
+          <td>${escapeHtml(row.patient?.name_ar)}</td>
+          <td>${escapeHtml(row.patient?.mobile_number)}</td>
+          <td>${escapeHtml(row.specialty?.name_ar)}</td>
+          <td>${escapeHtml(row.doctor?.name_ar ?? "أي طبيب")}</td>
+          <td>${escapeHtml(PRIORITY_LABELS[row.priority ?? "normal"] ?? row.priority)}</td>
+          <td>${escapeHtml(formatDate(row.desired_date, calendarDisplay))}</td>
+          <td>${escapeHtml(formatDate(row.created_at, calendarDisplay))}</td>
+          <td>${escapeHtml(row.created_by ? memberNames.data?.get(row.created_by) : "")}</td>
+          <td>${escapeHtml(STATUS_LABELS[row.status])}</td>
+          <td>${escapeHtml(row.status === "cancelled" ? row.cancel_reason : row.registration_note)}</td>
+        </tr>`,
+      )
+      .join("");
+    printHtml(
+      "قائمة انتظار المواعيد",
+      `<h2 style="margin:0 0 4px">قائمة انتظار المواعيد</h2>
+       <p style="margin:0 0 8px;font-size:11px;color:#555">
+         ${escapeHtml(STATUS_TABS.find((tab) => tab.key === status)?.label)}
+         ${from || to ? ` · التسجيل من ${escapeHtml(from || "—")} إلى ${escapeHtml(to || "—")}` : ""}
+         · العدد ${visibleWaitlist.length}
+       </p>
+       <table><thead><tr>
+         <th>رقم الحجز</th><th>التسلسل</th><th>الملف</th><th>المريض</th><th>الجوال</th><th>التخصص</th>
+         <th>الطبيب</th><th>الأولوية</th><th>المرغوب</th><th>التسجيل</th><th>سجّله</th><th>الحالة</th><th>ملاحظة / سبب الإلغاء</th>
+       </tr></thead><tbody>${rows}</tbody></table>`,
+      "a4",
+    );
+  };
 
   return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-5 p-4 sm:p-6">
+    <div className="mx-auto flex max-w-7xl flex-col gap-5 p-4 sm:p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">قائمة انتظار المواعيد</h1>
@@ -318,6 +390,7 @@ export default function Waitlist() {
             onClick: () => setAddOpen(true),
           },
           { key: "sep1", separator: true },
+          { key: "print", label: "طباعة القائمة", icon: Printer, onClick: printList },
           { key: "refresh", label: "تحديث", icon: RefreshCw, onClick: () => void list.refetch() },
         ]}
       />
@@ -325,10 +398,11 @@ export default function Waitlist() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <Tabs value={status} onValueChange={setStatus}>
           <TabsList>
-            <TabsTrigger value="waiting">بالانتظار</TabsTrigger>
-            <TabsTrigger value="booked">تم الحجز</TabsTrigger>
-            <TabsTrigger value="cancelled">ملغاة</TabsTrigger>
-            <TabsTrigger value="all">الكل</TabsTrigger>
+            {STATUS_TABS.map((tab) => (
+              <TabsTrigger key={tab.key} value={tab.key}>
+                {tab.label}
+              </TabsTrigger>
+            ))}
           </TabsList>
         </Tabs>
         <PatientSearchInput
@@ -342,37 +416,114 @@ export default function Waitlist() {
       </div>
 
       <Card>
+        <CardContent className="grid gap-3 p-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">سُجّل من</Label>
+            <Input type="date" value={from} onChange={(event) => setFrom(event.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">إلى</Label>
+            <Input type="date" value={to} onChange={(event) => setTo(event.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">التخصص</Label>
+            <LookupSelect
+              categoryKey="medical_specialties"
+              value={specialtyId}
+              onChange={setSpecialtyId}
+              allowClear
+              clearLabel="كل التخصصات"
+              placeholder="كل التخصصات"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">الطبيب</Label>
+            <Select value={doctorFilter} onValueChange={setDoctorFilter}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>كل الأطباء</SelectItem>
+                {(doctors.data ?? []).map((doctor) => (
+                  <SelectItem key={doctor.id} value={doctor.id}>
+                    {doctor.name_ar}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">رقم الحجز من</Label>
+            <Input type="number" min={1} value={numberFrom} onChange={(event) => setNumberFrom(event.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1">
+            <Label className="text-xs">إلى</Label>
+            <Input type="number" min={1} value={numberTo} onChange={(event) => setNumberTo(event.target.value)} />
+          </div>
+          {filtersActive && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="justify-self-start sm:col-span-3 lg:col-span-6"
+              onClick={() => {
+                setFrom("");
+                setTo("");
+                setSpecialtyId("");
+                setDoctorFilter(ALL);
+                setNumberFrom("");
+                setNumberTo("");
+              }}
+            >
+              <X className="h-3.5 w-3.5" />
+              مسح المرشّحات
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <CalendarClock className="h-4 w-4" />
             القائمة
           </CardTitle>
-          <CardDescription>مرتَّبة بالأولوية ثم أسبقية التسجيل — كترتيب طابور الاستقبال</CardDescription>
+          <CardDescription>
+            مرتَّبة بالأولوية ثم أسبقية التسجيل — كترتيب طابور الاستقبال. حجز موعدٍ للمريض عند الطبيب
+            أو التخصّص المطلوب يُعلِّم طلبه «تم الحجز» تلقائيًّا ويربطه بالموعد.
+          </CardDescription>
         </CardHeader>
-        <CardContent>
+        <CardContent className="overflow-x-auto">
           {list.isLoading && <Skeleton className="h-40 w-full" />}
-          {!list.isLoading && (
+          {list.isError && <p className="text-sm text-destructive">تعذّرت القراءة: {errorMessage(list.error)}</p>}
+          {!list.isLoading && !list.isError && (
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="whitespace-nowrap">رقم الحجز</TableHead>
+                  <TableHead className="whitespace-nowrap">التسلسل</TableHead>
                   <TableHead>المريض</TableHead>
                   <TableHead>رقم الملف</TableHead>
                   <TableHead>الجوال</TableHead>
+                  <TableHead>التخصص</TableHead>
                   <TableHead>الطبيب المطلوب</TableHead>
                   <TableHead>الأولوية</TableHead>
                   <TableHead>التاريخ المرغوب</TableHead>
                   <TableHead>تاريخ التسجيل</TableHead>
+                  <TableHead>سجّله</TableHead>
                   <TableHead>ملاحظة</TableHead>
                   <TableHead>الحالة</TableHead>
-                  <TableHead className="w-28">إجراءات</TableHead>
+                  <TableHead className="w-32">إجراءات</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {visibleWaitlist.map((row) => (
                   <TableRow key={row.id}>
+                    <TableCell className="font-mono text-xs tabular-nums">{row.booking_number ?? "—"}</TableCell>
+                    <TableCell className="font-mono text-xs tabular-nums">{sequence.get(row.id) ?? "—"}</TableCell>
                     <TableCell className="font-medium">{row.patient?.name_ar ?? "—"}</TableCell>
                     <TableCell className="font-mono text-xs">{row.patient?.file_number ?? "—"}</TableCell>
                     <TableCell className="font-mono text-xs">{row.patient?.mobile_number ?? "—"}</TableCell>
+                    <TableCell className="text-sm">{row.specialty?.name_ar ?? "—"}</TableCell>
                     <TableCell className="text-sm">{row.doctor?.name_ar ?? "أي طبيب"}</TableCell>
                     <TableCell>
                       <Badge
@@ -391,13 +542,33 @@ export default function Waitlist() {
                       {formatDate(row.desired_date, calendarDisplay)}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {formatDate(row.created_at, calendarDisplay)}
+                      {formatDateTime(row.created_at, calendarDisplay)}
                     </TableCell>
-                    <TableCell className="max-w-xs truncate text-sm text-muted-foreground">
-                      {row.registration_note ?? "—"}
+                    <TableCell className="whitespace-nowrap text-xs">
+                      {row.created_by ? memberNames.data?.get(row.created_by) ?? "—" : "—"}
+                    </TableCell>
+                    <TableCell className="max-w-xs text-sm text-muted-foreground">
+                      <span className="line-clamp-2">
+                        {row.status === "cancelled" && row.cancel_reason
+                          ? `أُلغي: ${row.cancel_reason}`
+                          : row.registration_note ?? "—"}
+                      </span>
                     </TableCell>
                     <TableCell>
-                      <Badge variant={STATUS_BADGE[row.status]}>{STATUS_LABELS[row.status]}</Badge>
+                      <div className="flex flex-col items-start gap-0.5">
+                        <Badge variant={STATUS_BADGE[row.status]}>{STATUS_LABELS[row.status]}</Badge>
+                        {row.status === "booked" && row.appointment && (
+                          <span className="whitespace-nowrap text-[11px] text-muted-foreground">
+                            موعده {formatDateTime(row.appointment.scheduled_start, calendarDisplay)}
+                          </span>
+                        )}
+                        {row.status === "cancelled" && row.cancelled_at && (
+                          <span className="whitespace-nowrap text-[11px] text-muted-foreground">
+                            {row.cancelled_by ? memberNames.data?.get(row.cancelled_by) ?? "" : ""}{" "}
+                            {formatDate(row.cancelled_at, calendarDisplay)}
+                          </span>
+                        )}
+                      </div>
                     </TableCell>
                     <TableCell>
                       {canManageWaitlist && row.status === "waiting" && (
@@ -405,16 +576,19 @@ export default function Waitlist() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            title="تم حجز موعد له"
+                            title="حجز موعد له"
                             onClick={() => setConvertTarget(row)}
                           >
                             <Check className="h-3.5 w-3.5" />
                           </Button>
+                          <Button variant="ghost" size="sm" title="تعديل الطلب" onClick={() => setEditTarget(row)}>
+                            <Edit3 className="h-3.5 w-3.5" />
+                          </Button>
                           <Button
                             variant="ghost"
                             size="sm"
-                            title="إلغاء"
-                            onClick={() => setRowStatus.mutate({ id: row.id, next: "cancelled" })}
+                            title="إلغاء الطلب بسبب"
+                            onClick={() => setCancelTarget(row)}
                           >
                             <X className="h-3.5 w-3.5" />
                           </Button>
@@ -423,10 +597,10 @@ export default function Waitlist() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {(list.data ?? []).length === 0 && (
+                {visibleWaitlist.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={10} className="py-8 text-center text-sm text-muted-foreground">
-                      لا يوجد مرضى في هذه القائمة.
+                    <TableCell colSpan={14} className="py-8 text-center text-sm text-muted-foreground">
+                      {(list.data ?? []).length === 0 ? "لا يوجد مرضى في هذه القائمة." : "لا نتائج بهذه المرشّحات."}
                     </TableCell>
                   </TableRow>
                 )}
@@ -441,7 +615,209 @@ export default function Waitlist() {
         <AddToWaitlistDialog open={addOpen} onOpenChange={setAddOpen} organizationId={organization?.id} />
       )}
       <ConvertWaitlistDialog target={convertTarget} onOpenChange={(open) => { if (!open) setConvertTarget(null); }} organizationId={organization?.id} />
+      <EditWaitlistDialog target={editTarget} onOpenChange={(open) => { if (!open) setEditTarget(null); }} organizationId={organization?.id} />
+      <CancelWaitlistDialog target={cancelTarget} onOpenChange={(open) => { if (!open) setCancelTarget(null); }} />
     </div>
+  );
+}
+
+const STATUS_TABS: { key: string; label: string }[] = [
+  { key: "waiting", label: "بالانتظار" },
+  { key: "booked", label: "تم الحجز" },
+  { key: "cancelled", label: "ملغاة" },
+  { key: "all", label: "الكل" },
+];
+
+/**
+ * تعديل طلب الانتظار — الطبيب والتخصّص والتاريخ المرغوب والأولوية والملاحظة.
+ * المريض ورقم الحجز لا يتغيّران: طلبٌ لمريضٍ آخر طلبٌ جديد.
+ */
+function EditWaitlistDialog({
+  target,
+  onOpenChange,
+  organizationId,
+}: {
+  target: WaitlistRowJoined | null;
+  onOpenChange: (open: boolean) => void;
+  organizationId: string | undefined;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const doctors = useDoctors(organizationId);
+  const [doctorId, setDoctorId] = useState(ANY_DOCTOR);
+  const [specialtyId, setSpecialtyId] = useState("");
+  const [desiredDate, setDesiredDate] = useState("");
+  const [priority, setPriority] = useState("normal");
+  const [note, setNote] = useState("");
+
+  useEffect(() => {
+    if (!target) return;
+    setDoctorId(target.doctor_id ?? ANY_DOCTOR);
+    setSpecialtyId(target.specialty_value_id ?? "");
+    setDesiredDate(target.desired_date ?? "");
+    setPriority(target.priority ?? "normal");
+    setNote(target.registration_note ?? "");
+  }, [target]);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!target || !organizationId) throw new Error("لا طلب محدَّد");
+      const { data, error } = await supabase
+        .from("appointment_waitlist")
+        .update({
+          doctor_id: doctorId === ANY_DOCTOR ? null : doctorId,
+          specialty_value_id: specialtyId || null,
+          desired_date: desiredDate || null,
+          priority,
+          registration_note: note.trim() || null,
+        })
+        .eq("id", target.id)
+        .eq("organization_id", organizationId)
+        .eq("status", "waiting")
+        .select("id");
+      if (error) throw error;
+      if (!data?.length) throw new Error("لم يعد الطلب بالانتظار — حدِّث الصفحة");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["waitlist"] });
+      toast({ title: "عُدِّل طلب الانتظار" });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذّر التعديل", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open={Boolean(target)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>
+            تعديل طلب الانتظار {target?.booking_number ? `رقم ${target.booking_number}` : ""}
+          </DialogTitle>
+          <DialogDescription>{target?.patient?.name_ar}</DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>الطبيب المطلوب</Label>
+            <Select value={doctorId} onValueChange={setDoctorId}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ANY_DOCTOR}>أي طبيب</SelectItem>
+                {(doctors.data ?? []).map((doctor) => (
+                  <SelectItem key={doctor.id} value={doctor.id}>
+                    {doctor.name_ar}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>التخصص</Label>
+            <LookupSelect
+              categoryKey="medical_specialties"
+              value={specialtyId}
+              onChange={setSpecialtyId}
+              allowClear
+              placeholder="اختياري"
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="flex flex-col gap-1.5">
+              <Label>التاريخ المرغوب</Label>
+              <Input type="date" value={desiredDate} onChange={(event) => setDesiredDate(event.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>الأولوية</Label>
+              <Select value={priority} onValueChange={setPriority}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(PRIORITY_LABELS).map(([key, label]) => (
+                    <SelectItem key={key} value={key}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>ملاحظة التسجيل</Label>
+            <Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            تراجع
+          </Button>
+          <Button disabled={save.isPending} onClick={() => save.mutate()}>
+            {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * إلغاء طلب الانتظار — بسبب مكتوب، ويبقى الطلب في «ملغاة» بسببه ومن ألغاه
+ * ومتى (`app_cancel_waitlist_entry`، 0197). لا حذف.
+ */
+function CancelWaitlistDialog({
+  target,
+  onOpenChange,
+}: {
+  target: WaitlistRowJoined | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [reason, setReason] = useState("");
+  useEffect(() => setReason(""), [target?.id]);
+
+  const cancel = useMutation({
+    mutationFn: async () => {
+      if (!target) throw new Error("لا طلب محدَّد");
+      const { error } = await supabase.rpc("app_cancel_waitlist_entry", {
+        p_waitlist_id: target.id,
+        p_reason: reason.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["waitlist"] });
+      toast({ title: "أُلغي طلب الانتظار وحُفظ السبب" });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) => toast({ variant: "destructive", title: "تعذّر الإلغاء", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open={Boolean(target)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>إلغاء طلب الانتظار</DialogTitle>
+          <DialogDescription>
+            {target?.patient?.name_ar}
+            {target?.booking_number ? ` — رقم الحجز ${target.booking_number}` : ""}. يبقى الطلب في «ملغاة» بسببه.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-1.5">
+          <Label>السبب *</Label>
+          <Textarea rows={3} value={reason} onChange={(event) => setReason(event.target.value)} />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            تراجع
+          </Button>
+          <Button variant="destructive" disabled={!reason.trim() || cancel.isPending} onClick={() => cancel.mutate()}>
+            {cancel.isPending ? "جارٍ الإلغاء..." : "إلغاء الطلب"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -514,7 +890,7 @@ function ConvertWaitlistDialog({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["waitlist"] });
-      queryClient.invalidateQueries({ queryKey: ["appointments-day"] });
+      APPOINTMENT_QUERY_KEYS.forEach((key) => queryClient.invalidateQueries({ queryKey: [...key] }));
       toast({ title: "تم إنشاء الموعد وربطه بطلب الانتظار" });
       onOpenChange(false);
     },

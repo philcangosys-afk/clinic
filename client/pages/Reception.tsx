@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import ReceptionBoard from "@/components/reception/ReceptionBoard";
 import DoctorRequests from "@/components/reception/DoctorRequests";
+import { ClinicEntryReportDialog, PresentNowDialog, QueueStatsDialog } from "@/components/reception/ReceptionTools";
 import {
   CalendarClock,
   CheckCircle2,
@@ -183,6 +184,8 @@ export default function Reception() {
    * بزرّ — لا تُستبدل شاشة يعمل عليها موظف كل يوم بلا مخرج.
    */
   const [mode, setMode] = useState<"board" | "cards">("board");
+  /** أدوات نظام الدور (Kizen): الموجودون الآن، وتقرير الدخول، والإحصائيات. */
+  const [toolOpen, setToolOpen] = useState<"present" | "entries" | "stats" | null>(null);
   const clinicList = useQuery({
     queryKey: ["reception-clinic-list", organization?.id],
     enabled: Boolean(organization?.id),
@@ -320,6 +323,15 @@ export default function Reception() {
               بطاقات
             </button>
           </div>
+          <Button variant="outline" onClick={() => setToolOpen("present")}>
+            الموجودون الآن
+          </Button>
+          <Button variant="outline" onClick={() => setToolOpen("entries")}>
+            كشف الدخول
+          </Button>
+          <Button variant="outline" onClick={() => setToolOpen("stats")}>
+            إحصائيات الدور
+          </Button>
           {canManageQueue && isToday && <Button onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" />
             إضافة للطابور
@@ -472,6 +484,25 @@ export default function Reception() {
         </DialogContent>
       </Dialog>
 
+      <PresentNowDialog
+        organizationId={organization?.id}
+        open={toolOpen === "present"}
+        onOpenChange={(open) => setToolOpen(open ? "present" : null)}
+      />
+      <ClinicEntryReportDialog
+        organizationId={organization?.id}
+        open={toolOpen === "entries"}
+        onOpenChange={(open) => setToolOpen(open ? "entries" : null)}
+        doctors={doctors.data ?? []}
+        clinics={clinicList.data ?? []}
+      />
+      <QueueStatsDialog
+        organizationId={organization?.id}
+        open={toolOpen === "stats"}
+        onOpenChange={(open) => setToolOpen(open ? "stats" : null)}
+        doctors={doctors.data ?? []}
+        clinics={clinicList.data ?? []}
+      />
       <AddToQueueDialog
         open={addOpen}
         onOpenChange={setAddOpen}
