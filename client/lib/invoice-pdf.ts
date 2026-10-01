@@ -1,4 +1,5 @@
 import { supabase } from "@/lib/supabase";
+import { importFresh } from "@/lib/stale-chunk";
 import {
   buildInvoiceReceiptHtml,
   invoiceLabel,
@@ -120,7 +121,7 @@ async function buildQrImage(
 ): Promise<{ dataUrl: string; sizeMm: number } | null> {
   if (!payload) return null;
   try {
-    const QRCode = (await import("qrcode")).default;
+    const QRCode = (await importFresh(() => import("qrcode"))).default;
     const modules = QRCode.create(payload, { errorCorrectionLevel: "M" }).modules.size + QR_QUIET_MODULES * 2;
     const moduleMm = QR_MODULE_MM[paper] ?? 0.5;
     const sizeMm = Math.min(modules * moduleMm, QR_MAX_MM[paper] ?? 62);
@@ -203,8 +204,8 @@ export async function downloadInvoicePdf(data: InvoicePrintData): Promise<void> 
   const widthPx = Math.round((widthMm * 96) / 25.4);
 
   const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
-    import("html2canvas"),
-    import("jspdf"),
+    importFresh(() => import("html2canvas")),
+    importFresh(() => import("jspdf")),
   ]);
 
   const frame = document.createElement("iframe");

@@ -16,6 +16,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { registerScreenLoader } from "./lib/screen-preload";
+import { importFresh, installStaleChunkReload } from "./lib/stale-chunk";
 
 type ScreenComponent = LazyExoticComponent<ComponentType<any>> & { preload: () => Promise<unknown> };
 
@@ -24,7 +25,8 @@ type ScreenComponent = LazyExoticComponent<ComponentType<any>> & { preload: () =
  * (`lib/screen-preload.ts`): عند مرور المؤشّر على القسم، وفي أوقات الفراغ.
  */
 function lazyScreen(loader: () => Promise<{ default: ComponentType<any> }>): ScreenComponent {
-  return Object.assign(lazy(loader), { preload: loader });
+  // بعد نشرٍ جديد قد تكون حزمة الشاشة القديمة حُذفت: تُعاد الصفحة لتأخذ الجديدة
+  return Object.assign(lazy(() => importFresh(loader)), { preload: loader });
 }
 const Index = lazyScreen(() => import("./pages/Index"));
 const Onboarding = lazyScreen(() => import("./pages/Onboarding"));
@@ -309,4 +311,5 @@ const App = () => (
   </QueryClientProvider>
 );
 
+installStaleChunkReload();
 createRoot(document.getElementById("root")!).render(<App />);

@@ -263,11 +263,40 @@ export default function BusinessDayPanel() {
     if (!shown) return;
     setExporting(format);
     try {
+      const dayInvoices = invoices.data ?? [];
+      // رقم الفاتورة الضريبية كما طُبع (C-…) وخصمها وضريبتها — إضافةٌ للتقرير؛
+      // إن تعذّرت قراءتها يخرج التقرير بالرقم الداخليّ كما كان.
+      const extra = new Map<
+        string,
+        { document_prefix: string | null; document_number: number | null; discount_amount: number; vat_amount: number }
+      >();
+      if (dayInvoices.length > 0) {
+        const { data: rows } = await supabase
+          .from("sales_invoices")
+          .select("id, document_prefix, document_number, discount_amount, vat_amount")
+          .in(
+            "id",
+            dayInvoices.map((row) => row.invoice_id),
+          );
+        for (const row of (rows ?? []) as any[]) extra.set(row.id, row);
+      }
       const data = {
         organizationName: organization?.name ?? "",
         day: shown,
         collections: collections.data ?? [],
-        invoices: invoices.data ?? [],
+        people: people.data ?? null,
+        invoices: dayInvoices.map((row) => {
+          const more = extra.get(row.invoice_id);
+          return {
+            ...row,
+            document_label:
+              more?.document_number != null
+                ? `${more.document_prefix ? `${more.document_prefix}-` : ""}${more.document_number}`
+                : null,
+            discount_amount: more ? Number(more.discount_amount ?? 0) : undefined,
+            vat_amount: more ? Number(more.vat_amount ?? 0) : undefined,
+          };
+        }),
       };
       if (format === "xlsx") downloadDayXlsx(data);
       else await downloadDayPdf(data);

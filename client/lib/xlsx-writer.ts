@@ -8,7 +8,56 @@
  * الخلايا نصٌّ أو رقم: الرقم يبقى رقمًا فتعمل عليه المعادلات والمجاميع.
  */
 
-export type XlsxCell = string | number | null | undefined;
+/**
+ * أنماط الخلايا — جدولٌ ثابت في styles.xml (الفهرس = رقم النمط في cellXfs):
+ *  title     عنوان التقرير (عريض 15)
+ *  subtitle  سطر وصفيّ رماديّ
+ *  section   عنوان قسمٍ داخل الورقة (عريض، لون المنشأة)
+ *  header    رأس جدول: خط أبيض عريض على خلفية خضراء مزرقّة، بإطار، وسط
+ *  text      خلية نصّ بإطار
+ *  money     رقم بمنزلتين وفاصل آلاف (#,##0.00) بإطار
+ *  int       عدد صحيح بفاصل آلاف بإطار
+ *  label     تسمية في جدول «بند/قيمة»: عريض على رماديّ فاتح
+ *  totalText / totalMoney / totalInt  صفّ الإجمالي: عريض على أخضر فاتح
+ *  textMuted نصّ رماديّ صغير بلا إطار (الملاحظات)
+ *  center    نصّ أو رقم بإطار في الوسط بلا فاصل آلاف (الأرقام المرجعية والأوقات)
+ */
+export type XlsxStyle =
+  | "title"
+  | "subtitle"
+  | "section"
+  | "header"
+  | "text"
+  | "money"
+  | "int"
+  | "label"
+  | "totalText"
+  | "totalMoney"
+  | "totalInt"
+  | "textMuted"
+  | "center";
+
+const STYLE_INDEX: Record<XlsxStyle | "bold", number> = {
+  bold: 1,
+  title: 2,
+  subtitle: 3,
+  section: 4,
+  header: 5,
+  text: 6,
+  money: 7,
+  int: 8,
+  label: 9,
+  totalText: 10,
+  totalMoney: 11,
+  totalInt: 12,
+  textMuted: 13,
+  center: 14,
+};
+
+/** خلية بنمطٍ صريح، أو بمعادلة (`f`) تُحفظ قيمتها المحسوبة (`v`) لتظهر فورًا. */
+export type XlsxStyledCell = { v?: string | number | null; s?: XlsxStyle; f?: string };
+
+export type XlsxCell = string | number | null | undefined | XlsxStyledCell;
 
 export type XlsxSheet = {
   name: string;
@@ -17,6 +66,16 @@ export type XlsxSheet = {
   boldRows?: number[];
   /** عرض الأعمدة بعدد الأحرف */
   columnWidths?: number[];
+  /** دمج خلايا، مثل "A1:F1" */
+  merges?: string[];
+  /** تجميد أوّل N صفًّا (يبقى رأس الجدول ظاهرًا عند التمرير) */
+  freezeRows?: number;
+  /** ارتفاع صفوفٍ بعينها (بالنقاط) — بفهرسها من الصفر */
+  rowHeights?: Record<number, number>;
+  /** الطباعة: عرضيّ أو طوليّ، وتُضبط الورقة على عرض الصفحة */
+  landscape?: boolean;
+  /** صفّ يتكرّر أعلى كل صفحة مطبوعة (بفهرسه من الصفر) — رأس الجدول */
+  printTitleRow?: number;
 };
 
 const escapeXml = (value: string) =>
@@ -40,6 +99,34 @@ function columnName(index: number) {
   return name;
 }
 
+/** مرجع خلية من رقم الصفّ والعمود (من الصفر): (0,0) ← A1 */
+export function cellRef(row: number, col: number) {
+  return `${columnName(col)}${row + 1}`;
+}
+
+const isStyled = (cell: XlsxCell): cell is XlsxStyledCell =>
+  typeof cell === "object" && cell !== null;
+
+function cellXml(cell: XlsxCell, ref: string, rowStyle: number | null) {
+  const styled = isStyled(cell);
+  const value = styled ? cell.v : cell;
+  const formula = styled ? cell.f : undefined;
+  const styleIndex = styled && cell.s ? STYLE_INDEX[cell.s] : rowStyle;
+  const s = styleIndex ? ` s="${styleIndex}"` : "";
+  if (formula) {
+    const cached = typeof value === "number" && Number.isFinite(value) ? `<v>${value}</v>` : "";
+    return `<c r="${ref}"${s}><f>${escapeXml(formula)}</f>${cached}</c>`;
+  }
+  if (value === null || value === undefined || value === "") {
+    // خلية فارغة بنمط (إطار/خلفية) تُكتب ليكتمل شكل الجدول
+    return styled && cell.s ? `<c r="${ref}"${s}/>` : "";
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return `<c r="${ref}"${s}><v>${value}</v></c>`;
+  }
+  return `<c r="${ref}" t="inlineStr"${s}><is><t xml:space="preserve">${escapeXml(String(value))}</t></is></c>`;
+}
+
 function sheetXml(sheet: XlsxSheet) {
   const bold = new Set(sheet.boldRows ?? []);
   const cols = sheet.columnWidths?.length
@@ -49,26 +136,34 @@ function sheetXml(sheet: XlsxSheet) {
     : "";
   const rows = sheet.rows
     .map((row, r) => {
-      const style = bold.has(r) ? ' s="1"' : "";
-      const cells = row
-        .map((cell, c) => {
-          const ref = `${columnName(c)}${r + 1}`;
-          if (cell === null || cell === undefined || cell === "") return "";
-          if (typeof cell === "number" && Number.isFinite(cell)) {
-            return `<c r="${ref}"${style}><v>${cell}</v></c>`;
-          }
-          return `<c r="${ref}" t="inlineStr"${style}><is><t xml:space="preserve">${escapeXml(String(cell))}</t></is></c>`;
-        })
-        .join("");
-      return `<row r="${r + 1}">${cells}</row>`;
+      const rowStyle = bold.has(r) ? STYLE_INDEX.bold : null;
+      const cells = row.map((cell, c) => cellXml(cell, cellRef(r, c), rowStyle)).join("");
+      const height = sheet.rowHeights?.[r];
+      const ht = height ? ` ht="${height}" customHeight="1"` : "";
+      return `<row r="${r + 1}"${ht}>${cells}</row>`;
     })
     .join("");
+  const freeze = sheet.freezeRows
+    ? `<pane ySplit="${sheet.freezeRows}" topLeftCell="A${sheet.freezeRows + 1}" activePane="bottomLeft" state="frozen"/>` +
+      `<selection pane="bottomLeft" activeCell="A${sheet.freezeRows + 1}" sqref="A${sheet.freezeRows + 1}"/>`
+    : "";
+  const merges = sheet.merges?.length
+    ? `<mergeCells count="${sheet.merges.length}">${sheet.merges.map((m) => `<mergeCell ref="${m}"/>`).join("")}</mergeCells>`
+    : "";
+  const print =
+    `<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/>` +
+    `<pageSetup paperSize="9" orientation="${sheet.landscape ? "landscape" : "portrait"}" fitToWidth="1" fitToHeight="0"/>`;
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
-    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-    `<sheetViews><sheetView workbookViewId="0" rightToLeft="1"/></sheetViews>` +
+    `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">` +
+    `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>` +
+    `<sheetViews><sheetView workbookViewId="0" rightToLeft="1" showGridLines="0">${freeze}</sheetView></sheetViews>` +
+    `<sheetFormatPr defaultRowHeight="18"/>` +
     cols +
-    `<sheetData>${rows}</sheetData></worksheet>`
+    `<sheetData>${rows}</sheetData>` +
+    merges +
+    print +
+    `</worksheet>`
   );
 }
 
@@ -200,7 +295,19 @@ export function buildXlsx(sheets: XlsxSheet[]): Blob {
           sheets
             .map((s, i) => `<sheet name="${escapeXml(safeName(s.name, i))}" sheetId="${i + 1}" r:id="rId${i + 1}"/>`)
             .join("") +
-          `</sheets></workbook>`,
+          `</sheets>` +
+          (sheets.some((sheet) => sheet.printTitleRow !== undefined)
+            ? `<definedNames>${sheets
+                .map((sheet, i) =>
+                  sheet.printTitleRow === undefined
+                    ? ""
+                    : `<definedName name="_xlnm.Print_Titles" localSheetId="${i}">'${escapeXml(
+                        safeName(sheet.name, i).replace(/'/g, "''"),
+                      )}'!$${sheet.printTitleRow + 1}:$${sheet.printTitleRow + 1}</definedName>`,
+                )
+                .join("")}</definedNames>`
+            : "") +
+          `</workbook>`,
       ),
     },
     {
@@ -223,12 +330,53 @@ export function buildXlsx(sheets: XlsxSheet[]): Blob {
       data: encoder.encode(
         `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
           `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-          `<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts>` +
-          `<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>` +
-          `<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>` +
+          `<numFmts count="1"><numFmt numFmtId="164" formatCode="#,##0.00"/></numFmts>` +
+          `<fonts count="6">` +
+          `<font><sz val="11"/><name val="Calibri"/></font>` +
+          `<font><b/><sz val="11"/><name val="Calibri"/></font>` +
+          `<font><b/><sz val="15"/><color rgb="FF0F172A"/><name val="Calibri"/></font>` +
+          `<font><sz val="10"/><color rgb="FF64748B"/><name val="Calibri"/></font>` +
+          `<font><b/><sz val="12"/><color rgb="FF0F766E"/><name val="Calibri"/></font>` +
+          `<font><b/><sz val="11"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>` +
+          `</fonts>` +
+          `<fills count="5">` +
+          `<fill><patternFill patternType="none"/></fill>` +
+          `<fill><patternFill patternType="gray125"/></fill>` +
+          `<fill><patternFill patternType="solid"><fgColor rgb="FF0F766E"/><bgColor indexed="64"/></patternFill></fill>` +
+          `<fill><patternFill patternType="solid"><fgColor rgb="FFE6F4F1"/><bgColor indexed="64"/></patternFill></fill>` +
+          `<fill><patternFill patternType="solid"><fgColor rgb="FFF1F5F9"/><bgColor indexed="64"/></patternFill></fill>` +
+          `</fills>` +
+          `<borders count="2">` +
+          `<border><left/><right/><top/><bottom/><diagonal/></border>` +
+          `<border><left style="thin"><color rgb="FFCBD5E1"/></left><right style="thin"><color rgb="FFCBD5E1"/></right>` +
+          `<top style="thin"><color rgb="FFCBD5E1"/></top><bottom style="thin"><color rgb="FFCBD5E1"/></bottom><diagonal/></border>` +
+          `</borders>` +
           `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
-          `<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
-          `<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>` +
+          `<cellXfs count="15">` +
+          // 0 عاديّ — 1 عريض (boldRows)
+          `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
+          `<xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/>` +
+          // 2 title — 3 subtitle — 4 section
+          `<xf numFmtId="0" fontId="2" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>` +
+          `<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1"/>` +
+          `<xf numFmtId="0" fontId="4" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment vertical="center"/></xf>` +
+          // 5 header
+          `<xf numFmtId="0" fontId="5" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>` +
+          // 6 text — 7 money — 8 int
+          `<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>` +
+          `<xf numFmtId="164" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>` +
+          `<xf numFmtId="3" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +
+          // 9 label
+          `<xf numFmtId="0" fontId="1" fillId="4" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>` +
+          // 10 totalText — 11 totalMoney — 12 totalInt
+          `<xf numFmtId="0" fontId="1" fillId="3" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>` +
+          `<xf numFmtId="164" fontId="1" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment vertical="center"/></xf>` +
+          `<xf numFmtId="3" fontId="1" fillId="3" borderId="1" xfId="0" applyNumberFormat="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +
+          // 13 textMuted
+          `<xf numFmtId="0" fontId="3" fillId="0" borderId="0" xfId="0" applyFont="1" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf>` +
+          // 14 center
+          `<xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1" applyAlignment="1"><alignment horizontal="center" vertical="center"/></xf>` +
+          `</cellXfs>` +
           `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
           `</styleSheet>`,
       ),
