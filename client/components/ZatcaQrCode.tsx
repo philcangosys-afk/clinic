@@ -24,7 +24,10 @@ export default function ZatcaQrCode({ value, size = 112, className = "", status 
       return () => {
         active = false;
       };
-    QRCode.toDataURL(value, { width: size, margin: 4, errorCorrectionLevel: "M" })
+    // بعددٍ صحيح من البكسلات لكلّ مربّع ثمّ يُعرض بلا تنعيم: رمز المرحلة الثانية
+    // نحو 97 مربّعًا، و`width: 112` كان يعطي المربّع بكسلًا وكسرًا فلا يُقرأ
+    // من الشاشة.
+    QRCode.toDataURL(value, { scale: 6, margin: 4, errorCorrectionLevel: "M" })
       .then((url) => {
         if (active) setDataUrl(url);
       })
@@ -60,6 +63,7 @@ export default function ZatcaQrCode({ value, size = 112, className = "", status 
       width={size}
       height={size}
       className={`bg-white object-contain ${className}`}
+      style={{ imageRendering: "pixelated" }}
     />
   );
 }

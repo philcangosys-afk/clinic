@@ -108,6 +108,8 @@ export type InvoicePrintData = {
   logoDataUrl?: string | null;
   /** رمز ZATCA صورةً جاهزة (data URI) — يُولَّد قبل الطباعة */
   qrDataUrl?: string | null;
+  /** ضلع الرمز بالمليمتر — محسوبٌ من كثافته ليُقرأ (`buildQrImage`) */
+  qrSizeMm?: number | null;
 };
 
 function esc(value: unknown): string {
@@ -231,7 +233,9 @@ const STYLE = `
     display: inline-block; width: 26mm; height: 26mm; border: 1px dashed #000;
     font-size: 8px; line-height: 1.35; padding: 3mm 1mm; color: #000;
   }
-  .rcpt .qrimg { width: 26mm; height: 26mm; }
+  /* المقاس الفعليّ في سمة العنصر (من كثافة الرمز)، وهذا احتياطٌ فقط. والرمز
+     يُرسم بلا تنعيم: مربّعاتٌ حادّة على الطابعة الحرارية لا حوافّ رمادية. */
+  .rcpt .qrimg { width: 48mm; height: 48mm; image-rendering: crisp-edges; image-rendering: pixelated; }
   .rcpt .qrnote { font-size: 7.5px; margin-top: 2px; }
   .rcpt .foot { text-align: center; font-size: 9px; font-weight: 600; line-height: 1.5; margin-top: 6px; }
   .rcpt .muted { color: #000; }
@@ -423,7 +427,9 @@ export function buildInvoiceReceiptHtml(data: InvoicePrintData): string {
   <div class="qr">
     ${
       data.qrDataUrl
-        ? `<img class="qrimg" src="${esc(data.qrDataUrl)}" alt="ZATCA QR" />`
+        ? `<img class="qrimg" src="${esc(data.qrDataUrl)}" alt="ZATCA QR"${
+            data.qrSizeMm ? ` style="width:${Number(data.qrSizeMm)}mm;height:${Number(data.qrSizeMm)}mm"` : ""
+          } />`
         : `<div class="qrbox">رمز زاتكا<br />ZATCA QR<br /><br />يظهر بعد<br />اعتماد الفاتورة</div>`
     }
   </div>

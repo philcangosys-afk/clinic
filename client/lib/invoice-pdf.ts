@@ -79,7 +79,7 @@ export async function loadInvoicePrintData(
   const issuerName = issuerRow ? issuerRow.user_name ?? null : printedBy;
   const issuerJobNumber = issuerRow ? issuerRow.job_number ?? null : null;
   const qrPayload = extra?.zatca_qr_data || header.zatca_qr || null;
-  const qrDataUrl = await buildQrDataUrl(qrPayload);
+  const qr = await buildQrImage(qrPayload, header.paper_size ?? "thermal_80mm");
 
   return {
     header,
@@ -89,16 +89,48 @@ export async function loadInvoicePrintData(
     printedByJobNumber: issuerJobNumber,
     printCount: Number(extra?.print_count ?? 0) || null,
     logoDataUrl,
-    qrDataUrl,
+    qrDataUrl: qr?.dataUrl ?? null,
+    qrSizeMm: qr?.sizeMm ?? null,
   };
 }
 
-/** رمز QR صورةً — الفشل لا يمنع الطباعة، تبقى المساحة مرسومة. */
-async function buildQrDataUrl(payload: string | null): Promise<string | null> {
+/**
+ * رمز QR صورةً بمقاسٍ يُقرأ — الفشل لا يمنع الطباعة، تبقى المساحة مرسومة.
+ *
+ * **لماذا لم يُقرأ رمز C-10134 بتطبيق الهيئة؟** محتواه صحيح (الوسوم التسعة:
+ * البائع والرقم الضريبيّ والوقت والإجمالي والضريبة والبصمة والتوقيع والمفتاح
+ * العامّ وتوقيع الشهادة). لكنّ رمز المرحلة الثانية كثيف: نحو 89–97 مربّعًا في
+ * الضلع، وكان يُطبع في 26mm **بلا هامشٍ أبيض** — فالمربّع ≈0.29mm، أي نقطتان
+ * وثلث على طابعةٍ حراريّة بدقّة 203dpi (8 نقاط/مم). الكسر يُشوّه المربّعات،
+ * وغياب الهامش (Quiet Zone) يُفشل الكاميرا في تحديد حدود الرمز.
+ *
+ * الآن:
+ *   * هامشٌ أبيض بأربعة مربّعات كما يشترط معيار QR؛
+ *   * المربّع 0.5mm على الحراريّ (4 نقاطٍ صحيحة) و0.4mm على A4 — فيخرج الرمز
+ *     نحو 47–53mm على الشريط، ولا يتجاوز 62mm (عرض الطباعة 66mm)؛
+ *   * الصورة تُولَّد بعددٍ صحيح من البكسلات لكلّ مربّع، وتُرسم بلا تنعيم.
+ */
+const QR_MODULE_MM: Record<string, number> = { thermal_80mm: 0.5, a4: 0.4 };
+const QR_MAX_MM: Record<string, number> = { thermal_80mm: 62, a4: 50 };
+const QR_QUIET_MODULES = 4;
+
+async function buildQrImage(
+  payload: string | null,
+  paper: string,
+): Promise<{ dataUrl: string; sizeMm: number } | null> {
   if (!payload) return null;
   try {
     const QRCode = (await import("qrcode")).default;
-    return await QRCode.toDataURL(payload, { margin: 0, width: 320, errorCorrectionLevel: "M" });
+    const modules = QRCode.create(payload, { errorCorrectionLevel: "M" }).modules.size + QR_QUIET_MODULES * 2;
+    const moduleMm = QR_MODULE_MM[paper] ?? 0.5;
+    const sizeMm = Math.min(modules * moduleMm, QR_MAX_MM[paper] ?? 62);
+    const dataUrl = await QRCode.toDataURL(payload, {
+      errorCorrectionLevel: "M",
+      margin: QR_QUIET_MODULES,
+      scale: 8,
+      color: { dark: "#000000", light: "#ffffff" },
+    });
+    return { dataUrl, sizeMm: Math.round(sizeMm * 10) / 10 };
   } catch {
     return null;
   }
@@ -203,6 +235,8 @@ export async function downloadInvoicePdf(data: InvoicePrintData): Promise<void> 
     const heightPx = Math.max(body.scrollHeight, 10);
     frame.style.height = `${heightPx}px`;
 
+    const qrEl = doc.querySelector<HTMLImageElement>("img.qrimg");
+
     const canvas = await html2canvas(body, {
       // 4 لا 3: الحدّ الفاصل بين الأسود والأبيض أدقّ كلّما زادت البكسلات،
       // فالحرف الصغير لا يتآكل عند التحويل إلى نقطتين.
@@ -224,6 +258,31 @@ export async function downloadInvoicePdf(data: InvoicePrintData): Promise<void> 
      * خالص قبل التصدير، ويُحفظ PNG بلا فقدٍ — فيطبع الخطّ كاملًا كما في
      * الأنظمة الأخرى على الطابعة نفسها.
      */
+    /**
+     * الرمز يُعاد رسمه فوق الالتقاط **بلا تنعيم**: `html2canvas` يرسم الصور
+     * مصقولة الحواف، فتتداخل حدود المربّعات المتجاورة رماديًّا ثم يأكلها
+     * التحويل إلى أسود وأبيض أدناه. الرسم المباشر بأقرب بكسل يُبقي كلّ مربّعٍ
+     * مربّعًا حادًّا.
+     */
+    if (qrEl && qrEl.complete && qrEl.naturalWidth > 0) {
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        const scale = canvas.width / widthPx;
+        const bodyRect = body.getBoundingClientRect();
+        const r = qrEl.getBoundingClientRect();
+        ctx.imageSmoothingEnabled = false;
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect((r.left - bodyRect.left) * scale, (r.top - bodyRect.top) * scale, r.width * scale, r.height * scale);
+        ctx.drawImage(
+          qrEl,
+          Math.round((r.left - bodyRect.left) * scale),
+          Math.round((r.top - bodyRect.top) * scale),
+          Math.round(r.width * scale),
+          Math.round(r.height * scale),
+        );
+      }
+    }
+
     if (paper !== "a4") {
       const ctx = canvas.getContext("2d");
       if (ctx) {

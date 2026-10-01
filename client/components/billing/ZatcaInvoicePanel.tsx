@@ -32,7 +32,9 @@ const STATUS_META: Record<string, { label: string; className: string }> = {
   pending: { label: "لم تُرسل", className: "bg-muted text-muted-foreground" },
   submitted: { label: "قيد الإرسال", className: "bg-sky-100 text-sky-800" },
   cleared: { label: "مصادَق عليها", className: "bg-emerald-100 text-emerald-800" },
-  reported: { label: "مُبلَّغ عنها", className: "bg-emerald-100 text-emerald-800" },
+  // المبسّطة (للأفراد) تُبلَّغ خلال 24 ساعة ولا تُصادَق — «مُبلَّغ عنها» هي
+  // القبول النهائيّ لها. «مصادَق عليها» للفاتورة الضريبية (للمنشآت) وحدها.
+  reported: { label: "مُبلَّغ عنها — مقبولة", className: "bg-emerald-100 text-emerald-800" },
   rejected: { label: "مرفوضة", className: "bg-rose-100 text-rose-800" },
   failed: { label: "تعذّر الإرسال", className: "bg-amber-100 text-amber-900" },
   ambiguous: { label: "غير محسومة — مراجعة يدوية", className: "bg-rose-200 text-rose-900" },
@@ -136,7 +138,7 @@ export default function ZatcaInvoicePanel({ invoiceId }: { invoiceId: string }) 
 
   return (
     <div className="flex flex-wrap items-start gap-4 rounded-lg border p-3">
-      <ZatcaQrCode value={data.zatca_qr_data} status={data.zatca_status} size={112} />
+      <ZatcaQrCode value={data.zatca_qr_data} status={data.zatca_status} size={176} />
       <div className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-semibold">الفاتورة الإلكترونية — ZATCA</span>
@@ -148,6 +150,13 @@ export default function ZatcaInvoicePanel({ invoiceId }: { invoiceId: string }) 
         {data.zatca_uuid && (
           <span className="text-xs text-muted-foreground" dir="ltr">
             UUID {data.zatca_uuid} · ICV {data.zatca_icv ?? "—"}
+          </span>
+        )}
+        {accepted && (
+          <span className="text-xs text-muted-foreground">
+            {data.zatca_status === "reported"
+              ? "فاتورة مبسّطة: قبول الهيئة لها «إبلاغ» لا «مصادقة» — المصادقة للفواتير الضريبية للمنشآت."
+              : "فاتورة ضريبية: صادقت عليها الهيئة قبل تسليمها."}
           </span>
         )}
         {data.zatca_submitted_at && (
