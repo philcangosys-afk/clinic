@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, MoreHorizontal, Plus, Printer, Receipt, Send, WalletCards, Undo2 } from "lucide-react";
+import ZatcaPendingDialog, { useZatcaPending } from "@/components/billing/ZatcaPendingDialog";
+import { useZatcaAutoSettings } from "@/lib/zatca-auto";
 import { useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
@@ -185,6 +187,13 @@ export default function Billing() {
   const [sendData, setSendData] = useState<InvoicePrintData | null>(null);
   const [sendOpen, setSendOpen] = useState(false);
   const [busyInvoiceId, setBusyInvoiceId] = useState<string | null>(null);
+  /** فواتير لم تُبلَّغ ZATCA (0200) — تظهر حين يُحدَّد بدء الإبلاغ. */
+  const [zatcaPendingOpen, setZatcaPendingOpen] = useState(false);
+  const zatcaSettings = useZatcaAutoSettings(organization?.id);
+  const zatcaTracking = Boolean(zatcaSettings.data?.zatca_report_from) && (can("billing.view") || can("billing.issue"));
+  const zatcaPending = useZatcaPending(organization?.id, zatcaTracking);
+  const zatcaPendingCount = zatcaPending.data?.length ?? 0;
+  const zatcaLate = (zatcaPending.data ?? []).some((row) => row.hours_pending >= 20);
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const canManageBilling = legacyMode || ["owner", "organization_admin", "accountant", "receptionist"].includes(membership?.role_key ?? "");
@@ -450,6 +459,20 @@ export default function Billing() {
                 <SelectItem value="void">ملغاة</SelectItem>
               </SelectContent>
             </Select>
+          )}
+          {zatcaTracking && (
+            <Button
+              variant="outline"
+              className={zatcaLate ? "border-rose-400 text-rose-700" : undefined}
+              onClick={() => setZatcaPendingOpen(true)}
+              title="فواتير صادرة لم تقبلها ZATCA بعد"
+            >
+              <Send className="h-4 w-4" />
+              لم تُبلَّغ ZATCA
+              <Badge variant={zatcaPendingCount > 0 ? (zatcaLate ? "destructive" : "secondary") : "outline"} className="ms-1 font-mono">
+                {zatcaPendingCount}
+              </Badge>
+            </Button>
           )}
           {canManageBilling && <Button onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" />
@@ -905,6 +928,11 @@ export default function Billing() {
         appointment={invoiceContext}
       />
       <RecordPaymentDialog invoice={paymentTarget} onOpenChange={() => setPaymentTarget(null)} organizationId={organization?.id} />
+      <ZatcaPendingDialog
+        organizationId={organization?.id}
+        open={zatcaPendingOpen}
+        onOpenChange={setZatcaPendingOpen}
+      />
       <SendInvoiceDialog
         data={sendData}
         open={sendOpen}

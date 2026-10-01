@@ -33,6 +33,7 @@ import ItemPicker from "@/components/shared/ItemPicker";
 import LookupSelect from "@/components/shared/LookupSelect";
 import ServiceBrowserDialog from "@/components/billing/ServiceBrowserDialog";
 import { useToast } from "@/hooks/use-toast";
+import { reportInvoiceToZatca, useZatcaAutoSettings } from "@/lib/zatca-auto";
 
 /**
  * طرق الدفع وصناديق النقد — نسخة مستقلّة عن شاشة الفواتير.
@@ -477,6 +478,8 @@ export default function NewInvoiceDialog({
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  /** الإبلاغ التلقائيّ لـZATCA (0200): تُبلَّغ الفاتورة فور إصدارها. */
+  const zatcaAuto = useZatcaAutoSettings(organizationId);
   const { session } = useOrganizationAccess();
   const { can } = usePermissions();
   /**
@@ -1309,8 +1312,26 @@ export default function NewInvoiceDialog({
       if (!newInvoiceId) throw new Error("لم تُنشأ الفاتورة — أعد المحاولة");
       return newInvoiceId as string;
     },
-    onSuccess: () => {
+    onSuccess: (newInvoiceId) => {
       queryClient.invalidateQueries({ queryKey: ["invoices-list"] });
+      /**
+       * إبلاغ ZATCA فور الإصدار — في الخلفية، والنافذة تُغلق ولا تنتظر. إن
+       * تعذّر يُقال للموظّف، والمُبلِّغ الخلفيّ يعيد المحاولة، والفاتورة في
+       * «فواتير لم تُبلَّغ». عرض السعر ليس فاتورة ضريبية فلا يُبلَّغ.
+       */
+      if (!isQuote && newInvoiceId && zatcaAuto.data?.zatca_auto_report) {
+        void reportInvoiceToZatca(newInvoiceId).then((result) => {
+          queryClient.invalidateQueries({ queryKey: ["zatca-pending"] });
+          queryClient.invalidateQueries({ queryKey: ["invoice-zatca", newInvoiceId] });
+          if (!result.ok) {
+            toast({
+              variant: "destructive",
+              title: "صدرت الفاتورة ولم تُبلَّغ ZATCA بعد",
+              description: `${result.message} — ستُعاد المحاولة تلقائيًّا، وهي في «فواتير لم تُبلَّغ».`,
+            });
+          }
+        });
+      }
       // المفوتَر من الاتفاقية تغيّر بفعل المُحفِّز — بلا هذا التبطيل يبقى
       // البند معروضًا "غير مفوتر" فيُفوتر مرة ثانية.
       queryClient.invalidateQueries({ queryKey: ["billing-agreement-items"] });

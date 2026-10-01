@@ -360,6 +360,71 @@ function removeEmptyPartyIdentification(xml: string) {
   );
 }
 
+/**
+ * رمز سبب الإعفاء المعتمد لدى ZATCA للرعاية الصحية الخاصة للمواطن — فئة
+ * «صفرية» (Z). هكذا كان Kizen يُبلّغ فواتير المواطنين بضريبة 0.00.
+ */
+const ZERO_RATED_HEALTHCARE = {
+  code: "VATEX-SA-HEA",
+  reason: "Private healthcare to citizen",
+};
+
+/**
+ * فاتورة المواطن الصفرية.
+ *
+ * المولّد لا يعرف غير الفئة القياسية (S)، فتُحوَّل فئات الضريبة في الـXML
+ * **قبل التوقيع** إلى Z، ويُضاف سبب الإعفاء في كلّ TaxSubtotal (موضعه بعد
+ * Percent وقبل TaxScheme كما في UBL). ثمّ يُتحقّق من النتيجة: إن بقيت فئة S
+ * أو نقص سببٌ عن مجموعٍ فرعيّ رُفض المستند — إرساله بفئةٍ خاطئة مستندٌ
+ * ضريبيّ خاطئ، والرفض قبل الإرسال لا يستهلك شيئًا.
+ */
+function applyZeroRatedHealthcare(xml: string) {
+  let out = xml.replace(
+    /(<cac:(?:ClassifiedTaxCategory|TaxCategory)>\s*<cbc:ID\b[^>]*>)\s*S\s*(<\/cbc:ID>)/g,
+    "$1Z$2",
+  );
+  out = out.replace(/<cac:TaxSubtotal>[\s\S]*?<\/cac:TaxSubtotal>/g, (block) =>
+    block.includes("<cbc:TaxExemptionReasonCode>")
+      ? block
+      : block.replace(
+          /(<cbc:Percent>[^<]*<\/cbc:Percent>)/,
+          `$1<cbc:TaxExemptionReasonCode>${ZERO_RATED_HEALTHCARE.code}</cbc:TaxExemptionReasonCode>` +
+            `<cbc:TaxExemptionReason>${ZERO_RATED_HEALTHCARE.reason}</cbc:TaxExemptionReason>`,
+        ),
+  );
+  const standardLeft =
+    /<cac:(?:ClassifiedTaxCategory|TaxCategory)>\s*<cbc:ID\b[^>]*>\s*S\s*<\/cbc:ID>/.test(out);
+  const subtotals = (out.match(/<cac:TaxSubtotal>/g) ?? []).length;
+  const reasons = (out.match(/<cbc:TaxExemptionReasonCode>/g) ?? []).length;
+  if (standardLeft || subtotals === 0 || reasons !== subtotals) {
+    throw new Error("تعذّر إعداد الفاتورة بفئة الضريبة الصفرية (ZERO_RATED_XML_TRANSFORM_FAILED) — لم تُرسل إلى ZATCA");
+  }
+  return out;
+}
+
+/**
+ * الفاتورة المبسّطة (لفرد) لا تشترط عنوان المشتري — كفواتير Kizen المُبلَّغة
+ * باسم المريض وهويّته وحدهما. والمولّد يكتب عنوانًا دائمًا، فيُحذف عنوان
+ * المشتري حين لا يكون للمريض عنوانٌ وطنيّ صحيح، بدل كتابة عنوانٍ مُختلَق في
+ * مستندٍ ضريبيّ. عنوان البائع لا يُمسّ.
+ */
+function removeBuyerPostalAddress(xml: string) {
+  return xml.replace(
+    /(<cac:AccountingCustomerParty>(?:(?!<\/cac:AccountingCustomerParty>)[\s\S])*?)[ \t]*<cac:PostalAddress>[\s\S]*?<\/cac:PostalAddress>\r?\n?/,
+    "$1",
+  );
+}
+
+function hasValidRegisteredAddress(location: string) {
+  if (!clean(location)) return false;
+  try {
+    parseRegisteredAddress(location, true);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function buildSignedInvoice(input: {
   setup: any;
   invoice: any;
@@ -377,6 +442,10 @@ function buildSignedInvoice(input: {
   originalInvoiceId?: string;
   originalInvoiceUuid?: string;
   credentials: { csid: string; secret: string };
+  /** كلّ البنود صفرية لمواطن — فئة Z بسبب VATEX-SA-HEA. */
+  zeroRated?: boolean;
+  /** الهوية الوطنية للمشتري — لازمة مع VATEX-SA-HEA (BR-KSA-49). */
+  buyerNationalId?: string;
 }) {
   const {
     setup,
@@ -389,6 +458,8 @@ function buildSignedInvoice(input: {
     originalInvoiceId,
     originalInvoiceUuid,
     credentials,
+    zeroRated = false,
+    buyerNationalId = "",
   } = input;
   const address = parseRegisteredAddress(String(setup.branch_location));
   const now = new Date(Date.now() + 3 * 60 * 60 * 1000).toISOString();
@@ -441,6 +512,8 @@ function buildSignedInvoice(input: {
       .setPartyIdentification(String(invoice.buyer_id_number))
       .setPartyIdentificationId(String(invoice.buyer_id_scheme || "OTH"))
       .setVatNumber(String(invoice.buyer_vat));
+  } else if (zeroRated && buyerNationalId) {
+    buyer.setPartyIdentification(buyerNationalId).setPartyIdentificationId("NAT");
   }
 
   document.setSeller(seller).setBuyer(buyer);
@@ -474,9 +547,13 @@ function buildSignedInvoice(input: {
   }
   document.calculateTotals();
 
-  const unsignedXml = removeEmptyPartyIdentification(
+  let unsignedXml = removeEmptyPartyIdentification(
     new ZatcaInvoice().generateXml(document, uuid),
   );
+  if (simplified && !hasValidRegisteredAddress(clean(invoice.customer_address))) {
+    unsignedXml = removeBuyerPostalAddress(unsignedXml);
+  }
+  if (zeroRated) unsignedXml = applyZeroRatedHealthcare(unsignedXml);
   const certificate = createCompatibleCertificate(
     toCertificatePem(credentials.csid),
     String(setup.private_key_pem),
@@ -735,7 +812,7 @@ Deno.serve(async (req) => {
     if (record.patient_id) {
       const { data: patientRow, error: patientError } = await admin
         .from("patients")
-        .select("name_ar, id_type, id_number, tax_number, building_number, street, district, postal_code, city:lookup_values!city_value_id(name_ar)")
+        .select("name_ar, id_type, id_number, tax_number, nationality_value_id, building_number, street, district, postal_code, city:lookup_values!city_value_id(name_ar)")
         .eq("id", record.patient_id)
         .maybeSingle();
       if (patientError) throw patientError;
@@ -858,14 +935,55 @@ Deno.serve(async (req) => {
     if (lines.some((line) => line.quantity <= 0 || line.unitPrice < 0 || line.discount > line.quantity * line.unitPrice)) {
       return await rejectBeforeSubmission("توجد كمية أو قيمة خصم غير صالحة في بنود الفاتورة", 400);
     }
-    // المولّد يُصدر فئة الضريبة القياسية (S) وحدها. البند المعفى أو الصفريّ
-    // (مثل خدمات المواطنين الصحية) يحتاج فئةً وسبب إعفاء لا يدعمهما بعد —
-    // إرساله بفئةٍ خاطئة مستندٌ ضريبيّ خاطئ، فيُرفض قبل الإرسال.
-    if (lines.some((line) => Math.abs(line.taxPercent - 15) > 0.001 || line.exemption > 0)) {
+    /**
+     * فئة الضريبة.
+     *
+     * 15% ⇒ القياسية (S). و0% ⇒ الصفرية (Z) بسبب VATEX-SA-HEA — الرعاية
+     * الصحية الخاصة للمواطن، وهي حال فواتير المواطنين في ZainCare
+     * (`app_create_sales_invoice` تجعل البند 0% حين تكون جنسية المريض في
+     * قائمة الإعفاء وهويّته مثبتة). والسبب لا يُفترض: يُعاد حساب شرط الإعفاء
+     * من ملفّ المريض وإعدادات المنشأة، فبندٌ صفريّ لغير مواطن لا سبب إعفاءٍ
+     * معتمدًا له ويُرفض. والفاتورة التي تجمع الفئتين غير مدعومة بعد.
+     */
+    const zeroLines = lines.filter((line) => Math.abs(line.taxPercent) < 0.001);
+    const standardLines = lines.filter((line) => Math.abs(line.taxPercent - 15) < 0.001);
+    if (zeroLines.length + standardLines.length !== lines.length) {
       return await rejectBeforeSubmission(
-        "الفاتورة فيها بندٌ معفى أو بنسبة ضريبة غير 15% — هذا النوع غير مدعوم في الربط بعد",
+        "في الفاتورة بندٌ بنسبة ضريبة غير 15% وغير صفر — غير مدعوم في الربط",
         422,
       );
+    }
+    if (zeroLines.length && standardLines.length) {
+      return await rejectBeforeSubmission(
+        "الفاتورة تجمع بنودًا خاضعة للضريبة وبنودًا صفرية — غير مدعوم في الربط بعد؛ أصدرها في فاتورتين",
+        422,
+      );
+    }
+    const zeroRated = zeroLines.length > 0;
+    if (zeroRated) {
+      const { data: vatSettings, error: vatSettingsError } = await admin
+        .from("organization_vat_settings")
+        .select("vat_exempt_nationality_value_ids, vat_exempt_requires_id")
+        .eq("organization_id", organizationId)
+        .maybeSingle();
+      if (vatSettingsError) throw vatSettingsError;
+      const nationality = clean(record.nationality_value_id) || clean(patient?.nationality_value_id);
+      const exemptNationalities: string[] = Array.isArray(vatSettings?.vat_exempt_nationality_value_ids)
+        ? vatSettings.vat_exempt_nationality_value_ids
+        : [];
+      const citizenExempt = Boolean(nationality) && exemptNationalities.includes(nationality);
+      if (!citizenExempt) {
+        return await rejectBeforeSubmission(
+          "بنود الفاتورة بلا ضريبة والمريض ليس من الجنسية المعفاة — لا سبب إعفاءٍ معتمدًا لدى ZATCA لهذه الفاتورة",
+          422,
+        );
+      }
+      if (!/^1\d{9}$/.test(buyerIdNumber)) {
+        return await rejectBeforeSubmission(
+          "الإعفاء الصحّي للمواطن يتطلّب رقم الهوية الوطنية (10 أرقام تبدأ بـ1) في ملفّ المريض",
+          422,
+        );
+      }
     }
     const calculated = lines.reduce(
       (totals, line) => {
@@ -926,11 +1044,11 @@ Deno.serve(async (req) => {
       if (!invoice.customer) {
         return await rejectBeforeSubmission("اسم المشتري مطلوب قبل الإرسال الإنتاجي", 422);
       }
-      try {
-        parseRegisteredAddress(invoice.customer_address, true);
-      } catch {
+      // العنوان الوطني شرطٌ للفاتورة المعيارية وحدها؛ المبسّطة (لفرد) تُبلَّغ
+      // بلا عنوان المشتري، كما كانت فواتير Kizen تُبلَّغ.
+      if (!simplified && !hasValidRegisteredAddress(invoice.customer_address)) {
         return await rejectBeforeSubmission(
-          "العنوان الوطني للمريض ناقص: رقم مبنى من 4 أرقام، والشارع، والحي، والمدينة، ورمز بريدي من 5 أرقام — أكمله في ملفّه",
+          "العنوان الوطني للمشتري ناقص: رقم مبنى من 4 أرقام، والشارع، والحي، والمدينة، ورمز بريدي من 5 أرقام — أكمله في ملفّه",
           422,
         );
       }
@@ -1060,6 +1178,8 @@ Deno.serve(async (req) => {
           : undefined,
         originalInvoiceUuid: clean(originalInvoice?.zatca_uuid) || undefined,
         credentials,
+        zeroRated,
+        buyerNationalId: zeroRated ? buyerIdNumber : "",
       });
       const requestPayload = {
         mode,

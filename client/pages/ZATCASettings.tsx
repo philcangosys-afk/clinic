@@ -13,6 +13,7 @@ import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { cn } from "@/lib/utils";
+import ZatcaAutoReportCard from "@/components/billing/ZatcaAutoReportCard";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1164,6 +1165,8 @@ export default function ZATCASettings() {
           </Button>
         </div>
       )}
+
+      <ZatcaAutoReportCard organizationId={organizationId} />
 
       {audit.length > 0 && (
         <section className="rounded-xl border bg-card p-5">

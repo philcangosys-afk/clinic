@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
 import FollowUpAlerts from "@/components/follow-up/FollowUpAlerts";
+import ZatcaAutoReporter from "@/components/billing/ZatcaAutoReporter";
 import SectionGuideButton from "./SectionGuideButton";
 import { guideKeyForPath } from "@/lib/section-guides";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
@@ -563,6 +564,9 @@ export default function AppShell() {
       {/* ما يرسله الأطباء يلحق موظّف الاستقبال في أيّ شاشةٍ كان — لذلك هنا
           في الإطار لا في شاشة مركز المتابعة (0173). */}
       <FollowUpAlerts />
+
+      {/* إبلاغ ZATCA بما فات من الفواتير — في الإطار ليعمل في أيّ شاشة (0200) */}
+      <ZatcaAutoReporter />
     </div>
   );
 }
