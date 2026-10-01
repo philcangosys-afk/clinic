@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, LayoutGrid, Percent, Receipt, Save, Trash2 } from "lucide-react";
+import { Ban, BellRing, LayoutGrid, Percent, Receipt, Save, Scissors, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount } from "@/lib/locale";
 import { usePermissions } from "@/lib/permissions";
+import { useSessionDoctor } from "@/lib/session-doctor";
 import { useToast } from "@/hooks/use-toast";
 import {
   computeQuoteLine,
+  isKizenBalanceText,
   useAgreementQuotes,
   useAgreementVat,
   useQuoteLines,
@@ -105,6 +107,14 @@ export default function QuoteEditorDialog({
   const { toast } = useToast();
   const { can } = usePermissions();
   const canManage = can("agreements.manage") && !agreement.is_disabled;
+  const { isDoctorRole } = useSessionDoctor();
+  /**
+   * «فوترة» للاستقبال وحده (قرار المالك): الطبيب يُنشئ ويعدّل ويُشعر، ولا يُصدر
+   * فاتورة. وما أُلغيت مديونيته لا يُفوتَر (يُعاد من الاتفاقية أوّلًا).
+   */
+  const canInvoice = can("billing.issue") && !isDoctorRole;
+  const debtCancelled = Boolean(agreement.debt_cancelled);
+  const canNotify = can("follow_up_center.send");
   const lists = useDoctorsAndClinics(organizationId);
   const vat = useAgreementVat(organizationId, agreement.patient_id);
   const quotes = useAgreementQuotes(agreement.id);
@@ -302,6 +312,98 @@ export default function QuoteEditorDialog({
       toast({ variant: "destructive", title: "تعذّر الإلغاء", description: errorMessage(error) }),
   });
 
+  /**
+   * «إشعار للاستقبال» — كـKizen: الطبيب يُنهي العرض ويُنبّه الاستقبال.
+   *
+   * يمرّ بمركز المتابعة القائم (`app_send_follow_up_note`): يصل نافذةَ تنبيه
+   * الاستقبال فورًا وجرسَها، ويُسجَّل من أرسل ومن اطّلع. لا جدول ولا مسار جديد.
+   */
+  const notifyReception = useMutation({
+    mutationFn: async (extra: string) => {
+      let id = quoteId;
+      if (dirty || !id) id = await save.mutateAsync();
+      const unbilled = computed
+        .filter(({ line }) => line.qty - line.invoicedQty > 0)
+        .map(({ line, calc }) => {
+          const remainingQty = line.qty - line.invoicedQty;
+          const amount = line.qty > 0 ? (calc.net * remainingQty) / line.qty : 0;
+          return { text: `${line.description} × ${remainingQty}`, amount };
+        });
+      const total = unbilled.reduce((sum, row) => sum + row.amount, 0);
+      const number = quotes.data?.find((row) => row.id === id)?.quote_number ?? quote?.quote_number;
+      const body = [
+        `اتفاقية رقم ${agreement.agreement_number}${number ? ` — عرض سعر ${number}` : ""}: جاهزة للفوترة`,
+        unbilled.length > 0
+          ? `غير المفوتر ${formatAmount(total)} ر.س: ${unbilled.slice(0, 5).map((row) => row.text).join("، ")}${
+              unbilled.length > 5 ? ` و${unbilled.length - 5} بنود أخرى` : ""
+            }`
+          : "كلّ البنود مفوترة",
+        extra.trim(),
+      ]
+        .filter(Boolean)
+        .join("\n")
+        .slice(0, 1000);
+      const { error } = await supabase.rpc("app_send_follow_up_note", {
+        p_organization_id: agreement.organization_id,
+        p_patient_id: agreement.patient_id,
+        p_body: body,
+        p_doctor_id: doctorId === NONE ? agreement.doctor_id : doctorId,
+        p_priority: "routine",
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["follow-up-unseen"] });
+      toast({ title: "أُرسل الإشعار إلى الاستقبال" });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر إرسال الإشعار", description: errorMessage(error) }),
+  });
+
+  /**
+   * تقسيم البند — للفوترة الجزئية بالمبلغ (كدفعةٍ من علاجٍ واحد).
+   *
+   * الفوترة من الاتفاقية بالكمية؛ فبندٌ واحد بـ900 يُراد تحصيل 300 منه اليوم
+   * يُقسم بندين (300 و600) من الخدمة نفسها، ويُفوتَر الأوّل. يجري هنا في عرض
+   * السعر ثمّ «حفظ» بالدالّة القائمة — لا يمسّ الفاتورة ولا حارسها.
+   */
+  const splitLine = (key: string) => {
+    const target = computed.find(({ line }) => line.key === key);
+    if (!target) return;
+    const { line, calc } = target;
+    const answer = window.prompt(
+      `المبلغ الذي يُفصل في بندٍ مستقلّ (قبل الضريبة، من ${formatAmount(calc.taxable)}):`,
+    );
+    if (answer == null) return;
+    const part = Math.round(Number(answer) * 100) / 100;
+    if (!Number.isFinite(part) || part <= 0 || part >= calc.taxable) {
+      toast({ variant: "destructive", title: `المبلغ بين 0 و${formatAmount(calc.taxable)}` });
+      return;
+    }
+    const rest = Math.round((calc.taxable - part) * 100) / 100;
+    setLines((prev) =>
+      prev.flatMap((row) =>
+        row.key !== key
+          ? [row]
+          : [
+              { ...row, qty: 1, price: rest, discountAmount: 0, discountPercent: 0 },
+              {
+                ...row,
+                key: `split-${row.key}-${Date.now()}`,
+                id: null,
+                qty: 1,
+                price: part,
+                discountAmount: 0,
+                discountPercent: 0,
+                invoicedQty: 0,
+              },
+            ],
+      ),
+    );
+    setDirty(true);
+    toast({ title: "قُسم البند", description: "احفظ العرض، ثمّ «فوترة» واختر البند الذي يُحصَّل اليوم." });
+  };
+
   const invoice = async () => {
     // ما يُفوتَر هو المحفوظ: تعديلٌ لم يُحفظ يُحفظ أوّلًا، وإلّا فُوتر القديم
     if (dirty || !quoteId) {
@@ -340,16 +442,41 @@ export default function QuoteEditorDialog({
             <Save className="h-4 w-4" />
             {save.isPending ? "جارٍ الحفظ…" : "حفظ"}
           </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={save.isPending || isCancelled || lines.length === 0 || remainingQty <= 0 || agreement.is_disabled}
-            onClick={() => void invoice()}
-            title={remainingQty <= 0 ? "كلّ البنود مفوتَرة" : "إصدار فاتورة ضريبية بما لم يُفوتَر بعد"}
-          >
-            <Receipt className="h-4 w-4" />
-            فوترة
-          </Button>
+          {canInvoice && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={
+                save.isPending || isCancelled || lines.length === 0 || remainingQty <= 0 || agreement.is_disabled || debtCancelled
+              }
+              onClick={() => void invoice()}
+              title={
+                debtCancelled
+                  ? "أُلغيت مديونية الاتفاقية — أعدها من الاتفاقية أوّلًا"
+                  : remainingQty <= 0
+                    ? "كلّ البنود مفوتَرة"
+                    : "إصدار فاتورة ضريبية بما لم يُفوتَر بعد"
+              }
+            >
+              <Receipt className="h-4 w-4" />
+              فوترة
+            </Button>
+          )}
+          {canNotify && !isCancelled && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={notifyReception.isPending || save.isPending || lines.length === 0}
+              title="يصل نافذة تنبيه الاستقبال ومركز المتابعة"
+              onClick={() => {
+                const extra = window.prompt("ملاحظة للاستقبال (اختيارية):", "");
+                if (extra !== null) notifyReception.mutate(extra);
+              }}
+            >
+              <BellRing className="h-4 w-4" />
+              {notifyReception.isPending ? "جارٍ الإرسال…" : "إشعار للاستقبال"}
+            </Button>
+          )}
           <Button size="sm" variant="outline" disabled={readOnly} onClick={() => setBrowserOpen(true)}>
             <LayoutGrid className="h-4 w-4" />
             إضافة خدمة
@@ -477,7 +604,7 @@ export default function QuoteEditorDialog({
                   const locked = line.invoicedQty > 0;
                   return (
                     <tr key={line.key} className="border-t [&>td]:px-2 [&>td]:py-1 tabular-nums">
-                      <td>
+                      <td className="whitespace-nowrap">
                         <Button
                           size="icon"
                           variant="ghost"
@@ -491,10 +618,33 @@ export default function QuoteEditorDialog({
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          disabled={readOnly || locked || line.qty !== 1 || calc.taxable <= 0}
+                          title={
+                            locked
+                              ? "فُوتر منه — لا يُقسم"
+                              : line.qty !== 1
+                                ? "يُقسم البند ذو الكمية 1 — والأكثر يُفوتَر بالكمية"
+                                : "تقسيم البند لفوترة جزءٍ من مبلغه"
+                          }
+                          onClick={() => splitLine(line.key)}
+                        >
+                          <Scissors className="h-3.5 w-3.5" />
+                        </Button>
                       </td>
                       <td className="font-mono text-xs">{line.code ?? "—"}</td>
                       <td className="font-mono text-xs">{line.barcode ?? "—"}</td>
-                      <td className="max-w-[18rem] truncate" title={line.description}>{line.description}</td>
+                      <td className="max-w-[22rem]" title={line.description}>
+                        <span className="line-clamp-2">{line.description}</span>
+                        {isKizenBalanceText(line.description) && (
+                          <Badge variant="outline" className="mt-0.5 border-amber-400 text-[10px] text-amber-700">
+                            رصيد منقول من Kizen — لا يُطبع هذا العنوان على الفاتورة
+                          </Badge>
+                        )}
+                      </td>
                       <td>
                         <Input
                           className={`h-8 w-24 ${problem ? "border-destructive" : ""}`}

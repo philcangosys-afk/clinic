@@ -166,6 +166,8 @@ export type PermissionKey =
   /* اتفاقيات العلاج وعروض أسعارها: الاطّلاع، والإنشاء والتعديل والتعطيل (0193) */
   | "agreements.view"
   | "agreements.manage"
+  /* إلغاء مديونية الاتفاقية دون حذفها (0208) */
+  | "agreements.cancel_debt"
   | "cashier.receive"
   | "cashier.open"
   | "cashier.close"

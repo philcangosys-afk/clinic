@@ -6,6 +6,8 @@ import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import { formatAmount } from "@/lib/locale";
+import { invoiceLineText, isKizenBalanceText } from "@/lib/agreements";
+import { usePatientOpenAgreements } from "@/components/patients/PatientCommandsDialog";
 import { useInsuranceSettings } from "@/lib/insurance-settings";
 import { usePermissions } from "@/lib/permissions";
 import { Button } from "@/components/ui/button";
@@ -49,6 +51,11 @@ type InvoicePaymentMethod = {
   id: string;
   name_ar: string;
   affects_drawer: boolean;
+  /**
+   * يحتاج صندوقًا: يدخل الدرج، أو رمزه `cash` — وهو ما تشترط له القاعدة
+   * الصندوق (`app_receive_invoice_payment`، 0091).
+   */
+  needs_register: boolean;
 };
 
 function useInvoicePaymentMethods() {
@@ -69,6 +76,7 @@ function useInvoicePaymentMethods() {
         id: row.id,
         name_ar: row.name_ar,
         affects_drawer: Boolean(row.extra?.affects_drawer),
+        needs_register: Boolean(row.extra?.affects_drawer) || row.code === "cash",
       })) as InvoicePaymentMethod[];
     },
   });
@@ -590,6 +598,7 @@ export default function NewInvoiceDialog({
   const warehouses = useBillingWarehouses(organizationId);
   const quickGroups = useQuickGroups(organizationId);
   const agreementItems = useAgreementItemsForBilling(patient?.id, organizationId);
+  const openAgreements = usePatientOpenAgreements(patient?.id);
   const insuranceSettings = useInsuranceSettings(organizationId);
 
   /**
@@ -827,7 +836,9 @@ export default function NewInvoiceDialog({
       {
         key: `agr-${option.agreementItemId}-${Date.now()}`,
         item_id: option.itemId,
-        description: option.description,
+        // عنوان «رصيد اتفاقية Kizen رقم …» للاستقبال وحده — الفاتورة والمطبوع
+        // وZATCA تحمل الخدمات
+        description: invoiceLineText(option.description),
         price: option.unitPrice,
         qty: remainingQty,
         discount_percent: proratedAmount > 0 ? 0 : option.discountPercent,
@@ -840,7 +851,9 @@ export default function NewInvoiceDialog({
           : undefined,
         is_vat_exempt: false,
         agreement_item_id: option.agreementItemId,
-        agreement_label: `اتفاقية #${option.agreementNumber}`,
+        agreement_label: `اتفاقية #${option.agreementNumber}${
+          isKizenBalanceText(option.description) ? " · رصيد منقول من Kizen" : ""
+        }`,
         visit_service_id: null,
       },
     ]);
@@ -1203,9 +1216,26 @@ export default function NewInvoiceDialog({
    * القاعدة ترفض التجاوز والطريقة الفارغة، لكن رفضها يأتي بعد إرسال الفاتورة
    * كاملة — والمنع هنا يُظهر السبب قبل ذلك.
    */
+  const methodNeedsRegister = (methodId: string) =>
+    Boolean((paymentMethods.data ?? []).find((m) => m.id === methodId)?.needs_register);
+  /** نقدٌ بلا صندوق: القاعدة ترفضه («الدفع النقدي يحتاج تحديد الصندوق») — يُمنع هنا قبلها */
+  const cashWithoutRegister = payments.some(
+    (row) => Number(row.amount) > 0 && row.methodId && methodNeedsRegister(row.methodId) && row.registerId === NONE,
+  );
   const paymentsInvalid =
     payments.some((row) => Number(row.amount) > 0 && !row.methodId) ||
+    cashWithoutRegister ||
     paymentsTotal > totals.net + 0.009;
+
+  /**
+   * الطبيب والعيادة إلزاميّان لفاتورة المريض (قرار المالك 01/10/2026): عليهما
+   * تُبنى إيرادات الطبيب والعيادة وعمولته وتقارير اليومية، وفاتورةٌ بلا طبيب
+   * تخرج منها كلّها. عرض السعر ليس فاتورة، وفاتورة العميل الخارجيّ بلا ملفٍّ
+   * لا طبيب لها بالضرورة — فلا يُشترطان فيهما.
+   */
+  const requiresDoctorClinic = Boolean(patient) && !isQuote;
+  const missingDoctor = requiresDoctorClinic && doctorId === NONE;
+  const missingClinic = requiresDoctorClinic && clinicId === NONE;
 
   const createInvoice = useMutation({
     mutationFn: async () => {
@@ -1223,6 +1253,9 @@ export default function NewInvoiceDialog({
         if (isInsurance) throw new Error("فاتورة التأمين تُصدَر مبسّطة باسم المريض — أزل «فاتورة أعمال»");
       }
       if (lines.length === 0) throw new Error("أضف بندًا واحدًا على الأقل");
+      if (missingDoctor) throw new Error("اختر الطبيب المعالج — إلزاميّ لفاتورة المريض");
+      if (missingClinic) throw new Error("اختر العيادة — إلزاميّة لفاتورة المريض");
+      if (cashWithoutRegister) throw new Error("اختر الصندوق للدفع النقدي");
 
       /**
        * ما ترفضه القاعدة يُمنع هنا قبل الإرسال.
@@ -1433,7 +1466,8 @@ export default function NewInvoiceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      {/* عريضة بعرض الشاشة: بنود الاتفاقيات وأعمدة البنود تُقرأ كاملةً بلا تمريرٍ أفقيّ */}
+      <DialogContent className="max-h-[95vh] w-[min(96vw,1100px)] max-w-none overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{isQuote ? "عرض سعر جديد" : "فاتورة مبيعات جديدة"}</DialogTitle>
           <DialogDescription>
@@ -1481,13 +1515,21 @@ export default function NewInvoiceDialog({
 
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="flex flex-col gap-1.5">
-              <Label>الطبيب المعالج</Label>
+              <Label>
+                الطبيب المعالج{requiresDoctorClinic && <span className="text-destructive"> *</span>}
+              </Label>
               <Select value={doctorId} onValueChange={setDoctorId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="بدون" />
+                <SelectTrigger className={missingDoctor ? "border-destructive" : undefined}>
+                  <SelectValue placeholder={requiresDoctorClinic ? "اختر الطبيب" : "بدون"} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={NONE}>بدون</SelectItem>
+                  {requiresDoctorClinic ? (
+                    <SelectItem value={NONE} disabled>
+                      اختر الطبيب
+                    </SelectItem>
+                  ) : (
+                    <SelectItem value={NONE}>بدون</SelectItem>
+                  )}
                   {(doctors.data ?? []).map((doctor) => (
                     <SelectItem key={doctor.id} value={doctor.id}>
                       {doctor.name_ar}
@@ -1497,13 +1539,21 @@ export default function NewInvoiceDialog({
               </Select>
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label>العيادة</Label>
+              <Label>
+                العيادة{requiresDoctorClinic && <span className="text-destructive"> *</span>}
+              </Label>
               <Select value={clinicId} onValueChange={setClinicId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="بدون" />
+                <SelectTrigger className={missingClinic ? "border-destructive" : undefined}>
+                  <SelectValue placeholder={requiresDoctorClinic ? "اختر العيادة" : "بدون"} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={NONE}>بدون</SelectItem>
+                  {requiresDoctorClinic ? (
+                    <SelectItem value={NONE} disabled>
+                      اختر العيادة
+                    </SelectItem>
+                  ) : (
+                    <SelectItem value={NONE}>بدون</SelectItem>
+                  )}
                   {(clinics.data ?? []).map((clinic) => (
                     <SelectItem key={clinic.id} value={clinic.id}>
                       {clinic.name}
@@ -1803,11 +1853,17 @@ export default function NewInvoiceDialog({
           {patient && (agreementItems.data ?? []).length > 0 && (
             <div className="flex flex-col gap-1.5 rounded-lg border border-primary/30 bg-primary/5 p-3">
               <Label>بنود الاتفاقيات العلاجية لهذا المريض</Label>
+              {openAgreements.data && Number(openAgreements.data.open_count) > 0 && (
+                <p className="rounded-md border border-amber-400 bg-amber-50 px-2 py-1 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                  على المريض {formatAmount(openAgreements.data.open_count)} اتفاقية عليها متبقٍّ بمجموع{" "}
+                  <span className="font-semibold tabular-nums">{formatAmount(openAgreements.data.remaining_total)} ر.س</span>
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 إضافة البند من هنا تربطه بالاتفاقية، فيُحدَّث "المفوتَر" و"المتبقّي" فيها تلقائيًا.
                 إضافته من "إضافة بند" العادية لا تربطه بشيء.
               </p>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-col gap-1.5">
                 {(agreementItems.data ?? []).map((option) => {
                   const remainingQty = Math.max(option.qty - option.invoicedQty, 0);
                   const alreadyAdded = lines.some(
@@ -1818,17 +1874,21 @@ export default function NewInvoiceDialog({
                       key={option.agreementItemId}
                       size="sm"
                       variant="outline"
+                      className="h-auto w-full justify-start gap-2 whitespace-normal py-1.5 text-start"
                       disabled={remainingQty <= 0 || alreadyAdded}
                       onClick={() => addAgreementLine(option)}
                     >
-                      <Plus className="h-3.5 w-3.5" />
-                      <span className="truncate">{option.description}</span>
-                      <Badge variant={remainingQty <= 0 ? "secondary" : "default"}>
+                      <Plus className="h-3.5 w-3.5 shrink-0" />
+                      <span className="min-w-0 flex-1 break-words">{option.description}</span>
+                      <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
+                        {formatAmount(option.unitPrice)} ر.س
+                      </span>
+                      <Badge className="shrink-0" variant={remainingQty <= 0 ? "secondary" : "default"}>
                         {remainingQty <= 0
                           ? "مفوتَر بالكامل"
                           : `متبقٍ ${remainingQty} من ${option.qty}`}
                       </Badge>
-                      <span className="text-[10px] text-muted-foreground">
+                      <span className="shrink-0 text-[10px] text-muted-foreground">
                         اتفاقية #{option.agreementNumber}
                         {option.quoteNumber ? ` · عرض ${option.quoteNumber}` : ""}
                       </span>
@@ -2121,13 +2181,22 @@ export default function NewInvoiceDialog({
                         searchable={false}
                         onChange={(value) =>
                           setPayments((prev) =>
-                            prev.map((p) => (p.key === row.key ? { ...p, methodId: value } : p)),
+                            prev.map((p) => {
+                              if (p.key !== row.key) return p;
+                              // صندوقٌ واحد مفعَّل: يُختار تلقائيًّا للنقد — ويبقى قابلًا للتغيير
+                              const registers = cashRegisters.data ?? [];
+                              const registerId =
+                                methodNeedsRegister(value) && p.registerId === NONE && registers.length === 1
+                                  ? registers[0].id
+                                  : p.registerId;
+                              return { ...p, methodId: value, registerId };
+                            }),
                           )
                         }
                         options={(paymentMethods.data ?? []).map((m) => ({
                           value: m.id,
                           label: m.name_ar,
-                          hint: m.affects_drawer ? "نقد — يدخل الصندوق" : undefined,
+                          hint: m.needs_register ? "نقد — يدخل الصندوق" : undefined,
                         }))}
                       />
                     </div>
@@ -2172,9 +2241,11 @@ export default function NewInvoiceDialog({
                     </div>
                     {/* الصندوق يظهر للنقد وحده: القاعدة تشترط مناوبة مفتوحة
                         للقبض النقديّ ولا تشترطها للشبكة والتحويل. */}
-                    {method?.affects_drawer && (
+                    {method?.needs_register && (
                       <div className="flex min-w-[10rem] flex-1 flex-col gap-1">
-                        <Label className="text-xs">الصندوق</Label>
+                        <Label className="text-xs">
+                          الصندوق<span className="text-destructive"> *</span>
+                        </Label>
                         <Select
                           value={row.registerId}
                           onValueChange={(value) =>
@@ -2185,7 +2256,11 @@ export default function NewInvoiceDialog({
                             )
                           }
                         >
-                          <SelectTrigger>
+                          <SelectTrigger
+                            className={
+                              Number(row.amount) > 0 && row.registerId === NONE ? "border-destructive" : undefined
+                            }
+                          >
                             <SelectValue placeholder="اختر الصندوق" />
                           </SelectTrigger>
                           <SelectContent>
@@ -2233,6 +2308,9 @@ export default function NewInvoiceDialog({
                   {payments.some((row) => Number(row.amount) > 0 && !row.methodId) && (
                     <span className="text-xs text-destructive">اختر طريقة الدفع لكل مبلغ.</span>
                   )}
+                  {cashWithoutRegister && (
+                    <span className="text-xs text-destructive">اختر الصندوق للدفع النقدي.</span>
+                  )}
                 </div>
               )}
             </div>
@@ -2267,11 +2345,22 @@ export default function NewInvoiceDialog({
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="items-center gap-2">
+          {(missingDoctor || missingClinic) && (
+            <span className="text-xs text-destructive">
+              {missingDoctor && missingClinic
+                ? "اختر الطبيب والعيادة قبل الحفظ."
+                : missingDoctor
+                  ? "اختر الطبيب قبل الحفظ."
+                  : "اختر العيادة قبل الحفظ."}
+            </span>
+          )}
           <Button
             disabled={
               createInvoice.isPending ||
               lines.length === 0 ||
+              missingDoctor ||
+              missingClinic ||
               paymentsInvalid ||
               vatUnresolved ||
               vatBlocked

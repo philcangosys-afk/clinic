@@ -84,7 +84,8 @@ export default function AgreementsPanel({
         vat: sum.vat + Number(row.vat_amount),
         net: sum.net + Number(row.net_amount),
         invoiced: sum.invoiced + Number(row.invoiced_amount),
-        remaining: sum.remaining + Number(row.remaining_amount),
+        // ما أُلغيت مديونيته لا يُطالَب به — خارج مجموع المتبقّي
+        remaining: sum.remaining + (row.debt_cancelled ? 0 : Number(row.remaining_amount)),
       }),
       { vat: 0, net: 0, invoiced: 0, remaining: 0 },
     );
@@ -320,9 +321,14 @@ export default function AgreementsPanel({
                     <td className={remaining < 0 ? "font-bold text-destructive" : remaining > 0 ? "font-semibold text-amber-700" : ""}>
                       {formatAmount(remaining)}
                     </td>
-                    <td>
+                    <td className="whitespace-nowrap">
                       {row.is_disabled ? (
                         <Badge variant="secondary" title={row.disabled_reason ?? ""}>معطّلة</Badge>
+                      ) : null}
+                      {row.debt_cancelled ? (
+                        <Badge variant="outline" className="border-rose-400 text-rose-700" title={row.debt_cancel_reason ?? ""}>
+                          أُلغيت مديونيتها
+                        </Badge>
                       ) : null}
                     </td>
                   </tr>

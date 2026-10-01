@@ -53,7 +53,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
 import PatientContactsTab from "@/components/patients/PatientContactsTab";
 import MergePatientsDialog from "@/components/patients/MergePatientsDialog";
-import PatientCommandsDialog from "@/components/patients/PatientCommandsDialog";
+import PatientCommandsDialog, { usePatientOpenAgreements } from "@/components/patients/PatientCommandsDialog";
 import { usePermissions } from "@/lib/permissions";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import LookupSelect from "@/components/shared/LookupSelect";
@@ -392,6 +392,7 @@ export default function PatientProfile() {
             {patient.data.block_appointments && <Badge variant="destructive">محجوب عن المواعيد</Badge>}
             {patient.data.block_invoices && <Badge variant="destructive">محجوب عن الفوترة</Badge>}
             {patient.data.block_sms && <Badge variant="secondary">محجوب عن SMS</Badge>}
+            <OpenAgreementsBadge patientId={patient.data.id} onOpen={() => setSection("agreements")} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {/* الملاحظات أوّل الأزرار ولكلّ الأدوار: الطبيب يكتب، والاستقبال يرى */}
@@ -2190,5 +2191,26 @@ function MergeButton({ patientId, patientName }: { patientId: string; patientNam
         primaryPatientName={patientName}
       />
     </>
+  );
+}
+
+/**
+ * تنبيه الاتفاقيات في رأس الملفّ — كسطر Kizen الأصفر «العميل عليه اتفاقيات
+ * عليها متبقي». يظهر وحده إن كان عليه متبقٍّ (لا المعطّلة ولا ما أُلغيت
+ * مديونيته)، والضغط يفتح قسم الاتفاقيات.
+ */
+function OpenAgreementsBadge({ patientId, onOpen }: { patientId: string; onOpen: () => void }) {
+  const open = usePatientOpenAgreements(patientId);
+  const row = open.data;
+  if (!row || Number(row.open_count) <= 0) return null;
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="rounded-md border border-amber-400 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-900 hover:bg-amber-100 dark:bg-amber-950/30 dark:text-amber-200"
+      title="عرض الاتفاقيات"
+    >
+      اتفاقيات عليها متبقٍّ: {formatAmount(row.open_count)} — {formatAmount(row.remaining_total)} ر.س
+    </button>
   );
 }

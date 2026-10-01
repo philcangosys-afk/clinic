@@ -40,7 +40,32 @@ export type AgreementListRow = {
   net_amount: number;
   invoiced_amount: number;
   remaining_amount: number;
+  /** 0208 — قبل تنفيذها لا تُرجعها القاعدة، فتُعامل كـ«لا». */
+  debt_cancelled?: boolean | null;
+  debt_cancel_reason?: string | null;
+  debt_cancelled_at?: string | null;
+  patient_signed_at?: string | null;
+  has_patient_signature?: boolean | null;
 };
+
+/**
+ * بند «رصيد اتفاقية Kizen»: ما بقي من اتفاقيةٍ منقولة من النظام السابق.
+ *
+ * يُعرض بنصّه في الاستقبال (ليُفهم من أين جاء)، و**لا يُطبع** على الفاتورة:
+ * سطر الفاتورة يحمل الخدمات وحدها — `invoiceLineText`.
+ */
+const KIZEN_BALANCE_PREFIX = /^\s*رصيد\s+اتفاقية\s+Kizen\s+رقم\s+\d+\s*[:：]\s*/;
+
+export function isKizenBalanceText(text: string | null | undefined): boolean {
+  return KIZEN_BALANCE_PREFIX.test(text ?? "");
+}
+
+/** نصّ البند كما يُكتب على الفاتورة والمطبوع: بلا «رصيد اتفاقية Kizen رقم …:». */
+export function invoiceLineText(text: string | null | undefined): string {
+  const original = String(text ?? "");
+  const stripped = original.replace(KIZEN_BALANCE_PREFIX, "").trim();
+  return stripped || original;
+}
 
 export type QuoteListRow = {
   id: string;
@@ -267,6 +292,17 @@ export async function printAgreement(agreement: AgreementListRow, organizationNa
   if (qError) throw qError;
   if (lError) throw lError;
 
+  // توقيع المريض (0208) يُقرأ عند الطباعة وحدها — صورةٌ لا تُحمَّل مع القوائم
+  let signature: string | null = null;
+  if (agreement.has_patient_signature) {
+    const { data } = await supabase
+      .from("treatment_agreements")
+      .select("patient_signature")
+      .eq("id", agreement.id)
+      .maybeSingle();
+    signature = ((data as { patient_signature?: string | null } | null)?.patient_signature ?? null) || null;
+  }
+
   const quoteBlocks = ((quotes ?? []) as QuoteListRow[])
     .map((quote) => {
       const rows = ((lines ?? []) as QuoteLineRow[])
@@ -274,7 +310,7 @@ export async function printAgreement(agreement: AgreementListRow, organizationNa
         .map(
           (line) => `<tr>
             <td>${esc(line.item_code ?? "")}</td>
-            <td>${esc(line.description)}</td>
+            <td>${esc(invoiceLineText(line.description))}</td>
             <td>${money(line.unit_price)}</td>
             <td>${num(line.qty)}</td>
             <td>${money(line.discount_amount)}</td>
@@ -313,8 +349,14 @@ export async function printAgreement(agreement: AgreementListRow, organizationNa
     </table>
     ${agreement.note ? `<p><b>ملاحظات:</b> ${esc(agreement.note)}</p>` : ""}
     <table style="margin-top:40px;border:none">
-      <tr><td style="border:none;padding-top:30px">توقيع المريض: ____________________</td>
-          <td style="border:none;padding-top:30px">توقيع الطبيب: ____________________</td></tr>
+      <tr><td style="border:none;padding-top:30px;vertical-align:bottom">توقيع المريض:
+            ${
+              signature && signature.startsWith("data:image/png;base64,")
+                ? `<img src="${esc(signature)}" alt="توقيع المريض" style="height:60px;vertical-align:middle" />
+                   <span style="font-size:11px">${agreement.patient_signed_at ? esc(new Date(agreement.patient_signed_at).toLocaleString("ar-SA")) : ""}</span>`
+                : "____________________"
+            }</td>
+          <td style="border:none;padding-top:30px;vertical-align:bottom">توقيع الطبيب: ____________________</td></tr>
     </table>`;
 
   printHtml(`اتفاقية ${agreement.agreement_number}`, body, "a4");

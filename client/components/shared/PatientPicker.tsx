@@ -35,6 +35,8 @@ export default function PatientPicker({
   const [loading, setLoading] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
+  /** متبقّي اتفاقيات كلّ نتيجة — كعمود «Agree…» في منتقي Kizen */
+  const [agreementDue, setAgreementDue] = useState<Record<string, number>>({});
 
   const { organization } = useOrganizationAccess();
 
@@ -67,8 +69,26 @@ export default function PatientPicker({
        * إلى إنشاء ملفّ ثانٍ لمريض موجود.
        */
       setSearchError(error ? error.message : null);
-      setResults(error ? [] : ((data as PatientSearchResult[]) ?? []));
+      const found = error ? [] : ((data as PatientSearchResult[]) ?? []);
+      setResults(found);
       setLoading(false);
+
+      // متبقّي الاتفاقيات للنتائج — تعذّره لا يمنع البحث (ترقية لم تُنفَّذ، أو لا صلاحية)
+      setAgreementDue({});
+      if (found.length > 0) {
+        const due = await supabase
+          .from("v_patient_open_agreements")
+          .select("patient_id, remaining_total")
+          .eq("organization_id", organization?.id as string)
+          .in("patient_id", found.map((row) => row.id));
+        if (!due.error) {
+          const map: Record<string, number> = {};
+          for (const row of (due.data ?? []) as { patient_id: string; remaining_total: number }[]) {
+            map[row.patient_id] = Number(row.remaining_total) || 0;
+          }
+          setAgreementDue(map);
+        }
+      }
     }, 300);
     return () => clearTimeout(handle);
   }, [term, searchScopes, organization?.id]);
@@ -115,6 +135,14 @@ export default function PatientPicker({
             >
               <UserRound className="h-4 w-4 text-muted-foreground" />
               <span className="flex-1">{patient.name_ar}</span>
+              {agreementDue[patient.id] > 0 && (
+                <span
+                  className="shrink-0 rounded border border-amber-400 bg-amber-50 px-1.5 text-[11px] tabular-nums text-amber-800 dark:bg-amber-950/30 dark:text-amber-200"
+                  title="متبقّي اتفاقيات المريض"
+                >
+                  اتفاقيات {agreementDue[patient.id].toLocaleString("en-US", { maximumFractionDigits: 2 })}
+                </span>
+              )}
               <span className="text-xs text-muted-foreground">
                 #{patient.file_number} · {patient.mobile_number ?? "—"}
               </span>

@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FilePlus2, FileText, FolderOpen, Printer, Receipt, RefreshCw, Save } from "lucide-react";
+import { FilePlus2, FileSignature, FileText, FolderOpen, Printer, Receipt, RefreshCw, Save } from "lucide-react";
+import SignatureCanvas from "@/components/shared/SignatureCanvas";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount } from "@/lib/locale";
@@ -97,8 +98,191 @@ export function invalidateAgreementQueries(queryClient: ReturnType<typeof useQue
   queryClient.invalidateQueries({ queryKey: ["agreement-quote-lines"] });
   queryClient.invalidateQueries({ queryKey: ["billing-agreement-items"] });
   queryClient.invalidateQueries({ queryKey: ["patient-agreements-context"] });
+  queryClient.invalidateQueries({ queryKey: ["patient-open-agreements"] });
+  queryClient.invalidateQueries({ queryKey: ["agreement-signature"] });
   if (agreementId) queryClient.invalidateQueries({ queryKey: ["agreement", agreementId] });
   else queryClient.invalidateQueries({ queryKey: ["agreement"] });
+}
+
+/**
+ * إلغاء مديونية الاتفاقية أو إعادتها — كـ«إلغاء المديونية» في Kizen (0208).
+ *
+ * منفصلٌ عن التعطيل: الاتفاقية تبقى ظاهرةً بعروضها وما فُوتر منها، ومتبقّيها
+ * يسقط من مطالبة المريض — لا ينبّه الاستقبال ولا يُعرض للفوترة. بسببٍ مكتوب،
+ * ولمن يملك `agreements.cancel_debt` (مدير الفرع افتراضًا).
+ */
+export function AgreementDebtDialog({
+  agreement,
+  onOpenChange,
+}: {
+  agreement: Pick<AgreementListRow, "id" | "agreement_number" | "debt_cancelled" | "remaining_amount"> | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [reason, setReason] = useState("");
+  const cancelling = agreement ? !agreement.debt_cancelled : true;
+
+  useEffect(() => {
+    if (agreement) setReason("");
+  }, [agreement?.id]);
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      if (!agreement) return;
+      const { error } = await supabase.rpc("app_set_agreement_debt_cancelled", {
+        p_agreement_id: agreement.id,
+        p_cancelled: cancelling,
+        p_reason: cancelling ? reason.trim() : null,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      invalidateAgreementQueries(queryClient, agreement?.id);
+      toast({ title: cancelling ? "أُلغيت مديونية الاتفاقية" : "أُعيدت مديونية الاتفاقية" });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر تغيير مديونية الاتفاقية", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open={Boolean(agreement)} onOpenChange={onOpenChange}>
+      <DialogContent dir="rtl" className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {cancelling ? "إلغاء مديونية" : "إعادة مديونية"} الاتفاقية رقم {agreement?.agreement_number}
+          </DialogTitle>
+          <DialogDescription>
+            {cancelling
+              ? `يسقط متبقّيها (${formatAmount(agreement?.remaining_amount ?? 0)} ر.س) من مطالبة المريض: لا ينبّه الاستقبال ولا يُعرض للفوترة. الاتفاقية وما فُوتر منها باقيان.`
+              : "يعود متبقّيها مطالبةً على المريض، قابلًا للفوترة."}
+          </DialogDescription>
+        </DialogHeader>
+        {cancelling && (
+          <div className="flex flex-col gap-1">
+            <Label>سبب إلغاء المديونية</Label>
+            <Textarea rows={2} value={reason} onChange={(event) => setReason(event.target.value)} />
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            تراجع
+          </Button>
+          <Button
+            variant={cancelling ? "destructive" : "default"}
+            disabled={mutation.isPending || (cancelling && !reason.trim())}
+            onClick={() => mutation.mutate()}
+          >
+            {mutation.isPending ? "جارٍ الحفظ…" : cancelling ? "إلغاء المديونية" : "إعادة المديونية"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * توقيع المريض على الاتفاقية (0208) — يُرسم على الشاشة ويُحفظ صورةً، ويُطبع
+ * على الاتفاقية. والتوقيع الخاطئ يُمسح ويُعاد، وكلاهما بسطر تدقيق.
+ */
+function AgreementSignatureDialog({
+  agreement,
+  canManage,
+  onOpenChange,
+}: {
+  agreement: Pick<AgreementListRow, "id" | "agreement_number" | "patient_name" | "has_patient_signature" | "patient_signed_at"> | null;
+  canManage: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [drawn, setDrawn] = useState<string | null>(null);
+  const existing = useQuery({
+    queryKey: ["agreement-signature", agreement?.id],
+    enabled: Boolean(agreement?.id && agreement?.has_patient_signature),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("treatment_agreements")
+        .select("patient_signature")
+        .eq("id", agreement!.id)
+        .maybeSingle();
+      if (error) throw error;
+      return ((data as { patient_signature?: string | null } | null)?.patient_signature ?? null) || null;
+    },
+  });
+
+  useEffect(() => {
+    if (agreement) setDrawn(null);
+  }, [agreement?.id]);
+
+  const mutation = useMutation({
+    mutationFn: async (signature: string | null) => {
+      if (!agreement) return;
+      const { error } = await supabase.rpc("app_sign_agreement", {
+        p_agreement_id: agreement.id,
+        p_signature: signature,
+      });
+      if (error) throw error;
+    },
+    onSuccess: (_data, signature) => {
+      invalidateAgreementQueries(queryClient, agreement?.id);
+      toast({ title: signature ? "حُفظ توقيع المريض" : "مُسح التوقيع" });
+      if (signature) onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حفظ التوقيع", description: errorMessage(error) }),
+  });
+
+  const signed = Boolean(agreement?.has_patient_signature);
+
+  return (
+    <Dialog open={Boolean(agreement)} onOpenChange={onOpenChange}>
+      <DialogContent dir="rtl" className="w-[min(96vw,720px)] max-w-none">
+        <DialogHeader>
+          <DialogTitle>توقيع المريض على الاتفاقية رقم {agreement?.agreement_number}</DialogTitle>
+          <DialogDescription>
+            {agreement?.patient_name} — يوقّع بإصبعه أو بالقلم أو بالفأرة، ويُطبع التوقيع على الاتفاقية.
+          </DialogDescription>
+        </DialogHeader>
+        {signed && (
+          <div className="flex flex-col gap-2 rounded-md border p-2">
+            <span className="text-xs text-muted-foreground">
+              موقّعة{agreement?.patient_signed_at ? ` — ${new Date(agreement.patient_signed_at).toLocaleString("ar-SA")}` : ""}
+            </span>
+            {existing.data && <img src={existing.data} alt="توقيع المريض" className="h-24 w-auto self-start bg-white" />}
+            {canManage && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="self-start text-destructive"
+                disabled={mutation.isPending}
+                onClick={() => mutation.mutate(null)}
+              >
+                مسح التوقيع
+              </Button>
+            )}
+          </div>
+        )}
+        {canManage && (
+          <>
+            <Label>{signed ? "توقيعٌ جديد بدل الحالي" : "التوقيع"}</Label>
+            <SignatureCanvas onChange={setDrawn} />
+          </>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            إغلاق
+          </Button>
+          {canManage && (
+            <Button disabled={!drawn || mutation.isPending} onClick={() => mutation.mutate(drawn)}>
+              {mutation.isPending ? "جارٍ الحفظ…" : "حفظ التوقيع"}
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 /**
@@ -198,6 +382,7 @@ export default function AgreementDialog({
   const { can } = usePermissions();
   const { organization, session } = useOrganizationAccess();
   const canManage = can("agreements.manage");
+  const canCancelDebt = can("agreements.cancel_debt");
 
   const [currentId, setCurrentId] = useState<string | null>(agreementId);
   const [pickedPatientId, setPickedPatientId] = useState<string | null>(fixedPatientId ?? null);
@@ -213,6 +398,8 @@ export default function AgreementDialog({
   const [quoteEditor, setQuoteEditor] = useState<{ open: boolean; quoteId: string | null }>({ open: false, quoteId: null });
   const [invoiceQuoteId, setInvoiceQuoteId] = useState<string | null>(null);
   const [disableTarget, setDisableTarget] = useState<AgreementListRow | null>(null);
+  const [debtTarget, setDebtTarget] = useState<AgreementListRow | null>(null);
+  const [signatureTarget, setSignatureTarget] = useState<AgreementListRow | null>(null);
 
   const agreement = useAgreement(currentId);
   const quotes = useAgreementQuotes(currentId);
@@ -351,6 +538,14 @@ export default function AgreementDialog({
               {row?.is_disabled && (
                 <Badge variant="secondary">معطّلة{row.disabled_reason ? ` — ${row.disabled_reason}` : ""}</Badge>
               )}
+              {row?.debt_cancelled && (
+                <Badge variant="outline" className="border-rose-400 text-rose-700">
+                  أُلغيت مديونيتها{row.debt_cancel_reason ? ` — ${row.debt_cancel_reason}` : ""}
+                </Badge>
+              )}
+              {row?.has_patient_signature && (
+                <Badge variant="outline" className="border-emerald-400 text-emerald-700">موقّعة من المريض</Badge>
+              )}
               {dirty && (
                 <Badge variant="outline" className="border-amber-400 text-amber-700">
                   تعديلات لم تُحفظ
@@ -384,6 +579,10 @@ export default function AgreementDialog({
                 </Link>
               </Button>
             )}
+            <Button size="sm" variant="outline" disabled={!row} onClick={() => row && setSignatureTarget(row)}>
+              <FileSignature className="h-4 w-4" />
+              توقيع المريض
+            </Button>
             <Button size="sm" variant="ghost" disabled={!currentId} onClick={refresh}>
               <RefreshCw className="h-4 w-4" />
               تحديث
@@ -490,6 +689,16 @@ export default function AgreementDialog({
                   onCheckedChange={() => row && setDisableTarget(row)}
                 />
                 <Label htmlFor="agreement-disabled" className="text-sm">معطّلة</Label>
+              </div>
+              <div className="flex items-end gap-2 pb-2">
+                <Checkbox
+                  id="agreement-debt-cancelled"
+                  checked={Boolean(row?.debt_cancelled)}
+                  disabled={!canCancelDebt || !row}
+                  title={canCancelDebt ? "" : "لمن يملك صلاحية «إلغاء مديونية الاتفاقية»"}
+                  onCheckedChange={() => row && setDebtTarget(row)}
+                />
+                <Label htmlFor="agreement-debt-cancelled" className="text-sm">إلغاء المديونية</Label>
               </div>
 
               <div className="col-span-2 flex flex-col gap-1 md:col-span-4 lg:col-span-3">
@@ -648,6 +857,12 @@ export default function AgreementDialog({
       )}
 
       <AgreementDisableDialog agreement={disableTarget} onOpenChange={(value) => !value && setDisableTarget(null)} />
+      <AgreementDebtDialog agreement={debtTarget} onOpenChange={(value) => !value && setDebtTarget(null)} />
+      <AgreementSignatureDialog
+        agreement={signatureTarget}
+        canManage={canManage}
+        onOpenChange={(value) => !value && setSignatureTarget(null)}
+      />
     </>
   );
 }
