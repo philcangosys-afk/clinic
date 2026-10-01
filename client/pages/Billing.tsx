@@ -54,7 +54,6 @@ import { printInvoiceReceipt, type InvoicePrintData } from "@/lib/invoice-receip
 import { useToast } from "@/hooks/use-toast";
 import { usePermissions } from "@/lib/permissions";
 import TaxSettingsTab, {
-  EInvoicePanel,
   VatReturnPanel,
   TaxInvoicePreview,
 } from "@/components/billing/TaxSettingsTab";
@@ -495,7 +494,9 @@ export default function Billing() {
         <div className="flex flex-col gap-4">
           <TaxSettingsTab />
           <VatReturnPanel />
-          <EInvoicePanel />
+          {/* «الفواتير الإلكترونية» (0092) كانت محاكاةً محليّة قبل الربط الفعليّ مع
+              ZATCA ولا تُرسل شيئًا — أُزيلت من الشاشة؛ حالة الإبلاغ الحقيقية في
+              زرّ «لم تُبلَّغ ZATCA» وفي كل فاتورة. */}
         </div>
       )}
 

@@ -684,9 +684,13 @@ export function VatReturnPanel() {
                 className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
               >
                 <span>
-                  {r.period_month} · {CATEGORY_LABELS[r.vat_category] ?? r.vat_category}
+                  {new Date(`${r.period_month}T12:00:00`).toLocaleDateString("ar-SA-u-ca-gregory", { month: "long", year: "numeric" })} ·{" "}
+                  {CATEGORY_LABELS[r.vat_category] ?? r.vat_category}
                   <span className="block text-xs text-muted-foreground">
-                    {r.invoice_count} فاتورة · {r.document_type}
+                    {r.invoice_count} فاتورة · {r.document_type === "simplified" ? "مبسّطة" : r.document_type === "standard" ? "ضريبية (أعمال)" : r.document_type}
+                    {r.vat_category === "standard" && Number(r.vat_amount ?? 0) === 0 && Number(r.taxable_amount ?? 0) > 0
+                      ? " · ضريبة صفر: مرضى سعوديون تتحمّل الدولة ضريبتهم"
+                      : ""}
                   </span>
                 </span>
                 <span className="tabular-nums">
