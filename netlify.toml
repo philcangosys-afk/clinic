@@ -17,3 +17,11 @@ to = "/.netlify/functions/api/:splat"
 from = "/*"
 to = "/index.html"
 status = 200
+
+# حزم الشيفرة تحمل بصمةً في اسمها (Vite): تُخزَّن في المتصفّح سنةً بلا إعادة
+# تحقّق، فلا يُسأل الخادم عنها في كلّ فتحٍ للنظام. والصفحة الرئيسية (index.html)
+# يُتحقَّق منها في كلّ فتح كما هي — فيصل كلّ نشرٍ جديد فورًا.
+[[headers]]
+for = "/assets/*"
+[headers.values]
+Cache-Control = "public, max-age=31536000, immutable"

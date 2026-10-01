@@ -12,6 +12,12 @@ type DemoRoleContextValue = {
   role: DemoRoleKey | null;
   name: string;
   doctorId: string | null;
+  /**
+   * صفةُ معاينةٍ اختارها المدير — لا صفةُ عضويةٍ حقيقية. ترشيح القائمة بقائمة
+   * الصفة الثابتة (`DEMO_ROLES`) للمعاينة وحدها؛ والموظّف الحقيقي تحكم قائمتَه
+   * صلاحياتُه التي يضبطها المالك من شاشة الصفات (0207).
+   */
+  isPreview: boolean;
   /** انتهى تحميل الاختيار المحفوظ — قبلها لا تُعرض شاشة الاختيار حتى لا ترتعش. */
   ready: boolean;
   set: (state: DemoRoleState) => void;
@@ -22,6 +28,7 @@ const DemoRoleContext = createContext<DemoRoleContextValue>({
   role: null,
   name: "",
   doctorId: null,
+  isPreview: false,
   ready: false,
   set: () => {},
   clear: () => {},
@@ -67,6 +74,7 @@ export function DemoRoleProvider({ children }: { children: ReactNode }) {
         role: membershipRole,
         name: "",
         doctorId: null,
+        isPreview: false,
         ready,
         set,
         clear,
@@ -76,6 +84,7 @@ export function DemoRoleProvider({ children }: { children: ReactNode }) {
       role: state?.role ?? null,
       name: state?.name ?? "",
       doctorId: state?.doctorId ?? null,
+      isPreview: Boolean(state?.role),
       ready,
       set,
       clear,

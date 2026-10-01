@@ -123,7 +123,17 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
       }
 
       const currentMembership = membershipResult.data as OrganizationMembership;
-      const [organizationResult, branchResult, featuresResult, permissionsResult] = await Promise.all([
+      // كلّ ما يلي يحتاج العضوية وحدها، فيُطلب دفعةً واحدة لا متتابعًا: كان
+      // الدور المخصّص ثمّ `v_my_permissions` رحلتين إضافيتين بعد هذه — نحو نصف
+      // ثانيةٍ في كلّ فتحٍ للنظام مع بُعد الخادم.
+      const [
+        organizationResult,
+        branchResult,
+        featuresResult,
+        permissionsResult,
+        roleResult,
+        grantedResult,
+      ] = await Promise.all([
         supabase.from("organizations").select("*").eq("id", currentMembership.organization_id).maybeSingle(),
         currentMembership.branch_id
           ? supabase.from("branches").select("*").eq("id", currentMembership.branch_id).maybeSingle()
@@ -134,6 +144,18 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
           .select("organization_id, user_id, permission_key, granted")
           .eq("organization_id", currentMembership.organization_id)
           .eq("user_id", activeSession.user.id),
+        currentMembership.custom_role_id
+          ? supabase
+              .from("organization_role_permissions")
+              .select("permission_key")
+              .eq("role_id", currentMembership.custom_role_id)
+          : Promise.resolve(null),
+        // جواب القاعدة عن كلّ مفتاح
+        supabase
+          .from("v_my_permissions")
+          .select("permission_key, granted")
+          .eq("organization_id", currentMembership.organization_id)
+          .eq("granted", true),
       ]);
       const queryError = organizationResult.error || branchResult.error || featuresResult.error || permissionsResult.error;
       if (queryError) throw queryError;
@@ -147,11 +169,7 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
 
       // الدور المخصّص: مجموعة صلاحياته تحلّ محلّ افتراض الدور الأساس.
       // تعذّر قراءتها لا يُسقط الجلسة — يعود المستخدم إلى افتراض أساسه.
-      if (currentMembership.custom_role_id) {
-        const roleResult = await supabase
-          .from("organization_role_permissions")
-          .select("permission_key")
-          .eq("role_id", currentMembership.custom_role_id);
+      if (currentMembership.custom_role_id && roleResult) {
         setCustomRolePermissions(
           roleResult.error
             ? null
@@ -161,13 +179,7 @@ export function OrganizationAccessProvider({ children }: { children: ReactNode }
         setCustomRolePermissions(null);
       }
 
-      // جواب القاعدة عن كلّ مفتاح. يُقرأ بعد العضوية لأنّه يحتاج
-      // `organization_id`، وتعذّرُه لا يُسقط الجلسة — يعود الحساب المحلّي.
-      const grantedResult = await supabase
-        .from("v_my_permissions")
-        .select("permission_key, granted")
-        .eq("organization_id", currentMembership.organization_id)
-        .eq("granted", true);
+      // جواب القاعدة عن كلّ مفتاح: تعذّرُه لا يُسقط الجلسة — يعود الحساب المحلّي.
       setDatabasePermissions(
         grantedResult.error
           ? null

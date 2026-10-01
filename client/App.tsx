@@ -1,86 +1,105 @@
 import "./global.css";
 
-import { Fragment, lazy, Suspense, useState, type ComponentType, type ReactNode } from "react";
+import {
+  Fragment,
+  lazy,
+  Suspense,
+  useState,
+  type ComponentType,
+  type LazyExoticComponent,
+  type ReactNode,
+} from "react";
 import { Toaster } from "@/components/ui/toaster";
 import { createRoot } from "react-dom/client";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
-const Index = lazy(() => import("./pages/Index"));
-const Onboarding = lazy(() => import("./pages/Onboarding"));
-const Login = lazy(() => import("./pages/Login"));
-const ComingSoon = lazy(() => import("./pages/ComingSoon"));
-const NotFound = lazy(() => import("./pages/NotFound"));
-const Reception = lazy(() => import("./pages/Reception"));
-const Patients = lazy(() => import("./pages/Patients"));
-const PatientProfile = lazy(() => import("./pages/PatientProfile"));
-const Appointments = lazy(() => import("./pages/Appointments"));
-const Billing = lazy(() => import("./pages/Billing"));
-const Doctors = lazy(() => import("./pages/Doctors"));
-const Departments = lazy(() => import("./pages/Departments"));
-const Services = lazy(() => import("./pages/Services"));
-const MedicalRecords = lazy(() => import("./pages/MedicalRecords"));
-const Insurance = lazy(() => import("./pages/Insurance"));
-const Employees = lazy(() => import("./pages/Employees"));
-const Payroll = lazy(() => import("./pages/Payroll"));
-const Reports = lazy(() => import("./pages/Reports"));
-const OperationsSettings = lazy(() => import("./pages/OperationsSettings"));
-const Laboratory = lazy(() => import("./pages/Laboratory"));
-const Radiology = lazy(() => import("./pages/Radiology"));
-const RadiologyConsole = lazy(() => import("./pages/RadiologyConsole"));
-const VitalSigns = lazy(() => import("./pages/VitalSigns"));
-const Pharmacy = lazy(() => import("./pages/Pharmacy"));
-const Packages = lazy(() => import("./pages/Packages"));
-const Accounting = lazy(() => import("./pages/Accounting"));
-const Procurement = lazy(() => import("./pages/Procurement"));
-const ZATCASettings = lazy(() => import("./pages/ZATCASettings"));
-const CashExpenses = lazy(() => import("./pages/CashExpenses"));
-const PurchaseReports = lazy(() => import("./pages/PurchaseReports"));
-const Inventory = lazy(() => import("./pages/Inventory"));
-const DentalLab = lazy(() => import("./pages/DentalLab"));
-const Messaging = lazy(() => import("./pages/Messaging"));
-const AuditLog = lazy(() => import("./pages/AuditLog"));
-const PatientJourney = lazy(() => import("./pages/PatientJourney"));
-const Shifts = lazy(() => import("./pages/Shifts"));
-const Attendance = lazy(() => import("./pages/Attendance"));
-const Leave = lazy(() => import("./pages/Leave"));
-const Contracts = lazy(() => import("./pages/Contracts"));
-const Recruitment = lazy(() => import("./pages/Recruitment"));
-const Performance = lazy(() => import("./pages/Performance"));
-const Training = lazy(() => import("./pages/Training"));
-const HrReports = lazy(() => import("./pages/HrReports"));
-const DocumentTemplates = lazy(() => import("./pages/DocumentTemplates"));
-const ExternalClients = lazy(() => import("./pages/ExternalClients"));
-const CustomReports = lazy(() => import("./pages/CustomReports"));
-const Warehouses = lazy(() => import("./pages/Warehouses"));
-const Licenses = lazy(() => import("./pages/Licenses"));
-const Waitlist = lazy(() => import("./pages/Waitlist"));
-const FollowUpCenter = lazy(() => import("./pages/FollowUpCenter"));
-const Users = lazy(() => import("./pages/Users"));
-const ExamTemplates = lazy(() => import("./pages/ExamTemplates"));
-const Offers = lazy(() => import("./pages/Offers"));
-const SystemControl = lazy(() => import("./pages/SystemControl"));
-const Alerts = lazy(() => import("./pages/Alerts"));
-const BlockedContacts = lazy(() => import("./pages/BlockedContacts"));
-const PatientVisits = lazy(() => import("./pages/PatientVisits"));
-const DeviceSettings = lazy(() => import("./pages/DeviceSettings"));
-const OrganizationSettings = lazy(() => import("./pages/OrganizationSettings"));
-const Content = lazy(() => import("./pages/Content"));
-const Settings = lazy(() => import("./pages/Settings"));
-const ReferenceData = lazy(() => import("./pages/ReferenceData"));
-const PriceLists = lazy(() => import("./pages/PriceLists"));
-const Resources = lazy(() => import("./pages/Resources"));
-const Assets = lazy(() => import("./pages/Assets"));
-const Documents = lazy(() => import("./pages/Documents"));
-const PatientPortalAdmin = lazy(() => import("./pages/PatientPortalAdmin"));
-const Portal = lazy(() => import("./pages/Portal"));
-const PublicBooking = lazy(() => import("./pages/PublicBooking"));
-const DoctorWorkspace = lazy(() => import("./pages/DoctorWorkspace"));
-const Quality = lazy(() => import("./pages/Quality"));
-const Integrations = lazy(() => import("./pages/Integrations"));
-const Analytics = lazy(() => import("./pages/Analytics"));
-const LaunchReadiness = lazy(() => import("./pages/LaunchReadiness"));
+import { registerScreenLoader } from "./lib/screen-preload";
+
+type ScreenComponent = LazyExoticComponent<ComponentType<any>> & { preload: () => Promise<unknown> };
+
+/**
+ * شاشةٌ تُحمَّل عند الحاجة، ومعها محمِّلها لتُنزَّل حزمتها مسبقًا
+ * (`lib/screen-preload.ts`): عند مرور المؤشّر على القسم، وفي أوقات الفراغ.
+ */
+function lazyScreen(loader: () => Promise<{ default: ComponentType<any> }>): ScreenComponent {
+  return Object.assign(lazy(loader), { preload: loader });
+}
+const Index = lazyScreen(() => import("./pages/Index"));
+const Onboarding = lazyScreen(() => import("./pages/Onboarding"));
+const Login = lazyScreen(() => import("./pages/Login"));
+const ComingSoon = lazyScreen(() => import("./pages/ComingSoon"));
+const NotFound = lazyScreen(() => import("./pages/NotFound"));
+const Reception = lazyScreen(() => import("./pages/Reception"));
+const Patients = lazyScreen(() => import("./pages/Patients"));
+const PatientProfile = lazyScreen(() => import("./pages/PatientProfile"));
+const Appointments = lazyScreen(() => import("./pages/Appointments"));
+const Billing = lazyScreen(() => import("./pages/Billing"));
+const Doctors = lazyScreen(() => import("./pages/Doctors"));
+const Departments = lazyScreen(() => import("./pages/Departments"));
+const Services = lazyScreen(() => import("./pages/Services"));
+const MedicalRecords = lazyScreen(() => import("./pages/MedicalRecords"));
+const Insurance = lazyScreen(() => import("./pages/Insurance"));
+const Employees = lazyScreen(() => import("./pages/Employees"));
+const Payroll = lazyScreen(() => import("./pages/Payroll"));
+const Reports = lazyScreen(() => import("./pages/Reports"));
+const OperationsSettings = lazyScreen(() => import("./pages/OperationsSettings"));
+const Laboratory = lazyScreen(() => import("./pages/Laboratory"));
+const Radiology = lazyScreen(() => import("./pages/Radiology"));
+const RadiologyConsole = lazyScreen(() => import("./pages/RadiologyConsole"));
+const VitalSigns = lazyScreen(() => import("./pages/VitalSigns"));
+const Pharmacy = lazyScreen(() => import("./pages/Pharmacy"));
+const Packages = lazyScreen(() => import("./pages/Packages"));
+const Accounting = lazyScreen(() => import("./pages/Accounting"));
+const Procurement = lazyScreen(() => import("./pages/Procurement"));
+const ZATCASettings = lazyScreen(() => import("./pages/ZATCASettings"));
+const CashExpenses = lazyScreen(() => import("./pages/CashExpenses"));
+const PurchaseReports = lazyScreen(() => import("./pages/PurchaseReports"));
+const Inventory = lazyScreen(() => import("./pages/Inventory"));
+const DentalLab = lazyScreen(() => import("./pages/DentalLab"));
+const Messaging = lazyScreen(() => import("./pages/Messaging"));
+const AuditLog = lazyScreen(() => import("./pages/AuditLog"));
+const PatientJourney = lazyScreen(() => import("./pages/PatientJourney"));
+const Shifts = lazyScreen(() => import("./pages/Shifts"));
+const Attendance = lazyScreen(() => import("./pages/Attendance"));
+const Leave = lazyScreen(() => import("./pages/Leave"));
+const Contracts = lazyScreen(() => import("./pages/Contracts"));
+const Recruitment = lazyScreen(() => import("./pages/Recruitment"));
+const Performance = lazyScreen(() => import("./pages/Performance"));
+const Training = lazyScreen(() => import("./pages/Training"));
+const HrReports = lazyScreen(() => import("./pages/HrReports"));
+const DocumentTemplates = lazyScreen(() => import("./pages/DocumentTemplates"));
+const ExternalClients = lazyScreen(() => import("./pages/ExternalClients"));
+const CustomReports = lazyScreen(() => import("./pages/CustomReports"));
+const Warehouses = lazyScreen(() => import("./pages/Warehouses"));
+const Licenses = lazyScreen(() => import("./pages/Licenses"));
+const Waitlist = lazyScreen(() => import("./pages/Waitlist"));
+const FollowUpCenter = lazyScreen(() => import("./pages/FollowUpCenter"));
+const Users = lazyScreen(() => import("./pages/Users"));
+const ExamTemplates = lazyScreen(() => import("./pages/ExamTemplates"));
+const Offers = lazyScreen(() => import("./pages/Offers"));
+const SystemControl = lazyScreen(() => import("./pages/SystemControl"));
+const Alerts = lazyScreen(() => import("./pages/Alerts"));
+const BlockedContacts = lazyScreen(() => import("./pages/BlockedContacts"));
+const PatientVisits = lazyScreen(() => import("./pages/PatientVisits"));
+const DeviceSettings = lazyScreen(() => import("./pages/DeviceSettings"));
+const OrganizationSettings = lazyScreen(() => import("./pages/OrganizationSettings"));
+const Content = lazyScreen(() => import("./pages/Content"));
+const Settings = lazyScreen(() => import("./pages/Settings"));
+const ReferenceData = lazyScreen(() => import("./pages/ReferenceData"));
+const PriceLists = lazyScreen(() => import("./pages/PriceLists"));
+const Resources = lazyScreen(() => import("./pages/Resources"));
+const Assets = lazyScreen(() => import("./pages/Assets"));
+const Documents = lazyScreen(() => import("./pages/Documents"));
+const PatientPortalAdmin = lazyScreen(() => import("./pages/PatientPortalAdmin"));
+const Portal = lazyScreen(() => import("./pages/Portal"));
+const PublicBooking = lazyScreen(() => import("./pages/PublicBooking"));
+const DoctorWorkspace = lazyScreen(() => import("./pages/DoctorWorkspace"));
+const Quality = lazyScreen(() => import("./pages/Quality"));
+const Integrations = lazyScreen(() => import("./pages/Integrations"));
+const Analytics = lazyScreen(() => import("./pages/Analytics"));
+const LaunchReadiness = lazyScreen(() => import("./pages/LaunchReadiness"));
 import { OrganizationAccessProvider } from "./contexts/OrganizationAccessContext";
 import { DemoRoleProvider } from "./contexts/DemoRoleContext";
 import AppShell from "./components/layout/AppShell";
@@ -103,14 +122,44 @@ function ScreenResetBoundary({ children }: { children: ReactNode }) {
 }
 import { moduleRegistry, settingsModule } from "./lib/module-registry";
 
-const queryClient = new QueryClient();
+/**
+ * إعدادات جلب البيانات.
+ *
+ * كانت الافتراضية: كلّ استعلامٍ «قديم» لحظة وصوله (`staleTime: 0`)، فيُعاد جلبه
+ * عند كلّ فتح شاشةٍ أو حوار، **وعند كلّ عودةٍ إلى النافذة** (من واتساب أو من
+ * برنامجٍ آخر) يُعاد جلب كلّ ما هو مفتوح دفعةً واحدة — عشرات الطلبات تشغل
+ * اتّصالات الخادم، فينتظر خلفها ما ضغطه المستخدم. والخطأ يُعاد ثلاث مرّات
+ * بمهلٍ متزايدة (نحو سبع ثوانٍ) قبل أن يظهر.
+ *
+ * الآن:
+ *   * البيانات تبقى حديثةً ثلاثين ثانية، ولا جلب عند العودة إلى النافذة —
+ *     الشاشات الحيّة (الاستقبال، التقويم، التنبيهات) لها تحديثها الدوريّ.
+ *   * **كلّ إجراءٍ ناجح يُعلِّم كلّ البيانات قديمةً** بلا جلبٍ فوريّ: الشاشة
+ *     التالية تجلب من جديد عند فتحها، فلا يُرى رقمٌ سابقٌ لما حُفظ للتوّ — مع
+ *     بقاء ما يُعيد الإجراء نفسه جلبه (`invalidateQueries`) كما هو.
+ *   * الخطأ يُعاد مرّةً واحدة.
+ */
+const queryClient: QueryClient = new QueryClient({
+  mutationCache: new MutationCache({
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ refetchType: "none" });
+    },
+  }),
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 // كل موديولات الهيكل العام (module-registry) تُسجَّل كمسارات فعلية منذ الآن،
 // حتى لا يبقى أي رابط في الشريط الجانبي بلا وجهة. الموديولات التي لم تُبنَ
 // شاشتها الحقيقية بعد تعرض صفحة "قيد التطوير" (ComingSoon) مؤقتًا. الأساسيات
 // التشغيلية اليومية (الاستقبال، المرضى، المواعيد، الفوترة) أصبحت شاشات حقيقية
 // مربوطة بقاعدة البيانات — المرحلة 3.2.
-const REAL_SCREENS: Record<string, ComponentType> = {
+const REAL_SCREENS: Record<string, ScreenComponent> = {
   reception: Reception,
   patients: Patients,
   appointments: Appointments,
@@ -195,6 +244,13 @@ const REAL_SCREENS: Record<string, ComponentType> = {
   diagnoses: ReferenceData,
   settings: Settings,
 };
+registerScreenLoader("dashboard", Index.preload);
+// «المرضى» يقود إلى ملفّ المريض: الحزمتان معًا
+registerScreenLoader("patients", () => Promise.all([Patients.preload(), PatientProfile.preload()]));
+for (const [moduleId, Screen] of Object.entries(REAL_SCREENS)) {
+  registerScreenLoader(moduleId, Screen.preload);
+}
+
 const routedModules = [...moduleRegistry.filter((item) => item.id !== "dashboard"), settingsModule];
 
 const App = () => (

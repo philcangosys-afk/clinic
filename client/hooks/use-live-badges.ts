@@ -24,8 +24,9 @@ function todayBounds() {
   return { startIso: start.toISOString(), endIso: end.toISOString() };
 }
 
-async function fetchLiveBadges(
+async function fetchLiveBadgesPerKey(
   organizationId: string,
+  keys: string[],
   userId?: string,
   /**
    * حصرُ العدّادات على طبيبٍ بعينه.
@@ -65,25 +66,26 @@ async function fetchLiveBadges(
     .gte("visit_date", startIso)
     .lt("visit_date", endIso);
 
-  const entries: [string, Promise<number | null>][] = [
+  // مصنعٌ لكلّ عدّاد — لا يُطلَق إلّا ما طُلب
+  const entries: [string, () => Promise<number | null>][] = [
     [
       "reception",
-      safeCount(
+      () => safeCount(
         (scopedDoctorId
           ? receptionQuery.eq("doctor_id", scopedDoctorId)
           : receptionQuery) as any,
       ),
     ],
-    ["patients", safeCount(patientsQuery as any)],
+    ["patients", () => safeCount(patientsQuery as any)],
     [
       "medical-records",
-      safeCount(
+      () => safeCount(
         (scopedDoctorId ? visitsQuery.eq("doctor_id", scopedDoctorId) : visitsQuery) as any,
       ),
     ],
     [
       "services",
-      safeCount(
+      () => safeCount(
         supabase
           .from("items")
           .select("id", { count: "exact", head: true })
@@ -94,7 +96,7 @@ async function fetchLiveBadges(
     ],
     [
       "departments",
-      safeCount(
+      () => safeCount(
         supabase
           .from("clinics")
           .select("id", { count: "exact", head: true })
@@ -104,7 +106,7 @@ async function fetchLiveBadges(
     ],
     [
       "doctors",
-      safeCount(
+      () => safeCount(
         supabase
           .from("doctors")
           .select("id", { count: "exact", head: true })
@@ -114,7 +116,7 @@ async function fetchLiveBadges(
     ],
     [
       "laboratory",
-      safeCount(
+      () => safeCount(
         supabase
           .from("v_lab_pending_orders")
           // مفتاح هذا العرض اسمه `lab_order_id` لا `id` — طلب عمود
@@ -125,7 +127,7 @@ async function fetchLiveBadges(
     ],
     [
       "radiology",
-      safeCount(
+      () => safeCount(
         supabase
           .from("v_radiology_unreported_orders")
           // مفتاح هذا العرض اسمه `radiology_order_id` لا `id` — طلب عمود
@@ -136,7 +138,7 @@ async function fetchLiveBadges(
     ],
     [
       "pharmacy",
-      safeCount(
+      () => safeCount(
         supabase
           .from("items")
           .select("id", { count: "exact", head: true })
@@ -147,7 +149,7 @@ async function fetchLiveBadges(
     ],
     [
       "dispensing",
-      safeCount(
+      () => safeCount(
         supabase
           .from("v_prescriptions_pending_dispensing")
           // مفتاح هذا العرض اسمه `prescription_id` لا `id` — طلب عمود
@@ -158,7 +160,7 @@ async function fetchLiveBadges(
     ],
     [
       "employees",
-      safeCount(
+      () => safeCount(
         supabase
           .from("employees")
           .select("id", { count: "exact", head: true })
@@ -168,7 +170,7 @@ async function fetchLiveBadges(
     ],
     [
       "attendance",
-      safeCount(
+      () => safeCount(
         supabase
           .from("v_today_attendance")
           .select("employee_id", { count: "exact", head: true })
@@ -177,7 +179,7 @@ async function fetchLiveBadges(
     ],
     [
       "leave",
-      safeCount(
+      () => safeCount(
         supabase
           .from("leave_requests")
           .select("id", { count: "exact", head: true })
@@ -187,7 +189,7 @@ async function fetchLiveBadges(
     ],
     [
       "contracts",
-      safeCount(
+      () => safeCount(
         supabase
           .from("v_employee_contracts_status")
           .select("employee_id", { count: "exact", head: true })
@@ -196,7 +198,7 @@ async function fetchLiveBadges(
     ],
     [
       "recruitment",
-      safeCount(
+      () => safeCount(
         supabase
           .from("job_postings")
           .select("id", { count: "exact", head: true })
@@ -205,7 +207,7 @@ async function fetchLiveBadges(
     ],
     [
       "training",
-      safeCount(
+      () => safeCount(
         supabase
           .from("training_programs")
           .select("id", { count: "exact", head: true })
@@ -214,7 +216,7 @@ async function fetchLiveBadges(
     ],
     [
       "shifts",
-      safeCount(
+      () => safeCount(
         supabase
           .from("shift_templates")
           .select("id", { count: "exact", head: true })
@@ -223,7 +225,7 @@ async function fetchLiveBadges(
     ],
     [
       "audit",
-      safeCount(
+      () => safeCount(
         supabase
           .from("audit_log")
           .select("id", { count: "exact", head: true })
@@ -235,7 +237,7 @@ async function fetchLiveBadges(
     [
       // ما ينتظر السداد لا عدد كلّ الفواتير: العدد الذي يستدعي عملًا
       "purchase-invoices",
-      safeCount(
+      () => safeCount(
         supabase
           .from("purchase_invoices")
           .select("id", { count: "exact", head: true })
@@ -246,7 +248,7 @@ async function fetchLiveBadges(
     [
       // طلبات تنتظر الاعتماد
       "purchase-requests",
-      safeCount(
+      () => safeCount(
         supabase
           .from("purchase_requests")
           .select("id", { count: "exact", head: true })
@@ -258,7 +260,7 @@ async function fetchLiveBadges(
       "follow-up-center",
       // للاستقبال: ما وصل اليوم ولم يُطَّلع عليه — العدد الذي ينتظر عملًا.
       // وللطبيب: ما أرسله اليوم.
-      safeCount(
+      () => safeCount(
         (scopedDoctorId
           ? supabase
               .from("v_follow_up_center")
@@ -282,7 +284,7 @@ async function fetchLiveBadges(
   if (userId) {
     entries.push([
       "messaging",
-      safeCount(
+      () => safeCount(
         supabase
           .from("v_internal_unread_counts")
           .select("conversation_id", { count: "exact", head: true })
@@ -292,12 +294,77 @@ async function fetchLiveBadges(
     ]);
   }
 
-  const results = await Promise.all(entries.map(([, p]) => p));
+  const wanted = new Set(keys);
+  const selected = entries.filter(([key]) => wanted.has(key));
+  const results = await Promise.all(selected.map(([, run]) => run()));
   const out: Record<string, number | null> = {};
-  entries.forEach(([key], i) => {
+  selected.forEach(([key], i) => {
     out[key] = results[i];
   });
   return out;
+}
+
+/** مفاتيح الأقسام التي لها عدّادٌ حيّ (تطابق `app_sidebar_badge_counts`). */
+const LIVE_BADGE_KEYS = new Set([
+  "reception",
+  "patients",
+  "medical-records",
+  "services",
+  "departments",
+  "doctors",
+  "laboratory",
+  "radiology",
+  "pharmacy",
+  "dispensing",
+  "employees",
+  "attendance",
+  "leave",
+  "contracts",
+  "recruitment",
+  "training",
+  "shifts",
+  "audit",
+  "purchase-invoices",
+  "purchase-requests",
+  "follow-up-center",
+  "messaging",
+]);
+
+/** الدالّة غير منشورة بعد (0207 لم يُنفَّذ) — يُرجَع إلى الطلبات المنفصلة. */
+let rpcUnavailable = false;
+
+async function fetchLiveBadges(
+  organizationId: string,
+  keys: string[],
+  userId?: string,
+  scopedDoctorId?: string | null,
+): Promise<Record<string, number | null>> {
+  if (keys.length === 0) return {};
+
+  if (!rpcUnavailable) {
+    const { startIso, endIso } = todayBounds();
+    const { data, error } = await supabase.rpc("app_sidebar_badge_counts", {
+      p_organization_id: organizationId,
+      p_keys: keys,
+      p_day_start: startIso,
+      p_day_end: endIso,
+      p_doctor_id: scopedDoctorId ?? null,
+    });
+    if (!error) {
+      const out: Record<string, number | null> = {};
+      const raw = (data ?? {}) as Record<string, number | null>;
+      for (const key of keys) {
+        const value = raw[key];
+        out[key] = typeof value === "number" ? value : null;
+      }
+      return out;
+    }
+    // PGRST202: الدالّة غير موجودة في مخطّط الواجهة — قبل تنفيذ 0207
+    if ((error as { code?: string }).code !== "PGRST202") return {};
+    rpcUnavailable = true;
+  }
+
+  return fetchLiveBadgesPerKey(organizationId, keys, userId, scopedDoctorId);
 }
 
 /**
@@ -310,14 +377,23 @@ export function useLiveBadgeCounts(
   organizationId?: string | null,
   userId?: string | null,
   scopedDoctorId?: string | null,
+  /** أقسام القائمة الظاهرة للمستخدم — لا يُعدّ ما لا يراه. */
+  visibleModuleIds?: string[],
 ) {
+  const keys = (visibleModuleIds ?? []).filter((id) => LIVE_BADGE_KEYS.has(id)).sort();
+  if (!userId) {
+    const index = keys.indexOf("messaging");
+    if (index >= 0) keys.splice(index, 1);
+  }
   return useQuery({
-    queryKey: ["live-badge-counts", organizationId, userId, scopedDoctorId ?? ""],
+    queryKey: ["live-badge-counts", organizationId, userId, scopedDoctorId ?? "", keys.join(",")],
     queryFn: () =>
-      fetchLiveBadges(organizationId as string, userId ?? undefined, scopedDoctorId ?? null),
-    enabled: Boolean(organizationId),
-    staleTime: 60_000,
-    refetchInterval: 120_000,
+      fetchLiveBadges(organizationId as string, keys, userId ?? undefined, scopedDoctorId ?? null),
+    enabled: Boolean(organizationId) && keys.length > 0,
+    // استدعاءٌ واحد كلّ ثلاث دقائق، ولا يعمل والتبويب في الخلفية
+    staleTime: 120_000,
+    refetchInterval: 180_000,
+    refetchIntervalInBackground: false,
   });
 }
 

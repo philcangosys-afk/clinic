@@ -27,6 +27,7 @@ import {
   type PatientSearchScope,
 } from "@/lib/patient-search";
 import { useLiveBadgeCounts, formatBadgeNumber } from "@/hooks/use-live-badges";
+import { preloadScreen, preloadScreensWhenIdle } from "@/lib/screen-preload";
 import { demoRoleAllowsModule } from "@/lib/demo-role";
 import { ROLE_LABELS } from "@/lib/role-permissions";
 import { useDemoRole } from "@/contexts/DemoRoleContext";
@@ -65,27 +66,45 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { canAccess, organization, branch, session } = useOrganizationAccess();
   const location = useLocation();
   const { doctorId: scopeDoctorId, isDoctorScope } = useSessionDoctor();
+  const { role, isPreview } = useDemoRole();
+
+  // صفة **المعاينة** تُخفي ما لا يخصّها من القائمة (ترشيح عرضٍ لا حماية).
+  // أمّا الموظّف الحقيقي فقائمته صلاحياته وحدها: كانت القائمة الثابتة للصفة
+  // تُخفي ما منحه المالك — «الأطباء» عن الطبيب، أو شاشةً فعّلها له — فلا يرى
+  // ما فُعّل ولا يعرف المالك السبب.
+  const accessible = useMemo(
+    () =>
+      filterAccessibleModules(moduleRegistry, canAccess).filter((item) =>
+        demoRoleAllowsModule(isPreview ? role : null, item.id),
+      ),
+    [canAccess, role, isPreview],
+  );
+  // مفتاحٌ نصّيّ ثابت: لا يتغيّر بتغيّر مرجع المصفوفة وحده
+  const visibleIdsKey = useMemo(() => accessible.map((item) => item.id).join(","), [accessible]);
+  const visibleIds = useMemo(
+    () => (visibleIdsKey ? visibleIdsKey.split(",") : []),
+    [visibleIdsKey],
+  );
+
+  // العدّادات لما يظهر في القائمة فقط (0207)
   const liveBadges = useLiveBadgeCounts(
     organization?.id,
     session?.user.id,
     isDoctorScope ? scopeDoctorId : null,
+    visibleIds,
   );
 
-  const { role } = useDemoRole();
+  // حزم الشاشات الظاهرة تُنزَّل في أوقات الفراغ، فيُفتح القسم بلا انتظار
+  useEffect(() => preloadScreensWhenIdle(visibleIds), [visibleIds]);
 
   const groups = useMemo(() => {
-    // الصفة تُخفي ما لا يخصّها من القائمة. هذا ترشيح عرضٍ لا حماية: المنع
-    // الحقيقي في RLS وفي فحوص الدوالّ، وهو قائم بصرف النظر عن هذا السطر.
-    const accessible = filterAccessibleModules(moduleRegistry, canAccess).filter((item) =>
-      demoRoleAllowsModule(role, item.id),
-    );
     const withLiveBadges: ModuleRegistryItem[] = accessible.map((item) => {
       const live = liveBadges.data?.[item.id];
       if (live === null || live === undefined) return item;
       return { ...item, badge: formatBadgeNumber(live) };
     });
     return groupModules(withLiveBadges);
-  }, [canAccess, liveBadges.data, role]);
+  }, [accessible, liveBadges.data]);
 
   const settingsAccessible = canAccess(settingsModule.featureKey, settingsModule.requiredPermission);
 
@@ -249,6 +268,10 @@ function SidebarLink({
   return (
     <NavLink
       to={to}
+      // تنزيل حزمة الشاشة قبل الضغط: المرور بالمؤشّر أو اللمس أو التركيز
+      onPointerEnter={() => void preloadScreen(to)}
+      onTouchStart={() => void preloadScreen(to)}
+      onFocus={() => void preloadScreen(to)}
       onClick={(event) => {
         /**
          * الضغط على القسم يعيده إلى واجهته الرئيسية دائمًا.
@@ -302,7 +325,7 @@ function SidebarLink({
 function useCurrentModuleAccess() {
   const location = useLocation();
   const { canAccess } = useOrganizationAccess();
-  const { role } = useDemoRole();
+  const { role, isPreview } = useDemoRole();
 
   return useMemo(() => {
     const key = guideKeyForPath(location.pathname);
@@ -314,9 +337,9 @@ function useCurrentModuleAccess() {
         : moduleRegistry.find((entry) => entry.id === moduleId);
     // مسار لا يقابله موديول (مثل شاشة غير مسجَّلة) لا يُحجب من هنا.
     if (!item) return { allowed: true, label: null };
-    const allowed = moduleAccessible(item, canAccess) && demoRoleAllowsModule(role, item.id);
+    const allowed = moduleAccessible(item, canAccess) && demoRoleAllowsModule(isPreview ? role : null, item.id);
     return { allowed, label: item.label };
-  }, [canAccess, location.pathname, role]);
+  }, [canAccess, location.pathname, role, isPreview]);
 }
 
 /**

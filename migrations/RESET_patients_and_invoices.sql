@@ -1,23 +1,33 @@
 -- ============================================================================
--- RESET — تفريغ المرضى والفواتير قبل التشغيل الحقيقي
+-- RESET — تفريغ المرضى والفواتير قبل التشغيل الحقيقي (الإنتاج مع ZATCA)
 -- ============================================================================
 --
 -- ⚠ **حذفٌ نهائيّ لا رجعة فيه.** يُنفَّذ مرّةً واحدة قبل أن تدخل البيانات
--- الحقيقية، ولا يُنفَّذ بعدها أبدًا. خذ نسخة احتياطية من Supabase أوّلًا
--- (Database ← Backups) إن أردت طريق عودة.
+-- الحقيقية وقبل ربط الإنتاج مع هيئة الزكاة والضريبة، ولا يُنفَّذ بعدها أبدًا.
+-- خذ نسخة احتياطية من Supabase أوّلًا (Database ← Backups) إن أردت طريق عودة.
 --
 -- ما يُحذف:
 --   * كلّ المرضى وكلّ ما تعلّق بهم (زيارات، مواعيد، وصفات، تحاليل، أشعة،
---     أسنان، موافقات، وثائق، محافظ) — بسلسلة الحذف نفسها التي في
---     `app_purge_patients` (0171): 75 جدولًا من الابن إلى الأب.
+--     أسنان، موافقات، وثائق، محافظ، اتفاقيات وعروض أسعارها، جلسات) — بسلسلة
+--     الحذف نفسها التي في `app_purge_patients` (0171): من الابن إلى الأب.
 --   * ما تبقّى من الماليات بلا مريض: فواتير العملاء الخارجيين وبنودها،
 --     السندات وتخصيصاتها، مناوبات الصناديق، اليوميات، وسجلّ إرسال ZATCA.
---   * تسلسل أرقام المستندات يعود إلى الصفر، فتبدأ أوّل فاتورة حقيقية من 1.
+--   * قيود اليومية الآلية التي أنشأتها تلك الفواتير والسندات (وعكوسها)،
+--     فيبدأ ميزان المراجعة نظيفًا من الإيرادات والضريبة التجريبية.
+--   * الترقيم يعود إلى أوّله: أوّل فاتورة حقيقية رقم 1، وأوّل ملفّ مريض،
+--     وأوّل اتفاقية — كلٌّ من بدايته.
+--   * عدّاد جهاز ZATCA **التجريبيّ** (simulation) يعود إلى ICV = 1.
 --
--- ما يبقى: الخدمات والأسعار والأصناف والأطباء والموظفون والمستودعات
--- والمستخدمون وإعدادات المنشأة وشجرة الحسابات.
+-- ما يبقى: الخدمات والأسعار والأصناف والمخزون والمشتريات والموردون والأطباء
+-- والموظفون والمستخدمون والصلاحيات وإعدادات المنشأة والضريبة وشجرة الحسابات
+-- وقيودها اليدوية، وسجلّ التدقيق، وإعداد الربط مع ZATCA نفسه.
+--
+-- **حارس الإنتاج:** إن وُجدت فاتورةٌ واحدة أُبلغت أو اعتُمدت لدى ZATCA في
+-- بيئة **الإنتاج**، يتوقّف كلّ شيء قبل حذف أيّ صفّ. تلك فاتورةٌ رسمية عند
+-- الهيئة يلزم حفظها، وحذفها يكسر سلسلة التجزئة لديهم.
 --
 -- منشأةٌ واحدة في كلّ تنفيذ: تُلتقط باسمها، ولا يُفرَّغ من المنشآت غيرها.
+-- كلّه في معاملةٍ واحدة: أيّ خطأ يُعيد كلّ شيء كما كان.
 -- ============================================================================
 
 begin;
@@ -30,6 +40,7 @@ declare
   v_patients  int;
   v_left      int;
   v_rel       record;
+  v_has       boolean;
 begin
   -- منشأةٌ بعينها إن حُدِّدت قبل التشغيل:
   --   select set_config('zaincare.target_org', '<معرّف المنشأة>', false);
@@ -57,6 +68,20 @@ begin
   loop
     raise notice 'يُفرَّغ من: % (%) — % مريضًا، % فاتورة', v_rel.name, v_org, v_rel.patients, v_rel.invoices;
   end loop;
+
+  -- ══ حارس الإنتاج — قبل أيّ حذف ═══════════════════════════════════════════
+  begin
+    select count(*) into v_left
+      from public.zatca_invoice_submission_logs l
+     where l.organization_id = v_org
+       and l.mode = 'production'
+       and l.status in ('cleared', 'reported');
+  exception when undefined_table or undefined_column then
+    v_left := 0;
+  end;
+  if v_left > 0 then
+    raise exception 'توقّف: % فاتورة أُبلغت أو اعتُمدت لدى ZATCA في بيئة الإنتاج. هذه فواتير رسمية لا تُحذف — التفريغ يكون قبل الإنتاج فقط.', v_left;
+  end if;
 
   -- المنشأة تُمرَّر إلى كتلة التحقّق: التحقّق بلا تقييدٍ بها كان يعدّ صفوف
   -- منشآتٍ أخرى في القاعدة نفسها ويرفع خطأً على تفريغٍ تمّ كما ينبغي.
@@ -97,6 +122,45 @@ begin
   -- **ما لا وجود له يُتخطّى، وما عدا ذلك يُفجِّر العملية:** جدولٌ أو عمودٌ
   -- غير موجود في هذه النسخة من القاعدة يُذكر في رسالة ويُمضى، أمّا خطأ مفتاح
   -- أجنبيّ أو صلاحية فيوقف كلّ شيء — فلا يبقى نصف مريضٍ محذوفًا.
+  -- ══ ٠ب) كلّ ما يشير إلى فواتير المنشأة من خارج السلسلة ════════════════════
+  --
+  -- سلسلة 0171 كُتبت قبل جداول أُضيفت بعدها — سجلّ إرسال ZATCA (0179) مثلًا
+  -- يشير إلى الفاتورة بقيدٍ أجنبيّ، فيرفض حذفها. فلا يُعتمد على قائمةٍ مكتوبة:
+  -- تُقرأ القيود الأجنبية التي تشير إلى `sales_invoices` من القاعدة نفسها،
+  -- وكلّ جدولٍ ليس في السلسلة يُعالَج قبلها:
+  --   * عمودٌ إلزاميّ (not null) ⇒ الصفّ تابعٌ للفاتورة، فيُحذف معها
+  --   * عمودٌ اختياريّ ⇒ يُفرَّغ المرجع ويبقى الصفّ
+  -- والفواتير كلّها تُحذف في هذا الملفّ (بمريض أو بلا مريض)، فالمعالجة
+  -- لفواتير المنشأة كلّها.
+  for v_rel in
+    select cl.relname::text as tbl, att.attname::text as col, att.attnotnull as required
+      from pg_constraint c
+      join pg_class      cl  on cl.oid = c.conrelid
+      join pg_namespace  ns  on ns.oid = cl.relnamespace
+      join pg_attribute  att on att.attrelid = c.conrelid and att.attnum = c.conkey[1]
+     where c.contype = 'f'
+       and ns.nspname = 'public'
+       and c.confrelid = 'public.sales_invoices'::regclass
+       and array_length(c.conkey, 1) = 1
+       and cl.relname not in ('sales_invoices', 'sales_invoice_items', 'einvoice_documents',
+                              'insurance_claim_batch_items', 'voucher_invoice_allocations')
+  loop
+    if v_rel.required then
+      execute format(
+        'delete from public.%I where %I in (select id from public.sales_invoices where organization_id = $1)',
+        v_rel.tbl, v_rel.col) using v_org;
+    else
+      execute format(
+        'update public.%I set %I = null where %I in (select id from public.sales_invoices where organization_id = $1)',
+        v_rel.tbl, v_rel.col, v_rel.col) using v_org;
+    end if;
+    get diagnostics v_left = row_count;
+    if v_left > 0 then
+      raise notice '% — % سطرًا يشير إلى الفواتير: %', v_rel.tbl, v_left,
+        case when v_rel.required then 'حُذف معها' else 'فُرِّغ مرجعه' end;
+    end if;
+  end loop;
+
   v_ids := array(select id from public.patients where organization_id = v_org);
 
   foreach v_stmt in array array[
@@ -173,6 +237,7 @@ begin
     $stmt$delete from patient_wallets where patient_id = any($1)$stmt$,
     $stmt$delete from quality_incidents where patient_id = any($1)$stmt$,
     $stmt$delete from treatment_agreement_items where agreement_id in (select id from treatment_agreements where patient_id = any($1))$stmt$,
+    $stmt$delete from agreement_quotes where agreement_id in (select id from treatment_agreements where patient_id = any($1))$stmt$,
     $stmt$delete from treatment_agreements where patient_id = any($1)$stmt$,
     $stmt$delete from patients where id = any($1)$stmt$
   ] loop
@@ -210,7 +275,9 @@ begin
     $stmt$delete from public.sales_invoices where organization_id = $1$stmt$,
     $stmt$delete from public.cash_register_shifts where cash_register_id in (select id from public.cash_registers where organization_id = $1)$stmt$,
     $stmt$delete from public.business_days where organization_id = $1$stmt$,
-    $stmt$delete from public.document_number_sequences where organization_id = $1$stmt$
+    -- أنواع المستندات التي فُرِّغت وحدها — لا تسلسل مستندٍ ما زالت صفوفه قائمة
+    $stmt$delete from public.document_number_sequences where organization_id = $1 and document_kind in ('invoice', 'credit_note', 'debit_note', 'medical_report', 'patient_document')$stmt$,
+    $stmt$delete from public.document_number_sequences where organization_id = $1 and document_kind = 'quality_incident' and not exists (select 1 from public.quality_incidents q where q.organization_id = $1)$stmt$
   ] loop
     begin
       execute v_stmt using v_org;
@@ -220,7 +287,77 @@ begin
     end;
   end loop;
 
-  -- ══ ٤) إعادة الحُرّاس ═════════════════════════════════════════════════════
+  -- ══ ٣) قيود اليومية الآلية لفواتير وسندات لم تعد موجودة ══════════════════
+  --
+  -- كلّ فاتورة وسند أنشأ قيدًا آليًّا (0027) بمرجعه. حذفُ المستند وبقاءُ قيده
+  -- يترك في ميزان المراجعة إيراداتٍ وضريبةً وصندوقًا من بياناتٍ تجريبية.
+  -- يُحذف القيد الذي مرجعه مستندٌ لم يعد موجودًا، وعكوسُه معه. القيود
+  -- اليدوية والافتتاحية وقيود فواتير الشراء لا تُمسّ.
+  begin
+    create temp table _je (id uuid primary key) on commit drop;
+    insert into _je
+    select e.id
+      from public.journal_entries e
+     where e.organization_id = v_org
+       and ((e.reference_type = 'sales_invoice'
+             and not exists (select 1 from public.sales_invoices x where x.id = e.reference_id))
+         or (e.reference_type = 'financial_voucher'
+             and not exists (select 1 from public.financial_vouchers x where x.id = e.reference_id)));
+    begin
+      loop
+        insert into _je
+        select e.id from public.journal_entries e
+         where e.reversal_of_id in (select id from _je)
+        on conflict do nothing;
+        get diagnostics v_left = row_count;
+        exit when v_left = 0;
+      end loop;
+    exception when undefined_column then null;   -- قاعدة بلا عكوس قيود
+    end;
+
+    begin
+      delete from public.bank_reconciliation_lines
+       where journal_entry_line_id in (select id from public.journal_entry_lines
+                                        where journal_entry_id in (select id from _je));
+    exception when undefined_table or undefined_column then null;
+    end;
+    delete from public.journal_entry_lines where journal_entry_id in (select id from _je);
+    delete from public.journal_entries     where id in (select id from _je);
+    get diagnostics v_left = row_count;
+    raise notice 'حُذف % قيدًا آليًّا لفواتير وسندات تجريبية', v_left;
+  exception when undefined_table or undefined_column then
+    raise notice 'تُخطّي قيود اليومية: الجداول أو الأعمدة غير موجودة في هذه القاعدة';
+  end;
+
+  -- ══ ٤) الترقيم الداخليّ يعود إلى أوّله ═════════════════════════════════════
+  --
+  -- أرقام الملفّات والفواتير الداخلية والاتفاقيات… تسلسلاتٌ في القاعدة، لا
+  -- تعود وحدها بعد الحذف. يُعاد التسلسل **فقط** إن فرغ جدوله كلّه (في كلّ
+  -- المنشآت): تسلسلٌ يعود وجدوله فيه صفوف يُنتج رقمًا مكرّرًا.
+  for v_rel in
+    select s.oid::regclass::text as seq, t.relname as tbl, a.attname as col
+      from pg_class s
+      join pg_depend d     on d.objid = s.oid and d.classid = 'pg_class'::regclass
+                          and d.refclassid = 'pg_class'::regclass and d.deptype in ('a', 'i')
+      join pg_class t      on t.oid = d.refobjid
+      join pg_namespace n  on n.oid = t.relnamespace
+      join pg_attribute a  on a.attrelid = t.oid and a.attnum = d.refobjsubid
+     where s.relkind = 'S' and n.nspname = 'public'
+       and t.relname = any (array[
+         'patients', 'appointments', 'patient_visits', 'sales_invoices', 'sales_invoice_items',
+         'financial_vouchers', 'treatment_agreements', 'agreement_quotes', 'treatment_sessions',
+         'prescriptions', 'lab_orders', 'radiology_orders', 'dental_lab_orders',
+         'insurance_claim_forms', 'medical_reports', 'business_days', 'cash_register_shifts',
+         'journal_entries'])
+  loop
+    execute format('select exists (select 1 from public.%I)', v_rel.tbl) into v_has;
+    if not v_has then
+      perform setval(v_rel.seq, 1, false);
+      raise notice 'الترقيم يبدأ من 1: %.%', v_rel.tbl, v_rel.col;
+    end if;
+  end loop;
+
+  -- ══ ٥) إعادة الحُرّاس ═════════════════════════════════════════════════════
   for v_rel in
     select distinct c.relname
       from pg_trigger t
