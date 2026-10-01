@@ -67,6 +67,8 @@ export type ExportDayData = {
   collections: ExportDayCollection[];
   invoices: ExportDayInvoice[];
   people?: ExportDayPeople | null;
+  /** إن حُدِّد: التقرير لإيرادات هذا الطبيب وحده، والفواتير المُمرَّرة فواتيره فقط */
+  doctorName?: string | null;
 };
 
 const STATUS_AR: Record<string, string> = {
@@ -115,7 +117,35 @@ const docNumber = (row: ExportDayInvoice) => row.document_label || `#${row.invoi
 /** ما يدخل في الإجمالي: لا الملغاة ولا عروض الأسعار */
 const counts = (row: ExportDayInvoice) => row.status !== "void" && !row.is_temporary;
 
-const fileBase = (data: ExportDayData) => `اليومية-${data.day.day_number}-${data.day.business_date}`;
+const fileBase = (data: ExportDayData) =>
+  `اليومية-${data.day.day_number}-${data.day.business_date}${
+    data.doctorName ? `-${data.doctorName.replace(/[\\/:*?"<>|]/g, " ").trim()}` : ""
+  }`;
+
+const reportTitle = (data: ExportDayData) =>
+  data.doctorName
+    ? `إيرادات الطبيب ${data.doctorName} — اليومية رقم ${data.day.day_number}`
+    : `تقرير اليومية رقم ${data.day.day_number}`;
+
+const DOCTOR_COLLECTION_NOTE = "التحصيل حسب طريقة الدفع يُحسب لليومية كاملة ولا يُفصل لكل طبيب.";
+
+/** مبالغ الطبيب من فواتيره (بلا الملغاة وعروض الأسعار). */
+function doctorTotals(data: ExportDayData) {
+  const rows = data.invoices.filter(counts);
+  const sum = (pick: (row: ExportDayInvoice) => unknown) => num(rows.reduce((s, row) => s + Number(pick(row) ?? 0), 0));
+  const patients = new Set(rows.map((row) => row.file_number ?? row.patient_name ?? row.external_customer_name ?? "")).size;
+  const net = sum((r) => r.net_amount);
+  return {
+    count: rows.length,
+    patients,
+    discount: sum((r) => r.discount_amount),
+    vat: sum((r) => r.vat_amount),
+    net,
+    paid: sum((r) => r.paid_amount),
+    remaining: sum((r) => r.remaining_amount),
+    average: rows.length ? num(net / rows.length) : 0,
+  };
+}
 
 const sortedInvoices = (data: ExportDayData) =>
   [...data.invoices].sort((a, b) => a.created_at.localeCompare(b.created_at));
@@ -127,6 +157,7 @@ function closedText(d: ExportDaySummary) {
 function infoPairs(data: ExportDayData): [string, string][] {
   const d = data.day;
   return [
+    ...(data.doctorName ? ([["الطبيب", data.doctorName]] as [string, string][]) : []),
     ["رقم اليومية", String(d.day_number)],
     ["يوم العمل", d.business_date],
     ["فُتحت", localTime(d.opened_at)],
@@ -139,7 +170,21 @@ function infoPairs(data: ExportDayData): [string, string][] {
 
 type AmountRow = { label: string; value: number; kind: "int" | "money"; strong?: boolean };
 
-function amountRows(d: ExportDaySummary): AmountRow[] {
+function amountRows(data: ExportDayData): AmountRow[] {
+  const d = data.day;
+  if (data.doctorName) {
+    const t = doctorTotals(data);
+    return [
+      { label: "عدد الفواتير", value: t.count, kind: "int" },
+      { label: "عدد المرضى", value: t.patients, kind: "int" },
+      { label: "الخصومات", value: t.discount, kind: "money" },
+      { label: "الضريبة", value: t.vat, kind: "money" },
+      { label: "صافي الفواتير (الإيراد)", value: t.net, kind: "money", strong: true },
+      { label: "المحصَّل منها", value: t.paid, kind: "money", strong: true },
+      { label: "غير محصَّل", value: t.remaining, kind: "money" },
+      { label: "متوسط الفاتورة", value: t.average, kind: "money" },
+    ];
+  }
   return [
     { label: "عدد الفواتير", value: Number(d.invoices_count), kind: "int" },
     { label: "الإجمالي قبل الخصم", value: num(d.gross_amount), kind: "money" },
@@ -169,7 +214,7 @@ export function downloadDayXlsx(data: ExportDayData) {
   const push = (row: XlsxCell[]) => summary.push(row);
   const mergeValue = () => sMerges.push(`B${summary.length}:D${summary.length}`);
 
-  push([c(`تقرير اليومية رقم ${d.day_number}`, "title")]);
+  push([c(reportTitle(data), "title")]);
   push([c(subtitle, "subtitle")]);
   push([]);
   push([c("بيانات اليومية", "section")]);
@@ -179,7 +224,7 @@ export function downloadDayXlsx(data: ExportDayData) {
   }
   push([]);
   push([c("المبالغ", "section")]);
-  for (const row of amountRows(d)) {
+  for (const row of amountRows(data)) {
     const valueStyle: XlsxStyle = row.strong ? (row.kind === "int" ? "totalInt" : "totalMoney") : row.kind;
     push([
       c(row.label, row.strong ? "totalText" : "label"),
@@ -190,6 +235,10 @@ export function downloadDayXlsx(data: ExportDayData) {
     mergeValue();
   }
   push([]);
+  if (data.doctorName) {
+    push([c(DOCTOR_COLLECTION_NOTE, "textMuted")]);
+    sMerges.push(`A${summary.length}:D${summary.length}`);
+  } else {
   push([c("المحصَّل حسب طريقة الدفع", "section")]);
   push([c("طريقة الدفع", "header"), c("نقد في الصندوق", "header"), c("عدد السندات", "header"), c("المبلغ", "header")]);
   if (data.collections.length === 0) {
@@ -211,6 +260,7 @@ export function downloadDayXlsx(data: ExportDayData) {
       c(num(data.collections.reduce((sum, row) => sum + Number(row.amount), 0)), "totalMoney"),
     ]);
   }
+  }
 
   /* ── الورقة الثانية: الفواتير ── */
   const invoices = sortedInvoices(data);
@@ -231,7 +281,7 @@ export function downloadDayXlsx(data: ExportDayData) {
   ];
   const lastCol = String.fromCharCode(64 + head.length);
   const list: XlsxCell[][] = [
-    [c(`فواتير اليومية رقم ${d.day_number}`, "title")],
+    [c(data.doctorName ? `فواتير الطبيب ${data.doctorName} — اليومية رقم ${d.day_number}` : `فواتير اليومية رقم ${d.day_number}`, "title")],
     [c(subtitle, "subtitle")],
     [],
     head.map((h) => c(h, "header")),
@@ -353,15 +403,28 @@ function pageShell(data: ExportDayData, printedAt: string) {
   const d = data.day;
   return `
     <div class="head">
-      <div><div class="org">${esc(data.organizationName)}</div><div class="title">تقرير اليومية رقم ${d.day_number}</div></div>
+      <div><div class="org">${esc(data.organizationName)}</div><div class="title">${esc(reportTitle(data))}</div></div>
       <div class="meta">يوم العمل ${ltr(d.business_date)}<br/>أُعدّ في ${ltr(printedAt)}</div>
     </div>
     <div class="content"></div>
     <div class="foot"><span>ZainCare — تقرير اليومية</span><span class="pageno"></span></div>`;
 }
 
-function kpiHtml(d: ExportDaySummary) {
-  const cards: [string, string, boolean][] = [
+function kpiHtml(data: ExportDayData) {
+  const d = data.day;
+  const t = data.doctorName ? doctorTotals(data) : null;
+  const cards: [string, string, boolean][] = t
+    ? [
+        ["عدد الفواتير", String(t.count), false],
+        ["عدد المرضى", String(t.patients), false],
+        ["الخصومات", money(t.discount), false],
+        ["الضريبة", money(t.vat), false],
+        ["صافي الفواتير (الإيراد)", money(t.net), true],
+        ["المحصَّل منها", money(t.paid), true],
+        ["غير محصَّل", money(t.remaining), false],
+        ["متوسط الفاتورة", money(t.average), false],
+      ]
+    : [
     ["عدد الفواتير", String(Number(d.invoices_count)), false],
     ["الإجمالي قبل الخصم", money(d.gross_amount), false],
     ["الخصومات", money(d.discount_amount), false],
@@ -378,10 +441,13 @@ function kpiHtml(d: ExportDaySummary) {
 
 function infoHtml(data: ExportDayData) {
   const pairs = infoPairs(data).filter(([label]) => label !== "رقم اليومية" && label !== "يوم العمل");
-  const extra: [string, string][] = [
-    ["المحصَّل", money(data.day.collected_amount)],
-    ["المرتجع", money(data.day.refunded_amount)],
-  ];
+  // مبالغ اليومية كاملة لا تُعرض في تقرير الطبيب
+  const extra: [string, string][] = data.doctorName
+    ? []
+    : [
+        ["المحصَّل", money(data.day.collected_amount)],
+        ["المرتجع", money(data.day.refunded_amount)],
+      ];
   const all = [...pairs, ...extra];
   return `<h2>بيانات اليومية</h2><div class="info">${all
     .map(([l, v]) => `<div><b>${esc(l)}</b><span class="v">${/^[\d\-: .,()]/.test(v) && !/[؀-ۿ]/.test(v) ? ltr(v) : esc(v)}</span></div>`)
@@ -471,9 +537,9 @@ export async function downloadDayPdf(data: ExportDayData) {
       }
     };
 
-    place(kpiHtml(data.day));
+    place(kpiHtml(data));
     place(infoHtml(data));
-    place(collectionsHtml(data));
+    place(data.doctorName ? `<p class="note">${esc(DOCTOR_COLLECTION_NOTE)}</p>` : collectionsHtml(data));
 
     // ── جدول الفواتير: يُقسَم عند حدود الصفوف ويتكرّر رأسه
     const invoices = sortedInvoices(data);

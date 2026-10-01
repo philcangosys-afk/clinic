@@ -111,6 +111,9 @@ type DayInvoice = {
   doctor_name: string | null;
 };
 
+const ALL_DOCTORS = "__all__";
+const NO_DOCTOR_KEY = "__none__";
+
 const MANAGER_ROLES = ["owner", "organization_admin", "branch_manager", "accountant"];
 
 /**
@@ -144,6 +147,8 @@ export default function BusinessDayPanel() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [exporting, setExporting] = useState<"xlsx" | "pdf" | null>(null);
+  /** فلتر الطبيب في «فواتير اليومية» — ويتبعه التنزيل (إيرادات الطبيب المختار). */
+  const [doctorFilter, setDoctorFilter] = useState<string>(ALL_DOCTORS);
 
   const settings = useBusinessDaySettings(organizationId);
   const currentDate = useCurrentBusinessDate(organizationId);
@@ -259,11 +264,38 @@ export default function BusinessDayPanel() {
       }),
   });
 
+  // الأطباء من فواتير اليومية نفسها: من له فاتورة فيها يظهر، ولا يظهر غيره
+  const dayInvoiceRows = invoices.data ?? [];
+  const doctorOptions = Array.from(
+    dayInvoiceRows.reduce((map, row) => {
+      const key = row.doctor_name ?? NO_DOCTOR_KEY;
+      map.set(key, (map.get(key) ?? 0) + 1);
+      return map;
+    }, new Map<string, number>()),
+  ).sort(([a], [b]) => (a === NO_DOCTOR_KEY ? 1 : b === NO_DOCTOR_KEY ? -1 : a.localeCompare(b, "ar")));
+  const activeDoctor = doctorOptions.some(([key]) => key === doctorFilter) ? doctorFilter : ALL_DOCTORS;
+  const filteredInvoices =
+    activeDoctor === ALL_DOCTORS
+      ? dayInvoiceRows
+      : dayInvoiceRows.filter((row) => (row.doctor_name ?? NO_DOCTOR_KEY) === activeDoctor);
+  const doctorLabel =
+    activeDoctor === ALL_DOCTORS ? null : activeDoctor === NO_DOCTOR_KEY ? "بلا طبيب" : activeDoctor;
+  // الإجمالي بلا الملغاة وعروض الأسعار — كإجمالي التقرير المنزَّل
+  const countedInvoices = filteredInvoices.filter((row) => row.status !== "void" && !row.is_temporary);
+  const filteredTotals = countedInvoices.reduce(
+    (acc, row) => ({
+      net: acc.net + Number(row.net_amount ?? 0),
+      paid: acc.paid + Number(row.paid_amount ?? 0),
+      remaining: acc.remaining + Number(row.remaining_amount ?? 0),
+    }),
+    { net: 0, paid: 0, remaining: 0 },
+  );
+
   const runExport = async (format: "xlsx" | "pdf") => {
     if (!shown) return;
     setExporting(format);
     try {
-      const dayInvoices = invoices.data ?? [];
+      const dayInvoices = filteredInvoices;
       // رقم الفاتورة الضريبية كما طُبع (C-…) وخصمها وضريبتها — إضافةٌ للتقرير؛
       // إن تعذّرت قراءتها يخرج التقرير بالرقم الداخليّ كما كان.
       const extra = new Map<
@@ -285,6 +317,7 @@ export default function BusinessDayPanel() {
         day: shown,
         collections: collections.data ?? [],
         people: people.data ?? null,
+        doctorName: doctorLabel,
         invoices: dayInvoices.map((row) => {
           const more = extra.get(row.invoice_id);
           return {
@@ -356,11 +389,11 @@ export default function BusinessDayPanel() {
             )}
             <Button variant="outline" disabled={!exportReady || exporting !== null} onClick={() => void runExport("xlsx")}>
               <FileSpreadsheet className="h-4 w-4" />
-              {exporting === "xlsx" ? "جارٍ التجهيز…" : "تنزيل Excel"}
+              {exporting === "xlsx" ? "جارٍ التجهيز…" : doctorLabel ? `تنزيل Excel — ${doctorLabel}` : "تنزيل Excel"}
             </Button>
             <Button variant="outline" disabled={!exportReady || exporting !== null} onClick={() => void runExport("pdf")}>
               <FileDown className="h-4 w-4" />
-              {exporting === "pdf" ? "جارٍ التجهيز…" : "تنزيل PDF"}
+              {exporting === "pdf" ? "جارٍ التجهيز…" : doctorLabel ? `تنزيل PDF — ${doctorLabel}` : "تنزيل PDF"}
             </Button>
           </div>
         </CardContent>
@@ -529,9 +562,32 @@ export default function BusinessDayPanel() {
       </Card>
 
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">فواتير اليومية</CardTitle>
-          <CardDescription>راجعها قبل التقفيل.</CardDescription>
+        <CardHeader className="flex flex-row flex-wrap items-end justify-between gap-3 space-y-0">
+          <div className="flex flex-col gap-1.5">
+            <CardTitle className="text-base">فواتير اليومية</CardTitle>
+            <CardDescription>
+              راجعها قبل التقفيل.
+              {doctorLabel && " تنزيل Excel وPDF في الأعلى يُخرج إيرادات الطبيب المختار وحده."}
+            </CardDescription>
+          </div>
+          {doctorOptions.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs">الطبيب</Label>
+              <Select value={activeDoctor} onValueChange={setDoctorFilter}>
+                <SelectTrigger className="w-56">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_DOCTORS}>كلّ الأطباء ({dayInvoiceRows.length})</SelectItem>
+                  {doctorOptions.map(([key, count]) => (
+                    <SelectItem key={key} value={key}>
+                      {key === NO_DOCTOR_KEY ? "بلا طبيب" : key} ({count})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
           {invoices.isLoading && <Skeleton className="h-24 w-full" />}
@@ -552,8 +608,8 @@ export default function BusinessDayPanel() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(invoices.data ?? []).map((row) => (
-                  <TableRow key={row.invoice_id}>
+                {filteredInvoices.map((row) => (
+                  <TableRow key={row.invoice_id} className={row.status === "void" ? "text-muted-foreground line-through" : undefined}>
                     <TableCell className="whitespace-nowrap tabular-nums text-xs">
                       #{row.invoice_number}
                       {row.is_temporary && (
@@ -592,6 +648,22 @@ export default function BusinessDayPanel() {
                     </TableCell>
                   </TableRow>
                 ))}
+                <TableRow className="bg-emerald-50/70 font-semibold hover:bg-emerald-50/70">
+                  <TableCell colSpan={3} className="text-sm">
+                    الإجمالي{doctorLabel ? ` — ${doctorLabel}` : ""} · {countedInvoices.length} فاتورة
+                    <span className="block text-[10px] font-normal text-muted-foreground">بلا الملغاة وعروض الأسعار</span>
+                  </TableCell>
+                  <TableCell className="hidden lg:table-cell" />
+                  <TableCell className="whitespace-nowrap text-end tabular-nums">{formatAmount(filteredTotals.net)}</TableCell>
+                  <TableCell className="whitespace-nowrap text-end tabular-nums text-emerald-700">
+                    {formatAmount(filteredTotals.paid)}
+                  </TableCell>
+                  <TableCell
+                    className={`whitespace-nowrap text-end tabular-nums ${filteredTotals.remaining > 0 ? "text-rose-600" : ""}`}
+                  >
+                    {formatAmount(filteredTotals.remaining)}
+                  </TableCell>
+                </TableRow>
               </TableBody>
             </Table>
           )}
