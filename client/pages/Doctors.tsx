@@ -130,7 +130,7 @@ const roleLabelOf = (candidate: AccountCandidate) =>
   candidate.custom_role_name ?? ROLE_LABELS[candidate.role_key] ?? candidate.role_key;
 
 export default function Doctors() {
-  const { organization, membership, legacyMode } = useOrganizationAccess();
+  const { organization, membership, legacyMode, session } = useOrganizationAccess();
   /**
    * الحذف النهائيّ لصاحب المنشأة ومسؤولها وحدهما — والقاعدة تفرضه (0171)،
    * فإخفاء الزرّ راحةٌ للعين لا حراسة.
@@ -142,10 +142,27 @@ export default function Doctors() {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<DoctorFormRow | null>(null);
-  const [relationsTarget, setRelationsTarget] = useState<{ id: string; name_ar: string; initialTab?: string } | null>(null);
+  const [relationsTarget, setRelationsTarget] = useState<{
+    id: string;
+    name_ar: string;
+    initialTab?: string;
+    /** الطبيب يفتح جدوله هو بصلاحية `doctors.self_edit` (0204) */
+    selfEdit?: boolean;
+  } | null>(null);
+  /** «بياناتي» — الطبيب يعدّل بياناته الشخصية (0204) */
+  const [selfTarget, setSelfTarget] = useState<DoctorFormRow | null>(null);
   const [accountTarget, setAccountTarget] = useState<{ id: string; name_ar: string; user_id: string | null } | null>(null);
   const doctors = useDoctors(organization?.id);
   const { can } = usePermissions();
+  /**
+   * الكتابة لمن يملك `doctors.manage` وحده — والقاعدة تفرضها. كانت الأزرار
+   * ظاهرةً لكلّ من يرى الشاشة، فيضغط الطبيب «تعديل» ثمّ يُرفض الحفظ.
+   */
+  const canManage = legacyMode || can("doctors.manage");
+  /** الطبيب المربوط بحسابه يعدّل بياناته الشخصية وجدول عمله (0204). */
+  const canSelfEdit = can("doctors.self_edit");
+  const myUserId = session?.user.id ?? null;
+  const isMine = (doctor: { user_id?: string | null }) => Boolean(myUserId) && doctor.user_id === myUserId;
   /** ربط الحساب يمنح صاحبه هويّة الطبيب في النظام — صلاحية إدارة المستخدمين. */
   const canLinkAccounts = legacyMode || can("users.manage");
   const candidates = useAccountCandidates(organization?.id, canLinkAccounts);
@@ -202,15 +219,25 @@ export default function Doctors() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold">الأطباء</h1>
-          <p className="text-sm text-muted-foreground">ملفات الأطباء وإعدادات الحجز الخاصة بكل طبيب</p>
+          <p className="text-sm text-muted-foreground">
+            {canManage
+              ? "ملفات الأطباء وإعدادات الحجز الخاصة بكل طبيب"
+              : canSelfEdit
+                ? "للاطّلاع — وتعدّل في صفّك أنت بياناتك الشخصية وجدول عملك وإجازاتك"
+                : "للاطّلاع فقط"}
+          </p>
         </div>
-        <Button onClick={() => {
-            setEditing(null);
-            setCreateOpen(true);
-          }}>
-          <Plus className="h-4 w-4" />
-          طبيب جديد
-        </Button>
+        {canManage && (
+          <Button
+            onClick={() => {
+              setEditing(null);
+              setCreateOpen(true);
+            }}
+          >
+            <Plus className="h-4 w-4" />
+            طبيب جديد
+          </Button>
+        )}
       </div>
 
       <Card>
@@ -268,7 +295,14 @@ export default function Doctors() {
                       </TableCell>
                     )}
                     <TableCell className="font-mono text-xs">#{doctor.file_number}</TableCell>
-                    <TableCell className="font-medium">د. {doctor.name_ar}</TableCell>
+                    <TableCell className="font-medium">
+                      د. {doctor.name_ar}
+                      {isMine(doctor) && (
+                        <Badge variant="secondary" className="ms-2">
+                          أنت
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell className="text-muted-foreground">{doctor.name_en ?? "—"}</TableCell>
                     <TableCell>{doctor.clinic?.name ?? "—"}</TableCell>
                     <TableCell>{doctor.job_title ?? "—"}</TableCell>
@@ -300,17 +334,31 @@ export default function Doctors() {
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          title="تعديل"
-                          onClick={() => {
-                            setEditing(doctor as unknown as DoctorFormRow);
-                            setCreateOpen(true);
-                          }}
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
+                        {canManage ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            title="تعديل"
+                            onClick={() => {
+                              setEditing(doctor as unknown as DoctorFormRow);
+                              setCreateOpen(true);
+                            }}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        ) : (
+                          canSelfEdit &&
+                          isMine(doctor) && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              title="بياناتي الشخصية"
+                              onClick={() => setSelfTarget(doctor as unknown as DoctorFormRow)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          )
+                        )}
                         {canLinkAccounts && (
                           <Button
                             size="sm"
@@ -327,7 +375,14 @@ export default function Doctors() {
                           size="sm"
                           variant="ghost"
                           title="أوقات الدوام"
-                          onClick={() => setRelationsTarget({ id: doctor.id, name_ar: doctor.name_ar, initialTab: "schedule" })}
+                          onClick={() =>
+                            setRelationsTarget({
+                              id: doctor.id,
+                              name_ar: doctor.name_ar,
+                              initialTab: "schedule",
+                              selfEdit: !canManage && canSelfEdit && isMine(doctor),
+                            })
+                          }
                         >
                           <CalendarClock className="h-3.5 w-3.5" />
                         </Button>
@@ -335,7 +390,13 @@ export default function Doctors() {
                           size="sm"
                           variant="ghost"
                           title="العيادات والخدمات وجدول العمل"
-                          onClick={() => setRelationsTarget({ id: doctor.id, name_ar: doctor.name_ar })}
+                          onClick={() =>
+                            setRelationsTarget({
+                              id: doctor.id,
+                              name_ar: doctor.name_ar,
+                              selfEdit: !canManage && canSelfEdit && isMine(doctor),
+                            })
+                          }
                         >
                           <Network className="h-3.5 w-3.5" />
                         </Button>
@@ -350,13 +411,15 @@ export default function Doctors() {
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
                         )}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() => toggleEnabled.mutate({ id: doctor.id, is_enabled: !doctor.is_enabled })}
-                        >
-                          {doctor.is_enabled ? "تعطيل" : "تفعيل"}
-                        </Button>
+                        {canManage && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => toggleEnabled.mutate({ id: doctor.id, is_enabled: !doctor.is_enabled })}
+                          >
+                            {doctor.is_enabled ? "تعطيل" : "تفعيل"}
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -401,9 +464,138 @@ export default function Doctors() {
         key={`${relationsTarget?.id ?? "closed"}-${relationsTarget?.initialTab ?? "places"}`}
         doctor={relationsTarget}
         initialTab={relationsTarget?.initialTab}
+        selfEdit={Boolean(relationsTarget?.selfEdit)}
         onClose={() => setRelationsTarget(null)}
       />
+
+      {selfTarget && (
+        <MyDoctorProfileDialog
+          key={selfTarget.id}
+          organizationId={organization?.id}
+          doctor={selfTarget}
+          onClose={() => setSelfTarget(null)}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * «بياناتي» — الطبيب يعدّل بياناته الشخصية بنفسه (0204).
+ *
+ * عبر `app_update_my_doctor_profile`: الحقول الشخصية وحدها، ولصفّه هو وحده،
+ * وبصلاحية `doctors.self_edit`. الاسم العربيّ والعيادة والحالة والحجز
+ * والترخيص للمدير — تظهر هنا للاطّلاع ولا تُعدَّل.
+ */
+function MyDoctorProfileDialog({
+  organizationId,
+  doctor,
+  onClose,
+}: {
+  organizationId: string | undefined;
+  doctor: DoctorFormRow;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [nameEn, setNameEn] = useState(doctor.name_en ?? "");
+  const [mobile, setMobile] = useState(doctor.mobile_number ?? "");
+  const [email, setEmail] = useState(doctor.email ?? "");
+  const [address, setAddress] = useState(doctor.address ?? "");
+  const [birthDate, setBirthDate] = useState(doctor.birth_date ?? "");
+  const [gender, setGender] = useState<"male" | "female" | "">((doctor.gender as "male" | "female") ?? "");
+  const [nationalityId, setNationalityId] = useState(doctor.nationality_value_id ?? "");
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!organizationId) throw new Error("لا منشأة نشطة");
+      const { error } = await supabase.rpc("app_update_my_doctor_profile", {
+        p_organization_id: organizationId,
+        p_payload: {
+          name_en: nameEn.trim(),
+          mobile_number: mobile.trim(),
+          email: email.trim(),
+          address: address.trim(),
+          birth_date: birthDate || "",
+          gender: gender || "",
+          nationality_value_id: nationalityId || "",
+        },
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["doctors-list"] });
+      toast({ title: "حُفظت بياناتك" });
+      onClose();
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر الحفظ", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>بياناتي — د. {doctor.name_ar}</DialogTitle>
+          <DialogDescription>
+            بياناتك الشخصية. الاسم العربيّ والعيادة والترخيص وإعدادات الحجز يعدّلها المدير.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-1.5">
+            <Label>الاسم بالإنجليزية</Label>
+            <Input value={nameEn} onChange={(e) => setNameEn(e.target.value)} dir="ltr" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الجوال</Label>
+            <Input value={mobile} onChange={(e) => setMobile(e.target.value)} dir="ltr" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>البريد الإلكترونيّ</Label>
+            <Input value={email} onChange={(e) => setEmail(e.target.value)} dir="ltr" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>تاريخ الميلاد</Label>
+            <Input type="date" value={birthDate} onChange={(e) => setBirthDate(e.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الجنس</Label>
+            <Select value={gender} onValueChange={(value) => setGender(value as "male" | "female")}>
+              <SelectTrigger>
+                <SelectValue placeholder="اختر" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="male">ذكر</SelectItem>
+                <SelectItem value="female">أنثى</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>الجنسية</Label>
+            <LookupSelect
+              categoryKey="nationalities"
+              centered
+              title="الجنسية"
+              allowClear
+              value={nationalityId}
+              onChange={setNationalityId}
+            />
+          </div>
+          <div className="flex flex-col gap-1.5 sm:col-span-2">
+            <Label>العنوان</Label>
+            <Input value={address} onChange={(e) => setAddress(e.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            إلغاء
+          </Button>
+          <Button disabled={save.isPending} onClick={() => save.mutate()}>
+            {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

@@ -63,16 +63,24 @@ const NONE = "__none__";
 export default function DoctorRelationsDialog({
   doctor,
   initialTab = "places",
+  selfEdit = false,
   onClose,
 }: {
   doctor: { id: string; name_ar: string } | null;
   initialTab?: string;
+  /**
+   * الطبيب يفتح سجلّه هو بصلاحية `doctors.self_edit` (0204): يكتب جدول عمله
+   * وإجازاته واستثناءاته، ويطّلع على الباقي. والقاعدة تفرض ذلك بسياستين لا
+   * تفتحان إلّا صفوف الطبيب المربوط بالحساب الداخل.
+   */
+  selfEdit?: boolean;
   onClose: () => void;
 }) {
   const { organization } = useOrganizationAccess();
   const { can } = usePermissions();
   const organizationId = organization?.id;
   const canManage = can("doctors.manage");
+  const canEditSchedule = canManage || selfEdit;
   const [tab, setTab] = useState(initialTab);
 
   return (
@@ -87,7 +95,9 @@ export default function DoctorRelationsDialog({
 
         {!canManage && (
           <p className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-            صلاحيتك تسمح بالاطّلاع فقط.
+            {selfEdit
+              ? "تعدّل هنا جدول عملك وإجازاتك واستثناءاتك. الفروع والعيادات والخدمات والتراخيص يعدّلها المدير."
+              : "صلاحيتك تسمح بالاطّلاع فقط."}
           </p>
         )}
 
@@ -108,10 +118,10 @@ export default function DoctorRelationsDialog({
               <ServicesTab doctorId={doctor.id} organizationId={organizationId} canManage={canManage} />
             </TabsContent>
             <TabsContent value="schedule" className="pt-3">
-              <ScheduleTab doctorId={doctor.id} organizationId={organizationId} canManage={canManage} />
+              <ScheduleTab doctorId={doctor.id} organizationId={organizationId} canManage={canEditSchedule} />
             </TabsContent>
             <TabsContent value="exceptions" className="pt-3">
-              <ExceptionsTab doctorId={doctor.id} organizationId={organizationId} canManage={canManage} />
+              <ExceptionsTab doctorId={doctor.id} organizationId={organizationId} canManage={canEditSchedule} />
             </TabsContent>
             <TabsContent value="license" className="pt-3">
               <LicenseTab doctorId={doctor.id} canManage={canManage} />

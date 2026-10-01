@@ -1031,6 +1031,18 @@ Deno.serve(async (req) => {
         : record.document_type === "debit_note"
           ? "debitNote"
           : "invoice";
+    // فاتورة «مرتجع» من المسار القديم (قبل 0205) نوع مستندها «مبسّطة» لا
+    // «إشعار دائن» — إرسالها فاتورةً يُبلغ ZATCA ببيعٍ جديد بدل إنقاص البيع.
+    if (documentType === "invoice" && clean(record.invoice_type) === "return") {
+      return respond(
+        {
+          error:
+            "هذا مرتجعٌ من المسار القديم (فاتورة مرتجع لا إشعار دائن) — لا يُبلَّغ فاتورةَ بيع. ألغِه وأصدر إشعارًا دائنًا على الفاتورة الأصلية",
+        },
+        422,
+      );
+    }
+
     let originalInvoice: any = null;
     if (documentType !== "invoice") {
       const { data: linked, error: linkedError } = await admin

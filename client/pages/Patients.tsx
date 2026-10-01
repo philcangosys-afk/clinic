@@ -570,9 +570,8 @@ export default function Patients() {
 
       {unresolvedDoctor && (
         <p className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
-          الصفة «طبيب» ولم يُعرف أيّ طبيبٍ أنت — لا حسابٌ مربوط بسجلّ طبيب
-          (<span className="font-mono">doctors.user_id</span>) ولا طبيبٌ مختار في
-          شاشة الصفة. <strong>المعروض هنا كلّ المنشأة لا ما يخصّك.</strong>
+          حسابك بصفة «طبيب» غير مربوط بسجلّ طبيب، فلا يُعرض لك أيّ مريض — الطبيب يرى مرضاه وحدهم.{" "}
+          <strong>العلاج:</strong> يربط المدير حسابك من «الأطباء» ← زرّ «حساب الدخول» في صفّك.
         </p>
       )}
 

@@ -86,7 +86,7 @@ function useInvoices(
       let query = supabase
         .from("sales_invoices")
         .select(
-          "id, invoice_number, document_number, document_type, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, remaining_amount, insurance_share_amount, patient_share_amount, insurance_company_name, external_customer_name, zatca_invoice_number, zatca_qr, is_insurance_invoice, created_by, nationality_value_id, patient:patients!sales_invoices_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!sales_invoices_doctor_tenant_fk(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar), business_day:business_days!inner(business_date)",
+          "id, invoice_number, document_number, document_type, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, credited_amount, remaining_amount, insurance_share_amount, patient_share_amount, insurance_company_name, external_customer_name, zatca_invoice_number, zatca_qr, is_insurance_invoice, created_by, nationality_value_id, patient:patients!sales_invoices_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!sales_invoices_doctor_tenant_fk(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar), business_day:business_days!inner(business_date)",
         )
         // التصفية بالمؤسسة إلزامية: سياسة RLS تسمح بكل مؤسسة **ينتمي إليها**
         // المستخدم، لا بالمؤسسة النشطة وحدها — فبدونها كانت قائمة عضو في
@@ -388,9 +388,11 @@ export default function Billing() {
 
   const totals = useMemo(() => {
     const rows = invoices.data ?? [];
+    // المرتجع والإشعار الدائن يُنقصان الصافي ولا يُحسبان متبقّيًا على المريض (0205)
+    const isReturn = (row: { invoice_type?: string | null }) => row.invoice_type === "return";
     return {
-      net: rows.reduce((sum, row) => sum + Number(row.net_amount), 0),
-      remaining: rows.reduce((sum, row) => sum + Number(row.remaining_amount), 0),
+      net: rows.reduce((sum, row) => sum + (isReturn(row) ? -1 : 1) * Number(row.net_amount), 0),
+      remaining: rows.reduce((sum, row) => sum + (isReturn(row) ? 0 : Number(row.remaining_amount)), 0),
     };
   }, [invoices.data]);
 
@@ -649,13 +651,22 @@ export default function Billing() {
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-end tabular-nums text-emerald-700">
                       {formatAmount(invoice.paid_amount ?? 0)}
+                      {/* ما سوّاه إشعارٌ دائن داخلٌ في المدفوع وليس نقدًا (0206) */}
+                      {Number((invoice as { credited_amount?: number }).credited_amount ?? 0) > 0 && (
+                        <span className="block text-[11px] font-normal text-muted-foreground">
+                          منها بإشعار دائن {formatAmount((invoice as { credited_amount?: number }).credited_amount ?? 0)}
+                        </span>
+                      )}
                     </TableCell>
+                    {/* المرتجع والإشعار الدائن ليسا ذمّةً على المريض: لا «متبقٍّ» لهما (0205) */}
                     <TableCell
                       className={`whitespace-nowrap text-end tabular-nums ${
-                        Number(invoice.remaining_amount) > 0 ? "font-semibold text-rose-600" : "text-muted-foreground"
+                        invoice.invoice_type !== "return" && Number(invoice.remaining_amount) > 0
+                          ? "font-semibold text-rose-600"
+                          : "text-muted-foreground"
                       }`}
                     >
-                      {formatAmount(invoice.remaining_amount)}
+                      {invoice.invoice_type === "return" ? "—" : formatAmount(invoice.remaining_amount)}
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {invoice.is_temporary ? (
@@ -750,7 +761,12 @@ export default function Billing() {
                       {(() => {
                         const docType = (invoice as any).document_type ?? "";
                         const isNote = ["credit_note", "debit_note"].includes(docType);
-                        const canPay = !invoice.is_temporary && invoice.status !== "paid" && invoice.status !== "void";
+                        // لا تحصيل على مرتجع أو إشعار دائن: ما يُردّ للمريض «استرداد» على فاتورته الأصلية
+                        const canPay =
+                          !invoice.is_temporary &&
+                          invoice.invoice_type !== "return" &&
+                          invoice.status !== "paid" &&
+                          invoice.status !== "void";
                         const canIssue = invoice.status === "draft" && can("billing.issue");
                         const canReturn =
                           !invoice.is_temporary && invoice.invoice_type !== "return" && invoice.status !== "void";
@@ -759,7 +775,9 @@ export default function Billing() {
                           ["unpaid", "partial", "paid", "partially_refunded"].includes(invoice.status) &&
                           !isNote &&
                           can("billing.refund");
-                        const canVoid = ["unpaid", "partial", "refunded"].includes(invoice.status) && can("billing.void");
+                        // المسوّدة تُلغى ولا تُحذف — ومنها الإشعار المكرَّر (0205)
+                        const canVoid =
+                          ["draft", "unpaid", "partial", "refunded"].includes(invoice.status) && can("billing.void");
                         // الإجراء الرئيسيّ: عرض السعر يُحوَّل، والمسوّدة تُصدَر، والصادرة تُحصَّل
                         const primary: "convert" | "issue" | "pay" | null = invoice.is_temporary
                           ? "convert"
@@ -856,7 +874,7 @@ export default function Billing() {
                                             voidInvoice.mutate({ id: invoice.id, reason: reason.trim() });
                                         }}
                                       >
-                                        إلغاء الفاتورة
+                                        {invoice.status === "draft" ? "إلغاء المسوّدة" : "إلغاء الفاتورة"}
                                       </DropdownMenuItem>
                                     </>
                                   )}
@@ -1027,11 +1045,14 @@ function ReturnInvoiceDialog({
     queryKey: ["prior-returns", invoice?.id],
     enabled: Boolean(invoice?.id),
     queryFn: async () => {
+      // فواتير المرتجع القديمة (قبل 0205) وحدها؛ الإشعارات الدائنة تُحسب بأسطرها أدناه
       const { data: returnInvoices, error } = await supabase
         .from("sales_invoices")
         .select("id")
         .eq("original_invoice_id", invoice!.id)
-        .eq("invoice_type", "return");
+        .eq("invoice_type", "return")
+        .neq("status", "void")
+        .not("document_type", "in", "(credit_note,debit_note)");
       if (error) throw error;
       const ids = (returnInvoices ?? []).map((row) => (row as { id: string }).id);
       if (ids.length === 0) return new Map<string, number>();
@@ -1048,6 +1069,38 @@ function ReturnInvoiceDialog({
       for (const row of (returnedLines ?? []) as { description: string | null; item_id: string | null; qty: number }[]) {
         const key = row.item_id ?? `desc:${row.description ?? ""}`;
         map.set(key, (map.get(key) ?? 0) + (Number(row.qty) || 0));
+      }
+      return map;
+    },
+  });
+
+  /**
+   * ما في الإشعارات الدائنة غير الملغاة (مسوّدةً أو صادرة) من كلّ بند — بإشارة
+   * البند إلى أصله (`corrects_item_id`، 0205). القاعدة تحسب الشيء نفسه وترفض
+   * الزائد؛ وهنا يظهر الباقي قبل المحاولة.
+   */
+  const credited = useQuery({
+    queryKey: ["credited-lines", invoice?.id],
+    enabled: Boolean(invoice?.id),
+    queryFn: async () => {
+      const { data: notes, error } = await supabase
+        .from("sales_invoices")
+        .select("id")
+        .eq("corrects_invoice_id", invoice!.id)
+        .eq("document_type", "credit_note")
+        .neq("status", "void");
+      if (error) throw error;
+      const ids = (notes ?? []).map((row) => (row as { id: string }).id);
+      const map = new Map<string, number>();
+      if (ids.length === 0) return map;
+      const { data: noteLines, error: linesError } = await supabase
+        .from("sales_invoice_items")
+        .select("corrects_item_id, qty")
+        .in("invoice_id", ids);
+      if (linesError) throw linesError;
+      for (const row of (noteLines ?? []) as { corrects_item_id: string | null; qty: number }[]) {
+        if (!row.corrects_item_id) continue;
+        map.set(row.corrects_item_id, (map.get(row.corrects_item_id) ?? 0) + (Number(row.qty) || 0));
       }
       return map;
     },
@@ -1076,7 +1129,8 @@ function ReturnInvoiceDialog({
       const pool = remainingReturned.get(key) ?? 0;
       const consumed = Math.min(pool, Number(line.qty) || 0);
       remainingReturned.set(key, pool - consumed);
-      result.set(line.id, Math.max((Number(line.qty) || 0) - consumed, 0));
+      const inNotes = credited.data?.get(line.id) ?? 0;
+      result.set(line.id, Math.max((Number(line.qty) || 0) - consumed - inNotes, 0));
     }
     return result;
   })();
@@ -1153,51 +1207,21 @@ function ReturnInvoiceDialog({
        * `visit_service_id` لا يُمرَّر مع بنود المرتجع: `uq_invoice_item_visit_service`
        * فريد على مستوى الجدول كلّه، فتمريره كان سيرفض المرتجع بتضارب مفتاح.
        */
-      const { data: newInvoiceId, error } = await supabase.rpc("app_create_sales_invoice", {
-        p_organization_id: organizationId,
-        p_items: selected.map((line) => {
-          /**
-           * تُمرَّر **نسبة** الخصم لا مبلغه: الدالّة تحسب خصم السطر من
-           * `discount_percent` وتتجاهل أي مبلغ يرسله العميل. وتمرير
-           * `discount_percent` المخزَّن كما هو كان خطأً متى كان الخصم مبلغًا
-           * مقطوعًا على السطر (أو موزَّعًا من خصم الرأس) لا نسبةً — فيُردّ
-           * للمريض غير ما دفعه. النسبة الفعلية من سطر الأصل تُنتج في القاعدة
-           * نفس الخصم بنسبة الكمية المرتجعة.
-           */
-          const originalBase = Number(line.price) * Number(line.qty);
-          const effectiveDiscountPercent =
-            originalBase > 0
-              ? Math.min(
-                  Math.max((Number(line.discount_amount ?? 0) / originalBase) * 100, 0),
-                  100,
-                )
-              : 0;
-          return {
-            item_id: line.item_id,
-            description: line.description,
-            qty: line.returnQty,
-            price: line.price,
-            discount_percent: effectiveDiscountPercent,
-            // إعفاء السطر يُنقل من الأصل لا من علم الصنف الحالي: الصنف قد
-            // عُلِّم معفى (أو أُزيل إعفاؤه) بعد البيع، فالاعتماد على كتالوج
-            // اليوم كان سيُرجع ضريبة لم تُحصَّل أو يُسقط ضريبة حُصِّلت.
-            is_vat_exempt:
-              line.vat_category === "exempt" ||
-              line.vat_category === "zero_rated" ||
-              Number(line.exemption_amount ?? 0) > 0,
-            doctor_id: line.doctor_id,
-          };
-        }),
-        p_patient_id: invoice.patient?.id ?? null,
-        p_external_customer_name: invoice.patient ? null : invoice.external_customer_name,
-        p_invoice_type: "return",
-        p_original_invoice_id: invoice.id,
-        // المرتجع يُنشأ مسدَّدًا: المبلغ رُدّ للمريض عند الإرجاع. تركه
-        // "غير مدفوع" كان سيُظهره كذمّة مدينة على المريض — عكس الحقيقة.
-        // والدالّة تحصر المدفوع في صافي المرتجع الذي حسبته هي، فلا يمكن
-        // للمتصفح أن يُسجّل ردًّا أكبر من قيمة البنود.
-        p_paid_amount: round2(totals.net),
-        p_note: note.trim() || `مرتجع للفاتورة #${invoice.invoice_number}`,
+      /**
+       * المرتجع إشعارٌ دائن (0205) — `app_create_credit_note` ببنوده وكميّاتها.
+       *
+       * كان يمرّ بـ`app_create_sales_invoice` بنوع «return»، فيصدر فاتورةً
+       * مستقلّة بنوع مستندٍ «مبسّطة» لا «إشعار دائن»: تُبلَّغ ZATCA فاتورةَ بيعٍ
+       * جديدة (تزيد الإيراد بدل أن تُنقصه)، ولا ترتبط بأصلها ارتباط الإشعار.
+       * والإشعار يحسب الخصم بنسبة الكمية من البند الأصليّ نفسه، ويرفض إرجاع
+       * ما أُرجع قبلُ في إشعارٍ آخر — مسوّدةً كان أو صادرًا.
+       */
+      if (!note.trim()) throw new Error("اكتب سبب الإرجاع — الإشعار الدائن لا يصدر بلا سبب");
+      const { data: newInvoiceId, error } = await supabase.rpc("app_create_credit_note", {
+        p_invoice_id: invoice.id,
+        p_reason: note.trim(),
+        p_lines: selected.map((line) => ({ invoice_item_id: line.id, qty: line.returnQty })),
+        p_note_type: "credit_note",
       });
       if (error) throw error;
       if (!newInvoiceId) throw new Error("لم يُنشأ المرتجع — أعد المحاولة");
@@ -1211,7 +1235,8 @@ function ReturnInvoiceDialog({
       queryClient.invalidateQueries({ queryKey: ["invoice-kpis"] });
       queryClient.invalidateQueries({ queryKey: ["patient-balances"] });
       queryClient.invalidateQueries({ queryKey: ["invoice-register-overdue"] });
-      toast({ title: "تم إنشاء فاتورة المرتجع" });
+      queryClient.invalidateQueries({ queryKey: ["credited-lines"] });
+      toast({ title: "أُنشئ الإشعار الدائن مسوّدة", description: "راجعه في القائمة ثمّ أصدره" });
       setQtyByLine({});
       setNote("");
       onOpenChange();
@@ -1224,7 +1249,7 @@ function ReturnInvoiceDialog({
       }),
   });
 
-  const busy = lines.isLoading || priorReturns.isLoading;
+  const busy = lines.isLoading || priorReturns.isLoading || credited.isLoading;
 
   return (
     <Dialog open={Boolean(invoice)} onOpenChange={() => onOpenChange()}>
@@ -1243,9 +1268,9 @@ function ReturnInvoiceDialog({
               الضريبة المخزَّنة، فيُردّ للمريض ما دفعه فعلًا بعد الخصم لا سعر القائمة.
             </p>
             <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-              المرتجع مستند محاسبي فقط. النقد المُعاد للمريض يُسجَّل سندَ صرفٍ من زرّ «استرداد» في
-              نافذة تحصيل الفاتورة الأصلية — بدونه يُغلق الصندوق بعجزٍ بقيمة ما رُدّ، لأن المتوقَّع
-              يُحسب من سندات الصرف لا من فواتير المرتجع.
+              المرتجع يُنشئ إشعارًا دائنًا مسوّدةً على هذه الفاتورة: يُراجَع ثمّ «إصدار» من القائمة فيُبلَّغ
+              ZATCA. والنقد المُعاد للمريض يُسجَّل سندَ صرفٍ من زرّ «استرداد» في نافذة تحصيل الفاتورة
+              الأصلية — بدونه يُغلق الصندوق بعجزٍ بقيمة ما رُدّ.
             </p>
 
             <Table>
@@ -1292,8 +1317,8 @@ function ReturnInvoiceDialog({
             </Table>
 
             <div className="flex flex-col gap-1.5">
-              <Label>سبب الإرجاع</Label>
-              <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="اختياري" />
+              <Label>سبب الإرجاع *</Label>
+              <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="يُطبع على الإشعار ويُبلَّغ ZATCA" />
             </div>
 
             <div className="flex flex-wrap justify-end gap-4 rounded-lg border p-3 text-sm tabular-nums">
@@ -1310,10 +1335,10 @@ function ReturnInvoiceDialog({
             إلغاء
           </Button>
           <Button
-            disabled={createReturn.isPending || selected.length === 0}
+            disabled={createReturn.isPending || selected.length === 0 || !note.trim()}
             onClick={() => createReturn.mutate()}
           >
-            {createReturn.isPending ? "جارٍ الإنشاء..." : "إنشاء المرتجع"}
+            {createReturn.isPending ? "جارٍ الإنشاء..." : "إنشاء الإشعار الدائن"}
           </Button>
         </DialogFooter>
       </DialogContent>

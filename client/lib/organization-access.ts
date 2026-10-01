@@ -128,8 +128,9 @@ const viewPermissions = (features: FeatureKey[]) =>
   features.map((feature) => `${feature}.view`);
 
 const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_admin">, string[]> = {
-  branch_manager: viewPermissions(allFeatureKeys),
-  doctor: viewPermissions([
+  // قوائم الأسعار والموارد صارتا مفتاحين مستقلّين عن «الخدمات» (0204)
+  branch_manager: [...viewPermissions(allFeatureKeys), "price_lists.view", "resources.view"],
+  doctor: [...viewPermissions([
     "core_dashboard",
     "appointments",
     "patients",
@@ -143,7 +144,7 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "doctor_workspace",
     "quality",
     "follow_up_center",
-  ]),
+  ]), "doctors.self_edit"],
   nurse: viewPermissions([
     "core_dashboard",
     "reception",

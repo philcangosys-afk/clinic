@@ -125,6 +125,11 @@ export type PermissionKey =
   | "structure.manage"
   | "doctors.view"
   | "doctors.manage"
+  /* الطبيب يعدّل بياناته الشخصية وجدول عمله (0204) */
+  | "doctors.self_edit"
+  /* شاشتا قوائم الأسعار والموارد — منفصلتان عن «الخدمات» (0204) */
+  | "price_lists.view"
+  | "resources.view"
   | "exam_templates.view"
   | "exam_templates.manage"
   | "visits.view"

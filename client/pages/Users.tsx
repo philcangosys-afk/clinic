@@ -547,6 +547,106 @@ function MemberDetailsForm({
   );
 }
 
+/**
+ * إزالة العضو من المنشأة نهائيًّا — `app_remove_member` (0199).
+ *
+ * تُحذف العضويّة واستثناءات صلاحياته، ويُفكّ ربط حسابه بملفّ الطبيب والموظّف
+ * (والملفّان باقيان). ما سجّله من مواعيد وفواتير وسجلّ تدقيق يبقى باسمه، ولذلك
+ * لا يُحذف حساب الدخول نفسه. السبب مطلوب ويُكتب في سجلّ التدقيق.
+ */
+function RemoveMemberDialog({
+  organizationId,
+  member,
+  email,
+  onOpenChange,
+}: {
+  organizationId: string | undefined;
+  member: MemberRow | null;
+  email: string | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [reason, setReason] = useState("");
+  const [confirmText, setConfirmText] = useState("");
+  const [lastId, setLastId] = useState<string | null>(null);
+  if (member && member.user_id !== lastId) {
+    setLastId(member.user_id);
+    setReason("");
+    setConfirmText("");
+  }
+  const confirmWord = "إزالة";
+
+  const remove = useMutation({
+    mutationFn: async () => {
+      if (!organizationId || !member) throw new Error("لا عضو محدَّد");
+      const { error } = await supabase.rpc("app_remove_member", {
+        p_organization_id: organizationId,
+        p_user_id: member.user_id,
+        p_reason: reason.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["org-members-admin"] });
+      queryClient.invalidateQueries({ queryKey: ["member-accounts"] });
+      queryClient.invalidateQueries({ queryKey: ["organization-role-holders"] });
+      queryClient.invalidateQueries({ queryKey: ["doctors-list"] });
+      queryClient.invalidateQueries({ queryKey: ["doctor-account-candidates"] });
+      toast({ title: `أُزيل ${member?.display_name ?? "العضو"} من المنشأة` });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّرت الإزالة", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open={Boolean(member)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>إزالة {member?.display_name} من المنشأة نهائيًّا</DialogTitle>
+          <DialogDescription>
+            {email ? `${email} · ` : ""}
+            {member ? ROLE_LABELS[member.role_key] ?? member.role_key : ""}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3 text-sm">
+          <ul className="list-disc space-y-1 ps-5 text-xs text-muted-foreground">
+            <li>يختفي من قائمة الأعضاء ولا يستطيع الدخول إلى المنشأة، وتُحذف استثناءات صلاحياته.</li>
+            <li>يُفكّ ربط حسابه بملفّ الطبيب أو الموظّف إن وُجد — والملفّ نفسه يبقى.</li>
+            <li>
+              ما سجّله من مواعيد وفواتير وسندات وسجلّ تدقيق يبقى باسمه كما هو. وإن أضفته لاحقًا بالبريد نفسه عاد عضوًا
+              جديدًا.
+            </li>
+          </ul>
+          <div className="flex flex-col gap-1.5">
+            <Label>سبب الإزالة *</Label>
+            <Textarea rows={2} value={reason} onChange={(event) => setReason(event.target.value)} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>
+              اكتب «{confirmWord}» للتأكيد
+            </Label>
+            <Input value={confirmText} onChange={(event) => setConfirmText(event.target.value)} />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            تراجع
+          </Button>
+          <Button
+            variant="destructive"
+            disabled={!reason.trim() || confirmText.trim() !== confirmWord || remove.isPending}
+            onClick={() => remove.mutate()}
+          >
+            {remove.isPending ? "جارٍ الإزالة..." : "إزالة نهائيًّا"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function Users() {
   const { organization, membership, session } = useOrganizationAccess();
   const queryClient = useQueryClient();
@@ -559,6 +659,7 @@ export default function Users() {
 
   const [specialOpen, setSpecialOpen] = useState(false);
   const [accountTarget, setAccountTarget] = useState<MemberRow | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<MemberRow | null>(null);
   const roles = useOrganizationRoles(organization?.id);
 
   /**
@@ -905,6 +1006,23 @@ export default function Users() {
                             >
                               {row.is_active ? "تعطيل الدخول" : "تفعيل الدخول"}
                             </DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="text-destructive focus:text-destructive"
+                              onSelect={() => {
+                                const blocked = guard(row, false, row.role_key);
+                                if (blocked) {
+                                  toast({
+                                    variant: "destructive",
+                                    title: "غير مسموح",
+                                    description: blocked.replace("تعطيل", "إزالة"),
+                                  });
+                                  return;
+                                }
+                                setRemoveTarget(row);
+                              }}
+                            >
+                              إزالة من المنشأة نهائيًّا
+                            </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       )}
@@ -948,6 +1066,15 @@ export default function Users() {
           onOpenChange={() => setAccountTarget(null)}
         />
       )}
+
+      <RemoveMemberDialog
+        organizationId={organization?.id}
+        member={removeTarget}
+        email={removeTarget ? accountOf(removeTarget.user_id)?.email ?? null : null}
+        onOpenChange={(open) => {
+          if (!open) setRemoveTarget(null);
+        }}
+      />
 
       <MemberDetailsDialog
         member={editTarget}

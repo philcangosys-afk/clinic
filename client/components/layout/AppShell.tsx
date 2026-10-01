@@ -33,6 +33,7 @@ import { useDemoRole } from "@/contexts/DemoRoleContext";
 import { useSessionDoctor } from "@/lib/session-doctor";
 import {
   filterAccessibleModules,
+  moduleAccessible,
   groupModules,
   moduleRegistry,
   settingsModule,
@@ -313,7 +314,7 @@ function useCurrentModuleAccess() {
         : moduleRegistry.find((entry) => entry.id === moduleId);
     // مسار لا يقابله موديول (مثل شاشة غير مسجَّلة) لا يُحجب من هنا.
     if (!item) return { allowed: true, label: null };
-    const allowed = canAccess(item.featureKey, item.requiredPermission) && demoRoleAllowsModule(role, item.id);
+    const allowed = moduleAccessible(item, canAccess) && demoRoleAllowsModule(role, item.id);
     return { allowed, label: item.label };
   }, [canAccess, location.pathname, role]);
 }

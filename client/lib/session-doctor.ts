@@ -20,14 +20,21 @@ import { useDemoRole } from "@/contexts/DemoRoleContext";
  *      بديلٌ عن الجلسة، ولذلك يأتي ثانيًا.
  *
  * **`isDoctorScope` ليست «هل هو طبيب» بل «هل يجب أن تُحصَر الشاشة».** المدير
- * الذي يعاين بعيون طبيب يجب أن يُحصَر أيضًا وإلّا فالمعاينة تكذب عليه؛
- * والطبيب الذي لم يُربط حسابه بسجلّ طبيب لا يُحصَر على «لا أحد» — يُترك على
- * حاله ويُعلَّق السبب في الشاشة، لأنّ حصره على الفراغ يمنعه من العمل.
+ * الذي يعاين بعيون طبيب يجب أن يُحصَر أيضًا وإلّا فالمعاينة تكذب عليه.
+ *
+ * **والطبيب الذي لم تُعرف هويّته يُحصَر على «لا أحد» (0204).** كان يُترك على
+ * حاله فيرى مرضى المنشأة كلّها ومواعيدها، مع تنبيهٍ في أعلى الشاشة — وهذا
+ * بالضبط ما رآه المالك بحساب الطبيب ورفضه: «يجب أن يظهر له الخاصّون به
+ * فقط». فالقاعدة الآن: لا يُعرض للطبيب شيءٌ لا يُعرف أنّه له. والعلاج ربط
+ * حسابه بسجلّه من «الأطباء» ← حساب الدخول، وتقوله الشاشة.
  *
  * وهذا **حصرُ عرضٍ لا حصرُ صلاحية**: سياسات RLS فوقه كما هي. حصر القاعدة
  * نفسها على العلاقة العلاجية قرارٌ أوسع أثرًا (يمسّ الفوترة والتقارير
  * والاستقبال) ولم يُطلب.
  */
+/** معرّفٌ لا يطابق طبيبًا: حصرٌ على «لا أحد» للطبيب الذي لم تُعرف هويّته. */
+export const NO_DOCTOR = "00000000-0000-0000-0000-000000000000";
+
 export function useSessionDoctor() {
   const { organization, session } = useOrganizationAccess();
   const { role, doctorId: previewDoctorId } = useDemoRole();
@@ -50,20 +57,24 @@ export function useSessionDoctor() {
     },
   });
 
-  const doctorId = linked.data ?? previewDoctorId ?? null;
+  const resolvedDoctorId = linked.data ?? previewDoctorId ?? null;
   const isDoctorRole = role === "doctor";
 
   return {
-    doctorId,
+    /**
+     * معرّف الطبيب للحصر. للصفة «طبيب» بلا هويّةٍ معروفة (أو أثناء التحميل)
+     * معرّفٌ لا يطابق أحدًا، فتعود القوائم فارغة لا شاملة.
+     */
+    doctorId: resolvedDoctorId ?? (isDoctorRole ? NO_DOCTOR : null),
     /** الصفة طبيب — بصرف النظر عن نجاح تحديد هويّته. */
     isDoctorRole,
-    /** تُحصَر الشاشة فعلًا: الصفة طبيب **وعُرفت هويّته**. */
-    isDoctorScope: isDoctorRole && Boolean(doctorId),
+    /** تُحصَر الشاشة: كلّ صفة «طبيب» — عُرفت هويّته أم لم تُعرف (0204). */
+    isDoctorScope: isDoctorRole,
     /**
-     * الصفة طبيب ولم تُعرف هويّته — الشاشة تعرض الكلّ، وعليها أن تقول ذلك
-     * بدل أن تصمت. الصمت هنا يجعل الطبيب يظنّ أنّ هؤلاء مرضاه.
+     * الصفة طبيب ولم تُعرف هويّته — القوائم فارغة، والشاشة تقول السبب
+     * وعلاجه بدل أن تبدو كأن لا مرضى له.
      */
-    unresolvedDoctor: isDoctorRole && !linked.isLoading && !doctorId,
+    unresolvedDoctor: isDoctorRole && !linked.isLoading && !resolvedDoctorId,
     resolving: linked.isLoading,
     error: linked.error as Error | null,
   };

@@ -65,6 +65,13 @@ export type ModuleRegistryItem = {
   badge?: string;
   featureKey: FeatureKey;
   requiredPermission: `${FeatureKey}.view`;
+  /**
+   * صلاحيةٌ ثانية تُشترط مع فتح الشاشة (0204). شاشاتٌ تتشارك مزيّةً واحدة —
+   * «قوائم الأسعار» و«الموارد» مع «الخدمات»، و«تصميم شاشات العيادات» مع
+   * «السجل الطبي» — كانت تُفتح بمفتاحها المشترك، فلا يُخفى أحدها عن صفةٍ إلّا
+   * بإخفاء أخواتها. وبهذا يُخفى كلٌّ منها بمفتاحه من شاشة الصفات.
+   */
+  alsoRequires?: string;
   category: string;
   order: number;
 };
@@ -79,8 +86,8 @@ export const moduleRegistry: ModuleRegistryItem[] = [
   { id: "patient-journey", label: "رحلة المريض", icon: Activity, badge: "3", featureKey: "patient_journey", requiredPermission: "patient_journey.view", category: "الاستقبال والمواعيد", order: 60 },
   { id: "services", label: "الخدمات", icon: ReceiptText, badge: "18", featureKey: "medical_services", requiredPermission: "medical_services.view", category: "الكتالوج الطبي", order: 70 },
   { id: "departments", label: "الأقسام والعيادات", icon: Building2, badge: "22", featureKey: "departments_clinics", requiredPermission: "departments_clinics.view", category: "الكتالوج الطبي", order: 80 },
-  { id: "price-lists", label: "قوائم الأسعار", icon: TicketPercent, featureKey: "medical_services", requiredPermission: "medical_services.view", category: "الكتالوج الطبي", order: 72 },
-  { id: "resources", label: "الموارد", icon: Warehouse, featureKey: "medical_services", requiredPermission: "medical_services.view", category: "الكتالوج الطبي", order: 74 },
+  { id: "price-lists", label: "قوائم الأسعار", icon: TicketPercent, featureKey: "medical_services", requiredPermission: "medical_services.view", alsoRequires: "price_lists.view", category: "الكتالوج الطبي", order: 72 },
+  { id: "resources", label: "الموارد", icon: Warehouse, featureKey: "medical_services", requiredPermission: "medical_services.view", alsoRequires: "resources.view", category: "الكتالوج الطبي", order: 74 },
   { id: "doctor-workspace", label: "مساحة عمل الطبيب", icon: Stethoscope, featureKey: "doctor_workspace", requiredPermission: "doctor_workspace.view", category: "الكتالوج الطبي", order: 92 },
   { id: "doctors", label: "الأطباء", icon: Stethoscope, badge: "10", featureKey: "doctors", requiredPermission: "doctors.view", category: "الكتالوج الطبي", order: 90 },
   { id: "laboratory", label: "المختبر", icon: FlaskConical, badge: "4", featureKey: "laboratory", requiredPermission: "laboratory.view", category: "الكتالوج الطبي", order: 100 },
@@ -132,7 +139,9 @@ export const moduleRegistry: ModuleRegistryItem[] = [
   { id: "external-clients", label: "العملاء الخارجيون", icon: Contact2, featureKey: "billing_payments", requiredPermission: "billing_payments.view", category: "المالية والتأمين", order: 166 },
   { id: "audit", label: "سجل التدقيق", icon: LockKeyhole, badge: "107", featureKey: "audit_log", requiredPermission: "audit_log.view", category: "التشغيل والإدارة", order: 350 },
   { id: "warehouses", label: "المستودعات", icon: Warehouse, featureKey: "inventory", requiredPermission: "inventory.view", category: "المخزون", order: 332 },
-  { id: "exam-templates", label: "تصميم شاشات العيادات", icon: LayoutTemplate, featureKey: "medical_records", requiredPermission: "medical_records.view", category: "الكتالوج الطبي", order: 115 },
+  // تصميم النماذج إدارةٌ لا عرض (0204): الطبيب يستعمل النماذج بـ`exam_templates.view`
+  // في مساحة عمله، ولا يرى شاشة تصميمها إلّا من مُنح «إدارة نماذج الفحص»
+  { id: "exam-templates", label: "تصميم شاشات العيادات", icon: LayoutTemplate, featureKey: "medical_records", requiredPermission: "medical_records.view", alsoRequires: "exam_templates.manage", category: "الكتالوج الطبي", order: 115 },
   { id: "users", label: "المستخدمون والصلاحيات", icon: UserCog, featureKey: "settings", requiredPermission: "settings.view", category: "التشغيل والإدارة", order: 352 },
   { id: "licenses", label: "تراخيص المنشأة", icon: ShieldCheck, featureKey: "settings", requiredPermission: "settings.view", category: "التشغيل والإدارة", order: 355 },
   { id: "waitlist", label: "قائمة انتظار المواعيد", icon: CalendarClock, featureKey: "appointments", requiredPermission: "appointments.view", category: "الاستقبال والمواعيد", order: 35 },
@@ -163,7 +172,18 @@ export function filterAccessibleModules(
   items: ModuleRegistryItem[],
   canAccess: (featureKey: FeatureKey, permissionKey: string) => boolean,
 ) {
-  return items.filter((item) => canAccess(item.featureKey, item.requiredPermission));
+  return items.filter((item) => moduleAccessible(item, canAccess));
+}
+
+/** فتح الشاشة: مفتاحها، وما تشترطه معه إن وُجد (`alsoRequires`). */
+export function moduleAccessible(
+  item: Pick<ModuleRegistryItem, "featureKey" | "requiredPermission" | "alsoRequires">,
+  canAccess: (featureKey: FeatureKey, permissionKey: string) => boolean,
+) {
+  return (
+    canAccess(item.featureKey, item.requiredPermission) &&
+    (!item.alsoRequires || canAccess(item.featureKey, item.alsoRequires))
+  );
 }
 
 export function groupModules(items: ModuleRegistryItem[]) {

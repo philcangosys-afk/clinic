@@ -59,8 +59,10 @@ export function DemoRoleProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<DemoRoleContextValue>(() => {
-    // موظّف بدور محدّد (طبيب، أشعة، مختبر…) يدخل على صفته مباشرة.
-    if (!loading && membershipRole && !isAdminLike && !state) {
+    // موظّف بدور محدّد (طبيب، أشعة، مختبر…) يدخل على صفته مباشرة — ولا تُقرأ له
+    // معاينةٌ محفوظة في المتصفّح (0204): كانت تسبق صفته الحقيقية إن فتح على
+    // جهازٍ عاين منه المدير قبله، فيرى بصفةٍ أو طبيبٍ غير صفته.
+    if (!loading && membershipRole && !isAdminLike) {
       return {
         role: membershipRole,
         name: "",
