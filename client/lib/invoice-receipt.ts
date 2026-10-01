@@ -68,6 +68,15 @@ export type InvoicePrintHeader = {
   patient_share_amount: number | null;
   note: string | null;
   zatca_qr: string | null;
+
+  /** 0202 — نوع المستند: standard (فاتورة الأعمال) أو simplified أو إشعار */
+  document_type?: string | null;
+  patient_id?: string | null;
+  /** مشتري فاتورة الأعمال — العميل الخارجيّ من لقطة الإصدار */
+  buyer_name?: string | null;
+  buyer_vat_number?: string | null;
+  buyer_cr_number?: string | null;
+  buyer_address?: string | null;
 };
 
 export type InvoicePrintItem = {
@@ -145,8 +154,15 @@ function titleOf(header: InvoicePrintHeader): { ar: string; en: string } {
   if (header.invoice_type === "return") {
     return { ar: "إشعار دائن", en: "Credit Note" };
   }
+  if (header.document_type === "debit_note") {
+    return { ar: "إشعار مدين", en: "Debit Note" };
+  }
   if (header.is_temporary) {
     return { ar: "عرض سعر — ليس فاتورة ضريبية", en: "Quotation — Not a Tax Invoice" };
+  }
+  // فاتورة الأعمال (0202) فاتورة ضريبية كاملة لا مبسّطة
+  if (header.document_type === "standard") {
+    return { ar: "فاتورة ضريبية", en: "Tax Invoice" };
   }
   return { ar: "فاتورة ضريبية مبسطة", en: "Simplified Tax Invoice" };
 }
@@ -260,13 +276,28 @@ export function buildInvoiceReceiptHtml(data: InvoicePrintData): string {
       ? ""
       : `${h.age_years} Year , ${h.age_months ?? 0} Month , ${h.age_days ?? 0}`;
 
+  /**
+   * مشتري فاتورة الأعمال (0202): المنشأة بهويّتها الضريبية وعنوانها — والفاتورة
+   * الضريبية لا تكتمل بدونها. المريض (إن وُجد) يبقى متلقّي الخدمة.
+   */
+  const buyerRows = h.buyer_name
+    ? [
+        row("المشتري", esc(h.buyer_name), "Buyer"),
+        row("الرقم الضريبي للمشتري", `<span class="ltr">${esc(h.buyer_vat_number ?? "")}</span>`, "Buyer VAT"),
+        row("السجل التجاري", `<span class="ltr">${esc(h.buyer_cr_number ?? "")}</span>`, "CR No."),
+        row("عنوان المشتري", esc(h.buyer_address ?? ""), "Address"),
+      ]
+    : [];
+  const showPatient = !h.buyer_name || Boolean(h.patient_id);
+
   const infoRows = [
     row("رقم الفاتورة", esc(invoiceLabel(h)), "Invoice. N."),
     row("التاريخ", `<span class="ltr">${esc(stamp(h.invoice_at))}</span>`, "Date"),
     row("إسم الطبيب", esc(h.doctor_name ?? ""), "Doctor"),
     row("إسم العيادة", esc(h.clinic_name ?? ""), "Clinic"),
-    row("إسم المريض", esc(h.customer_name ?? ""), "Patient"),
-    row("الرقم الضريبي للعميل", esc(h.customer_tax_number ?? ""), "Cust. VAT"),
+    ...buyerRows,
+    showPatient ? row("إسم المريض", esc(h.customer_name ?? ""), "Patient") : "",
+    h.buyer_name ? "" : row("الرقم الضريبي للعميل", esc(h.customer_tax_number ?? ""), "Cust. VAT"),
     row("العمر", ageText ? `<span class="ltr">${esc(ageText)}</span>` : "", "Age"),
     row("الجنسية", esc(h.customer_nationality_en || h.customer_nationality || ""), "Nat."),
     row("رقم الهوية", esc(h.customer_id_number ?? ""), "ID"),

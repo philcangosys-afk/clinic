@@ -9,6 +9,11 @@
  *
  * الإرسال الحقيقي لا يحدث إلا بشرطين معًا: عبارة التأكيد مع الطلب، وتفعيل
  * الإنتاج على الجهاز في القاعدة.
+ *
+ * منذ 0202: الأقسام المالية في UBL تُبنى هنا من البنود (`computeMonetaryModel`
+ * و`rebuildMonetarySections`) — فالفاتورة قد تجمع 15% وصفرًا، وتحمل خصمًا على
+ * مستوى الفاتورة، وفاتورة الأعمال (`document_type = 'standard'`) تُعتمد مسبقًا
+ * لمشتريها العميل الخارجيّ، وفاتورة التأمين تُبلَّغ مبسّطة باسم المريض.
  */
 import { createClient } from "npm:@supabase/supabase-js@2.45.4";
 import { Buffer } from "node:buffer";
@@ -361,45 +366,300 @@ function removeEmptyPartyIdentification(xml: string) {
 }
 
 /**
- * رمز سبب الإعفاء المعتمد لدى ZATCA للرعاية الصحية الخاصة للمواطن — فئة
- * «صفرية» (Z). هكذا كان Kizen يُبلّغ فواتير المواطنين بضريبة 0.00.
+ * أسباب الصفرية (الفئة Z) المعتمدة لدى ZATCA التي يستعملها ZainCare.
+ *
+ * * VATEX-SA-HEA — الرعاية الصحية الخاصة للمواطن: تُحسب من ملفّ المريض
+ *   (جنسيته في قائمة الإعفاء وهويّته الوطنية ثابتة). هكذا كان Kizen يُبلّغ
+ *   فواتير المواطنين بضريبة 0.00.
+ * * VATEX-SA-35 — الأدوية والمعدّات الطبية: من بطاقة الصنف
+ *   (`items.zatca_exemption_code`، لقطةٌ في البند — 0202) لبندٍ صفريّ لغير
+ *   المواطن.
  */
-const ZERO_RATED_HEALTHCARE = {
-  code: "VATEX-SA-HEA",
-  reason: "Private healthcare to citizen",
+const ZATCA_EXEMPTIONS: Record<string, string> = {
+  "VATEX-SA-HEA": "Private healthcare to citizen",
+  "VATEX-SA-35": "Medicines and medical equipment",
+};
+
+type TaxCategoryCode = "S" | "Z";
+
+/** بندٌ بفئته الضريبية كما سيُبلَّغ. */
+type TaxLine = {
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  /** خصم البند بالريال */
+  discount: number;
+  rate: number;
+  category: TaxCategoryCode;
+  /** سبب الصفرية للفئة Z */
+  exemptionCode?: string;
+};
+
+type MonetaryLine = TaxLine & {
+  grossCents: number;
+  discountCents: number;
+  netCents: number;
+  vatCents: number;
+};
+
+type MonetaryCategory = {
+  category: TaxCategoryCode;
+  rate: number;
+  exemptionCode?: string;
+  baseCents: number;
+  allowanceCents: number;
+  taxableCents: number;
+  taxCents: number;
+};
+
+type MonetaryModel = {
+  lines: MonetaryLine[];
+  categories: MonetaryCategory[];
+  documentDiscountCents: number;
+  lineExtensionCents: number;
+  taxExclusiveCents: number;
+  taxCents: number;
+  taxInclusiveCents: number;
+};
+
+/** هللات صحيحة — المبالغ المخزّنة بخانتين، فلا كسور عائمة في الجمع. */
+const toCents = (value: number) => Math.round(Number(value || 0) * 100);
+/** تقريبٌ نصفيّ بعيدًا عن الصفر كـ`round(numeric, 2)` في PostgreSQL. */
+const roundCents = (value: number) => Math.sign(value) * Math.round(Math.abs(value) + 1e-7);
+const amountText = (cents: number) => (cents / 100).toFixed(2);
+const decimalText = (value: number, min = 2, max = 6) => {
+  const fixed = Number(value).toFixed(max).replace(/0+$/, "");
+  const [whole, fraction = ""] = fixed.split(".");
+  return `${whole}.${fraction.padEnd(min, "0")}`;
 };
 
 /**
- * فاتورة المواطن الصفرية.
+ * الحساب الذي يُبلَّغ — بقواعد EN 16931 وZATCA، ومن البنود لا من الرأس:
  *
- * المولّد لا يعرف غير الفئة القياسية (S)، فتُحوَّل فئات الضريبة في الـXML
- * **قبل التوقيع** إلى Z، ويُضاف سبب الإعفاء في كلّ TaxSubtotal (موضعه بعد
- * Percent وقبل TaxScheme كما في UBL). ثمّ يُتحقّق من النتيجة: إن بقيت فئة S
- * أو نقص سببٌ عن مجموعٍ فرعيّ رُفض المستند — إرساله بفئةٍ خاطئة مستندٌ
- * ضريبيّ خاطئ، والرفض قبل الإرسال لا يستهلك شيئًا.
+ *   صافي البند            = تقريب(الكمية × السعر) − خصم البند
+ *   ضريبة البند           = تقريب(صافي البند × النسبة)            (BR-KSA-50)
+ *   وعاء الفئة            = Σ صافي بنودها − نصيبها من خصم المستند
+ *   ضريبة الفئة           = تقريب(وعاء الفئة × النسبة)            (BR-CO-17)
+ *   الإجمالي قبل الضريبة  = Σ صافي البنود − خصم المستند           (BR-CO-13)
+ *   الإجمالي              = قبل الضريبة + Σ ضريبة الفئات          (BR-CO-15)
+ *
+ * خصم المستند يوزَّع على الفئات بنسبة أوعيتها، والباقي من التقريب على أكبرها
+ * — **القاعدة نفسها حرفيًّا** في `app_apply_invoice_discount` (0202)، فتطابق
+ * ضريبة الرأس المخزّنة ضريبة المستند المُبلَّغ.
  */
-function applyZeroRatedHealthcare(xml: string) {
-  let out = xml.replace(
-    /(<cac:(?:ClassifiedTaxCategory|TaxCategory)>\s*<cbc:ID\b[^>]*>)\s*S\s*(<\/cbc:ID>)/g,
-    "$1Z$2",
-  );
-  out = out.replace(/<cac:TaxSubtotal>[\s\S]*?<\/cac:TaxSubtotal>/g, (block) =>
-    block.includes("<cbc:TaxExemptionReasonCode>")
-      ? block
-      : block.replace(
-          /(<cbc:Percent>[^<]*<\/cbc:Percent>)/,
-          `$1<cbc:TaxExemptionReasonCode>${ZERO_RATED_HEALTHCARE.code}</cbc:TaxExemptionReasonCode>` +
-            `<cbc:TaxExemptionReason>${ZERO_RATED_HEALTHCARE.reason}</cbc:TaxExemptionReason>`,
-        ),
-  );
-  const standardLeft =
-    /<cac:(?:ClassifiedTaxCategory|TaxCategory)>\s*<cbc:ID\b[^>]*>\s*S\s*<\/cbc:ID>/.test(out);
-  const subtotals = (out.match(/<cac:TaxSubtotal>/g) ?? []).length;
-  const reasons = (out.match(/<cbc:TaxExemptionReasonCode>/g) ?? []).length;
-  if (standardLeft || subtotals === 0 || reasons !== subtotals) {
-    throw new Error("تعذّر إعداد الفاتورة بفئة الضريبة الصفرية (ZERO_RATED_XML_TRANSFORM_FAILED) — لم تُرسل إلى ZATCA");
+function computeMonetaryModel(lines: TaxLine[], documentDiscount: number): MonetaryModel {
+  const modelLines: MonetaryLine[] = lines.map((line) => {
+    const grossCents = roundCents(line.quantity * line.unitPrice * 100);
+    const discountCents = toCents(line.discount);
+    const netCents = grossCents - discountCents;
+    return {
+      ...line,
+      grossCents,
+      discountCents,
+      netCents,
+      vatCents: roundCents((netCents * line.rate) / 100),
+    };
+  });
+
+  const groups = new Map<string, MonetaryCategory>();
+  for (const line of modelLines) {
+    const key = `${line.category}|${line.rate}|${line.exemptionCode ?? ""}`;
+    const group = groups.get(key) ?? {
+      category: line.category,
+      rate: line.rate,
+      exemptionCode: line.exemptionCode,
+      baseCents: 0,
+      allowanceCents: 0,
+      taxableCents: 0,
+      taxCents: 0,
+    };
+    group.baseCents += line.netCents;
+    groups.set(key, group);
   }
-  return out;
+  const categories = [...groups.values()].sort(
+    (a, b) => b.baseCents - a.baseCents || b.rate - a.rate,
+  );
+  if (new Set(categories.map((group) => group.rate)).size !== categories.length) {
+    // التوزيع في القاعدة على النسبة؛ فئتان بنسبةٍ واحدة تفترقان عنه
+    throw new Error("فئتان ضريبيتان بالنسبة نفسها في مستندٍ واحد — غير مدعوم (TAX_GROUPS_AMBIGUOUS)");
+  }
+
+  const totalBase = categories.reduce((sum, group) => sum + group.baseCents, 0);
+  const discountCents = toCents(documentDiscount);
+  if (discountCents < 0 || discountCents > totalBase) {
+    throw new Error("خصم الفاتورة أكبر من صافي بنودها (DOCUMENT_DISCOUNT_INVALID)");
+  }
+  if (discountCents > 0) {
+    let others = 0;
+    categories.forEach((group, index) => {
+      if (index === 0) return;
+      group.allowanceCents = roundCents((discountCents * group.baseCents) / totalBase);
+      others += group.allowanceCents;
+    });
+    categories[0].allowanceCents = discountCents - others;
+  }
+  for (const group of categories) {
+    group.taxableCents = group.baseCents - group.allowanceCents;
+    if (group.taxableCents < 0) throw new Error("DOCUMENT_DISCOUNT_ALLOCATION_NEGATIVE");
+    group.taxCents = roundCents((group.taxableCents * group.rate) / 100);
+  }
+
+  const lineExtensionCents = totalBase;
+  const taxExclusiveCents = lineExtensionCents - discountCents;
+  const taxCents = categories.reduce((sum, group) => sum + group.taxCents, 0);
+  return {
+    lines: modelLines,
+    categories,
+    documentDiscountCents: discountCents,
+    lineExtensionCents,
+    taxExclusiveCents,
+    taxCents,
+    taxInclusiveCents: taxExclusiveCents + taxCents,
+  };
+}
+
+const TAX_SCHEME =
+  '<cac:TaxScheme><cbc:ID schemeID="UN/ECE 5153" schemeAgencyID="6">VAT</cbc:ID></cac:TaxScheme>';
+
+function taxCategoryXml(
+  group: { category: TaxCategoryCode; rate: number; exemptionCode?: string },
+  withReason: boolean,
+  indent: string,
+) {
+  const inner = `\n${indent}    `;
+  const reason =
+    withReason && group.category === "Z" && group.exemptionCode
+      ? `${inner}<cbc:TaxExemptionReasonCode>${group.exemptionCode}</cbc:TaxExemptionReasonCode>` +
+        `${inner}<cbc:TaxExemptionReason>${escapeXmlText(ZATCA_EXEMPTIONS[group.exemptionCode])}</cbc:TaxExemptionReason>`
+      : "";
+  return (
+    `<cac:TaxCategory>` +
+    `${inner}<cbc:ID schemeID="UN/ECE 5305" schemeAgencyID="6">${group.category}</cbc:ID>` +
+    `${inner}<cbc:Percent>${group.rate.toFixed(2)}</cbc:Percent>` +
+    reason +
+    `${inner}${TAX_SCHEME}` +
+    `\n${indent}</cac:TaxCategory>`
+  );
+}
+
+/**
+ * يعيد بناء الأقسام المالية في UBL من الحساب أعلاه.
+ *
+ * المولّد (`zatca-node`) لا يعرف إلا الفئة القياسية (S) ومجموعًا ضريبيًا
+ * واحدًا وخصمًا صفريًّا على المستند — فلا يكتب فاتورةً مختلطة، ولا خصمًا على
+ * الفاتورة، ولا الفئة الصفرية. فيُستبدل **قبل التوقيع**: خصومات المستند
+ * (AllowanceCharge) ومجموعا الضريبة (TaxTotal) والإجماليات
+ * (LegalMonetaryTotal) وكلّ بند (InvoiceLine). ما سواها — الترويسة، والعدّاد
+ * والتجزئة السابقة، والبائع والمشتري، والمرجع والدفع — يبقى كما كتبه المولّد.
+ *
+ * أيّ شكلٍ غير متوقّع (عدد بنود مختلف، أو قسمٌ ماليّ بقي بعد الحذف) يوقف
+ * الإرسال: مستندٌ ضريبيّ بقسمين متناقضين أسوأ من مستندٍ لم يُرسل.
+ */
+function rebuildMonetarySections(xml: string, model: MonetaryModel) {
+  const lineOpen = "<cac:InvoiceLine>";
+  const lineClose = "</cac:InvoiceLine>";
+  const first = xml.indexOf(lineOpen);
+  const last = xml.lastIndexOf(lineClose);
+  if (first < 0 || last < first) throw new Error("UBL_INVOICE_LINES_NOT_FOUND");
+  const end = last + lineClose.length;
+  const generatedLines = xml.slice(first, end).match(/<cac:InvoiceLine>[\s\S]*?<\/cac:InvoiceLine>/g) ?? [];
+  if (generatedLines.length !== model.lines.length) {
+    throw new Error(`UBL_LINE_COUNT_MISMATCH ${generatedLines.length}/${model.lines.length}`);
+  }
+
+  let head = xml.slice(0, first);
+  for (const tag of ["AllowanceCharge", "TaxTotal", "LegalMonetaryTotal"]) {
+    head = head.replace(
+      new RegExp(`[ \\t]*<cac:${tag}>[\\s\\S]*?<\\/cac:${tag}>[ \\t]*\\r?\\n?`, "g"),
+      "",
+    );
+  }
+  if (/AllowanceCharge|TaxTotal|LegalMonetaryTotal|TaxSubtotal/.test(head)) {
+    throw new Error("UBL_MONETARY_SECTION_UNEXPECTED_SHAPE");
+  }
+  head = head.replace(/\s*$/, "\n");
+
+  const allowances = model.categories
+    .filter((group) => group.allowanceCents > 0)
+    .map(
+      (group) =>
+        `    <cac:AllowanceCharge>` +
+        `\n        <cbc:ChargeIndicator>false</cbc:ChargeIndicator>` +
+        `\n        <cbc:AllowanceChargeReasonCode>95</cbc:AllowanceChargeReasonCode>` +
+        `\n        <cbc:AllowanceChargeReason>Discount</cbc:AllowanceChargeReason>` +
+        `\n        <cbc:Amount currencyID="SAR">${amountText(group.allowanceCents)}</cbc:Amount>` +
+        `\n        ${taxCategoryXml(group, false, "        ")}` +
+        `\n    </cac:AllowanceCharge>\n`,
+    )
+    .join("");
+
+  const subtotals = model.categories
+    .map(
+      (group) =>
+        `\n        <cac:TaxSubtotal>` +
+        `\n            <cbc:TaxableAmount currencyID="SAR">${amountText(group.taxableCents)}</cbc:TaxableAmount>` +
+        `\n            <cbc:TaxAmount currencyID="SAR">${amountText(group.taxCents)}</cbc:TaxAmount>` +
+        `\n            ${taxCategoryXml(group, true, "            ")}` +
+        `\n        </cac:TaxSubtotal>`,
+    )
+    .join("");
+
+  const totals =
+    `    <cac:TaxTotal>` +
+    `\n        <cbc:TaxAmount currencyID="SAR">${amountText(model.taxCents)}</cbc:TaxAmount>` +
+    `\n    </cac:TaxTotal>` +
+    `\n    <cac:TaxTotal>` +
+    `\n        <cbc:TaxAmount currencyID="SAR">${amountText(model.taxCents)}</cbc:TaxAmount>` +
+    subtotals +
+    `\n    </cac:TaxTotal>` +
+    `\n    <cac:LegalMonetaryTotal>` +
+    `\n        <cbc:LineExtensionAmount currencyID="SAR">${amountText(model.lineExtensionCents)}</cbc:LineExtensionAmount>` +
+    `\n        <cbc:TaxExclusiveAmount currencyID="SAR">${amountText(model.taxExclusiveCents)}</cbc:TaxExclusiveAmount>` +
+    `\n        <cbc:TaxInclusiveAmount currencyID="SAR">${amountText(model.taxInclusiveCents)}</cbc:TaxInclusiveAmount>` +
+    `\n        <cbc:AllowanceTotalAmount currencyID="SAR">${amountText(model.documentDiscountCents)}</cbc:AllowanceTotalAmount>` +
+    `\n        <cbc:PrepaidAmount currencyID="SAR">0.00</cbc:PrepaidAmount>` +
+    `\n        <cbc:PayableAmount currencyID="SAR">${amountText(model.taxInclusiveCents)}</cbc:PayableAmount>` +
+    `\n    </cac:LegalMonetaryTotal>\n`;
+
+  const lines = model.lines
+    .map((line, index) => {
+      const name = escapeXmlText(line.description) || "بند";
+      const allowance =
+        line.discountCents > 0
+          ? `\n        <cac:AllowanceCharge>` +
+            `\n            <cbc:ChargeIndicator>false</cbc:ChargeIndicator>` +
+            `\n            <cbc:AllowanceChargeReasonCode>95</cbc:AllowanceChargeReasonCode>` +
+            `\n            <cbc:AllowanceChargeReason>Discount</cbc:AllowanceChargeReason>` +
+            `\n            <cbc:Amount currencyID="SAR">${amountText(line.discountCents)}</cbc:Amount>` +
+            `\n        </cac:AllowanceCharge>`
+          : "";
+      return (
+        `    <cac:InvoiceLine>` +
+        `\n        <cbc:ID>${index + 1}</cbc:ID>` +
+        `\n        <cbc:InvoicedQuantity unitCode="PCE">${decimalText(line.quantity, 6, 6)}</cbc:InvoicedQuantity>` +
+        `\n        <cbc:LineExtensionAmount currencyID="SAR">${amountText(line.netCents)}</cbc:LineExtensionAmount>` +
+        allowance +
+        `\n        <cac:TaxTotal>` +
+        `\n            <cbc:TaxAmount currencyID="SAR">${amountText(line.vatCents)}</cbc:TaxAmount>` +
+        `\n            <cbc:RoundingAmount currencyID="SAR">${amountText(line.netCents + line.vatCents)}</cbc:RoundingAmount>` +
+        `\n        </cac:TaxTotal>` +
+        `\n        <cac:Item>` +
+        `\n            <cbc:Name>${name}</cbc:Name>` +
+        `\n            <cac:ClassifiedTaxCategory>` +
+        `\n                <cbc:ID>${line.category}</cbc:ID>` +
+        `\n                <cbc:Percent>${line.rate.toFixed(2)}</cbc:Percent>` +
+        `\n                <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>` +
+        `\n            </cac:ClassifiedTaxCategory>` +
+        `\n        </cac:Item>` +
+        `\n        <cac:Price>` +
+        `\n            <cbc:PriceAmount currencyID="SAR">${decimalText(line.unitPrice)}</cbc:PriceAmount>` +
+        `\n        </cac:Price>` +
+        `\n    </cac:InvoiceLine>`
+      );
+    })
+    .join("\n");
+
+  return head + allowances + totals + lines + xml.slice(end);
 }
 
 /**
@@ -428,13 +688,8 @@ function hasValidRegisteredAddress(location: string) {
 function buildSignedInvoice(input: {
   setup: any;
   invoice: any;
-  lines: Array<{
-    description: string;
-    quantity: number;
-    unitPrice: number;
-    discount: number;
-    taxPercent: number;
-  }>;
+  /** الحساب المُبلَّغ — بنوده بفئاتها وخصم المستند (`computeMonetaryModel`) */
+  model: MonetaryModel;
   icv: number;
   previousHash: string;
   uuid: string;
@@ -442,15 +697,13 @@ function buildSignedInvoice(input: {
   originalInvoiceId?: string;
   originalInvoiceUuid?: string;
   credentials: { csid: string; secret: string };
-  /** كلّ البنود صفرية لمواطن — فئة Z بسبب VATEX-SA-HEA. */
-  zeroRated?: boolean;
-  /** الهوية الوطنية للمشتري — لازمة مع VATEX-SA-HEA (BR-KSA-49). */
+  /** الهوية الوطنية للمشتري المواطن — لازمة مع VATEX-SA-HEA (BR-KSA-49). */
   buyerNationalId?: string;
 }) {
   const {
     setup,
     invoice,
-    lines,
+    model,
     icv,
     previousHash,
     uuid,
@@ -458,7 +711,6 @@ function buildSignedInvoice(input: {
     originalInvoiceId,
     originalInvoiceUuid,
     credentials,
-    zeroRated = false,
     buyerNationalId = "",
   } = input;
   const address = parseRegisteredAddress(String(setup.branch_location));
@@ -508,16 +760,20 @@ function buildSignedInvoice(input: {
     .setPostalZone(buyerAddress.postalZone)
     .setCountryCode("SA");
   if (!simplified) {
-    buyer
-      .setPartyIdentification(String(invoice.buyer_id_number))
-      .setPartyIdentificationId(String(invoice.buyer_id_scheme || "OTH"))
-      .setVatNumber(String(invoice.buyer_vat));
-  } else if (zeroRated && buyerNationalId) {
+    // مشتري الأعمال (0202): السجلّ التجاريّ معرّفًا، والرقم الضريبيّ إن كان
+    // مسجّلًا. معرّفٌ فارغ يُحذف بعد التوليد (`removeEmptyPartyIdentification`).
+    if (clean(invoice.buyer_cr)) {
+      buyer.setPartyIdentification(clean(invoice.buyer_cr)).setPartyIdentificationId("CRN");
+    }
+    if (clean(invoice.buyer_vat)) buyer.setVatNumber(clean(invoice.buyer_vat));
+  } else if (buyerNationalId) {
     buyer.setPartyIdentification(buyerNationalId).setPartyIdentificationId("NAT");
   }
 
   document.setSeller(seller).setBuyer(buyer);
-  lines.forEach((line, index) => {
+  // البنود تُعطى للمولّد ليكتب هيكل المستند، ثمّ تُستبدل أقسامها المالية
+  // كلّها من `model` (`rebuildMonetarySections`) قبل التوقيع.
+  model.lines.forEach((line, index) => {
     document.addLine(
       new InvoiceLineData()
         .setId(index + 1)
@@ -526,7 +782,7 @@ function buildSignedInvoice(input: {
         .setQuantity(line.quantity)
         .setUnitPrice(line.unitPrice)
         .setAllowanceAmount(line.discount)
-        .setTaxPercent(line.taxPercent)
+        .setTaxPercent(line.rate)
         .setUnitCode("EA")
         .calculateTotals(),
     );
@@ -553,7 +809,7 @@ function buildSignedInvoice(input: {
   if (simplified && !hasValidRegisteredAddress(clean(invoice.customer_address))) {
     unsignedXml = removeBuyerPostalAddress(unsignedXml);
   }
-  if (zeroRated) unsignedXml = applyZeroRatedHealthcare(unsignedXml);
+  unsignedXml = rebuildMonetarySections(unsignedXml, model);
   const certificate = createCompatibleCertificate(
     toCertificatePem(credentials.csid),
     String(setup.private_key_pem),
@@ -580,16 +836,6 @@ const riyadhParts = (iso: string) => {
   const shifted = new Date(Date.parse(iso) + 3 * 60 * 60 * 1000).toISOString();
   return { date: shifted.slice(0, 10), time: shifted.slice(11, 19) };
 };
-
-function buyerIdScheme(idType: string, idNumber: string) {
-  const type = idType.toLowerCase();
-  if (/iqama|إقام|اقام|resident/.test(type)) return "IQA";
-  if (/passport|جواز/.test(type)) return "PAS";
-  if (/national|وطن|هوي|citizen/.test(type)) return "NAT";
-  if (/^1\d{9}$/.test(idNumber)) return "NAT";
-  if (/^2\d{9}$/.test(idNumber)) return "IQA";
-  return "OTH";
-}
 
 function composeAddress(parts: {
   building?: unknown;
@@ -789,7 +1035,7 @@ Deno.serve(async (req) => {
     if (documentType !== "invoice") {
       const { data: linked, error: linkedError } = await admin
         .from("sales_invoices")
-        .select("id, organization_id, document_type, document_prefix, document_number, invoice_number, zatca_uuid")
+        .select("id, organization_id, document_type, document_prefix, document_number, invoice_number, zatca_uuid, is_b2b, external_client_id, buyer_snapshot")
         .eq("id", clean(record.corrects_invoice_id))
         .maybeSingle();
       if (linkedError) throw linkedError;
@@ -820,7 +1066,68 @@ Deno.serve(async (req) => {
     }
     const buyerSnapshot = (record.buyer_snapshot ?? {}) as Record<string, unknown>;
     const patientCity = Array.isArray(patient?.city) ? patient.city[0]?.name_ar : patient?.city?.name_ar;
-    const buyerIdNumber = clean(buyerSnapshot.id_number) || clean(patient?.id_number) || clean(record.id_number);
+    /**
+     * هويّة المشتري.
+     *
+     * لقطة المشتري تُؤخذ لحظة الإصدار؛ فإن صُحّح رقم الهويّة في ملفّ المريض
+     * بعدها بقيت اللقطة على الرقم القديم ورُفض الإرسال وإن كان الملفّ صحيحًا.
+     * يُقدَّم أوّل رقم هويّة وطنيّة صالح (10 أرقام تبدأ بـ1) من اللقطة ثمّ
+     * الفاتورة ثمّ الملفّ الحاليّ، وإلّا فأوّل رقمٍ غير فارغ كما كان.
+     */
+    const buyerIdCandidates = [
+      clean(buyerSnapshot.id_number),
+      clean(record.id_number),
+      clean(patient?.id_number),
+    ].map((value) =>
+      value
+        .replace(/\s+/g, "")
+        // أرقام عربية-هندية أو فارسية مكتوبة في الملفّ تُقرأ لاتينية
+        .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+        .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0)),
+    );
+    const buyerIdNumber =
+      buyerIdCandidates.find((value) => /^1\d{9}$/.test(value)) ??
+      buyerIdCandidates.find((value) => value.length > 0) ??
+      "";
+    /**
+     * مشتري فاتورة الأعمال (0202) — العميل الخارجيّ: من لقطة الإصدار، وإلّا
+     * من ملفّه. وللإشعار مشتري فاتورته الأصلية: الإشعار يصحّح مستندها.
+     */
+    let b2bBuyer: {
+      name: string;
+      vat: string;
+      cr: string;
+      address: string;
+    } | null = null;
+    if (!simplified) {
+      const buyerSource = originalInvoice ?? record;
+      const snapshot = (buyerSource.buyer_snapshot ?? {}) as Record<string, any>;
+      let client: any = null;
+      if (clean(buyerSource.external_client_id)) {
+        const { data: clientRow, error: clientError } = await admin
+          .from("external_clients")
+          .select("name, vat_number, cr_number, building_number, street_name, district, city, postal_code")
+          .eq("id", clean(buyerSource.external_client_id))
+          .maybeSingle();
+        if (clientError) throw clientError;
+        client = clientRow;
+      }
+      const fromSnapshot = snapshot.kind === "b2b";
+      const address = (fromSnapshot ? snapshot.address : client) ?? {};
+      b2bBuyer = {
+        name: clean(fromSnapshot ? snapshot.name : client?.name),
+        vat: clean(fromSnapshot ? snapshot.vat_number : client?.vat_number),
+        cr: clean(fromSnapshot ? snapshot.cr_number : client?.cr_number),
+        address: composeAddress({
+          building: address.building_number,
+          street: address.street_name,
+          district: address.district,
+          city: address.city,
+          postal: address.postal_code,
+        }),
+      };
+    }
+
     const numberLabel = record.document_number
       ? `${clean(record.document_prefix) || "INV"}-${record.document_number}`
       : String(record.invoice_number);
@@ -830,19 +1137,22 @@ Deno.serve(async (req) => {
       date: issued.date,
       time: issued.time,
       due_date: issued.date,
-      customer:
-        clean(buyerSnapshot.name) || clean(patient?.name_ar) || clean(record.external_customer_name),
-      customer_address: composeAddress({
-        building: patient?.building_number,
-        street: patient?.street,
-        district: patient?.district,
-        city: patientCity,
-        postal: patient?.postal_code,
-      }),
+      customer: b2bBuyer
+        ? b2bBuyer.name
+        : clean(buyerSnapshot.name) || clean(patient?.name_ar) || clean(record.external_customer_name),
+      customer_address: b2bBuyer
+        ? b2bBuyer.address
+        : composeAddress({
+            building: patient?.building_number,
+            street: patient?.street,
+            district: patient?.district,
+            city: patientCity,
+            postal: patient?.postal_code,
+          }),
       invoice_type: simplified ? "simplified" : "standard",
-      buyer_vat: clean(buyerSnapshot.vat_number) || clean(patient?.tax_number),
+      buyer_vat: b2bBuyer ? b2bBuyer.vat : "",
+      buyer_cr: b2bBuyer ? b2bBuyer.cr : "",
       buyer_id_number: buyerIdNumber,
-      buyer_id_scheme: buyerIdScheme(clean(patient?.id_type), buyerIdNumber),
       reason: clean(record.note_reason),
     };
 
@@ -917,53 +1227,48 @@ Deno.serve(async (req) => {
     // ── البنود من جدولها، ولا يُرسل إلا ما يطابق مجموعه رأسَ الفاتورة
     const { data: itemRows, error: itemsError } = await admin
       .from("sales_invoice_items")
-      .select("description, item_name_snapshot, qty, price, discount_amount, vat_rate, vat_amount, exemption_amount, net_amount")
+      .select("description, item_name_snapshot, qty, price, discount_amount, vat_rate, zatca_exemption_code")
       .eq("invoice_id", recordId)
       .order("created_at");
     if (itemsError) throw itemsError;
-    const lines = (itemRows ?? []).map((item: any) => ({
+    const rawLines = (itemRows ?? []).map((item: any) => ({
       description: clean(item.item_name_snapshot) || clean(item.description),
       quantity: Number(item.qty) || 0,
       unitPrice: Number(item.price) || 0,
       discount: Math.max(Number(item.discount_amount) || 0, 0),
-      taxPercent: Number(item.vat_rate ?? 0),
-      exemption: Number(item.exemption_amount ?? 0),
+      rate: Number(item.vat_rate ?? 0),
+      itemExemptionCode: clean(item.zatca_exemption_code),
     }));
-    if (!lines.length) {
+    if (!rawLines.length) {
       return await rejectBeforeSubmission("لا توجد بنود في الفاتورة", 400);
     }
-    if (lines.some((line) => line.quantity <= 0 || line.unitPrice < 0 || line.discount > line.quantity * line.unitPrice)) {
+    if (rawLines.some((line) => line.quantity <= 0 || line.unitPrice < 0 || line.discount > line.quantity * line.unitPrice)) {
       return await rejectBeforeSubmission("توجد كمية أو قيمة خصم غير صالحة في بنود الفاتورة", 400);
     }
-    /**
-     * فئة الضريبة.
-     *
-     * 15% ⇒ القياسية (S). و0% ⇒ الصفرية (Z) بسبب VATEX-SA-HEA — الرعاية
-     * الصحية الخاصة للمواطن، وهي حال فواتير المواطنين في ZainCare
-     * (`app_create_sales_invoice` تجعل البند 0% حين تكون جنسية المريض في
-     * قائمة الإعفاء وهويّته مثبتة). والسبب لا يُفترض: يُعاد حساب شرط الإعفاء
-     * من ملفّ المريض وإعدادات المنشأة، فبندٌ صفريّ لغير مواطن لا سبب إعفاءٍ
-     * معتمدًا له ويُرفض. والفاتورة التي تجمع الفئتين غير مدعومة بعد.
-     */
-    const zeroLines = lines.filter((line) => Math.abs(line.taxPercent) < 0.001);
-    const standardLines = lines.filter((line) => Math.abs(line.taxPercent - 15) < 0.001);
-    if (zeroLines.length + standardLines.length !== lines.length) {
+    if (rawLines.some((line) => Math.abs(line.rate) >= 0.001 && Math.abs(line.rate - 15) >= 0.001)) {
       return await rejectBeforeSubmission(
         "في الفاتورة بندٌ بنسبة ضريبة غير 15% وغير صفر — غير مدعوم في الربط",
         422,
       );
     }
-    if (zeroLines.length && standardLines.length) {
-      return await rejectBeforeSubmission(
-        "الفاتورة تجمع بنودًا خاضعة للضريبة وبنودًا صفرية — غير مدعوم في الربط بعد؛ أصدرها في فاتورتين",
-        422,
-      );
-    }
-    const zeroRated = zeroLines.length > 0;
-    if (zeroRated) {
+
+    /**
+     * فئة كلّ بند — والفاتورة قد تجمع الفئتين (0202).
+     *
+     * 15% ⇒ القياسية (S). و0% ⇒ الصفرية (Z) بسببٍ معتمد لا يُفترض:
+     *   * المواطن (جنسيته في قائمة الإعفاء وهويّته الوطنية صالحة) في فاتورة
+     *     مبسّطة ⇒ VATEX-SA-HEA لكلّ بنوده الصفرية. يُعاد حسابه هنا من ملفّ
+     *     المريض وإعدادات المنشأة، لا يؤخذ من الفاتورة.
+     *   * غيره ⇒ سبب الصنف المحفوظ في البند (VATEX-SA-35، أدوية ومعدّات
+     *     طبية). بندٌ صفريّ بلا سبب يُرفض قبل الإرسال ويُسمّى.
+     * فاتورة الأعمال لا تحمل إعفاء المواطن: مشتريها منشأة (BR-KSA-49).
+     */
+    const zeroLines = rawLines.filter((line) => Math.abs(line.rate) < 0.001);
+    let citizenNationality = false;
+    if (zeroLines.length) {
       const { data: vatSettings, error: vatSettingsError } = await admin
         .from("organization_vat_settings")
-        .select("vat_exempt_nationality_value_ids, vat_exempt_requires_id")
+        .select("vat_exempt_nationality_value_ids, vat_exemption_disabled_for_customer_types")
         .eq("organization_id", organizationId)
         .maybeSingle();
       if (vatSettingsError) throw vatSettingsError;
@@ -971,36 +1276,79 @@ Deno.serve(async (req) => {
       const exemptNationalities: string[] = Array.isArray(vatSettings?.vat_exempt_nationality_value_ids)
         ? vatSettings.vat_exempt_nationality_value_ids
         : [];
-      const citizenExempt = Boolean(nationality) && exemptNationalities.includes(nationality);
-      if (!citizenExempt) {
-        return await rejectBeforeSubmission(
-          "بنود الفاتورة بلا ضريبة والمريض ليس من الجنسية المعفاة — لا سبب إعفاءٍ معتمدًا لدى ZATCA لهذه الفاتورة",
-          422,
-        );
-      }
-      if (!/^1\d{9}$/.test(buyerIdNumber)) {
-        return await rejectBeforeSubmission(
-          "الإعفاء الصحّي للمواطن يتطلّب رقم الهوية الوطنية (10 أرقام تبدأ بـ1) في ملفّ المريض",
-          422,
-        );
-      }
+      citizenNationality =
+        simplified &&
+        Boolean(record.patient_id) &&
+        Boolean(nationality) &&
+        exemptNationalities.includes(nationality) &&
+        vatSettings?.vat_exemption_disabled_for_customer_types !== true;
     }
-    const calculated = lines.reduce(
-      (totals, line) => {
-        const net = line.quantity * line.unitPrice - line.discount;
-        const tax = (net * line.taxPercent) / 100;
-        return { tax: totals.tax + tax, total: totals.total + net + tax };
-      },
-      { tax: 0, total: 0 },
-    );
-    if (
-      Math.abs(Number(record.vat_amount ?? 0) - calculated.tax) > 0.05 ||
-      Math.abs(Number(record.net_amount ?? 0) - calculated.total) > 0.05
-    ) {
+    const citizenIdValid = /^1\d{9}$/.test(buyerIdNumber);
+    const citizenExempt = citizenNationality && citizenIdValid;
+
+    const taxLines: TaxLine[] = [];
+    for (const line of rawLines) {
+      if (Math.abs(line.rate) >= 0.001) {
+        taxLines.push({ ...line, rate: 15, category: "S" });
+        continue;
+      }
+      const code = citizenExempt ? "VATEX-SA-HEA" : line.itemExemptionCode;
+      if (!code || !ZATCA_EXEMPTIONS[code]) {
+        const label = line.description || "بند";
+        return await rejectBeforeSubmission(
+          citizenNationality && !citizenIdValid
+            ? "الإعفاء الصحّي للمواطن يتطلّب رقم الهوية الوطنية (10 أرقام تبدأ بـ1) في ملفّ المريض"
+            : !simplified
+              ? `البند «${label}» بلا ضريبة ولا سبب صفرية معتمد لفاتورة الأعمال — إعفاء المواطن لا يُبلَّغ في فاتورة أعمال، وصفرية الأدوية والمعدّات الطبية تُحدَّد في بطاقة الصنف`
+              : `البند «${label}» بلا ضريبة والمريض ليس من الجنسية المعفاة — لا سبب صفرية معتمدًا له لدى ZATCA. إن كان دواءً أو معدّات طبية فحدّد ذلك في بطاقة الصنف ثمّ أصدر فاتورة جديدة، وإلّا فيُصدر بالضريبة`,
+          422,
+        );
+      }
+      taxLines.push({ ...line, rate: 0, category: "Z", exemptionCode: code });
+    }
+    if (new Set(taxLines.filter((line) => line.category === "Z").map((line) => line.exemptionCode)).size > 1) {
       return await rejectBeforeSubmission(
-        "إجماليات الفاتورة لا تطابق مجموع بنودها وضريبتها (خصمٌ على مستوى الفاتورة؟)",
+        "بنود الفاتورة الصفرية بأسباب إعفاء مختلفة — غير مدعوم في مستندٍ واحد",
         422,
       );
+    }
+
+    let model: MonetaryModel;
+    try {
+      model = computeMonetaryModel(taxLines, Number(record.document_discount_amount ?? 0));
+    } catch (error: any) {
+      return await rejectBeforeSubmission(clean(error?.message) || "تعذّر حساب إجماليات الفاتورة", 422);
+    }
+    if (
+      Math.abs(toCents(Number(record.vat_amount ?? 0)) - model.taxCents) > 5 ||
+      Math.abs(toCents(Number(record.net_amount ?? 0)) - model.taxInclusiveCents) > 5
+    ) {
+      return await rejectBeforeSubmission(
+        `إجماليات الفاتورة (الضريبة ${Number(record.vat_amount ?? 0).toFixed(2)}، الصافي ${Number(record.net_amount ?? 0).toFixed(2)}) ` +
+          `لا تطابق بنودها وخصمها (الضريبة ${amountText(model.taxCents)}، الصافي ${amountText(model.taxInclusiveCents)})`,
+        422,
+      );
+    }
+
+    // ── فاتورة الأعمال: مشترٍ معرَّف بعنوانٍ وطنيّ — في المحاكاة والإنتاج معًا
+    if (!simplified) {
+      if (!invoice.customer) {
+        return await rejectBeforeSubmission("اسم المشتري (العميل الخارجيّ) مطلوب لفاتورة الأعمال", 422);
+      }
+      const vatValid = /^3\d{13}3$/.test(invoice.buyer_vat);
+      const crValid = /^\d{10}$/.test(invoice.buyer_cr);
+      if (!vatValid && !crValid) {
+        return await rejectBeforeSubmission(
+          "فاتورة الأعمال تتطلّب الرقم الضريبيّ للعميل (15 رقمًا يبدأ وينتهي بـ3) أو سجلّه التجاريّ (10 أرقام) — أكمله في «العملاء الخارجيون»",
+          422,
+        );
+      }
+      if (!hasValidRegisteredAddress(invoice.customer_address)) {
+        return await rejectBeforeSubmission(
+          "العنوان الوطنيّ للعميل ناقص: رقم مبنى من 4 أرقام، والشارع، والحي، والمدينة، ورمز بريدي من 5 أرقام — أكمله في «العملاء الخارجيون»",
+          422,
+        );
+      }
     }
 
     if (mode === "production") {
@@ -1023,17 +1371,13 @@ Deno.serve(async (req) => {
       if (!Number.isFinite(expiresAt) || expiresAt <= Date.now()) {
         return await rejectBeforeSubmission("شهادة ZATCA منتهية أو لا يوجد تاريخ انتهاء صالح", 403);
       }
-      if (record.is_insurance_invoice) {
-        return await rejectBeforeSubmission(
-          "فاتورة التأمين تُقسم بين المريض والشركة — إرسالها الحقيقي غير مدعوم بعد",
-          422,
-        );
-      }
+      // فاتورة التأمين (0202، بقرار المالك): مبسّطة واحدة باسم المريض بكامل
+      // المبلغ وضريبته؛ حصّة الشركة جهةُ دفعٍ لا مشترٍ ثانٍ. فلا حارس هنا.
       if (
         containsSyntheticMarker({
           number: numberLabel,
           customer: invoice.customer,
-          items: lines.map((line) => line.description),
+          items: taxLines.map((line) => line.description),
         })
       ) {
         return await rejectBeforeSubmission(
@@ -1044,25 +1388,8 @@ Deno.serve(async (req) => {
       if (!invoice.customer) {
         return await rejectBeforeSubmission("اسم المشتري مطلوب قبل الإرسال الإنتاجي", 422);
       }
-      // العنوان الوطني شرطٌ للفاتورة المعيارية وحدها؛ المبسّطة (لفرد) تُبلَّغ
-      // بلا عنوان المشتري، كما كانت فواتير Kizen تُبلَّغ.
-      if (!simplified && !hasValidRegisteredAddress(invoice.customer_address)) {
-        return await rejectBeforeSubmission(
-          "العنوان الوطني للمشتري ناقص: رقم مبنى من 4 أرقام، والشارع، والحي، والمدينة، ورمز بريدي من 5 أرقام — أكمله في ملفّه",
-          422,
-        );
-      }
-      if (!simplified) {
-        if (!/^3\d{13}3$/.test(invoice.buyer_vat)) {
-          return await rejectBeforeSubmission(
-            "الرقم الضريبي الحقيقي للمشتري مطلوب للفاتورة المعيارية (15 رقمًا يبدأ وينتهي بـ3)",
-            422,
-          );
-        }
-        if (!invoice.buyer_id_number) {
-          return await rejectBeforeSubmission("رقم هوية المشتري أو سجلّه مطلوب للفاتورة المعيارية", 422);
-        }
-      }
+      // العنوان الوطنيّ وهويّة مشتري الأعمال تُفحص أعلاه في البيئتين؛ المبسّطة
+      // (لفرد) تُبلَّغ بلا عنوان المشتري، كما كانت فواتير Kizen تُبلَّغ.
       if (documentType !== "invoice") {
         if (!invoice.reason) {
           return await rejectBeforeSubmission("سبب الإشعار الدائن أو المدين مطلوب", 422);
@@ -1166,7 +1493,7 @@ Deno.serve(async (req) => {
       const signed = buildSignedInvoice({
         setup,
         invoice,
-        lines,
+        model,
         icv,
         previousHash,
         uuid,
@@ -1178,8 +1505,7 @@ Deno.serve(async (req) => {
           : undefined,
         originalInvoiceUuid: clean(originalInvoice?.zatca_uuid) || undefined,
         credentials,
-        zeroRated,
-        buyerNationalId: zeroRated ? buyerIdNumber : "",
+        buyerNationalId: citizenExempt ? buyerIdNumber : "",
       });
       const requestPayload = {
         mode,

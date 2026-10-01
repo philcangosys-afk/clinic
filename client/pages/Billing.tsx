@@ -889,7 +889,8 @@ export default function Billing() {
             <DialogTitle>خصم على الفاتورة #{discountTarget?.invoice_number}</DialogTitle>
             <DialogDescription>
               الإجمالي قبل الخصم {formatAmount(discountTarget?.subtotal_amount ?? 0)} ر.س.
-              الخصم يُمنح على المسوّدة قبل الإصدار، ويُسجَّل بسببه ومانحه.
+              خصمٌ على مستوى الفاتورة يُضاف إلى خصومات البنود، وتُحسب الضريبة بعده، ويُبلَّغ ZATCA كما هو. يُمنح
+              على المسوّدة قبل الإصدار ويُسجَّل بسببه ومانحه؛ والصفر يلغيه. لا يُمنح على فاتورة تأمين.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">

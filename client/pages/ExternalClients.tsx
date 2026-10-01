@@ -22,12 +22,13 @@ import {
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
+import { externalClientB2bGaps } from "@/lib/external-clients";
 
 /**
- * قائمة العملاء الخارجيين — من المواصفة الأصلية: جهات ليست مرضى (شركات/جهات
- * تواصل) بحقول تواصل بسيطة فقط (اسم، موبايلان، هاتفان، تاريخ تسجيل)، مع
- * إمكانية إرسال رسالة نصية جماعية. قائمة تواصل (Rolodex) بسيطة عمدًا — بلا أي
- * حقول فوترة أو ضريبة، تمييزًا عن الموردين (distributors) وشركات التأمين.
+ * قائمة العملاء الخارجيين — جهات ليست مرضى (شركات/جهات تواصل): الاسم وأرقام
+ * التواصل، ومنذ 0202 **الهويّة الضريبية والعنوان الوطنيّ**: العميل الخارجيّ هو
+ * مشتري «فاتورة الأعمال» (B2B)، وهي فاتورة ضريبية تعتمدها ZATCA مسبقًا ولا
+ * تُقبل بلا رقمه الضريبيّ أو سجلّه التجاريّ وعنوانه الوطنيّ كاملًا.
  */
 function useExternalClients(organizationId: string | undefined, search: string) {
   return useQuery({
@@ -46,6 +47,33 @@ function useExternalClients(organizationId: string | undefined, search: string) 
     },
   });
 }
+
+/** قواعد القاعدة نفسها (0202) — تُفحص هنا ليظهر الخطأ بجانب حقله. */
+const TAX_FIELD_RULES = {
+  vat_number: { pattern: /^3\d{13}3$/, message: "الرقم الضريبيّ 15 رقمًا يبدأ وينتهي بـ3" },
+  cr_number: { pattern: /^\d{10}$/, message: "السجلّ التجاريّ 10 أرقام" },
+  building_number: { pattern: /^\d{4}$/, message: "رقم المبنى 4 أرقام" },
+  postal_code: { pattern: /^\d{5}$/, message: "الرمز البريديّ 5 أرقام" },
+  additional_number: { pattern: /^\d{4}$/, message: "الرقم الإضافيّ 4 أرقام" },
+} as const;
+
+type TaxFields = {
+  vat_number: string;
+  cr_number: string;
+  building_number: string;
+  street_name: string;
+  district: string;
+  city: string;
+  postal_code: string;
+  additional_number: string;
+};
+
+/** أرقامٌ عربية-هندية مكتوبة في الحقل تُحفظ لاتينية، والمسافات تُزال. */
+const digitsOnly = (value: string) =>
+  value
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660))
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06f0))
+    .replace(/\s+/g, "");
 
 function ClientFormDialog({
   open,
@@ -66,11 +94,32 @@ function ClientFormDialog({
   const [phone1, setPhone1] = useState(initial?.phone_1 ?? "");
   const [phone2, setPhone2] = useState(initial?.phone_2 ?? "");
   const [note, setNote] = useState(initial?.note ?? "");
+  const [tax, setTax] = useState<TaxFields>({
+    vat_number: initial?.vat_number ?? "",
+    cr_number: initial?.cr_number ?? "",
+    building_number: initial?.building_number ?? "",
+    street_name: initial?.street_name ?? "",
+    district: initial?.district ?? "",
+    city: initial?.city ?? "",
+    postal_code: initial?.postal_code ?? "",
+    additional_number: initial?.additional_number ?? "",
+  });
+  const setTaxField = (key: keyof TaxFields, value: string) => setTax((prev) => ({ ...prev, [key]: value }));
+  const fieldError = (key: keyof typeof TAX_FIELD_RULES) => {
+    const value = digitsOnly(tax[key]);
+    return value && !TAX_FIELD_RULES[key].pattern.test(value) ? TAX_FIELD_RULES[key].message : null;
+  };
+  const taxErrors = (Object.keys(TAX_FIELD_RULES) as (keyof typeof TAX_FIELD_RULES)[])
+    .map(fieldError)
+    .filter(Boolean) as string[];
 
   const save = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
       if (!name.trim()) throw new Error("الاسم مطلوب");
+      if (taxErrors.length > 0) throw new Error(taxErrors.join("، "));
+      const digits = (key: keyof TaxFields) => digitsOnly(tax[key]) || null;
+      const textValue = (key: keyof TaxFields) => tax[key].trim() || null;
       const payload = {
         organization_id: organizationId,
         name: name.trim(),
@@ -79,6 +128,14 @@ function ClientFormDialog({
         phone_1: phone1.trim() || null,
         phone_2: phone2.trim() || null,
         note: note.trim() || null,
+        vat_number: digits("vat_number"),
+        cr_number: digits("cr_number"),
+        building_number: digits("building_number"),
+        street_name: textValue("street_name"),
+        district: textValue("district"),
+        city: textValue("city"),
+        postal_code: digits("postal_code"),
+        additional_number: digits("additional_number"),
       };
       if (initial) {
         const { data: affectedRows, error } = await supabase.from("external_clients").update(payload).eq("id", initial.id)
@@ -104,10 +161,12 @@ function ClientFormDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
+      <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{initial ? "تعديل عميل خارجي" : "عميل خارجي جديد"}</DialogTitle>
-          <DialogDescription>جهة تواصل ليست مريضًا (شركة أو جهة تواصل) — بيانات اتصال بسيطة فقط</DialogDescription>
+          <DialogDescription>
+            جهة ليست مريضًا (شركة أو جهة). البيانات الضريبية والعنوان الوطنيّ لازمة لفاتورة الأعمال (B2B) وحدها.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-3">
@@ -133,6 +192,28 @@ function ClientFormDialog({
               <Input value={phone2} onChange={(e) => setPhone2(e.target.value)} />
             </div>
           </div>
+          <div className="flex flex-col gap-2 rounded-md border p-3">
+            <p className="text-sm font-medium">البيانات الضريبية — لفاتورة الأعمال (B2B)</p>
+            <div className="grid grid-cols-2 gap-2">
+              <TaxInput label="الرقم الضريبيّ" value={tax.vat_number} error={fieldError("vat_number")}
+                onChange={(v) => setTaxField("vat_number", v)} placeholder="3xxxxxxxxxxxxx3" />
+              <TaxInput label="السجلّ التجاريّ" value={tax.cr_number} error={fieldError("cr_number")}
+                onChange={(v) => setTaxField("cr_number", v)} />
+              <TaxInput label="رقم المبنى" value={tax.building_number} error={fieldError("building_number")}
+                onChange={(v) => setTaxField("building_number", v)} />
+              <TaxInput label="الشارع" value={tax.street_name} onChange={(v) => setTaxField("street_name", v)} />
+              <TaxInput label="الحيّ" value={tax.district} onChange={(v) => setTaxField("district", v)} />
+              <TaxInput label="المدينة" value={tax.city} onChange={(v) => setTaxField("city", v)} />
+              <TaxInput label="الرمز البريديّ" value={tax.postal_code} error={fieldError("postal_code")}
+                onChange={(v) => setTaxField("postal_code", v)} />
+              <TaxInput label="الرقم الإضافيّ (اختياري)" value={tax.additional_number}
+                error={fieldError("additional_number")} onChange={(v) => setTaxField("additional_number", v)} />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              يكفي الرقم الضريبيّ أو السجلّ التجاريّ (لمنشأةٍ غير مسجّلة في الضريبة). والعنوان الوطنيّ كاملًا شرطٌ
+              لفاتورة الأعمال.
+            </p>
+          </div>
           <div className="flex flex-col gap-1.5">
             <Label>ملاحظة (اختياري)</Label>
             <Textarea value={note} onChange={(e) => setNote(e.target.value)} />
@@ -146,6 +227,28 @@ function ClientFormDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function TaxInput({
+  label,
+  value,
+  onChange,
+  error,
+  placeholder,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  error?: string | null;
+  placeholder?: string;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>{label}</Label>
+      <Input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />
+      {error && <span className="text-xs text-destructive">{error}</span>}
+    </div>
   );
 }
 
@@ -291,7 +394,9 @@ export default function ExternalClients() {
           <h1 className="flex items-center gap-2 text-2xl font-bold">
             <Contact2 className="h-6 w-6" /> العملاء الخارجيون
           </h1>
-          <p className="text-sm text-muted-foreground">جهات تواصل ليست مرضى (شركات أو جهات تواصل) — مع تسجيل رسالة نصية جماعية في الطابور (قناة الرسائل غير مفعّلة بعد)</p>
+          <p className="text-sm text-muted-foreground">
+            جهات ليست مرضى (شركات أو جهات) — مشترو فاتورة الأعمال (B2B) بهويّتهم الضريبية، وجهات تواصل
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -334,7 +439,7 @@ export default function ExternalClients() {
                   <TableHead>جوال 1</TableHead>
                   <TableHead>جوال 2</TableHead>
                   <TableHead>هاتف 1</TableHead>
-                  <TableHead>هاتف 2</TableHead>
+                  <TableHead>الرقم الضريبيّ / السجلّ</TableHead>
                   <TableHead>تاريخ التسجيل</TableHead>
                   <TableHead>الحالة</TableHead>
                   <TableHead>إجراءات</TableHead>
@@ -350,7 +455,16 @@ export default function ExternalClients() {
                     <TableCell className="text-xs">{client.mobile_1 ?? "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{client.mobile_2 ?? "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{client.phone_1 ?? "—"}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{client.phone_2 ?? "—"}</TableCell>
+                    <TableCell className="text-xs">
+                      <div className="font-mono">{client.vat_number ?? client.cr_number ?? "—"}</div>
+                      {externalClientB2bGaps(client).length === 0 ? (
+                        <Badge variant="success" className="mt-0.5">جاهز لفاتورة الأعمال</Badge>
+                      ) : (
+                        <span className="text-[11px] text-muted-foreground">
+                          ينقصه لفاتورة الأعمال: {externalClientB2bGaps(client).join("، ")}
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {new Date(client.registered_at).toLocaleDateString("ar-SA")}
                     </TableCell>
@@ -389,7 +503,15 @@ export default function ExternalClients() {
         </CardContent>
       </Card>
 
-      <ClientFormDialog open={formOpen} onOpenChange={setFormOpen} organizationId={organization?.id} initial={editing} />
+      {/* المفتاح يُعيد تهيئة الحقول لكلّ عميل: الحالة تُقرأ من `initial` عند التركيب
+          وحده، فكانت نافذة التعديل تفتح بحقول أوّل عميل فُتح (أو فارغة). */}
+      <ClientFormDialog
+        key={`${editing?.id ?? "new"}-${formOpen ? "open" : "closed"}`}
+        open={formOpen}
+        onOpenChange={setFormOpen}
+        organizationId={organization?.id}
+        initial={editing}
+      />
       <BulkSmsDialog open={bulkSmsOpen} onOpenChange={setBulkSmsOpen} organizationId={organization?.id} recipients={selectedClients} />
     </div>
   );

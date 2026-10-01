@@ -35,6 +35,8 @@ import ServiceBrowserDialog from "@/components/billing/ServiceBrowserDialog";
 import { useToast } from "@/hooks/use-toast";
 import { reportInvoiceToZatca, useZatcaAutoSettings } from "@/lib/zatca-auto";
 import CenteredPicker from "@/components/shared/CenteredPicker";
+import { externalClientB2bGaps } from "@/lib/external-clients";
+import type { ExternalClientRow } from "@/lib/database.types";
 
 /**
  * طرق الدفع وصناديق النقد — نسخة مستقلّة عن شاشة الفواتير.
@@ -68,6 +70,29 @@ function useInvoicePaymentMethods() {
         name_ar: row.name_ar,
         affects_drawer: Boolean(row.extra?.affects_drawer),
       })) as InvoicePaymentMethod[];
+    },
+  });
+}
+
+/**
+ * مشترو فاتورة الأعمال — العملاء الخارجيون النشطون بهويّتهم الضريبية (0202).
+ * تُجلب حين تُؤشَّر «فاتورة أعمال» وحدها.
+ */
+function useB2bClients(organizationId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["external-clients", organizationId, "b2b-picker"],
+    enabled: Boolean(organizationId) && enabled,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("external_clients")
+        .select(
+          "id, name, vat_number, cr_number, building_number, street_name, district, city, postal_code, is_disabled",
+        )
+        .eq("organization_id", organizationId)
+        .eq("is_disabled", false)
+        .order("name");
+      if (error) throw error;
+      return (data ?? []) as Partial<ExternalClientRow>[];
     },
   });
 }
@@ -554,8 +579,13 @@ export default function NewInvoiceDialog({
    * المبسّطة (B2C) — والخلط بينهما سبب رفض شائع.
    */
   const [isB2b, setIsB2b] = useState(false);
+  /** مشتري فاتورة الأعمال — عميلٌ خارجيّ (0202) */
+  const [b2bClientId, setB2bClientId] = useState("");
 
   const doctors = useBillingDoctors(organizationId);
+  const b2bClients = useB2bClients(organizationId, isB2b);
+  const b2bClient = (b2bClients.data ?? []).find((client) => client.id === b2bClientId) ?? null;
+  const b2bGaps = b2bClient ? externalClientB2bGaps(b2bClient) : [];
   const clinics = useBillingClinics(organizationId);
   const warehouses = useBillingWarehouses(organizationId);
   const quickGroups = useQuickGroups(organizationId);
@@ -1180,7 +1210,18 @@ export default function NewInvoiceDialog({
   const createInvoice = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
-      if (!patient && !externalName.trim()) throw new Error("اختر مريضًا أو أدخل اسم عميل خارجي");
+      if (!patient && !externalName.trim() && !(isB2b && b2bClientId)) {
+        throw new Error("اختر مريضًا أو أدخل اسم عميل خارجي");
+      }
+      // فاتورة الأعمال (0202): مشتريها عميلٌ خارجيّ مكتمل الهويّة الضريبية —
+      // والقاعدة تفرض الشروط نفسها؛ هنا يظهر السبب قبل الإرسال
+      if (isB2b && !isQuote) {
+        if (!b2bClientId) throw new Error("فاتورة الأعمال تحتاج مشتريًا: اختر العميل الخارجيّ (المنشأة)");
+        if (b2bGaps.length > 0) {
+          throw new Error(`بيانات العميل ناقصة لفاتورة الأعمال: ${b2bGaps.join("، ")} — أكملها في «العملاء الخارجيون»`);
+        }
+        if (isInsurance) throw new Error("فاتورة التأمين تُصدَر مبسّطة باسم المريض — أزل «فاتورة أعمال»");
+      }
       if (lines.length === 0) throw new Error("أضف بندًا واحدًا على الأقل");
 
       /**
@@ -1288,6 +1329,7 @@ export default function NewInvoiceDialog({
         p_classification_value_id: classificationValueId || null,
         p_is_temporary: Boolean(isQuote),
         p_is_b2b: isB2b,
+        p_external_client_id: isB2b && b2bClientId ? b2bClientId : null,
         p_id_number: idNumber.trim() || null,
         p_note: note.trim() || null,
         // الختم يجري داخل نفس معاملة الفاتورة (0057): إمّا فاتورة وطلبات
@@ -1365,6 +1407,7 @@ export default function NewInvoiceDialog({
       setNote("");
       setIsInsurance(false);
       setIsB2b(false);
+      setB2bClientId("");
       setInsCompany("");
       setInsPolicy("");
       setInsClass("");
@@ -1618,21 +1661,57 @@ export default function NewInvoiceDialog({
               type="checkbox"
               className="mt-0.5 h-4 w-4"
               checked={isB2b}
-              onChange={(e) => setIsB2b(e.target.checked)}
+              onChange={(e) => {
+                setIsB2b(e.target.checked);
+                if (!e.target.checked) setB2bClientId("");
+              }}
             />
             <span className="flex flex-col gap-0.5">
               <span>فاتورة أعمال (B2B)</span>
               <span className="text-xs text-muted-foreground">
-                فاتورة ضريبية لمنشأة لا لمستهلك — تتطلب الرقم الضريبي للمشتري. اتركها فارغة
-                للفاتورة الضريبية المبسّطة (B2C).
+                فاتورة ضريبية لمنشأة لا لمستهلك، تعتمدها ZATCA قبل تسليمها. مشتريها عميلٌ خارجيّ برقمه الضريبيّ
+                أو سجلّه وعنوانه الوطنيّ. اتركها فارغة للفاتورة الضريبية المبسّطة (B2C).
               </span>
-              {isB2b && !idNumber.trim() && (
-                <span className="text-xs text-amber-600">
-                  أدخل الرقم الضريبي/الهوية للمشتري في خانة «رقم الهوية» — بدونه تُرفض الفاتورة
-                </span>
-              )}
             </span>
           </label>
+          {isB2b && (
+            <div className="flex flex-col gap-1.5 rounded-md border border-sky-200 bg-sky-50/50 p-3">
+              <Label>المشتري — العميل الخارجيّ (المنشأة)</Label>
+              <CenteredPicker
+                title="مشتري فاتورة الأعمال"
+                description="العملاء الخارجيون النشطون. البيانات الضريبية تُكمَل من شاشة «العملاء الخارجيون»."
+                value={b2bClientId}
+                onChange={setB2bClientId}
+                loading={b2bClients.isLoading}
+                placeholder="اختر المنشأة..."
+                options={(b2bClients.data ?? []).map((client) => {
+                  const gaps = externalClientB2bGaps(client);
+                  return {
+                    value: String(client.id),
+                    label: String(client.name ?? ""),
+                    hint: gaps.length
+                      ? `ينقصه: ${gaps.join("، ")}`
+                      : client.vat_number
+                        ? `الرقم الضريبيّ ${client.vat_number}`
+                        : `السجلّ التجاريّ ${client.cr_number}`,
+                  };
+                })}
+              />
+              {b2bClient && b2bGaps.length > 0 && (
+                <span className="text-xs text-amber-700">
+                  ينقص هذا العميل لفاتورة الأعمال: {b2bGaps.join("، ")} — أكمله في «العملاء الخارجيون» ثمّ أصدر.
+                </span>
+              )}
+              {isInsurance && (
+                <span className="text-xs text-amber-700">
+                  فاتورة التأمين تُصدَر مبسّطة باسم المريض — لا تجتمع مع فاتورة الأعمال.
+                </span>
+              )}
+              <span className="text-xs text-muted-foreground">
+                المريض (إن اخترته) يبقى متلقّي الخدمة في السجلّ؛ والمواطن المعفى من الضريبة لا تُصدَر له فاتورة أعمال.
+              </span>
+            </div>
+          )}
 
           {(visitServices.data ?? []).length > 0 && (
             <div className="flex flex-col gap-1.5 rounded-lg border border-emerald-300 bg-emerald-50/60 p-3">

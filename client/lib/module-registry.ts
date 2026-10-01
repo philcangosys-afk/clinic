@@ -128,7 +128,8 @@ export const moduleRegistry: ModuleRegistryItem[] = [
   { id: "assets", label: "الأصول والصيانة", icon: Wrench, featureKey: "assets", requiredPermission: "assets.view", category: "التشغيل والإدارة", order: 334 },
   { id: "dental-lab", label: "معمل الأسنان", icon: Smile, featureKey: "dental_lab", requiredPermission: "dental_lab.view", category: "التشغيل والإدارة", order: 335 },
   { id: "messaging", label: "الرسائل والتنبيهات", icon: MessageCircle, badge: "3", featureKey: "messaging", requiredPermission: "messaging.view", category: "التشغيل والإدارة", order: 340 },
-  { id: "external-clients", label: "العملاء الخارجيون", icon: Contact2, featureKey: "messaging", requiredPermission: "messaging.view", category: "التشغيل والإدارة", order: 345 },
+  // منذ 0202 العميل الخارجيّ مشتري فاتورة الأعمال (B2B) — شاشةٌ للفوترة لا للرسائل
+  { id: "external-clients", label: "العملاء الخارجيون", icon: Contact2, featureKey: "billing_payments", requiredPermission: "billing_payments.view", category: "المالية والتأمين", order: 166 },
   { id: "audit", label: "سجل التدقيق", icon: LockKeyhole, badge: "107", featureKey: "audit_log", requiredPermission: "audit_log.view", category: "التشغيل والإدارة", order: 350 },
   { id: "warehouses", label: "المستودعات", icon: Warehouse, featureKey: "inventory", requiredPermission: "inventory.view", category: "المخزون", order: 332 },
   { id: "exam-templates", label: "تصميم شاشات العيادات", icon: LayoutTemplate, featureKey: "medical_records", requiredPermission: "medical_records.view", category: "الكتالوج الطبي", order: 115 },

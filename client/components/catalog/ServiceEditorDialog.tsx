@@ -79,6 +79,9 @@ const CODE_SYSTEMS: Record<string, string> = {
 
 type Draft = Record<string, any>;
 
+/** قيمة «بلا سبب» في قائمة سبب الإعفاء — Radix لا يقبل قيمةً فارغة. */
+const ZATCA_NO_REASON = "__none__";
+
 const EMPTY_DRAFT: Draft = {
   code: "",
   barcode: "",
@@ -101,6 +104,7 @@ const EMPTY_DRAFT: Draft = {
   complimentary_note: "",
   default_discount_percent: "0",
   is_vat_exempt: false,
+  zatca_exemption_code: "",
   is_disabled: false,
   requires_fasting: false,
   fasting_hours: "",
@@ -350,6 +354,8 @@ export default function ServiceEditorDialog({
         complimentary_note: text(draft.complimentary_note),
         default_discount_percent: text(draft.default_discount_percent) ?? "0",
         is_vat_exempt: Boolean(draft.is_vat_exempt),
+        // سبب الصفرية لدى ZATCA (0202) — يُحفظ مع الإعفاء وحده
+        zatca_exemption_code: draft.is_vat_exempt ? text(draft.zatca_exemption_code) : null,
         is_disabled: Boolean(draft.is_disabled),
         revenue_account_id: text(draft.revenue_account_id),
         cogs_account_id: text(draft.cogs_account_id),
@@ -716,6 +722,31 @@ export default function ServiceEditorDialog({
                 onChange={(value) => set("is_disabled", value)}
               />
             </div>
+            {draft.is_vat_exempt && (
+              <div className="grid gap-1.5 sm:max-w-md">
+                <Field label="سبب الإعفاء لدى ZATCA (لغير المواطن)">
+                  <Select
+                    value={draft.zatca_exemption_code || ZATCA_NO_REASON}
+                    disabled={!canManage}
+                    onValueChange={(value) =>
+                      set("zatca_exemption_code", value === ZATCA_NO_REASON ? "" : value)
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={ZATCA_NO_REASON}>بلا سبب معتمد</SelectItem>
+                      <SelectItem value="VATEX-SA-35">أدوية ومعدّات طبية — VATEX-SA-35</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <p className="text-xs text-muted-foreground">
+                  إعفاء المواطن يُبلَّغ تلقائيًّا من ملفّه. أمّا بيع هذا الصنف بلا ضريبة لغير المواطن فيحتاج سببًا
+                  تعتمده ZATCA — «بلا سبب معتمد» يُوقف إبلاغ فاتورته حتى يُصحَّح.
+                </p>
+              </div>
+            )}
           </TabsContent>
 
           {/* ---------------------------------------------------------- */}

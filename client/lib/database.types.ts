@@ -1931,6 +1931,15 @@ export interface ExternalClientRow {
   created_by: UUID | null;
   created_at: string;
   updated_at: string;
+  /** 0202 — هويّة مشتري فاتورة الأعمال (B2B) */
+  vat_number: string | null;
+  cr_number: string | null;
+  building_number: string | null;
+  street_name: string | null;
+  district: string | null;
+  city: string | null;
+  postal_code: string | null;
+  additional_number: string | null;
 }
 
 // ---------------------------------------------------------------------------
