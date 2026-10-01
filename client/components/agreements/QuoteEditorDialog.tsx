@@ -180,6 +180,9 @@ export default function QuoteEditorDialog({
   }, [open, quoteId, quote, existingLines.data, loadedFor]);
 
   const vatContext = { rate: vat.data?.rate ?? 0, patientExempt: vat.data?.patientExempt ?? false };
+  // عمود «باركود المصدر» كـKizen، ويُخفى إن لم يكن لأيّ بندٍ باركود فيتّسع الجدول.
+  const showBarcode = lines.some((line) => Boolean(line.barcode));
+
   const computed = useMemo(
     () =>
       lines.map((line) => ({
@@ -424,7 +427,7 @@ export default function QuoteEditorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent dir="rtl" className="max-h-[95vh] w-[min(96vw,1200px)] max-w-none overflow-y-auto">
+      <DialogContent dir="rtl" className="max-h-[95vh] w-[min(98vw,1320px)] max-w-none overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
             {title}
@@ -578,13 +581,13 @@ export default function QuoteEditorDialog({
           <Skeleton className="h-32 w-full" />
         ) : (
           <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[1100px] text-sm [&_th]:whitespace-nowrap">
+            <table className="w-full min-w-[880px] text-sm [&_td]:whitespace-nowrap">
               <thead className="bg-muted/60 text-xs">
-                <tr className="[&>th]:px-2 [&>th]:py-2 [&>th]:text-start [&>th]:font-medium">
+                <tr className="[&>th]:px-1.5 [&>th]:py-2 [&>th]:text-start [&>th]:align-bottom [&>th]:font-medium [&>th]:leading-tight">
                   <th className="w-8" />
                   <th>الكود</th>
-                  <th>باركود المصدر</th>
-                  <th className="min-w-[14rem]">العمل</th>
+                  {showBarcode && <th>باركود المصدر</th>}
+                  <th className="min-w-[12rem]">العمل</th>
                   <th>السعر</th>
                   <th>العدد</th>
                   <th>المفوتر</th>
@@ -603,7 +606,7 @@ export default function QuoteEditorDialog({
                   const problem = priceProblem(line);
                   const locked = line.invoicedQty > 0;
                   return (
-                    <tr key={line.key} className="border-t [&>td]:px-2 [&>td]:py-1 tabular-nums">
+                    <tr key={line.key} className="border-t [&>td]:px-1.5 [&>td]:py-1 tabular-nums">
                       <td className="whitespace-nowrap">
                         <Button
                           size="icon"
@@ -636,18 +639,18 @@ export default function QuoteEditorDialog({
                         </Button>
                       </td>
                       <td className="font-mono text-xs">{line.code ?? "—"}</td>
-                      <td className="font-mono text-xs">{line.barcode ?? "—"}</td>
-                      <td className="max-w-[22rem]" title={line.description}>
+                      {showBarcode && <td className="font-mono text-xs">{line.barcode ?? "—"}</td>}
+                      <td className="max-w-[20rem] !whitespace-normal" title={line.description}>
                         <span className="line-clamp-2">{line.description}</span>
                         {isKizenBalanceText(line.description) && (
                           <Badge variant="outline" className="mt-0.5 border-amber-400 text-[10px] text-amber-700">
-                            رصيد منقول من Kizen — لا يُطبع هذا العنوان على الفاتورة
+                            رصيد Kizen — لا يُطبع على الفاتورة
                           </Badge>
                         )}
                       </td>
                       <td>
                         <Input
-                          className={`h-8 w-24 ${problem ? "border-destructive" : ""}`}
+                          className={`h-8 w-20 px-2 ${problem ? "border-destructive" : ""}`}
                           type="number"
                           min={0}
                           value={line.price}
@@ -663,7 +666,7 @@ export default function QuoteEditorDialog({
                       </td>
                       <td>
                         <Input
-                          className="h-8 w-20"
+                          className="h-8 w-14 px-2"
                           type="number"
                           min={Math.max(line.invoicedQty, 0.01)}
                           step="1"
@@ -678,7 +681,7 @@ export default function QuoteEditorDialog({
                       <td>{formatAmount(calc.gross)}</td>
                       <td>
                         <Input
-                          className="h-8 w-24 text-rose-700"
+                          className="h-8 w-20 px-2 text-rose-700"
                           type="number"
                           min={0}
                           value={line.discountAmount > 0 ? line.discountAmount : calc.discount || ""}
@@ -691,7 +694,7 @@ export default function QuoteEditorDialog({
                       </td>
                       <td>
                         <Input
-                          className="h-8 w-20"
+                          className="h-8 w-14 px-2"
                           type="number"
                           min={0}
                           max={100}
@@ -713,7 +716,7 @@ export default function QuoteEditorDialog({
                 })}
                 {lines.length === 0 && (
                   <tr>
-                    <td colSpan={15} className="py-8 text-center text-sm text-muted-foreground">
+                    <td colSpan={showBarcode ? 15 : 14} className="py-8 text-center text-sm text-muted-foreground">
                       لا بنود بعد — «إضافة خدمة» لاختيارها من الكتالوج.
                     </td>
                   </tr>
@@ -721,8 +724,8 @@ export default function QuoteEditorDialog({
               </tbody>
               {lines.length > 0 && (
                 <tfoot className="border-t bg-muted/40 font-semibold tabular-nums">
-                  <tr className="[&>td]:px-2 [&>td]:py-2">
-                    <td colSpan={6}>الإجمالي — {lines.length} بندًا</td>
+                  <tr className="[&>td]:px-1.5 [&>td]:py-2">
+                    <td colSpan={showBarcode ? 6 : 5}>الإجمالي — {lines.length} بندًا</td>
                     <td>{totals.invoiced}</td>
                     <td>{formatAmount(totals.gross)}</td>
                     <td className="text-rose-700">{formatAmount(totals.discount)}</td>

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { TriangleAlert } from "lucide-react";
 import { birthDateFromAge, nameWordCount, transliterateArabicName } from "@/lib/arabic-name";
@@ -59,6 +59,8 @@ const emptyForm = {
   educational_qualification_value_id: "",
   work_entity_value_id: "",
   city_value_id: "",
+  /** الطبيب المعالج — إلزاميّ عند فتح الملف (قرار المالك 01/10/2026). */
+  treating_doctor_id: "",
   address: "",
   emergency_number: "",
   email_1: "",
@@ -136,6 +138,22 @@ export default function NewPatientDialog({
    */
   const nameEnTouched = useRef(false);
 
+  /** الأطباء المفعّلون فقط — كقائمة الطبيب المعالج في ملف المريض. */
+  const doctors = useQuery({
+    queryKey: ["doctors-for-patient", organization?.id],
+    enabled: open && Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar")
+        .eq("organization_id", organization!.id)
+        .eq("is_enabled", true)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { id: string; name_ar: string }[];
+    },
+  });
+
   const set = <K extends keyof typeof emptyForm>(key: K, value: typeof emptyForm[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
@@ -160,6 +178,7 @@ export default function NewPatientDialog({
     mobile_number: !hasDigits(form.mobile_number),
     age: !form.age_years.trim() && !form.age_months.trim(),
     nationality_value_id: !form.nationality_value_id,
+    treating_doctor_id: !form.treating_doctor_id,
   };
   const missingCount = Object.values(missing).filter(Boolean).length;
   const nameIsShort = !missing.name_ar && nameWordCount(form.name_ar) < 4;
@@ -293,7 +312,7 @@ export default function NewPatientDialog({
        */
       if (missingCount > 0) {
         throw new Error(
-          "أكمل الحقول الأساسية المعلَّمة بالأحمر: الاسم الرباعي، والهوية والجوال (١٠ أرقام لكلٍّ منهما)، والعمر، والجنسية",
+          "أكمل الحقول الأساسية المعلَّمة بالأحمر: الاسم الرباعي، والهوية والجوال (١٠ أرقام لكلٍّ منهما)، والعمر، والجنسية، والطبيب المعالج",
         );
       }
 
@@ -364,6 +383,7 @@ export default function NewPatientDialog({
           educational_qualification_value_id: form.educational_qualification_value_id || null,
           work_entity_value_id: form.work_entity_value_id || null,
           city_value_id: form.city_value_id || null,
+          treating_doctor_id: form.treating_doctor_id || null,
           address: form.address.trim() || null,
           emergency_number: form.emergency_number.trim() || null,
           email_1: form.email_1.trim() || null,
@@ -553,6 +573,22 @@ export default function NewPatientDialog({
               onChange={(v) => set("nationality_value_id", v)}
               triggerClassName={requiredInputClass(missing.nationality_value_id)}
             />
+          </Field>
+          <Field
+            labelNode={<RequiredLabel missing={missing.treating_doctor_id}>الطبيب المعالج</RequiredLabel>}
+          >
+            <Select value={form.treating_doctor_id} onValueChange={(v) => set("treating_doctor_id", v)}>
+              <SelectTrigger className={requiredInputClass(missing.treating_doctor_id)}>
+                <SelectValue placeholder={doctors.isLoading ? "جارٍ التحميل…" : "اختر الطبيب"} />
+              </SelectTrigger>
+              <SelectContent>
+                {(doctors.data ?? []).map((doctor) => (
+                  <SelectItem key={doctor.id} value={doctor.id}>
+                    {doctor.name_ar}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
           <Field label="المهنة">
             <LookupSelect
