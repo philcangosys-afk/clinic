@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import CenteredPicker from "@/components/shared/CenteredPicker";
 import {
   Select,
   SelectContent,
@@ -68,6 +69,8 @@ export default function LookupSelect({
   allowClear = false,
   clearLabel = "بدون",
   triggerClassName,
+  centered = false,
+  title,
 }: {
   categoryKey: string;
   value: string;
@@ -77,8 +80,31 @@ export default function LookupSelect({
   clearLabel?: string;
   /** لتمييز الحقل الأساسيّ بصريًا (إطار أحمر) من الشاشة المستدعية. */
   triggerClassName?: string;
+  /**
+   * نافذة اختيارٍ في منتصف الشاشة بسهمين يدويّين وبحث — للقوائم الطويلة
+   * (الجنسيات) بدل القائمة المنسدلة التي تتمرّر وحدها.
+   */
+  centered?: boolean;
+  /** عنوان نافذة الاختيار حين `centered`. */
+  title?: string;
 }) {
   const options = useLookupValues(categoryKey);
+
+  if (centered) {
+    return (
+      <CenteredPicker
+        title={title ?? placeholder}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        allowClear={allowClear}
+        clearLabel={clearLabel}
+        triggerClassName={triggerClassName}
+        loading={options.isLoading}
+        options={(options.data ?? []).map((option) => ({ value: option.id, label: option.name_ar }))}
+      />
+    );
+  }
 
   return (
     <Select

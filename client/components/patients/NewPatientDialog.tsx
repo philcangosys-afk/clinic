@@ -547,6 +547,8 @@ export default function NewPatientDialog({
           >
             <LookupSelect
               categoryKey="nationalities"
+              centered
+              title="الجنسية"
               value={form.nationality_value_id}
               onChange={(v) => set("nationality_value_id", v)}
               triggerClassName={requiredInputClass(missing.nationality_value_id)}

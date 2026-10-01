@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Stethoscope, Pencil, CalendarClock, Network, Trash2 } from "lucide-react";
+import { Plus, Stethoscope, Pencil, CalendarClock, Network, Trash2, KeyRound } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -25,6 +25,8 @@ import LookupSelect from "@/components/shared/LookupSelect";
 import { useToast } from "@/hooks/use-toast";
 import DoctorRelationsDialog from "@/components/doctors/DoctorRelationsDialog";
 import { errorMessage } from "@/lib/error-message";
+import { usePermissions } from "@/lib/permissions";
+import { ROLE_LABELS } from "@/lib/role-permissions";
 
 /** الحقول التي يقرأها/يكتبها نموذج الطبيب (إنشاء وتعديل). */
 export type DoctorFormRow = {
@@ -63,7 +65,7 @@ function useDoctors(organizationId: string | undefined) {
       const { data, error } = await supabase
         .from("doctors")
         .select(
-          "id, file_number, name_ar, name_en, job_title, clinic_id, specialty_value_id, gender, nationality_value_id, id_number, mobile_number, email, birth_date, notes, address, specialty_authority, specialty_authority_number, consultation_fee_renewal_days, free_reviews_count, patient_waiting_minutes, is_enabled, disabled_from_booking, receive_appointment_confirmation_sms, hide_patient_messages, force_session_selection, default_appointment_duration_minutes, clinic:clinics(id, name)",
+          "id, file_number, name_ar, name_en, job_title, clinic_id, specialty_value_id, gender, nationality_value_id, id_number, mobile_number, email, birth_date, notes, address, specialty_authority, specialty_authority_number, consultation_fee_renewal_days, free_reviews_count, patient_waiting_minutes, is_enabled, disabled_from_booking, receive_appointment_confirmation_sms, hide_patient_messages, force_session_selection, default_appointment_duration_minutes, user_id, clinic:clinics(id, name)",
         )
         // RLS يسمح بكل مؤسسة ينتمي إليها المستخدم لا بالنشطة وحدها —
         // بدون هذا الفلتر تختلط بيانات منشأتين لعضوٍ في كلتيهما.
@@ -94,6 +96,39 @@ function useClinicsList(organizationId: string | undefined) {
   });
 }
 
+/** حسابٌ في المنشأة يُربط ببطاقة طبيب (0198). */
+type AccountCandidate = {
+  user_id: string;
+  display_name: string;
+  email: string | null;
+  role_key: string;
+  custom_role_name: string | null;
+  member_kind: string | null;
+  linked_doctor_id: string | null;
+  linked_doctor_name: string | null;
+};
+
+/**
+ * حسابات المنشأة النشطة بالبريد والدور والطبيب المربوط — من دالّةٍ في القاعدة
+ * لأنّ البريد في `auth.users` لا يقرؤه المتصفّح. تحتاج `users.manage`.
+ */
+function useAccountCandidates(organizationId: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["doctor-account-candidates", organizationId],
+    enabled: Boolean(organizationId) && enabled,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_doctor_account_candidates", {
+        p_organization_id: organizationId,
+      });
+      if (error) throw error;
+      return (data ?? []) as AccountCandidate[];
+    },
+  });
+}
+
+const roleLabelOf = (candidate: AccountCandidate) =>
+  candidate.custom_role_name ?? ROLE_LABELS[candidate.role_key] ?? candidate.role_key;
+
 export default function Doctors() {
   const { organization, membership, legacyMode } = useOrganizationAccess();
   /**
@@ -108,7 +143,13 @@ export default function Doctors() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<DoctorFormRow | null>(null);
   const [relationsTarget, setRelationsTarget] = useState<{ id: string; name_ar: string; initialTab?: string } | null>(null);
+  const [accountTarget, setAccountTarget] = useState<{ id: string; name_ar: string; user_id: string | null } | null>(null);
   const doctors = useDoctors(organization?.id);
+  const { can } = usePermissions();
+  /** ربط الحساب يمنح صاحبه هويّة الطبيب في النظام — صلاحية إدارة المستخدمين. */
+  const canLinkAccounts = legacyMode || can("users.manage");
+  const candidates = useAccountCandidates(organization?.id, canLinkAccounts);
+  const accountById = new Map<string, AccountCandidate>((candidates.data ?? []).map((row) => [row.user_id, row] as const));
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -209,6 +250,7 @@ export default function Doctors() {
                   <TableHead>الوظيفة</TableHead>
                   <TableHead>الجوال</TableHead>
                   <TableHead>مدة الموعد</TableHead>
+                  <TableHead>حساب الدخول</TableHead>
                   <TableHead>الحالة</TableHead>
                   <TableHead />
                 </TableRow>
@@ -232,6 +274,22 @@ export default function Doctors() {
                     <TableCell>{doctor.job_title ?? "—"}</TableCell>
                     <TableCell>{doctor.mobile_number ?? "—"}</TableCell>
                     <TableCell>{doctor.default_appointment_duration_minutes ?? 30} دقيقة</TableCell>
+                    <TableCell className="text-xs">
+                      {doctor.user_id ? (
+                        <span className="flex flex-col">
+                          <span className="font-medium">
+                            {accountById.get(doctor.user_id)?.email ?? "مربوط بحساب"}
+                          </span>
+                          {accountById.get(doctor.user_id) && (
+                            <span className="text-muted-foreground">
+                              {roleLabelOf(accountById.get(doctor.user_id)!)}
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <Badge variant="outline">غير مربوط</Badge>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <div className="flex flex-col gap-1">
                         <Badge variant={doctor.is_enabled ? "success" : "secondary"}>
@@ -253,6 +311,18 @@ export default function Doctors() {
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
+                        {canLinkAccounts && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            title="حساب الدخول"
+                            onClick={() =>
+                              setAccountTarget({ id: doctor.id, name_ar: doctor.name_ar, user_id: doctor.user_id ?? null })
+                            }
+                          >
+                            <KeyRound className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="ghost"
@@ -293,7 +363,7 @@ export default function Doctors() {
                 ))}
                 {(doctors.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={9} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={canPurge ? 11 : 10} className="py-8 text-center text-sm text-muted-foreground">
                       لا يوجد أطباء مسجّلون بعد.
                     </TableCell>
                   </TableRow>
@@ -317,6 +387,16 @@ export default function Doctors() {
         />
       )}
 
+      <DoctorAccountDialog
+        target={accountTarget}
+        candidates={candidates.data ?? []}
+        loading={candidates.isLoading}
+        loadError={candidates.isError ? errorMessage(candidates.error) : null}
+        onOpenChange={(next) => {
+          if (!next) setAccountTarget(null);
+        }}
+      />
+
       <DoctorRelationsDialog
         key={`${relationsTarget?.id ?? "closed"}-${relationsTarget?.initialTab ?? "places"}`}
         doctor={relationsTarget}
@@ -324,6 +404,119 @@ export default function Doctors() {
         onClose={() => setRelationsTarget(null)}
       />
     </div>
+  );
+}
+
+const NO_ACCOUNT = "__none__";
+
+/**
+ * «حساب الدخول» — يربط حسابًا بالطبيب فيعرف النظام «أيّ طبيبٍ أنت»: تُحصَر
+ * شاشاته على مرضاه ومواعيده، وتعمل «يومي» و«زيارات لم تُغلق». الربط والفكّ
+ * بـ`app_set_doctor_user` (0198): صلاحية، وعضويّة نشطة، وحسابٌ لطبيبٍ واحد،
+ * وسطر تدقيق.
+ */
+function DoctorAccountDialog({
+  target,
+  candidates,
+  loading,
+  loadError,
+  onOpenChange,
+}: {
+  target: { id: string; name_ar: string; user_id: string | null } | null;
+  candidates: AccountCandidate[];
+  loading: boolean;
+  loadError: string | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [userId, setUserId] = useState(NO_ACCOUNT);
+  const [lastTarget, setLastTarget] = useState<string | null>(null);
+  if (target && target.id !== lastTarget) {
+    setLastTarget(target.id);
+    setUserId(target.user_id ?? NO_ACCOUNT);
+  }
+
+  const picked = candidates.find((row) => row.user_id === userId) ?? null;
+  const changed = Boolean(target) && (target?.user_id ?? NO_ACCOUNT) !== userId;
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!target) throw new Error("لا طبيب محدَّد");
+      const { error } = await supabase.rpc("app_set_doctor_user", {
+        p_doctor_id: target.id,
+        p_user_id: userId === NO_ACCOUNT ? null : userId,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["doctors-list"] });
+      queryClient.invalidateQueries({ queryKey: ["doctor-account-candidates"] });
+      queryClient.invalidateQueries({ queryKey: ["session-doctor-id"] });
+      toast({
+        title: userId === NO_ACCOUNT ? `فُكّ حساب الدخول عن د. ${target?.name_ar}` : `رُبط الحساب بـ د. ${target?.name_ar}`,
+        description: userId === NO_ACCOUNT ? undefined : "يسري عند دخول الطبيب التالي أو تحديث صفحته.",
+      });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حفظ الربط", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open={Boolean(target)} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>حساب الدخول — د. {target?.name_ar}</DialogTitle>
+          <DialogDescription>
+            الحساب الذي يدخل به الطبيب. بعد الربط يرى الطبيب مرضاه ومواعيده هو، وتعمل «يومي» و«زيارات لم تُغلق»
+            في مساحة الطبيب. الحساب نفسه يُنشأ أوّلًا من «الموظفين» (زرّ المفتاح) أو «المستخدمين».
+          </DialogDescription>
+        </DialogHeader>
+        {loading && <Skeleton className="h-10 w-full" />}
+        {loadError && <p className="text-sm text-destructive">تعذّرت قراءة الحسابات: {loadError}</p>}
+        {!loading && !loadError && (
+          <div className="flex flex-col gap-2">
+            <Label>الحساب</Label>
+            <Select value={userId} onValueChange={setUserId}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_ACCOUNT}>بدون حساب (غير مربوط)</SelectItem>
+                {candidates.map((row) => {
+                  const takenByOther = Boolean(row.linked_doctor_id && row.linked_doctor_id !== target?.id);
+                  return (
+                    <SelectItem key={row.user_id} value={row.user_id} disabled={takenByOther}>
+                      {row.display_name}
+                      {row.email ? ` · ${row.email}` : ""} · {roleLabelOf(row)}
+                      {takenByOther ? ` — مربوط بـ د. ${row.linked_doctor_name}` : ""}
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+            {candidates.length === 0 && (
+              <p className="text-xs text-muted-foreground">لا حسابات نشطة في المنشأة بعد — أنشئ حساب الطبيب من «الموظفين».</p>
+            )}
+            {picked && picked.role_key !== "doctor" && (
+              <p className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                دور هذا الحساب «{roleLabelOf(picked)}». حصر الشاشات على مرضى الطبيب يعمل حين تكون صفة الحساب
+                «طبيب» — غيّر دوره من «المستخدمين» إن كان حساب الطبيب نفسه.
+              </p>
+            )}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>
+            إغلاق
+          </Button>
+          <Button disabled={!changed || save.isPending || loading || Boolean(loadError)} onClick={() => save.mutate()}>
+            {save.isPending ? "جارٍ الحفظ..." : userId === NO_ACCOUNT ? "فكّ الربط" : "ربط الحساب"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -518,7 +711,7 @@ function NewDoctorDialog({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>الجنسية</Label>
-            <LookupSelect categoryKey="nationalities" value={nationalityId} onChange={setNationalityId} />
+            <LookupSelect categoryKey="nationalities" centered title="الجنسية" allowClear value={nationalityId} onChange={setNationalityId} />
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>رقم الهوية/الإقامة</Label>

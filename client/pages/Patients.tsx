@@ -658,6 +658,10 @@ export default function Patients() {
                   <Label>الجنسية</Label>
                   <LookupSelect
                     categoryKey="nationalities"
+                    centered
+                    title="الجنسية"
+                    allowClear
+                    clearLabel="الكل"
                     value={filters.nationalityValueId}
                     onChange={(value) => setFilter("nationalityValueId", value)}
                     placeholder="الكل"

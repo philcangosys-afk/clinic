@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, ChevronLeft, Archive, Copy, Eye, Pencil, Plus, ShieldCheck } from "lucide-react";
+import { ChevronDown, ChevronLeft, Archive, Copy, Eye, Pencil, Plus, RotateCcw, ShieldCheck } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -68,6 +68,8 @@ export function useOrganizationRoles(organizationId: string | undefined) {
         .select("id, organization_id, code, name_ar, name_en, base_role_key, is_active, is_archived, created_at, updated_at")
         .eq("organization_id", organizationId)
         .eq("is_archived", false)
+        // تعديلات الصفات الجاهزة (0201) صفوفٌ في الجدول نفسه لا أدوارٌ تُسنَد
+        .eq("overrides_base_role", false)
         .order("created_at");
       if (error) throw error;
       return (data ?? []) as OrganizationRoleRow[];
@@ -121,6 +123,41 @@ function useRoleDefaults() {
   });
 }
 
+/**
+ * تعديلات الصفات الجاهزة في هذه المنشأة (0201) — صفٌّ لكلّ صفةٍ عُدّلت،
+ * ومعه صلاحياته. ما لم يُعدَّل يبقى على الافتراض العامّ.
+ */
+function useBaseRoleOverrides(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["base-role-overrides", organizationId],
+    enabled: Boolean(organizationId),
+    queryFn: async () => {
+      const { data: rows, error } = await supabase
+        .from("organization_roles")
+        .select("id, base_role_key, updated_at")
+        .eq("organization_id", organizationId)
+        .eq("overrides_base_role", true)
+        .eq("is_archived", false);
+      if (error) throw error;
+      const list = (rows ?? []) as { id: string; base_role_key: string; updated_at: string }[];
+      const byRole: Record<string, { id: string; updated_at: string; permissions: string[] }> = {};
+      if (list.length === 0) return byRole;
+      const { data: perms, error: permsError } = await supabase
+        .from("organization_role_permissions")
+        .select("role_id, permission_key")
+        .in("role_id", list.map((row) => row.id));
+      if (permsError) throw permsError;
+      for (const row of list) byRole[row.base_role_key] = { id: row.id, updated_at: row.updated_at, permissions: [] };
+      const roleOf = new Map(list.map((row) => [row.id, row.base_role_key] as const));
+      for (const perm of (perms ?? []) as { role_id: string; permission_key: string }[]) {
+        const key = roleOf.get(perm.role_id);
+        if (key) byRole[key].permissions.push(perm.permission_key);
+      }
+      return byRole;
+    },
+  });
+}
+
 const dateText = (value: string | null | undefined) =>
   value ? new Date(value).toLocaleDateString("en-GB", { timeZone: "Asia/Riyadh" }) : "—";
 
@@ -138,6 +175,8 @@ export default function RolesPanel({
   const [creating, setCreating] = useState(false);
   /** صلاحياتٌ تُملأ بها شاشة الدور الجديد — نسخةً من صفةٍ جاهزة. */
   const [prefill, setPrefill] = useState<{ baseRole: string; permissions: string[] } | null>(null);
+  /** تعديل صلاحيات صفةٍ جاهزة لهذه المنشأة (0201). */
+  const [baseEditing, setBaseEditing] = useState<{ roleKey: string; permissions: string[] } | null>(null);
 
   const holders = useQuery({
     queryKey: ["organization-role-holders", organizationId],
@@ -279,12 +318,26 @@ export default function RolesPanel({
     </Card>
 
       <BaseRolesCard
+        organizationId={organizationId}
         canManage={canManage}
         onCopy={(baseRole, permissions) => {
           setPrefill({ baseRole, permissions });
           setCreating(true);
         }}
+        onEdit={(roleKey, permissions) => setBaseEditing({ roleKey, permissions })}
       />
+
+      {baseEditing && (
+        <RoleEditorDialog
+          key={`base-${baseEditing.roleKey}`}
+          organizationId={organizationId}
+          role={null}
+          baseOverride={baseEditing}
+          onOpenChange={(open) => {
+            if (!open) setBaseEditing(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -337,6 +390,7 @@ function RoleEditorDialog({
   organizationId,
   role,
   prefill,
+  baseOverride,
   onOpenChange,
 }: {
   organizationId: string | undefined;
@@ -349,16 +403,24 @@ function RoleEditorDialog({
    * من الصفة ثمّ التقليم هو الطريق الذي ينتهي بدورٍ محدود فعلًا.
    */
   prefill?: { baseRole: string; permissions: string[] } | null;
+  /**
+   * تعديل صفةٍ جاهزة لهذه المنشأة (0201) بدل دورٍ مخصّص: لا اسم ولا دور
+   * أساس ولا حالة — مصفوفة الصلاحيات وحدها، تبدأ من صلاحيات الصفة الحالية.
+   */
+  baseOverride?: { roleKey: string; permissions: string[] } | null;
   onOpenChange: (open: boolean) => void;
 }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const catalog = usePermissionCatalog();
+  const isBase = Boolean(baseOverride);
   const [nameAr, setNameAr] = useState(role?.name_ar ?? "");
   const [nameEn, setNameEn] = useState(role?.name_en ?? "");
   const [baseRole, setBaseRole] = useState(role?.base_role_key ?? prefill?.baseRole ?? "employee");
   const [isActive, setIsActive] = useState(role?.is_active ?? true);
-  const [granted, setGranted] = useState<Set<string>>(new Set(role ? [] : (prefill?.permissions ?? [])));
+  const [granted, setGranted] = useState<Set<string>>(
+    new Set(baseOverride ? baseOverride.permissions : role ? [] : (prefill?.permissions ?? [])),
+  );
   const [openSections, setOpenSections] = useState<Set<string>>(new Set(["فتح الشاشات"]));
   const [detailed, setDetailed] = useState<Set<string>>(new Set());
 
@@ -400,6 +462,15 @@ function RoleEditorDialog({
   const save = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
+      if (baseOverride) {
+        const { error } = await supabase.rpc("app_save_base_role_override", {
+          p_organization_id: organizationId,
+          p_role_key: baseOverride.roleKey,
+          p_permissions: [...granted],
+        });
+        if (error) throw error;
+        return;
+      }
       if (!nameAr.trim()) throw new Error("اسم الدور بالعربية مطلوب");
       const { error } = await supabase.rpc("app_save_organization_role", {
         p_organization_id: organizationId,
@@ -415,8 +486,16 @@ function RoleEditorDialog({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["organization-roles"] });
       queryClient.invalidateQueries({ queryKey: ["organization-role-permissions"] });
+      queryClient.invalidateQueries({ queryKey: ["base-role-overrides"] });
       queryClient.invalidateQueries({ queryKey: ["my-permissions"] });
-      toast({ title: role ? "حُفظ الدور" : "أُضيف الدور" });
+      toast({
+        title: baseOverride
+          ? `حُفظت صلاحيات صفة «${ROLE_LABELS[baseOverride.roleKey] ?? baseOverride.roleKey}»`
+          : role
+            ? "حُفظ الدور"
+            : "أُضيف الدور",
+        description: baseOverride ? "تسري على أصحاب الصفة عند دخولهم التالي أو تحديث صفحتهم." : undefined,
+      });
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -433,12 +512,21 @@ function RoleEditorDialog({
     <Dialog open onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92vh] max-w-4xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{role ? `تعديل الدور — ${role.name_ar}` : "دور جديد"}</DialogTitle>
+          <DialogTitle>
+            {baseOverride
+              ? `تعديل صلاحيات صفة — ${ROLE_LABELS[baseOverride.roleKey] ?? baseOverride.roleKey}`
+              : role
+                ? `تعديل الدور — ${role.name_ar}`
+                : "دور جديد"}
+          </DialogTitle>
           <DialogDescription>
-            اختر لكلّ قسم: بدون وصول، أو قراءة فقط (عرضٌ وبحثٌ وطباعة بلا تعديل)، أو إدارة كاملة
+            {baseOverride
+              ? "يسري على كلّ عضوٍ في المنشأة صفته هذه ولا دور مخصّصًا له. اختر لكلّ قسم: بدون وصول، أو قراءة فقط، أو إدارة كاملة."
+              : "اختر لكلّ قسم: بدون وصول، أو قراءة فقط (عرضٌ وبحثٌ وطباعة بلا تعديل)، أو إدارة كاملة"}
           </DialogDescription>
         </DialogHeader>
 
+        {!isBase && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
           <div className="flex flex-col gap-1.5">
             <Label>الاسم بالعربية *</Label>
@@ -479,6 +567,7 @@ function RoleEditorDialog({
             </Select>
           </div>
         </div>
+        )}
 
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2">
           <div className="flex items-center gap-2 text-sm">
@@ -604,7 +693,7 @@ function RoleEditorDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             إلغاء
           </Button>
-          <Button disabled={save.isPending || !nameAr.trim()} onClick={() => save.mutate()}>
+          <Button disabled={save.isPending || (!isBase && !nameAr.trim())} onClick={() => save.mutate()}>
             {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
           </Button>
         </DialogFooter>
@@ -628,15 +717,46 @@ function RoleEditorDialog({
  * فيُعرضان بذلك صراحةً بدل عددٍ يُوهم أنّ لهما حدًّا.
  */
 function BaseRolesCard({
+  organizationId,
   canManage,
   onCopy,
+  onEdit,
 }: {
+  organizationId: string | undefined;
   canManage: boolean;
   onCopy: (baseRole: string, permissions: string[]) => void;
+  onEdit: (roleKey: string, permissions: string[]) => void;
 }) {
   const defaults = useRoleDefaults();
+  const overrides = useBaseRoleOverrides(organizationId);
   const catalog = usePermissionCatalog();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [viewing, setViewing] = useState<string | null>(null);
+  const [resetting, setResetting] = useState<string | null>(null);
+
+  /** ما تمنحه الصفة الآن في هذه المنشأة: تعديلها إن عُدّلت، وإلّا الافتراض العامّ. */
+  const effective = (roleKey: string) =>
+    overrides.data?.[roleKey]?.permissions ?? defaults.data?.[roleKey] ?? [];
+
+  const reset = useMutation({
+    mutationFn: async (roleKey: string) => {
+      if (!organizationId) throw new Error("لا توجد منشأة نشطة");
+      const { error } = await supabase.rpc("app_reset_base_role_override", {
+        p_organization_id: organizationId,
+        p_role_key: roleKey,
+      });
+      if (error) throw error;
+    },
+    onSuccess: (_data, roleKey) => {
+      queryClient.invalidateQueries({ queryKey: ["base-role-overrides"] });
+      queryClient.invalidateQueries({ queryKey: ["my-permissions"] });
+      setResetting(null);
+      toast({ title: `عادت صفة «${ROLE_LABELS[roleKey] ?? roleKey}» إلى صلاحياتها الافتراضية` });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّرت الاستعادة", description: errorMessage(error) }),
+  });
 
   const ADMIN_ROLES = ["owner", "organization_admin"];
   const rows = Object.keys(ROLE_LABELS);
@@ -649,8 +769,8 @@ function BaseRolesCard({
           الصفات الجاهزة — ماذا تمنح كلّ صفة
         </CardTitle>
         <CardDescription>
-          هذه صفات القاعدة الثابتة، وهي ما يسري على العضو ما لم يُسنَد له دورٌ مخصّص.
-          افتحها قبل أن تُسند صفةً لأحد.
+          ما يسري على العضو ما لم يُسنَد له دورٌ مخصّص. «تعديل» يغيّر صلاحيات الصفة لهذه المنشأة وحدها،
+          فيسري على كلّ أصحابها فورًا، و«استعادة» تعيدها إلى الافتراض.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -672,7 +792,8 @@ function BaseRolesCard({
             </TableHeader>
             <TableBody>
               {rows.map((roleKey) => {
-                const keys = defaults.data?.[roleKey] ?? [];
+                const keys = effective(roleKey);
+                const overridden = Boolean(overrides.data?.[roleKey]);
                 const isAdmin = ADMIN_ROLES.includes(roleKey);
                 const screenKeys = keys.filter((key) =>
                   (catalog.data ?? []).some(
@@ -684,7 +805,16 @@ function BaseRolesCard({
                 ).length;
                 return (
                   <TableRow key={roleKey}>
-                    <TableCell className="font-medium">{ROLE_LABELS[roleKey]}</TableCell>
+                    <TableCell className="font-medium">
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {ROLE_LABELS[roleKey]}
+                        {overridden && (
+                          <Badge variant="outline" className="border-primary text-[10px] text-primary">
+                            معدّلة للمنشأة
+                          </Badge>
+                        )}
+                      </span>
+                    </TableCell>
                     <TableCell>
                       {isAdmin ? (
                         <Badge variant="outline" className="whitespace-nowrap">
@@ -712,6 +842,29 @@ function BaseRolesCard({
                             <Button
                               size="sm"
                               variant="outline"
+                              title="تعديل صلاحيات هذه الصفة لهذه المنشأة"
+                              disabled={overrides.isLoading}
+                              onClick={() => onEdit(roleKey, keys)}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                              تعديل
+                            </Button>
+                          )}
+                          {canManage && overridden && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              title="إعادة الصفة إلى صلاحياتها الافتراضية"
+                              onClick={() => setResetting(roleKey)}
+                            >
+                              <RotateCcw className="h-3.5 w-3.5" />
+                              استعادة
+                            </Button>
+                          )}
+                          {canManage && (
+                            <Button
+                              size="sm"
+                              variant="outline"
                               title="ابدأ دورًا مخصّصًا بنسخةٍ من صلاحيات هذه الصفة، ثمّ قلّمها"
                               onClick={() => onCopy(roleKey, keys)}
                             >
@@ -730,10 +883,30 @@ function BaseRolesCard({
         )}
       </CardContent>
 
+      <Dialog open={Boolean(resetting)} onOpenChange={(open) => !open && setResetting(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>استعادة صلاحيات «{resetting ? ROLE_LABELS[resetting] ?? resetting : ""}» الافتراضية؟</DialogTitle>
+            <DialogDescription>
+              يُلغى تعديل المنشأة ويعود كلّ أصحاب هذه الصفة إلى صلاحياتها الافتراضية (
+              {resetting ? (defaults.data?.[resetting] ?? []).length : 0} صلاحية). يبقى التعديل في السجلّ.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResetting(null)}>
+              تراجع
+            </Button>
+            <Button disabled={reset.isPending} onClick={() => resetting && reset.mutate(resetting)}>
+              {reset.isPending ? "جارٍ الاستعادة..." : "استعادة الافتراضي"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {viewing && (
         <BaseRoleDetailDialog
           roleKey={viewing}
-          permissions={defaults.data?.[viewing] ?? []}
+          permissions={effective(viewing)}
           catalog={catalog.data ?? []}
           onOpenChange={() => setViewing(null)}
         />
@@ -742,7 +915,7 @@ function BaseRolesCard({
   );
 }
 
-/** تفصيل صفةٍ جاهزة — للقراءة وحدها؛ الصفات لا تُعدَّل من الشاشة. */
+/** تفصيل صفةٍ جاهزة — للقراءة؛ التعديل من زرّ «تعديل» (0201). */
 function BaseRoleDetailDialog({
   roleKey,
   permissions,
@@ -764,8 +937,8 @@ function BaseRoleDetailDialog({
         <DialogHeader>
           <DialogTitle>صلاحيات صفة: {ROLE_LABELS[roleKey] ?? roleKey}</DialogTitle>
           <DialogDescription>
-            للقراءة فقط — الصفات ثابتة في القاعدة وبها تُقاس سياسات الحماية.
-            لتقييد أحدهم أنشئ دورًا مخصّصًا وأسنده إليه.
+            ما تمنحه الصفة الآن في هذه المنشأة. يُعدَّل من زرّ «تعديل» في جدول الصفات، ولتقييد عضوٍ واحد
+            أنشئ دورًا مخصّصًا وأسنده إليه.
           </DialogDescription>
         </DialogHeader>
 

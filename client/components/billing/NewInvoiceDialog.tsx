@@ -34,6 +34,7 @@ import LookupSelect from "@/components/shared/LookupSelect";
 import ServiceBrowserDialog from "@/components/billing/ServiceBrowserDialog";
 import { useToast } from "@/hooks/use-toast";
 import { reportInvoiceToZatca, useZatcaAutoSettings } from "@/lib/zatca-auto";
+import CenteredPicker from "@/components/shared/CenteredPicker";
 
 /**
  * طرق الدفع وصناديق النقد — نسخة مستقلّة عن شاشة الفواتير.
@@ -2033,25 +2034,23 @@ export default function NewInvoiceDialog({
                   <div key={row.key} className="flex flex-wrap items-end gap-2">
                     <div className="flex min-w-[11rem] flex-1 flex-col gap-1">
                       <Label className="text-xs">الطريقة</Label>
-                      <Select
+                      <CenteredPicker
+                        title="طريقة الدفع"
+                        placeholder="اختر الطريقة"
                         value={row.methodId}
-                        onValueChange={(value) =>
+                        loading={paymentMethods.isLoading}
+                        searchable={false}
+                        onChange={(value) =>
                           setPayments((prev) =>
                             prev.map((p) => (p.key === row.key ? { ...p, methodId: value } : p)),
                           )
                         }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="اختر الطريقة" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {(paymentMethods.data ?? []).map((m) => (
-                            <SelectItem key={m.id} value={m.id}>
-                              {m.name_ar}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
+                        options={(paymentMethods.data ?? []).map((m) => ({
+                          value: m.id,
+                          label: m.name_ar,
+                          hint: m.affects_drawer ? "نقد — يدخل الصندوق" : undefined,
+                        }))}
+                      />
                     </div>
                     <div className="flex w-32 flex-col gap-1">
                       <Label className="text-xs">المبلغ</Label>

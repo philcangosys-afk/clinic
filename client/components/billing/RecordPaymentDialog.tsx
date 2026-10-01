@@ -40,6 +40,7 @@ import TaxSettingsTab, {
 } from "@/components/billing/TaxSettingsTab";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
+import CenteredPicker from "@/components/shared/CenteredPicker";
 
 export type PaymentMethodRow = {
   id: string;
@@ -299,19 +300,19 @@ export function RecordPaymentDialog({
           {!refundMode && (
             <div className="flex flex-col gap-1.5">
               <Label>طريقة الدفع *</Label>
-              <Select value={methodId} onValueChange={setMethodId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="اختر الطريقة" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(methods.data ?? []).map((m) => (
-                    <SelectItem key={m.id} value={m.id}>
-                      {m.name_ar}
-                      {m.affects_drawer ? " (نقد)" : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <CenteredPicker
+                title="طريقة الدفع"
+                placeholder="اختر الطريقة"
+                value={methodId}
+                onChange={setMethodId}
+                loading={methods.isLoading}
+                searchable={false}
+                options={(methods.data ?? []).map((m) => ({
+                  value: m.id,
+                  label: m.name_ar,
+                  hint: m.affects_drawer ? "نقد — يدخل الصندوق" : undefined,
+                }))}
+              />
             </div>
           )}
           {(needsDrawer || refundMode) && (

@@ -516,7 +516,7 @@ function NewEmployeeDialog({
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>الجنسية</Label>
-            <LookupSelect categoryKey="nationalities" value={nationalityId} onChange={setNationalityId} />
+            <LookupSelect categoryKey="nationalities" centered title="الجنسية" allowClear value={nationalityId} onChange={setNationalityId} />
           </div>
         </div>
 
