@@ -117,6 +117,10 @@ export type QuoteLineRow = {
   invoiced_qty: number;
   remaining_qty: number;
   invoiced_amount: number;
+  /** 0213 — الفوترة بالمبلغ: ما فُوتر قبل الضريبة، والمتبقّي قبلها وبعدها */
+  invoiced_taxable: number;
+  remaining_taxable: number;
+  remaining_amount: number;
 };
 
 export type AgreementFilters = {
@@ -191,15 +195,33 @@ export function useQuoteLines(quoteId: string | null | undefined) {
         .eq("quote_id", quoteId)
         .order("sort_order");
       if (error) throw error;
-      return (data ?? []).map((row: any) => ({
-        ...row,
-        qty: num(row.qty),
-        unit_price: num(row.unit_price),
-        discount_amount: num(row.discount_amount),
-        discount_percent: num(row.discount_percent),
-        invoiced_qty: num(row.invoiced_qty),
-        remaining_qty: num(row.remaining_qty),
-      })) as QuoteLineRow[];
+      return (data ?? []).map((row: any) => {
+        // قبل 0213 لا أعمدة للمبالغ: تُشتقّ من الكمية كما كانت
+        const qty = num(row.qty);
+        const invoicedTaxable =
+          row.invoiced_taxable == null
+            ? qty > 0
+              ? num(row.taxable_amount) * Math.min(num(row.invoiced_qty) / qty, 1)
+              : 0
+            : num(row.invoiced_taxable);
+        return {
+          ...row,
+          qty,
+          unit_price: num(row.unit_price),
+          discount_amount: num(row.discount_amount),
+          discount_percent: num(row.discount_percent),
+          invoiced_qty: num(row.invoiced_qty),
+          remaining_qty: num(row.remaining_qty),
+          invoiced_amount: num(row.invoiced_amount),
+          invoiced_taxable: invoicedTaxable,
+          remaining_taxable:
+            row.remaining_taxable == null ? Math.max(num(row.taxable_amount) - invoicedTaxable, 0) : num(row.remaining_taxable),
+          remaining_amount:
+            row.remaining_amount == null
+              ? Math.max(num(row.net_amount) - num(row.invoiced_amount), 0)
+              : num(row.remaining_amount),
+        };
+      }) as QuoteLineRow[];
     },
   });
 }
@@ -317,7 +339,7 @@ export async function printAgreement(agreement: AgreementListRow, organizationNa
             <td>${money(line.taxable_amount)}</td>
             <td>${money(line.vat_amount)}</td>
             <td>${money(line.net_amount)}</td>
-            <td>${num(line.invoiced_qty)}</td>
+            <td>${money(line.invoiced_amount)}</td>
           </tr>`,
         )
         .join("");

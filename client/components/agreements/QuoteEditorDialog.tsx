@@ -55,6 +55,9 @@ type DraftLine = {
   minPrice: number | null;
   maxPrice: number | null;
   invoicedQty: number;
+  /** ما فُوتر من البند بالمبلغ (0213): بالصافي، وقبل الضريبة — كلّ فاتورة تنقص منه */
+  invoicedAmount: number;
+  invoicedTaxable: number;
 };
 
 function useDoctorsAndClinics(organizationId: string | undefined) {
@@ -164,6 +167,8 @@ export default function QuoteEditorDialog({
           minPrice: row.min_price,
           maxPrice: row.max_price,
           invoicedQty: Number(row.invoiced_qty),
+          invoicedAmount: Number(row.invoiced_amount) || 0,
+          invoicedTaxable: Number(row.invoiced_taxable) || 0,
         })),
       );
     } else {
@@ -208,11 +213,19 @@ export default function QuoteEditorDialog({
       vat: sum.vat + calc.vatAmount,
       exemption: sum.exemption + calc.exemption,
       net: sum.net + calc.net,
-      invoiced: sum.invoiced + line.invoicedQty,
+      invoiced: sum.invoiced + line.invoicedAmount,
+      remaining: sum.remaining + Math.max(calc.net - line.invoicedAmount, 0),
     }),
-    { gross: 0, discount: 0, taxable: 0, vat: 0, exemption: 0, net: 0, invoiced: 0 },
+    { gross: 0, discount: 0, taxable: 0, vat: 0, exemption: 0, net: 0, invoiced: 0, remaining: 0 },
   );
-  const remainingQty = lines.reduce((sum, line) => sum + Math.max(line.qty - line.invoicedQty, 0), 0);
+  /**
+   * المتبقّي للفوترة بالمبلغ قبل الضريبة (0213) — كما في Kizen: البند يُفوتَر
+   * منه دفعاتٍ حتى ينتهي مبلغه، لا مرّةً واحدة بكميته.
+   */
+  const remainingTaxable = computed.reduce(
+    (sum, { line, calc }) => sum + Math.max(calc.taxable - line.invoicedTaxable, 0),
+    0,
+  );
 
   const update = (key: string, patch: Partial<DraftLine>) => {
     setLines((prev) => prev.map((line) => (line.key === key ? { ...line, ...patch } : line)));
@@ -237,6 +250,8 @@ export default function QuoteEditorDialog({
         minPrice: item.min_price,
         maxPrice: item.max_price,
         invoicedQty: 0,
+        invoicedAmount: 0,
+        invoicedTaxable: 0,
       },
     ]);
     setDirty(true);
@@ -326,11 +341,13 @@ export default function QuoteEditorDialog({
       let id = quoteId;
       if (dirty || !id) id = await save.mutateAsync();
       const unbilled = computed
-        .filter(({ line }) => line.qty - line.invoicedQty > 0)
+        .filter(({ line, calc }) => calc.net - line.invoicedAmount > 0.009)
         .map(({ line, calc }) => {
-          const remainingQty = line.qty - line.invoicedQty;
-          const amount = line.qty > 0 ? (calc.net * remainingQty) / line.qty : 0;
-          return { text: `${line.description} × ${remainingQty}`, amount };
+          const amount = calc.net - line.invoicedAmount;
+          return {
+            text: line.invoicedAmount > 0 ? `${line.description} (متبقٍّ ${formatAmount(amount)})` : line.description,
+            amount,
+          };
         });
       const total = unbilled.reduce((sum, row) => sum + row.amount, 0);
       const number = quotes.data?.find((row) => row.id === id)?.quote_number ?? quote?.quote_number;
@@ -399,6 +416,8 @@ export default function QuoteEditorDialog({
                 discountAmount: 0,
                 discountPercent: 0,
                 invoicedQty: 0,
+                invoicedAmount: 0,
+                invoicedTaxable: 0,
               },
             ],
       ),
@@ -450,15 +469,15 @@ export default function QuoteEditorDialog({
               size="sm"
               variant="outline"
               disabled={
-                save.isPending || isCancelled || lines.length === 0 || remainingQty <= 0 || agreement.is_disabled || debtCancelled
+                save.isPending || isCancelled || lines.length === 0 || remainingTaxable <= 0.009 || agreement.is_disabled || debtCancelled
               }
               onClick={() => void invoice()}
               title={
                 debtCancelled
                   ? "أُلغيت مديونية الاتفاقية — أعدها من الاتفاقية أوّلًا"
-                  : remainingQty <= 0
-                    ? "كلّ البنود مفوتَرة"
-                    : "إصدار فاتورة ضريبية بما لم يُفوتَر بعد"
+                  : remainingTaxable <= 0.009
+                    ? "فُوتر كامل مبلغ العرض"
+                    : "إصدار فاتورة ضريبية بما لم يُفوتَر بعد — ويمكن فوترة جزءٍ من مبلغ البند"
               }
             >
               <Receipt className="h-4 w-4" />
@@ -591,6 +610,7 @@ export default function QuoteEditorDialog({
                   <th>السعر</th>
                   <th>العدد</th>
                   <th>المفوتر</th>
+                  <th>المتبقّي</th>
                   <th>الإجمالي</th>
                   <th>الخصم #</th>
                   <th>الخصم %</th>
@@ -604,7 +624,7 @@ export default function QuoteEditorDialog({
               <tbody>
                 {computed.map(({ line, calc }) => {
                   const problem = priceProblem(line);
-                  const locked = line.invoicedQty > 0;
+                  const locked = line.invoicedQty > 0 || line.invoicedAmount > 0;
                   return (
                     <tr key={line.key} className="border-t [&>td]:px-1.5 [&>td]:py-1 tabular-nums">
                       <td className="whitespace-nowrap">
@@ -668,15 +688,18 @@ export default function QuoteEditorDialog({
                         <Input
                           className="h-8 w-14 px-2"
                           type="number"
-                          min={Math.max(line.invoicedQty, 0.01)}
+                          min={0.01}
                           step="1"
                           value={line.qty}
                           disabled={readOnly}
                           onChange={(event) => update(line.key, { qty: Number(event.target.value) })}
                         />
                       </td>
-                      <td className={line.invoicedQty > 0 ? "font-semibold text-emerald-700" : "text-muted-foreground"}>
-                        {line.invoicedQty}
+                      <td className={line.invoicedAmount > 0 ? "font-semibold text-emerald-700" : "text-muted-foreground"}>
+                        {formatAmount(line.invoicedAmount)}
+                      </td>
+                      <td className={calc.net - line.invoicedAmount > 0.009 ? "font-semibold text-amber-700" : "text-muted-foreground"}>
+                        {formatAmount(Math.max(calc.net - line.invoicedAmount, 0))}
                       </td>
                       <td>{formatAmount(calc.gross)}</td>
                       <td>
@@ -716,7 +739,7 @@ export default function QuoteEditorDialog({
                 })}
                 {lines.length === 0 && (
                   <tr>
-                    <td colSpan={showBarcode ? 15 : 14} className="py-8 text-center text-sm text-muted-foreground">
+                    <td colSpan={showBarcode ? 16 : 15} className="py-8 text-center text-sm text-muted-foreground">
                       لا بنود بعد — «إضافة خدمة» لاختيارها من الكتالوج.
                     </td>
                   </tr>
@@ -726,7 +749,8 @@ export default function QuoteEditorDialog({
                 <tfoot className="border-t bg-muted/40 font-semibold tabular-nums">
                   <tr className="[&>td]:px-1.5 [&>td]:py-2">
                     <td colSpan={showBarcode ? 6 : 5}>الإجمالي — {lines.length} بندًا</td>
-                    <td>{totals.invoiced}</td>
+                    <td className="text-emerald-700">{formatAmount(totals.invoiced)}</td>
+                    <td className="text-amber-700">{formatAmount(totals.remaining)}</td>
                     <td>{formatAmount(totals.gross)}</td>
                     <td className="text-rose-700">{formatAmount(totals.discount)}</td>
                     <td />

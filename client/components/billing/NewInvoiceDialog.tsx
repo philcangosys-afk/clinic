@@ -257,7 +257,22 @@ type AgreementItemOption = {
   /** الخصم بالريال على البند كلّه (0193) — المرجع إن وُجد. */
   discountAmount: number;
   invoicedQty: number;
+  /**
+   * الرصيد بالمبلغ قبل الضريبة (0213): قيمة البند، وما فُوتر منه، والمتبقّي.
+   * البند يُفوتَر منه دفعاتٍ حتى ينتهي مبلغه — كالرصيد المرن في Kizen.
+   */
+  lineTaxable: number;
+  invoicedTaxable: number;
+  remainingTaxable: number;
 };
+
+/** البند فُوتر منه بالكمية تمامًا (لا دفعاتٍ جزئية) وبقيت منه وحدات. */
+function billsByQty(option: AgreementItemOption) {
+  const remainingQty = option.qty - option.invoicedQty;
+  if (remainingQty <= 0 || option.qty <= 0) return false;
+  const unit = option.lineTaxable / option.qty;
+  return Math.abs(option.invoicedTaxable - option.invoicedQty * unit) < 0.01;
+}
 
 /**
  * بنود الاتفاقيات العلاجية القابلة للفوترة لمريض بعينه.
@@ -286,7 +301,7 @@ function useAgreementItemsForBilling(patientId: string | undefined, organization
       const viewResult = await supabase
         .from("v_agreement_billable_items")
         .select(
-          "agreement_item_id, agreement_number, quote_id, quote_number, item_id, description, qty, unit_price, discount_percent, discount_amount, invoiced_qty",
+          "agreement_item_id, agreement_number, quote_id, quote_number, item_id, description, qty, unit_price, discount_percent, discount_amount, invoiced_qty, line_taxable, invoiced_taxable, remaining_taxable",
         )
         .eq("organization_id", organizationId)
         .eq("patient_id", patientId)
@@ -305,6 +320,9 @@ function useAgreementItemsForBilling(patientId: string | undefined, organization
           discountPercent: Number(row.discount_percent) || 0,
           discountAmount: Number(row.discount_amount) || 0,
           invoicedQty: Number(row.invoiced_qty) || 0,
+          lineTaxable: Number(row.line_taxable) || 0,
+          invoicedTaxable: Number(row.invoiced_taxable) || 0,
+          remainingTaxable: Number(row.remaining_taxable) || 0,
         })) as AgreementItemOption[];
       }
 
@@ -348,6 +366,9 @@ function useAgreementItemsForBilling(patientId: string | undefined, organization
             quoteId: null,
             quoteNumber: null,
             invoicedQty: 0,
+            lineTaxable: 0,
+            invoicedTaxable: 0,
+            remainingTaxable: 0,
           });
         }
       }
@@ -383,10 +404,19 @@ function useAgreementItemsForBilling(patientId: string | undefined, organization
         if (!invoice || invoice.is_temporary || invoice.status === "void") continue;
         billedQty.set(row.agreement_item_id, (billedQty.get(row.agreement_item_id) ?? 0) + (Number(row.qty) || 0));
       }
-      return options.map((option) => ({
-        ...option,
-        invoicedQty: billedQty.get(option.agreementItemId) ?? 0,
-      }));
+      // المسار القديم (قبل 0193) بالكمية وحدها
+      return options.map((option) => {
+        const invoicedQty = billedQty.get(option.agreementItemId) ?? 0;
+        const lineTaxable = option.qty * option.unitPrice * (1 - option.discountPercent / 100);
+        const unit = option.qty > 0 ? lineTaxable / option.qty : 0;
+        return {
+          ...option,
+          invoicedQty,
+          lineTaxable,
+          invoicedTaxable: Math.min(invoicedQty, option.qty) * unit,
+          remainingTaxable: Math.max(option.qty - invoicedQty, 0) * unit,
+        };
+      });
     },
   });
 }
@@ -816,10 +846,38 @@ export default function NewInvoiceDialog({
    * كان سيغيّر المبلغ عمّا وُقّع عليه.
    */
   const addAgreementLine = (option: AgreementItemOption) => {
-    const remainingQty = Math.max(option.qty - option.invoicedQty, 0);
-    if (remainingQty <= 0) return;
+    if (option.remainingTaxable <= 0.009) return;
     // منع تكرار نفس بند الاتفاقية في الفاتورة الواحدة
     if (lines.some((line) => line.agreement_item_id === option.agreementItemId)) return;
+    const remainingQty = Math.max(option.qty - option.invoicedQty, 0);
+    /**
+     * فُوتر من البند دفعةٌ جزئية (0213): يُضاف سطرًا واحدًا بمتبقّيه قبل الضريبة
+     * — والخصم المتّفق عليه داخلٌ فيه. ويُعدَّل سعره لتحصيل دفعةٍ أصغر؛ القاعدة
+     * تمنع تجاوز المتبقّي، وكلّ فاتورة تنقص من رصيد البند حتى ينتهي.
+     */
+    if (option.invoicedTaxable > 0.009 && !billsByQty(option)) {
+      setLines((prev) => [
+        ...prev,
+        {
+          key: `agr-${option.agreementItemId}-${Date.now()}`,
+          item_id: option.itemId,
+          description: invoiceLineText(option.description),
+          price: Math.round(option.remainingTaxable * 100) / 100,
+          qty: 1,
+          discount_percent: 0,
+          auto_discount_percent: 0,
+          discount_amount: 0,
+          discount_reason: undefined,
+          is_vat_exempt: false,
+          agreement_item_id: option.agreementItemId,
+          agreement_label: `اتفاقية #${option.agreementNumber} · متبقٍّ ${formatAmount(option.remainingTaxable)}${
+            isKizenBalanceText(option.description) ? " · رصيد منقول من Kizen" : ""
+          }`,
+          visit_service_id: null,
+        },
+      ]);
+      return;
+    }
     /**
      * الخصم المتّفق عليه يُنقل بمبلغه لا بنسبته إن كان مبلغًا — مقسومًا على ما
      * يُفوتَر الآن من الكمية. والقاعدة (0167) **تشترط سببًا لكلّ خصم** على سطر
@@ -870,7 +928,7 @@ export default function NewInvoiceDialog({
     if (!agreementItems.data) return;
     quotePreloadedFor.current = agreementQuoteId;
     for (const option of agreementItems.data) {
-      if (option.quoteId === agreementQuoteId && option.qty - option.invoicedQty > 0) {
+      if (option.quoteId === agreementQuoteId && option.remainingTaxable > 0.009) {
         addAgreementLine(option);
       }
     }
@@ -1861,11 +1919,14 @@ export default function NewInvoiceDialog({
               )}
               <p className="text-xs text-muted-foreground">
                 إضافة البند من هنا تربطه بالاتفاقية، فيُحدَّث "المفوتَر" و"المتبقّي" فيها تلقائيًا.
-                إضافته من "إضافة بند" العادية لا تربطه بشيء.
+                إضافته من "إضافة بند" العادية لا تربطه بشيء. ولتحصيل جزءٍ من مبلغ البند عدِّل سعره
+                في الفاتورة — يُخصم من رصيده، ويبقى الباقي للفاتورة التالية حتى ينتهي.
               </p>
               <div className="flex flex-col gap-1.5">
                 {(agreementItems.data ?? []).map((option) => {
                   const remainingQty = Math.max(option.qty - option.invoicedQty, 0);
+                  const done = option.remainingTaxable <= 0.009;
+                  const byQty = !done && billsByQty(option) && option.qty > 1;
                   const alreadyAdded = lines.some(
                     (line) => line.agreement_item_id === option.agreementItemId,
                   );
@@ -1875,7 +1936,7 @@ export default function NewInvoiceDialog({
                       size="sm"
                       variant="outline"
                       className="h-auto w-full justify-start gap-2 whitespace-normal py-1.5 text-start"
-                      disabled={remainingQty <= 0 || alreadyAdded}
+                      disabled={done || alreadyAdded}
                       onClick={() => addAgreementLine(option)}
                     >
                       <Plus className="h-3.5 w-3.5 shrink-0" />
@@ -1883,10 +1944,12 @@ export default function NewInvoiceDialog({
                       <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
                         {formatAmount(option.unitPrice)} ر.س
                       </span>
-                      <Badge className="shrink-0" variant={remainingQty <= 0 ? "secondary" : "default"}>
-                        {remainingQty <= 0
+                      <Badge className="shrink-0" variant={done ? "secondary" : "default"}>
+                        {done
                           ? "مفوتَر بالكامل"
-                          : `متبقٍ ${remainingQty} من ${option.qty}`}
+                          : byQty
+                            ? `متبقٍ ${remainingQty} من ${option.qty}`
+                            : `متبقٍ ${formatAmount(option.remainingTaxable)} ر.س`}
                       </Badge>
                       <span className="shrink-0 text-[10px] text-muted-foreground">
                         اتفاقية #{option.agreementNumber}
