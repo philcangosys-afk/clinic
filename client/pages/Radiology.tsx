@@ -37,6 +37,7 @@ import PatientPicker from "@/components/shared/PatientPicker";
 import ItemPicker from "@/components/shared/ItemPicker";
 import BillingItemLink from "@/components/shared/BillingItemLink";
 import { errorMessage } from "@/lib/error-message";
+import { usePermissions, type PermissionKey } from "@/lib/permissions";
 
 /**
  * دورة حياة طلب الأشعة (0084) — تسع حالات واثنتان استثنائيتان.
@@ -97,6 +98,28 @@ const NEXT_STATUS: Record<string, { value: string; label: string; needsReason?: 
   ],
   verified: [{ value: "delivered", label: "تسليم" }],
 };
+/**
+ * صلاحية كلّ انتقال — نفس خريطة `app_set_radiology_order_status` (0084).
+ * الزرّ الذي لا يملك المستخدم صلاحيته لا يُعرض: كان يظهر ثمّ ترفضه القاعدة
+ * برسالة «صلاحيتك لا تسمح بهذا الإجراء (rad.report)».
+ */
+const STATUS_PERMISSION: Record<string, PermissionKey> = {
+  scheduled: "rad.schedule",
+  arrived: "rad.schedule",
+  in_progress: "rad.perform",
+  images_ready: "rad.perform",
+  rejected: "rad.perform",
+  reporting: "rad.report",
+  verified: "rad.verify",
+  delivered: "rad.view",
+};
+const PERMISSION_LABEL: Partial<Record<PermissionKey, string>> = {
+  "rad.schedule": "جدولة فحوص الأشعة",
+  "rad.perform": "تنفيذ فحوص الأشعة",
+  "rad.report": "كتابة تقارير الأشعة",
+  "rad.verify": "اعتماد تقارير الأشعة",
+};
+
 type RadiologyExamWithCategory = RadiologyExamRow & {
   category: { name_ar: string } | { name_ar: string }[] | null;
 };
@@ -790,6 +813,7 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { session } = useOrganizationAccess();
+  const { can } = usePermissions();
   const [draftFindings, setDraftFindings] = useState<Record<string, { findings: string; impression: string }>>({});
 
   const markPerformed = useMutation({
@@ -1039,7 +1063,9 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
           )}
 
         <DialogFooter className="flex-wrap gap-2">
-          {(NEXT_STATUS[orderStatus ?? ""] ?? []).map((step) => (
+          {(NEXT_STATUS[orderStatus ?? ""] ?? [])
+            .filter((step) => can(STATUS_PERMISSION[step.value] ?? "rad.view"))
+            .map((step) => (
             <Button
               key={step.value}
               variant={step.needsReason ? "outline" : "default"}
@@ -1066,6 +1092,21 @@ function RadiologyOrderDetailsDialog({ orderId, onOpenChange }: { orderId: strin
           {(NEXT_STATUS[orderStatus ?? ""] ?? []).length === 0 && (
             <p className="text-sm text-muted-foreground">لا إجراء متاح — الطلب في حالة نهائية.</p>
           )}
+          {(() => {
+            const missing = Array.from(
+              new Set(
+                (NEXT_STATUS[orderStatus ?? ""] ?? [])
+                  .map((step) => STATUS_PERMISSION[step.value] ?? "rad.view")
+                  .filter((key) => !can(key)),
+              ),
+            );
+            return missing.length > 0 ? (
+              <p className="basis-full text-xs text-muted-foreground">
+                الخطوة التالية تحتاج صلاحية: {missing.map((key) => PERMISSION_LABEL[key] ?? key).join("، ")} — تُمنح من
+                «المستخدمون» ← «الأدوار والصلاحيات» ← الأشعة والتصوير.
+              </p>
+            ) : null;
+          })()}
         </DialogFooter>
 
         <Dialog open={Boolean(transition)} onOpenChange={(open) => !open && setTransition(null)}>

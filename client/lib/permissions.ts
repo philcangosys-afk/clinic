@@ -168,6 +168,11 @@ export type PermissionKey =
   | "agreements.manage"
   /* إلغاء مديونية الاتفاقية دون حذفها (0208) */
   | "agreements.cancel_debt"
+  | "rad.view"
+  | "rad.schedule"
+  | "rad.perform"
+  | "rad.report"
+  | "rad.verify"
   | "cashier.receive"
   | "cashier.open"
   | "cashier.close"
