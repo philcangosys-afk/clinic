@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Loader2, Plus, Trash2, X } from "lucide-react";
+import { Check, Loader2, Plus, Stethoscope, Trash2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -12,6 +12,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import DentalProcedureLog, { type DentalDraft } from "@/components/medical/DentalProcedureLog";
+import { DENTAL_TARGETS, fetchDentalLog, markedTeeth, type DentalTarget } from "@/lib/dental";
 
 /**
  * مخطّط الأسنان — المرحلة 35.
@@ -73,7 +75,52 @@ export default function Odontogram({ patientId }: { patientId: string }) {
   const { organization, branch } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const [toothType, setToothType] = useState<"permanent" | "primary">("permanent");
+  /** لوحة «حالة السنّ وخطّة العلاج» — تُفتح بزرّ بعد اختيار سنّ */
   const [selected, setSelected] = useState<string | null>(null);
+  /**
+   * منطق Kizen (0211): النقر على سنٍّ أو هدف يفلتر سجلّ الإجراءات عليه
+   * ويضعه في نموذج «إجراء جديد». «عدّة أسنان» يجعل النقر يضيف ويحذف بدل
+   * أن يستبدل — لإجراءٍ واحد على أسنانٍ في أرباع مختلفة.
+   */
+  const [logFilter, setLogFilter] = useState<string | null>(null);
+  const [draft, setDraft] = useState<DentalDraft>({ teeth: [], targets: [], toothType: "permanent" });
+  const [multi, setMulti] = useState(false);
+
+  const log = useQuery({
+    queryKey: ["dental-log", patientId],
+    enabled: Boolean(patientId),
+    queryFn: () => fetchDentalLog(patientId),
+  });
+  const marks = useMemo(() => markedTeeth(log.data ?? []), [log.data]);
+
+  const pickTooth = (tooth: string) => {
+    if (multi) {
+      setDraft((prev) => {
+        const teeth = prev.teeth.includes(tooth) ? prev.teeth.filter((t) => t !== tooth) : [...prev.teeth, tooth];
+        return { ...prev, teeth, toothType };
+      });
+      return;
+    }
+    const same = logFilter === tooth;
+    setLogFilter(same ? null : tooth);
+    setDraft({ teeth: same ? [] : [tooth], targets: [], toothType });
+    if (selected && selected !== tooth) setSelected(null);
+  };
+
+  const pickTarget = (target: DentalTarget) => {
+    if (multi) {
+      setDraft((prev) => ({
+        ...prev,
+        targets: prev.targets.includes(target) ? prev.targets.filter((t) => t !== target) : [...prev.targets, target],
+      }));
+      return;
+    }
+    const same = logFilter === target;
+    setLogFilter(same ? null : target);
+    setDraft({ teeth: [], targets: same ? [] : [target], toothType });
+    setSelected(null);
+  };
+  const focusTooth = draft.teeth.length === 1 && draft.targets.length === 0 ? draft.teeth[0] : null;
 
   const chart = useQuery({
     queryKey: ["odontogram", patientId],
@@ -120,7 +167,7 @@ export default function Odontogram({ patientId }: { patientId: string }) {
           <div>
             <CardTitle className="text-base">مخطّط الأسنان</CardTitle>
             <CardDescription>
-              اضغط سنًّا لتسجيل حاله أو تخطيط إجراء عليه
+              اضغط سنًّا لعرض تاريخه وتسجيل إجراء عليه — الإطار الأحمر: سنٌّ له إجراء مسجّل
             </CardDescription>
           </div>
           <div className="flex rounded-lg border p-0.5">
@@ -131,6 +178,8 @@ export default function Odontogram({ patientId }: { patientId: string }) {
                 onClick={() => {
                   setToothType(t);
                   setSelected(null);
+                  setDraft((prev) => ({ ...prev, teeth: [], toothType: t }));
+                  if (logFilter && /^\d+$/.test(logFilter)) setLogFilter(null);
                 }}
                 className={cn(
                   "rounded px-3 py-1 text-xs font-medium transition",
@@ -160,18 +209,21 @@ export default function Odontogram({ patientId }: { patientId: string }) {
                           const cond = conditionOf(row?.condition);
                           const planned = Number(row?.planned_count ?? 0);
                           const gone = row?.condition === "extracted" || row?.condition === "missing";
+                          const hasRecord = marks.teeth.has(tooth);
+                          const picked = draft.teeth.includes(tooth);
                           return (
                             <button
                               key={tooth}
                               type="button"
-                              onClick={() => setSelected(selected === tooth ? null : tooth)}
-                              title={`${tooth} — ${cond.label}`}
+                              onClick={() => pickTooth(tooth)}
+                              title={`${tooth} — ${cond.label}${hasRecord ? " — له إجراء مسجّل" : ""}`}
                               className={cn(
                                 "relative grid h-11 w-9 place-items-center rounded-md border-2 text-xs font-bold transition",
                                 cond.color,
                                 cond.ring,
                                 gone && "opacity-45 line-through",
-                                selected === tooth && "ring-2 ring-primary ring-offset-1",
+                                hasRecord && "outline outline-2 outline-offset-2 outline-red-600",
+                                picked && "ring-2 ring-slate-500 ring-offset-1",
                               )}
                             >
                               {tooth}
@@ -190,6 +242,60 @@ export default function Odontogram({ patientId }: { patientId: string }) {
               ))}
             </div>
           )}
+
+          {/* أهدافٌ ليست سنًّا (Kizen): الفكّ كاملًا لإزالة الجير، الأشعة، التقويم */}
+          <div className="flex flex-wrap items-center gap-1.5 border-t pt-3">
+            {DENTAL_TARGETS.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => pickTarget(t.key)}
+                className={cn(
+                  "rounded-md border px-2.5 py-1 text-xs font-medium transition hover:border-primary/50",
+                  marks.targets.has(t.key) && "outline outline-2 outline-offset-1 outline-red-600",
+                  draft.targets.includes(t.key) && "bg-slate-100 ring-2 ring-slate-500",
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+            <span className="mx-1 h-5 w-px bg-border" />
+            <button
+              type="button"
+              onClick={() => setMulti((v) => !v)}
+              className={cn(
+                "rounded-md border px-2.5 py-1 text-xs transition",
+                multi ? "border-primary bg-primary text-primary-foreground" : "hover:border-primary/50",
+              )}
+              title="النقر يضيف السنّ إلى الإجراء ويحذفه بدل أن يستبدله"
+            >
+              عدّة أسنان
+            </button>
+            {(draft.teeth.length > 0 || draft.targets.length > 0 || logFilter) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDraft({ teeth: [], targets: [], toothType });
+                  setLogFilter(null);
+                  setSelected(null);
+                }}
+                className="rounded-md border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground"
+              >
+                مسح الاختيار
+              </button>
+            )}
+            {focusTooth && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="ms-auto h-7 text-xs"
+                onClick={() => setSelected(selected === focusTooth ? null : focusTooth)}
+              >
+                <Stethoscope className="h-3.5 w-3.5" />
+                {selected === focusTooth ? "إخفاء" : "حالة السنّ"} {focusTooth} وخطة علاجه
+              </Button>
+            )}
+          </div>
 
           <div className="flex flex-wrap gap-x-3 gap-y-1.5 border-t pt-3">
             {CONDITIONS.filter((c) => c.key !== "sound").map((c) => (
@@ -218,9 +324,23 @@ export default function Odontogram({ patientId }: { patientId: string }) {
           onChanged={() => {
             queryClient.invalidateQueries({ queryKey: ["odontogram", patientId] });
             queryClient.invalidateQueries({ queryKey: ["tooth-plan", patientId] });
+            queryClient.invalidateQueries({ queryKey: ["dental-log", patientId] });
           }}
         />
       )}
+
+      <DentalProcedureLog
+        patientId={patientId}
+        rows={log.data ?? []}
+        isLoading={log.isLoading}
+        filter={logFilter}
+        onClearFilter={() => setLogFilter(null)}
+        draft={draft}
+        onDraftChange={(next) => {
+          setDraft(next);
+          if (next.teeth.length > 0 && next.toothType !== toothType) setToothType(next.toothType);
+        }}
+      />
 
       <Card>
         <CardHeader className="pb-3">
@@ -255,6 +375,8 @@ export default function Odontogram({ patientId }: { patientId: string }) {
                 // `["patient-visit-services"]` ولا استعلام يحمله، فالإجراء
                 // المُتمّ لا يظهر في الزيارة حتى يُحدِّث المستخدم الصفحة.
                 queryClient.invalidateQueries({ queryKey: ["patient-visits-context", patientId] });
+                // إجراء الخطّة المنفَّذ يظهر في سجلّ الإجراءات (0211)
+                queryClient.invalidateQueries({ queryKey: ["dental-log", patientId] });
               }}
             />
           ))}

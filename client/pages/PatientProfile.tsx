@@ -73,6 +73,7 @@ import ClaimFormsTab from "@/components/patients/ClaimFormsTab";
 import GrowthChartTab from "@/components/patients/GrowthChartTab";
 import AllergiesTab from "@/components/patients/AllergiesTab";
 import Odontogram from "@/components/medical/Odontogram";
+import PatientReportsMenu from "@/components/patients/PatientReportsMenu";
 import SendToDoctorDialog from "@/components/patients/SendToDoctorDialog";
 import PatientNotesButton, {
   PATIENT_NOTES_KEY,
@@ -401,6 +402,8 @@ export default function PatientProfile() {
               patientName={patient.data.name_ar}
               onOpenAll={() => setSection("notes")}
             />
+            {/* تقارير المريض بنموذج Kizen والملف الموحّد (0212) */}
+            <PatientReportsMenu patientId={patient.data.id} />
             <PatientQuickActions patient={patient.data} />
             <MergeButton patientId={patient.data.id} patientName={patient.data.name_ar} />
           </div>

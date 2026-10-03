@@ -1,10 +1,12 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
+import { VolumeX } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
+import { Button } from "@/components/ui/button";
 
 /**
  * التنبيه الحيّ — نافذةٌ منبثقة وصوت لكلّ تنبيهٍ جديد في صندوق المستخدم.
@@ -17,9 +19,11 @@ import { ToastAction } from "@/components/ui/toast";
  * — «آخر ما عُرض» يُحفظ في المتصفّح لكلّ مستخدم، فلا يتكرّر الصوت بعد
  *   تحديث الصفحة. وفي أوّل تشغيل يبدأ من أحدث تنبيهٍ موجود (توقيت الخادم لا
  *   ساعة الجهاز) فلا تنهال التنبيهات القديمة دفعةً واحدة.
- * — المتصفّح لا يسمح بالصوت قبل أوّل نقرة في الصفحة: يُفتح الصوت مع أوّل
- *   نقرة أو ضغطة مفتاح، ويُطلب معها إذن تنبيهات سطح المكتب (حين تكون نافذة
- *   النظام في الخلفية).
+ * — المتصفّح لا يسمح بالصوت قبل أوّل نقرة في الصفحة (بعد كل تحميلٍ لها):
+ *   يُفتح الصوت مع أيّ نقرة أو ضغطة مفتاح، ويُطلب معها إذن تنبيهات سطح
+ *   المكتب. وما دام مقفلًا يظهر في الرأس زرّ «فعّل صوت التنبيهات»، والتنبيه
+ *   الذي يصل قبل الفتح يُعزف صوته مع أوّل نقرة بدل أن يضيع بصمت — وهي حال
+ *   شاشة الطبيب التي تبقى مفتوحة بلا نقر بعد تحميلها.
  */
 
 const POLL_MS = 10_000;
@@ -53,21 +57,63 @@ function writeStorage(key: string, value: string) {
 
 /* ── الصوت (يُولَّد بلا ملفّ) ─────────────────────────────────────────────── */
 let audioCtx: AudioContext | null = null;
+/** صوتٌ وصل والمتصفّح لم يأذن بعد: null = لا شيء، وإلّا هل هو عاجل */
+let pendingChime: boolean | null = null;
+const audioListeners = new Set<() => void>();
+const emitAudio = () => audioListeners.forEach((listener) => listener());
+
 function getAudio(): AudioContext | null {
   if (typeof window === "undefined") return null;
   if (!audioCtx) {
     const Ctor = window.AudioContext ?? (window as any).webkitAudioContext;
     if (!Ctor) return null;
     audioCtx = new Ctor();
+    audioCtx.onstatechange = emitAudio;
   }
   return audioCtx;
+}
+
+/** يُستدعى من نقرة المستخدم: يفتح الصوت ويعزف ما تأجّل. */
+function unlockAudio() {
+  const ctx = getAudio();
+  if (!ctx) return;
+  const after = () => {
+    emitAudio();
+    if (ctx.state === "running" && pendingChime !== null) {
+      const urgent = pendingChime;
+      pendingChime = null;
+      playChime(urgent);
+    }
+  };
+  if (ctx.state === "running") after();
+  else void ctx.resume().then(after, after);
+}
+
+const audioRunning = () => audioCtx?.state === "running";
+function useAudioRunning() {
+  return useSyncExternalStore(
+    (listener) => {
+      audioListeners.add(listener);
+      return () => audioListeners.delete(listener);
+    },
+    audioRunning,
+    () => true,
+  );
 }
 
 function playChime(urgent: boolean) {
   if (readStorage(NO_SOUND_KEY) === "1") return;
   const ctx = getAudio();
   if (!ctx) return;
-  if (ctx.state === "suspended") void ctx.resume();
+  if (ctx.state !== "running") {
+    // لم يأذن المتصفّح بعد: يُعزف مع أوّل نقرة، ويظهر زرّ التفعيل
+    pendingChime = Boolean(pendingChime) || urgent;
+    void ctx.resume().then(() => {
+      if (ctx.state === "running") unlockAudio();
+    }, () => undefined);
+    emitAudio();
+    return;
+  }
   const notes = urgent ? [988, 740, 988, 740] : [740, 988];
   notes.forEach((freq, i) => {
     const osc = ctx.createOscillator();
@@ -94,20 +140,25 @@ export default function LiveNotifier() {
   const sinceRef = useRef<string | null>(null);
   const shownRef = useRef<Set<string>>(new Set());
 
-  // أوّل نقرة: يُفتح الصوت ويُطلب إذن تنبيهات سطح المكتب
+  const audioOn = useAudioRunning();
+
+  // كلّ نقرة أو ضغطة مفتاح: يُفتح الصوت إن كان مقفلًا (لا مرّةً واحدة فقط —
+  // فقد يُعلَّق السياق لاحقًا)، ويُطلب إذن تنبيهات سطح المكتب
   useEffect(() => {
     const unlock = () => {
-      const ctx = getAudio();
-      if (ctx && ctx.state === "suspended") void ctx.resume();
+      if (!audioRunning()) unlockAudio();
       if ("Notification" in window && Notification.permission === "default") {
         void Notification.requestPermission().catch(() => undefined);
       }
     };
-    document.addEventListener("pointerdown", unlock, { once: true });
-    document.addEventListener("keydown", unlock, { once: true });
+    // ينشأ السياق مبكّرًا (معلّقًا) ليُعرف أنّ الصوت مقفل فيظهر زرّ التفعيل
+    getAudio();
+    emitAudio();
+    document.addEventListener("pointerdown", unlock, true);
+    document.addEventListener("keydown", unlock, true);
     return () => {
-      document.removeEventListener("pointerdown", unlock);
-      document.removeEventListener("keydown", unlock);
+      document.removeEventListener("pointerdown", unlock, true);
+      document.removeEventListener("keydown", unlock, true);
     };
   }, []);
 
@@ -207,7 +258,23 @@ export default function LiveNotifier() {
     queryClient.invalidateQueries({ queryKey: ["my-notifications"] });
   }, [live.data, orgId, userId, navigate, queryClient, toast]);
 
-  return null;
+  if (audioOn || !isNotificationSoundOn() || !orgId || !userId) return null;
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      className="h-8 gap-1 border-amber-400 bg-amber-50 px-2 text-xs text-amber-900 hover:bg-amber-100"
+      title="المتصفّح يمنع الصوت حتى أوّل نقرة في الصفحة"
+      onClick={() => {
+        unlockAudio();
+        playChime(false);
+      }}
+    >
+      <VolumeX className="h-4 w-4" />
+      <span className="hidden sm:inline">فعّل صوت التنبيهات</span>
+    </Button>
+  );
 }
 
 /** كتم صوت التنبيهات على هذا المتصفّح أو إعادته. */
