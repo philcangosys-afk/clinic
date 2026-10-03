@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate } from "react-router-dom";
-import { AlertOctagon, ClipboardList, LogOut, PhoneCall, Play, Stethoscope } from "lucide-react";
+import { AlertOctagon, ClipboardList, LogOut, Megaphone, PhoneCall, Play, Stethoscope } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { usePermissions } from "@/lib/permissions";
@@ -31,7 +31,6 @@ import {
   QUEUE_ACTION_LABEL,
   QUEUE_ACTION_PERMISSION,
   QUEUE_TIME_COLUMNS,
-  primaryQueueAction,
   queueStage,
   type QueueAction,
 } from "@/lib/queue-steps";
@@ -431,20 +430,19 @@ function TodayPanel() {
   useAppointmentsLive(organization?.id, [["doctor-worklist"], ["doctor-open-visits"]], "doctor-worklist");
 
   /**
-   * «دخل» و«خرج» من قائمة الطبيب (0175).
+   * «نداء» و«دخل» و«خرج» من قائمة الطبيب (0175، 0216).
    *
-   * الفعلان نفساهما في لوحة الاستقبال، بالدالّة نفسها (`app_reception_transition`)
-   * — أيّهما سبق سُجِّل، وظهر عند الآخر فورًا. «دخل» يفتح الزيارة ثمّ السجلّ
-   * الطبّي، فما يكتبه الطبيب يُعلَّق بالزيارة الصحيحة.
-   *
-   * والطبيب لا يملك «وصل» ولا «نداء»: هما للاستقبال (قرار المالك).
+   * الخطوات نفسها في لوحة الاستقبال وبقاعدتها (`app_reception_transition`)،
+   * عبر `app_doctor_queue_step` التي تُنبّه الاستقبال فورًا (نافذة وصوت):
+   * «نداء» يطلب المريض إلى غرفة الطبيب، و«دخل» يفتح الزيارة ثمّ السجلّ الطبّي،
+   * و«خرج» يُنهيها فيعرف الاستقبال أنّ المريض للمحاسبة أو موعد المتابعة.
+   * «وصل» يبقى للاستقبال وحده (قرار المالك).
    */
   const step = useMutation({
     mutationFn: async ({ appointmentId, action }: { appointmentId: string; action: QueueAction }) => {
-      const { error } = await supabase.rpc("app_reception_transition", {
+      const { error } = await supabase.rpc("app_doctor_queue_step", {
         p_appointment_id: appointmentId,
         p_action: action,
-        p_reason: null,
       });
       if (error) throw error;
       return { appointmentId, action };
@@ -457,8 +455,10 @@ function TodayPanel() {
       if (action === "start") {
         toast({ title: "دخل المريض — فُتحت الزيارة" });
         navigate(`/medical-records?appointmentId=${appointmentId}`);
+      } else if (action === "call" || action === "recall") {
+        toast({ title: "نُودي المريض", description: "نُبِّه الاستقبال ليرسله إليك." });
       } else {
-        toast({ title: "خرج المريض" });
+        toast({ title: "خرج المريض", description: "نُبِّه الاستقبال." });
       }
     },
     onError: (error: unknown) =>
@@ -503,8 +503,8 @@ function TodayPanel() {
             مرضى اليوم
           </CardTitle>
           <CardDescription>
-            وصل ← نداء ← دخل ← خرج. الاستقبال يسجّل الوصول والنداء، و«دخل» و«خرج» منك أو منه —
-            وما يسجّله أحدكما يظهر عند الآخر فورًا.
+            وصل ← نداء ← دخل ← خرج. الاستقبال يسجّل الوصول. «نداء» و«دخل» و«خرج» منك تُنبّه الاستقبال
+            فورًا بنافذة وصوت، وما يسجّله أحدكما يظهر عند الآخر.
           </CardDescription>
         </div>
         <Button variant="ghost" onClick={() => setMineOnly((v) => !v)}>
@@ -537,10 +537,16 @@ function TodayPanel() {
             <TableBody>
               {rows.map((r) => {
                 const stage = queueStage(r.status);
-                const action = primaryQueueAction(r.status, "doctor");
                 // أزرار الطبيب على مرضاه وحدهم — «عرض كل الأطباء» للاطّلاع
-                const allowed =
-                  action !== null && isMine(r) && can(QUEUE_ACTION_PERMISSION[action]);
+                const actions = (
+                  stage === "waiting"
+                    ? (["call", "start"] as QueueAction[])
+                    : stage === "called"
+                      ? (["recall", "start"] as QueueAction[])
+                      : stage === "inside"
+                        ? (["finish"] as QueueAction[])
+                        : []
+                ).filter((a) => isMine(r) && can(QUEUE_ACTION_PERMISSION[a]));
                 const times: Record<string, string | null> = {
                   arrived: r.checked_in_1_at,
                   called: r.called_at,
@@ -579,18 +585,34 @@ function TodayPanel() {
                       ) : "—"}
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-xs">
-                      <div className="flex items-center gap-1.5">
-                        {allowed && action ? (
-                          <Button
-                            size="sm"
-                            variant={action === "start" ? "default" : "outline"}
-                            title={QUEUE_ACTION_HINT[action]}
-                            disabled={step.isPending}
-                            onClick={() => step.mutate({ appointmentId: r.appointment_id, action })}
-                          >
-                            {action === "start" ? <Play className="h-3.5 w-3.5" /> : <LogOut className="h-3.5 w-3.5" />}
-                            {QUEUE_ACTION_LABEL[action]}
-                          </Button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {actions.length > 0 ? (
+                          actions.map((action) => (
+                            <Button
+                              key={action}
+                              size="lg"
+                              variant={action === "start" ? "default" : "outline"}
+                              className={`h-11 min-w-[6.5rem] gap-2 px-5 text-base font-semibold ${
+                                action === "call" || action === "recall"
+                                  ? "border-amber-500 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                                  : action === "finish"
+                                    ? "border-rose-500 bg-rose-50 text-rose-800 hover:bg-rose-100"
+                                    : ""
+                              }`}
+                              title={QUEUE_ACTION_HINT[action]}
+                              disabled={step.isPending}
+                              onClick={() => step.mutate({ appointmentId: r.appointment_id, action })}
+                            >
+                              {action === "start" ? (
+                                <Play className="h-5 w-5" />
+                              ) : action === "finish" ? (
+                                <LogOut className="h-5 w-5" />
+                              ) : (
+                                <Megaphone className="h-5 w-5" />
+                              )}
+                              {QUEUE_ACTION_LABEL[action]}
+                            </Button>
+                          ))
                         ) : stage === "booked" ? (
                           <span className="text-muted-foreground">لم يصل بعد</span>
                         ) : null}
