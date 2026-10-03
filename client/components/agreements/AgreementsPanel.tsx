@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Ban, CheckCircle2, FileSignature, FileSpreadsheet, Pencil, Plus, Printer, RefreshCw, X } from "lucide-react";
+import { Archive, Ban, CheckCircle2, FileSignature, FileSpreadsheet, Pencil, Plus, Printer, RefreshCw, X } from "lucide-react";
 import { formatAmount } from "@/lib/locale";
 import { errorMessage } from "@/lib/error-message";
 import { usePermissions } from "@/lib/permissions";
@@ -11,6 +11,7 @@ import { buildXlsx, downloadBlob } from "@/lib/xlsx-writer";
 import { printAgreement, useAgreementList, type AgreementFilters, type AgreementListRow } from "@/lib/agreements";
 import AgreementDialog, { AgreementDisableDialog, invalidateAgreementQueries } from "@/components/agreements/AgreementDialog";
 import { useDoctorsAndClinics } from "@/components/agreements/QuoteEditorDialog";
+import LegacyAgreementsDialog from "@/components/agreements/LegacyAgreementsDialog";
 import PatientPicker from "@/components/shared/PatientPicker";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -56,6 +57,7 @@ export default function AgreementsPanel({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dialog, setDialog] = useState<{ open: boolean; agreementId: string | null }>({ open: false, agreementId: null });
   const [disableTarget, setDisableTarget] = useState<AgreementListRow | null>(null);
+  const [legacyOpen, setLegacyOpen] = useState(false);
 
   const filters: AgreementFilters = {
     patientId: patientId ?? filterPatient?.id ?? null,
@@ -194,6 +196,16 @@ export default function AgreementsPanel({
           <Button size="sm" variant="ghost" disabled={rows.length === 0} onClick={exportRows}>
             <FileSpreadsheet className="h-4 w-4" />
             تصدير
+          </Button>
+          {/* أرشيف Kizen: اتفاقيات النظام السابق ببنودها وفواتيرها، و«تنشيط»
+              يجعل أيًّا منها حيّةً هنا تُعدَّل وتُفوتَر (0217). */}
+          <Button
+            size="sm"
+            className="ms-auto bg-amber-500 text-white shadow-sm hover:bg-amber-600"
+            onClick={() => setLegacyOpen(true)}
+          >
+            <Archive className="h-4 w-4" />
+            أرشيف اتفاقيات النظام السابق (Kizen)
           </Button>
         </div>
 
@@ -361,6 +373,19 @@ export default function AgreementsPanel({
           organizationId={organizationId}
           agreementId={dialog.agreementId}
           patientId={patientId ?? null}
+        />
+      )}
+      {legacyOpen && (
+        <LegacyAgreementsDialog
+          open={legacyOpen}
+          onOpenChange={setLegacyOpen}
+          organizationId={organizationId}
+          patientId={patientId ?? null}
+          onOpenAgreement={(agreementId) => {
+            setLegacyOpen(false);
+            setSelectedId(agreementId);
+            setDialog({ open: true, agreementId });
+          }}
         />
       )}
       <AgreementDisableDialog agreement={disableTarget} onOpenChange={(value) => !value && setDisableTarget(null)} />
