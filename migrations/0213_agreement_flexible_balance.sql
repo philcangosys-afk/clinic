@@ -242,40 +242,53 @@ end $$;
 
 -- ── ٦) حفظ عرض السعر: لا تنزل قيمة البند تحت ما فُوتر منه (بالمبلغ) ─────────
 -- كان: «لا يُنزَل العدد تحت المفوتَر بالكمية» — فبندٌ بكمية 1 فُوتر منه
--- دفعتان يصير «مفوتَرًا 2» فيُرفض حفظ العرض. تعديلٌ موضعيّ في الدالّة (0193).
+-- دفعتان يصير «مفوتَرًا 2» فيُرفض حفظ العرض. تعديلٌ موضعيّ في الدالّة (0193)،
+-- يطابق الفحص بنمطٍ لا يتأثّر بالمسافات ولا بنصّ الرسالة، ولكلّ نسخها.
 do $$
 declare
-  v_src text;
-  v_old text := $old$      select coalesce(b.invoiced_qty, 0) into v_done
-        from v_agreement_item_balances b where b.agreement_item_id = v_line_id;
-      if v_qty < coalesce(v_done, 0) then
-        raise exception 'السطر % («%»): فُوتر منه % فلا يُنزَل عدده إلى %',
-          v_idx, v_item.name_ar, v_done, v_qty;
-      end if;$old$;
-  v_new text := $new$      -- 0213: بالمبلغ قبل الضريبة لا بالكمية
-      select coalesce(b.invoiced_taxable, 0) into v_done
-        from v_agreement_item_balances b where b.agreement_item_id = v_line_id;
-      if v_taxable < coalesce(v_done, 0) - 0.01 then
-        raise exception 'السطر % («%»): فُوتر منه % فلا تنزل قيمته إلى %',
-          v_idx, v_item.name_ar, round(v_done, 2), v_taxable;
-      end if;$new$;
+  r       record;
+  v_src   text;
+  v_new   text;
+  v_n     integer := 0;
+  v_done  integer := 0;
+  v_pat   text := 'select\s+coalesce\(\s*b\.invoiced_qty\s*,\s*0\s*\)\s+into\s+v_done\s+' ||
+                  'from\s+v_agreement_item_balances\s+b\s+where\s+b\.agreement_item_id\s*=\s*v_line_id\s*;\s*' ||
+                  'if\s+v_qty\s*<\s*coalesce\(\s*v_done\s*,\s*0\s*\)\s+then\s+' ||
+                  'raise\s+exception\s+''[^'']*''\s*,\s*v_idx\s*,\s*v_item\.name_ar\s*,\s*v_done\s*,\s*v_qty\s*;\s*' ||
+                  'end\s+if\s*;';
+  v_rep   text := E'-- 0213: بالمبلغ قبل الضريبة لا بالكمية\n' ||
+                  E'      select coalesce(b.invoiced_taxable, 0) into v_done\n' ||
+                  E'        from v_agreement_item_balances b where b.agreement_item_id = v_line_id;\n' ||
+                  E'      if v_taxable < coalesce(v_done, 0) - 0.01 then\n' ||
+                  E'        raise exception ''السطر % («%»): فُوتر منه % فلا تنزل قيمته إلى %'',\n' ||
+                  E'          v_idx, v_item.name_ar, round(v_done, 2), v_taxable;\n' ||
+                  E'      end if;';
 begin
-  select pg_get_functiondef(p.oid) into v_src
-    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-   where n.nspname = 'public' and p.proname = 'app_save_agreement_quote';
-  if v_src is null then
-    raise notice 'app_save_agreement_quote غير موجودة — لا تعديل';
-    return;
+  for r in
+    select p.oid, p.oid::regprocedure::text as sig
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.proname = 'app_save_agreement_quote'
+  loop
+    v_src := replace(pg_get_functiondef(r.oid), chr(13), '');
+    if position('0213: بالمبلغ' in v_src) > 0 then
+      v_done := v_done + 1;
+      continue;
+    end if;
+    v_new := regexp_replace(v_src, v_pat, v_rep);
+    if v_new = v_src then
+      raise notice 'لم يُعثر على فحص الكمية في % — تُركت', r.sig;
+      continue;
+    end if;
+    if position('v_taxable' in v_src) = 0 then
+      raise exception 'الدالّة % بلا v_taxable — أوقفتُ الترحيل كلّه (لم يُطبَّق شيء)', r.sig;
+    end if;
+    execute v_new;
+    v_n := v_n + 1;
+  end loop;
+  if v_n + v_done = 0 then
+    raise exception 'لم يُعثر على فحص المفوتَر بالكمية في app_save_agreement_quote — أوقفتُ الترحيل كلّه (لم يُطبَّق شيء)';
   end if;
-  v_src := replace(v_src, chr(13), '');
-  if position('0213: بالمبلغ' in v_src) > 0 then
-    raise notice 'حفظ عرض السعر بالمبلغ مسبقًا';
-    return;
-  end if;
-  if position(v_old in v_src) = 0 then
-    raise exception 'نصّ فحص المفوتَر في app_save_agreement_quote تغيّر — أوقفتُ الترحيل كلّه (لم يُطبَّق شيء)';
-  end if;
-  execute replace(v_src, v_old, v_new);
+  raise notice 'حفظ عرض السعر بالمبلغ: عُدِّلت % ومسبقًا %', v_n, v_done;
 end $$;
 
 commit;
