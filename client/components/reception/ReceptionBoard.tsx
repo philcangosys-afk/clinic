@@ -198,6 +198,7 @@ export default function ReceptionBoard({
   highlightAppointmentId,
   day,
   readOnly = false,
+  lockDoctor = false,
 }: {
   organizationId: string | undefined;
   organizationName: string;
@@ -219,6 +220,8 @@ export default function ReceptionBoard({
    * شيئًا، وهو أسوأ من شريطٍ للعرض فقط.
    */
   onDoctorFilterChange?: (doctorId: string) => void;
+  /** حساب الطبيب: الطابور على بطاقته وحده، بلا شريط الأطباء الآخرين. */
+  lockDoctor?: boolean;
   /** صفّ الموعد القادم من `?appointmentId=` يُبرَز حتى يُعثَر عليه بلا بحث. */
   highlightAppointmentId?: string | null;
   /** اليوم المعروض (YYYY-MM-DD) — اليوم افتراضًا (0176). */
@@ -437,7 +440,7 @@ export default function ReceptionBoard({
             </Badge>
           )}
         </div>
-        {doctorFilter !== "all" && (
+        {doctorFilter !== "all" && !lockDoctor && (
           <span className="text-xs text-muted-foreground">
             مصفّى على: {doctors.find((doctor) => doctor.id === doctorFilter)?.name_ar ?? "طبيب"}
           </span>
@@ -451,7 +454,7 @@ export default function ReceptionBoard({
         * الترقية كان الشريط يختفي بصمت، فيظنّ من يقرأ الشاشة أنّ الميزة لم
         * تُبنَ — وهو أسوأ من خطأٍ ظاهر: يُرسل الشكوى إلى الجهة الخطأ.
         */}
-      {!readOnly && pressure.isError && (
+      {!readOnly && !lockDoctor && pressure.isError && (
         <p className="rounded-md border border-amber-400 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-100">
           تعذّر قراءة ضغط الأطباء: {errorMessage(pressure.error)} — إن لم تُنفَّذ
           الترقية <span className="font-mono">0158</span> على القاعدة بعد، نفِّذها
@@ -460,7 +463,7 @@ export default function ReceptionBoard({
       )}
 
       {/* ضغط الطابور على كل طبيب — بطاقةٌ لكل طبيبٍ له منتظرون، والضغط يحصر */}
-      {!readOnly && pressure.isSuccess && (pressure.data ?? []).length > 0 && (
+      {!readOnly && !lockDoctor && pressure.isSuccess && (pressure.data ?? []).length > 0 && (
         <div className="flex flex-wrap gap-2">
           <button
             type="button"

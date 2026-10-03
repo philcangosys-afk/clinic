@@ -54,7 +54,12 @@ const TYPE_META: Record<string, { label: string; icon: typeof Inbox }> = {
  * وترك الطلب بلا مخرج كان يُخلّف طلبات منتهية فعلًا معلّقة في عدّاد
  * الاستقبال الأحمر، أو يدفع لحجز موعد ثانٍ للمريض لأن الطلب يبدو غير منجَز.
  */
-export default function DoctorRequests() {
+/**
+ * `doctorId`: حساب الطبيب — طلباته هو وحده، للاطّلاع بلا أزرار الاستقبال
+ * («تمّ»/«احجز»/«تجاهل» عمل الاستقبال، وترفضها القاعدة لغيره).
+ */
+export default function DoctorRequests({ doctorId = null }: { doctorId?: string | null } = {}) {
+  const ownOnly = Boolean(doctorId);
   const { organization } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -62,16 +67,16 @@ export default function DoctorRequests() {
   const [rejectReason, setRejectReason] = useState("");
 
   const requests = useQuery({
-    queryKey: ["reception-requests", organization?.id],
+    queryKey: ["reception-requests", organization?.id, doctorId],
     enabled: Boolean(organization?.id),
     queryFn: async () => {
-      const { data, error } = await supabase
+      let query = supabase
         .from("v_reception_requests")
         .select("*")
         .eq("organization_id", organization!.id)
-        .eq("status", "pending")
-        .order("requested_at", { ascending: false })
-        .limit(100);
+        .eq("status", "pending");
+      if (doctorId) query = query.eq("doctor_id", doctorId);
+      const { data, error } = await query.order("requested_at", { ascending: false }).limit(100);
       if (error) throw error;
       return (data ?? []) as any[];
     },
@@ -132,11 +137,13 @@ export default function DoctorRequests() {
       <CardHeader className="pb-3">
         <CardTitle className="flex items-center gap-2 text-base">
           <Inbox className="h-4 w-4" />
-          طلبات الأطباء
+          {ownOnly ? "طلباتك إلى الاستقبال" : "طلبات الأطباء"}
           {rows.length > 0 && <Badge variant="destructive">{rows.length}</Badge>}
         </CardTitle>
         <CardDescription>
-          ما يرسله الأطباء من عياداتهم — استدعاء مريض، تحصيل، متابعة، ملاحظة.
+          {ownOnly
+            ? "ما أرسلته ولم يُنجَز بعد — يصلك تنبيه حين يطّلع عليه الاستقبال أو ينفّذه."
+            : "ما يرسله الأطباء من عياداتهم — استدعاء مريض، تحصيل، متابعة، ملاحظة."}
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-2">
@@ -195,7 +202,7 @@ export default function DoctorRequests() {
                 </p>
               </div>
 
-              <div className="flex shrink-0 items-center gap-2">
+              {!ownOnly && <div className="flex shrink-0 items-center gap-2">
                 {isFollowUp ? (
                   <>
                     {/* معرّف الطلب في الرابط: نافذة الحجز تستدعي
@@ -245,7 +252,7 @@ export default function DoctorRequests() {
                     </Button>
                   </>
                 )}
-              </div>
+              </div>}
             </div>
           );
         })}

@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { useSessionDoctor } from "@/lib/session-doctor";
 import { supabase } from "@/lib/supabase";
 import { QUEUE_ACTION_HINT, QUEUE_ACTION_LABEL } from "@/lib/queue-steps";
 import { formatTime } from "@/lib/locale";
@@ -172,7 +173,13 @@ export default function Reception() {
   const highlightAppointmentId = searchParams.get("appointmentId");
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [doctorFilter, setDoctorFilter] = useState("all");
+  const [doctorChoice, setDoctorFilter] = useState("all");
+  /**
+   * حساب الطبيب يرى طابوره وطلباته وحده: المرشّح مثبَّت على بطاقته، وأدوات
+   * الاستقبال العامّة (الموجودون الآن، كشف الدخول، الإحصائيات) مخفيّة عنه.
+   */
+  const { doctorId: scopeDoctorId, isDoctorScope } = useSessionDoctor();
+  const doctorFilter = isDoctorScope && scopeDoctorId ? scopeDoctorId : doctorChoice;
   const [search, setSearch] = useState("");
   const [searchScopes, setSearchScopes] = useState<PatientSearchScope[]>([]);
   const [addOpen, setAddOpen] = useState(false);
@@ -294,19 +301,21 @@ export default function Reception() {
               </Button>
             )}
           </div>
-          <Select value={doctorFilter} onValueChange={setDoctorFilter}>
-            <SelectTrigger className="w-44">
-              <SelectValue placeholder="كل الأطباء" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">كل الأطباء</SelectItem>
-              {(doctors.data ?? []).map((doctor) => (
-                <SelectItem key={doctor.id} value={doctor.id}>
-                  د. {doctor.name_ar}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {!isDoctorScope && (
+            <Select value={doctorFilter} onValueChange={setDoctorFilter}>
+              <SelectTrigger className="w-44">
+                <SelectValue placeholder="كل الأطباء" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">كل الأطباء</SelectItem>
+                {(doctors.data ?? []).map((doctor) => (
+                  <SelectItem key={doctor.id} value={doctor.id}>
+                    د. {doctor.name_ar}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <div className="flex rounded-md border p-0.5">
             <button
               type="button"
@@ -323,6 +332,7 @@ export default function Reception() {
               بطاقات
             </button>
           </div>
+          {!isDoctorScope && (<>
           <Button variant="outline" onClick={() => setToolOpen("present")}>
             الموجودون الآن
           </Button>
@@ -332,6 +342,7 @@ export default function Reception() {
           <Button variant="outline" onClick={() => setToolOpen("stats")}>
             إحصائيات الدور
           </Button>
+          </>)}
           {canManageQueue && isToday && <Button onClick={() => setAddOpen(true)}>
             <Plus className="h-4 w-4" />
             إضافة للطابور
@@ -341,7 +352,7 @@ export default function Reception() {
 
       {/* ما يرسله الأطباء يظهر فوق الطابور: طلبٌ ينتظر لا يجوز أن يُدفن
           تحت الطابور حتى يسأل عنه الطبيب. */}
-      <DoctorRequests />
+      <DoctorRequests doctorId={isDoctorScope ? scopeDoctorId : null} />
 
       {highlightMissing && (
         <Card className="border-amber-300 bg-amber-50/60">
@@ -413,6 +424,7 @@ export default function Reception() {
           clinics={clinicList.data ?? []}
           doctorFilter={doctorFilter}
           onDoctorFilterChange={setDoctorFilter}
+          lockDoctor={isDoctorScope}
           highlightAppointmentId={highlightAppointmentId}
           day={day}
           readOnly={!isToday}

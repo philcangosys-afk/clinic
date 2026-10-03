@@ -10,6 +10,8 @@ import {
   WalletCards,
 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { useSessionDoctor } from "@/lib/session-doctor";
+import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -27,9 +29,17 @@ function endOfTodayIso() {
   return date.toISOString();
 }
 
-function useDashboardStats(organizationId: string | undefined) {
+/** حالات «في انتظار الطبيب الآن» */
+const WAITING_STATUSES = ["arrived", "checked_in", "waiting", "walk_in", "called"];
+
+/**
+ * `doctorId`: حساب الطبيب — كلّ رقمٍ وكلّ قائمةٍ له وحده (مرضاه، مواعيده،
+ * من ينتظره). أرقام المنشأة كلّها (الأطباء، المستحقات، تنبيهات الانتهاء)
+ * ليست من شأن شاشته.
+ */
+function useDashboardStats(organizationId: string | undefined, doctorId: string | null) {
   return useQuery({
-    queryKey: ["dashboard-stats", organizationId],
+    queryKey: ["dashboard-stats", organizationId, doctorId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       /**
@@ -38,6 +48,53 @@ function useDashboardStats(organizationId: string | undefined) {
        * تجمع أرقام العيادتين معًا — عدد المرضى وإجمالي المديونية وطابور
        * اليوم — بلا أي إشارة إلى أن الأرقام ليست لهذه العيادة وحدها.
        */
+      const todayList = () => {
+        let query = supabase
+          .from("appointments")
+          .select("id, scheduled_start, status, patient:patients!appointments_patient_tenant_fk(name_ar, file_number), doctor:doctors!appointments_doctor_tenant_fk(name_ar)")
+          .eq("organization_id", organizationId)
+          .gte("scheduled_start", startOfTodayIso())
+          .lte("scheduled_start", endOfTodayIso());
+        if (doctorId) query = query.eq("doctor_id", doctorId);
+        return query.order("scheduled_start", { ascending: true }).limit(8);
+      };
+      // عدّاد «مواعيد اليوم» استعلامٌ مستقلّ، لأن القائمة مسقوفة بثمانية للعرض.
+      const todayCountQuery = (statuses?: string[]) => {
+        let query = supabase
+          .from("appointments")
+          .select("id", { count: "exact", head: true })
+          .eq("organization_id", organizationId)
+          .gte("scheduled_start", startOfTodayIso())
+          .lte("scheduled_start", endOfTodayIso());
+        if (doctorId) query = query.eq("doctor_id", doctorId);
+        if (statuses) query = query.in("status", statuses);
+        return query;
+      };
+
+      if (doctorId) {
+        const [patients, todayAppointments, todayCount, waitingNow, doneToday] = await Promise.all([
+          supabase
+            .from("v_doctor_patients")
+            .select("id", { count: "exact", head: true })
+            .eq("organization_id", organizationId)
+            .eq("doctor_id", doctorId),
+          todayList(),
+          todayCountQuery(),
+          todayCountQuery(WAITING_STATUSES),
+          todayCountQuery(["completed"]),
+        ]);
+        return {
+          patientsCount: patients.count ?? 0,
+          doctorsCount: 0,
+          todayAppointments: todayAppointments.data ?? [],
+          todayAppointmentsCount: todayCount.count ?? 0,
+          unpaidTotal: 0,
+          alertsCount: 0,
+          waitingNow: waitingNow.count ?? 0,
+          doneToday: doneToday.count ?? 0,
+        };
+      }
+
       const [patients, doctors, todayAppointments, todayCount, unpaidInvoices, alerts] = await Promise.all([
         supabase
           .from("patients")
@@ -48,24 +105,8 @@ function useDashboardStats(organizationId: string | undefined) {
           .select("id", { count: "exact", head: true })
           .eq("organization_id", organizationId)
           .eq("is_enabled", true),
-        supabase
-          .from("appointments")
-          .select("id, scheduled_start, status, patient:patients!appointments_patient_tenant_fk(name_ar, file_number), doctor:doctors!appointments_doctor_tenant_fk(name_ar)")
-          .eq("organization_id", organizationId)
-          .gte("scheduled_start", startOfTodayIso())
-          .lte("scheduled_start", endOfTodayIso())
-          .order("scheduled_start", { ascending: true })
-          .limit(8),
-        // عدّاد «مواعيد اليوم» استعلامٌ مستقلّ، لأن القائمة أعلاه مسقوفة
-        // بثمانية للعرض. كان العدّاد يقرأ طول القائمة المسقوفة، فعيادة فيها
-        // أربعون موعدًا اليوم ترى الرقم 8 — رقمٌ يبدو حقيقيًّا تمامًا لأنه
-        // يتحرّك بين صفر وثمانية، ويقرأ منه المدير حجم يومه.
-        supabase
-          .from("appointments")
-          .select("id", { count: "exact", head: true })
-          .eq("organization_id", organizationId)
-          .gte("scheduled_start", startOfTodayIso())
-          .lte("scheduled_start", endOfTodayIso()),
+        todayList(),
+        todayCountQuery(),
         supabase
           .from("sales_invoices")
           .select("remaining_amount")
@@ -89,6 +130,8 @@ function useDashboardStats(organizationId: string | undefined) {
         todayAppointmentsCount: todayCount.count ?? 0,
         unpaidTotal,
         alertsCount: alerts.count ?? 0,
+        waitingNow: 0,
+        doneToday: 0,
       };
     },
   });
@@ -101,9 +144,20 @@ const QUICK_LINKS = [
   { to: "/billing", label: "الفوترة والمدفوعات", icon: WalletCards, hint: "الفواتير والسندات" },
 ];
 
+/** الوصول السريع لحساب الطبيب — شاشاته هو، بلا الفوترة. */
+const DOCTOR_QUICK_LINKS = [
+  { to: "/doctor-workspace", label: "مساحة عمل الطبيب", icon: Stethoscope, hint: "من ينتظرك الآن وطلباتك" },
+  { to: "/patients", label: "مرضاي", icon: UsersRound, hint: "من تعالجهم أو لك معهم موعد" },
+  { to: "/appointments", label: "مواعيدي", icon: CalendarDays, hint: "جدولك اليومي" },
+  { to: "/alerts", label: "التنبيهات", icon: BadgeAlert, hint: "ما أُرسل إليك" },
+];
+
 export default function Index() {
   const access = useOrganizationAccess();
-  const stats = useDashboardStats(access.organization?.id);
+  const { doctorId: scopeDoctorId, isDoctorScope } = useSessionDoctor();
+  const doctorView = isDoctorScope && Boolean(scopeDoctorId);
+  const stats = useDashboardStats(access.organization?.id, doctorView ? scopeDoctorId : null);
+  const quickLinks = doctorView ? DOCTOR_QUICK_LINKS : QUICK_LINKS;
 
   if (access.legacyMode) {
     return (
@@ -137,43 +191,49 @@ export default function Index() {
       <div>
         <h1 className="text-2xl font-bold">نظرة عامة</h1>
         <p className="text-sm text-muted-foreground">
-          ملخص سريع لحركة اليوم في {access.organization?.name ?? "منشأتك"}.
+          {doctorView
+            ? "يومك أنت: مرضاك ومواعيدك ومن ينتظرك."
+            : `ملخص سريع لحركة اليوم في ${access.organization?.name ?? "منشأتك"}.`}
         </p>
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <KpiCard
           icon={UsersRound}
-          label="إجمالي المرضى"
+          label={doctorView ? "مرضاي" : "إجمالي المرضى"}
           value={stats.data?.patientsCount}
           loading={stats.isLoading}
         />
         <KpiCard
           icon={Stethoscope}
-          label="الأطباء النشطون"
-          value={stats.data?.doctorsCount}
+          label={doctorView ? "في انتظارك الآن" : "الأطباء النشطون"}
+          value={doctorView ? stats.data?.waitingNow : stats.data?.doctorsCount}
           loading={stats.isLoading}
         />
         <KpiCard
           icon={CalendarDays}
-          label="مواعيد اليوم"
+          label={doctorView ? "مواعيدي اليوم" : "مواعيد اليوم"}
           value={stats.data?.todayAppointmentsCount}
           loading={stats.isLoading}
         />
-        <KpiCard
-          icon={WalletCards}
-          label="مستحقات غير مُحصّلة"
-          value={stats.data ? `${stats.data.unpaidTotal.toLocaleString("ar-SA")} ر.س` : undefined}
-          loading={stats.isLoading}
-          tone="warning"
-        />
+        {doctorView ? (
+          <KpiCard icon={Activity} label="أُنجز اليوم" value={stats.data?.doneToday} loading={stats.isLoading} />
+        ) : (
+          <KpiCard
+            icon={WalletCards}
+            label="مستحقات غير مُحصّلة"
+            value={stats.data ? `${stats.data.unpaidTotal.toLocaleString("ar-SA")} ر.س` : undefined}
+            loading={stats.isLoading}
+            tone="warning"
+          />
+        )}
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
-              <CardTitle>مواعيد اليوم</CardTitle>
+              <CardTitle>{doctorView ? "مواعيدي اليوم" : "مواعيد اليوم"}</CardTitle>
               <CardDescription>أقرب المواعيد المجدولة الآن</CardDescription>
             </div>
             <Button variant="outline" size="sm" asChild>
@@ -184,7 +244,9 @@ export default function Index() {
             {stats.isLoading &&
               Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className="h-12 w-full" />)}
             {!stats.isLoading && stats.data?.todayAppointments.length === 0 && (
-              <p className="py-6 text-center text-sm text-muted-foreground">لا توجد مواعيد مجدولة اليوم.</p>
+              <p className="py-6 text-center text-sm text-muted-foreground">
+                {doctorView ? "لا مواعيد لك اليوم." : "لا توجد مواعيد مجدولة اليوم."}
+              </p>
             )}
             {stats.data?.todayAppointments.map((appointment: any) => (
               <div
@@ -194,14 +256,15 @@ export default function Index() {
                 <div>
                   <p className="text-sm font-semibold">{appointment.patient?.name_ar ?? "—"}</p>
                   <p className="text-xs text-muted-foreground">
-                    د. {appointment.doctor?.name_ar ?? "—"} ·{" "}
+                    {!doctorView && <>د. {appointment.doctor?.name_ar ?? "—"} ·{" "}</>}
+                    {appointment.patient?.file_number != null && <>ملف {appointment.patient.file_number} ·{" "}</>}
                     {new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", {
                       hour: "2-digit",
                       minute: "2-digit",
                     })}
                   </p>
                 </div>
-                <Badge variant="secondary">{appointment.status}</Badge>
+                <Badge className={statusBadgeClass(appointment.status)}>{statusLabel(appointment.status)}</Badge>
               </div>
             ))}
             {/* البطاقة تعرض أقرب ثمانية. قول ذلك صريحًا يمنع قراءة القائمة
@@ -218,10 +281,10 @@ export default function Index() {
         <Card>
           <CardHeader>
             <CardTitle>الوصول السريع</CardTitle>
-            <CardDescription>الأساسيات التشغيلية اليومية</CardDescription>
+            <CardDescription>{doctorView ? "شاشاتك اليومية" : "الأساسيات التشغيلية اليومية"}</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
-            {QUICK_LINKS.map((link) => (
+            {quickLinks.map((link) => (
               <Link
                 key={link.to}
                 to={link.to}
