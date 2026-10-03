@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, BellRing, LayoutGrid, Percent, Receipt, Save, Scissors, Trash2 } from "lucide-react";
+import { Ban, BellRing, FileMinus2, LayoutGrid, Percent, Receipt, Save, Scissors, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount } from "@/lib/locale";
@@ -14,6 +14,7 @@ import {
   useAgreementVat,
   useQuoteLines,
   type AgreementListRow,
+  type QuoteLineRow,
 } from "@/lib/agreements";
 import ServiceBrowserDialog, { type PickedService } from "@/components/billing/ServiceBrowserDialog";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import AgreementSettlementDialog from "@/components/agreements/AgreementSettlementDialog";
 
 /**
  * عرض سعر تابع لاتفاقية — كشاشة الفاتورة، لكنّه مرن.
@@ -133,6 +135,7 @@ export default function QuoteEditorDialog({
   const [lines, setLines] = useState<DraftLine[]>([]);
   const [dirty, setDirty] = useState(false);
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [settleOpen, setSettleOpen] = useState(false);
   const [generalDiscount, setGeneralDiscount] = useState("");
   const [loadedFor, setLoadedFor] = useState<string | null>(null);
 
@@ -183,6 +186,33 @@ export default function QuoteEditorDialog({
     setDirty(false);
     setLoadedFor(key);
   }, [open, quoteId, quote, existingLines.data, loadedFor]);
+
+  // ما فُوتر من كلّ بند يتحدّث مع القاعدة (فوترة أو «تعديل فوترة بدون ضريبة»
+  // في نافذةٍ أخرى) دون أن يمسّ ما يُعدَّل في العرض (0219)
+  useEffect(() => {
+    if (!existingLines.data) return;
+    const fresh = new Map<string, QuoteLineRow>(existingLines.data.map((row) => [row.id, row]));
+    setLines((prev) => {
+      let changed = false;
+      const next = prev.map((line) => {
+        const row = line.id ? fresh.get(line.id) : undefined;
+        if (!row) return line;
+        const invoicedAmount = Number(row.invoiced_amount) || 0;
+        const invoicedTaxable = Number(row.invoiced_taxable) || 0;
+        const invoicedQty = Number(row.invoiced_qty);
+        if (
+          invoicedAmount === line.invoicedAmount &&
+          invoicedTaxable === line.invoicedTaxable &&
+          invoicedQty === line.invoicedQty
+        ) {
+          return line;
+        }
+        changed = true;
+        return { ...line, invoicedAmount, invoicedTaxable, invoicedQty };
+      });
+      return changed ? next : prev;
+    });
+  }, [existingLines.data]);
 
   const vatContext = { rate: vat.data?.rate ?? 0, patientExempt: vat.data?.patientExempt ?? false };
   // عمود «باركود المصدر» كـKizen، ويُخفى إن لم يكن لأيّ بندٍ باركود فيتّسع الجدول.
@@ -484,6 +514,27 @@ export default function QuoteEditorDialog({
               فوترة
             </Button>
           )}
+          {/* 0219: مبلغٌ دُفع بفاتورةٍ من ملفّ المريض لا من الاتفاقية — يُخصم
+              من البنود بلا فاتورة جديدة ولا ضريبة، بمرجع تلك الفاتورة. */}
+          {canInvoice && quoteId && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-violet-300 text-violet-700 hover:bg-violet-50"
+              disabled={
+                dirty || save.isPending || isCancelled || remainingTaxable <= 0.009 || agreement.is_disabled || debtCancelled
+              }
+              title={
+                dirty
+                  ? "احفظ العرض أوّلًا"
+                  : "خصم مبلغٍ دُفع بفاتورةٍ أخرى من متبقّي الاتفاقية — بلا فاتورة جديدة ولا ضريبة"
+              }
+              onClick={() => setSettleOpen(true)}
+            >
+              <FileMinus2 className="h-4 w-4" />
+              تعديل فوترة بدون ضريبة
+            </Button>
+          )}
           {canNotify && !isCancelled && (
             <Button
               size="sm"
@@ -773,6 +824,14 @@ export default function QuoteEditorDialog({
           doctorId={doctorId === NONE ? agreement?.doctor_id ?? null : doctorId}
         />
       </DialogContent>
+      {settleOpen && quoteId && (
+        <AgreementSettlementDialog
+          open={settleOpen}
+          onOpenChange={setSettleOpen}
+          agreement={agreement}
+          lines={existingLines.data ?? []}
+        />
+      )}
     </Dialog>
   );
 }

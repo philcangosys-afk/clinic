@@ -77,9 +77,16 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   // ما فُعّل ولا يعرف المالك السبب.
   const accessible = useMemo(
     () =>
-      filterAccessibleModules(moduleRegistry, canAccess).filter((item) =>
-        demoRoleAllowsModule(isPreview ? role : null, item.id),
-      ),
+      // «الرئيسية» (نظرة عامة) لكلّ داخل (0220): هي الصفحة التي يفتح عليها
+      // النظام، وصفحتها بلا قيد — كانت تختفي من القائمة لمن لا يملك
+      // `core_dashboard.view` فيبقى تحت «لوحة التحكم» التنبيهات وحدها.
+      filterAccessibleModules(moduleRegistry, canAccess)
+        .concat(
+          moduleRegistry.filter(
+            (item) => item.id === "dashboard" && !filterAccessibleModules([item], canAccess).length,
+          ),
+        )
+        .filter((item) => item.id === "dashboard" || demoRoleAllowsModule(isPreview ? role : null, item.id)),
     [canAccess, role, isPreview],
   );
   // مفتاحٌ نصّيّ ثابت: لا يتغيّر بتغيّر مرجع المصفوفة وحده
