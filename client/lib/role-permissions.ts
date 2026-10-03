@@ -79,6 +79,7 @@ export const MODULE_LABELS: Record<string, string> = {
   purchasing: "المشتريات والموردون",
   catalog: "الأصناف والخدمات",
   billing: "الفوترة والمدفوعات",
+  agreements: "اتفاقيات المرضى",
   cashier: "الصندوق",
   accounting: "المحاسبة",
   insurance: "التأمين والمطالبات",
@@ -105,6 +106,8 @@ const MODULE_SECTION: Record<string, string> = {
   patients: "الاستقبال والمرضى",
   visits: "الاستقبال والمرضى",
   portal: "الاستقبال والمرضى",
+  // الاتفاقيات مستقلّة عن الفوترة (0209): الطبيب ينشئها ولا يفوتر
+  agreements: "الاستقبال والمرضى",
 
   doctors: "الطبّ والعيادات",
   doctor_workspace: "الطبّ والعيادات",
