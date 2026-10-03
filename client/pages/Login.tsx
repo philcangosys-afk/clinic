@@ -1,6 +1,8 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import {
+  ArrowRight,
   BarChart3,
   CalendarCheck2,
   Eye,
@@ -9,10 +11,10 @@ import {
   LockKeyhole,
   Mail,
   ReceiptText,
+  Search,
   ShieldCheck,
   Stethoscope,
   UsersRound,
-  Wallet,
   type LucideIcon,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -24,7 +26,7 @@ import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
 
 /**
- * شاشة الدخول — بالبريد وكلمة المرور.
+ * شاشة الدخول — باختيار الاسم ثم كلمة المرور (0218)، أو بالبريد.
  *
  * **ما كان قبلها:** من يفتح العنوان يدخل النظام بلا حساب، ويختار «صفة»
  * للمعاينة باسمٍ يكتبه بنفسه. كان ذلك مقبولًا وهو نظامُ تجربةٍ بلا بيانات
@@ -46,36 +48,82 @@ const FEATURES: { icon: LucideIcon; title: string; text: string }[] = [
   { icon: BarChart3, title: "التقارير والمحاسبة", text: "اليومية والصناديق والمشتريات وتقارير الإيراد" },
 ];
 
-const ROLES: { icon: LucideIcon; label: string }[] = [
-  { icon: ShieldCheck, label: "الإدارة" },
-  { icon: CalendarCheck2, label: "الاستقبال" },
-  { icon: Stethoscope, label: "الأطباء" },
-  { icon: Wallet, label: "المحاسبة" },
-];
+type DirectoryUser = {
+  user_id: string;
+  display_name: string;
+  role_label: string;
+  group_key: "doctor" | "staff";
+  email: string;
+};
+
+/**
+ * أسماء من يدخلون النظام (0218): الحاسوب الواحد يعمل عليه أكثر من طبيب،
+ * فيختار الداخل اسمه ثم يكتب كلمة مروره — بدل أن يكتب بريده كلّ مرّة أو
+ * يجد بريد زميله محفوظًا. إن تعذّرت القائمة (ترقيةٌ لم تُنفَّذ، أو انقطاع)
+ * بقي الدخول بالبريد كما كان.
+ */
+function useLoginDirectory() {
+  return useQuery({
+    queryKey: ["login-directory"],
+    staleTime: 5 * 60 * 1000,
+    retry: 1,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_login_directory");
+      if (error) throw error;
+      return (data ?? []) as DirectoryUser[];
+    },
+  });
+}
 
 export default function Login() {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { session, loading, refresh } = useOrganizationAccess();
+  const directory = useLoginDirectory();
+  const [mode, setMode] = useState<"names" | "email">("names");
+  const [picked, setPicked] = useState<DirectoryUser | null>(null);
+  const [filter, setFilter] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [logoBroken, setLogoBroken] = useState(false);
+  // حقل كلمة المرور للقراءة فقط حتى يُلمس: المتصفّح لا يملؤه بكلمةٍ محفوظة
+  // لزميلٍ دخل من الحاسوب نفسه.
+  const [passwordArmed, setPasswordArmed] = useState(false);
 
   // جلسةٌ قائمة ⇒ لا معنى لشاشة الدخول
   useEffect(() => {
     if (!loading && session) navigate("/", { replace: true });
   }, [loading, session, navigate]);
 
+  const users = directory.data ?? [];
+  const namesAvailable = users.length > 0;
+  const effectiveMode = namesAvailable ? mode : "email";
+  const loginEmail = effectiveMode === "names" ? picked?.email ?? "" : email.trim();
+
+  const visibleUsers = useMemo(() => {
+    const term = filter.trim();
+    return term ? users.filter((u) => u.display_name.includes(term) || u.role_label.includes(term)) : users;
+  }, [users, filter]);
+  const doctors = visibleUsers.filter((u) => u.group_key === "doctor");
+  const staff = visibleUsers.filter((u) => u.group_key !== "doctor");
+
+  const pick = (user: DirectoryUser | null) => {
+    setPicked(user);
+    setPassword("");
+    setShowPassword(false);
+    setPasswordArmed(false);
+  };
+
   const signIn = async (event: FormEvent) => {
     event.preventDefault();
-    if (!email.trim() || !password) return;
+    if (!loginEmail || !password) return;
     setBusy(true);
     try {
       const { error } = await supabase.auth.signInWithPassword({
-        email: email.trim().toLowerCase(),
+        email: loginEmail.toLowerCase(),
         password,
       });
       if (error) {
@@ -86,12 +134,15 @@ export default function Login() {
         const raw = String(error.message ?? "");
         throw new Error(
           /invalid login credentials/i.test(raw)
-            ? "البريد الإلكتروني أو كلمة المرور غير صحيحة"
+            ? effectiveMode === "names"
+              ? "كلمة المرور غير صحيحة"
+              : "البريد الإلكتروني أو كلمة المرور غير صحيحة"
             : /email not confirmed/i.test(raw)
               ? "الحساب غير مفعَّل — راجع مسؤول النظام"
               : raw || "تعذّر تسجيل الدخول",
         );
       }
+      setPassword("");
       await refresh();
       navigate("/", { replace: true });
     } catch (error: unknown) {
@@ -102,13 +153,17 @@ export default function Login() {
   };
 
   const resetPassword = async () => {
-    if (!email.trim()) {
-      toast({ variant: "destructive", title: "اكتب بريدك أولًا", description: "نرسل الرابط إلى بريدك المسجَّل" });
+    if (!loginEmail) {
+      toast({
+        variant: "destructive",
+        title: effectiveMode === "names" ? "اختر اسمك أولًا" : "اكتب بريدك أولًا",
+        description: "نرسل الرابط إلى البريد المسجَّل",
+      });
       return;
     }
     setResetting(true);
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+      const { error } = await supabase.auth.resetPasswordForEmail(loginEmail.toLowerCase(), {
         redirectTo: `${window.location.origin}/login`,
       });
       if (error) throw error;
@@ -124,6 +179,66 @@ export default function Login() {
     }
   };
 
+  const passwordBlock = (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center justify-between">
+        <Label htmlFor="login-password">كلمة المرور</Label>
+        <button
+          type="button"
+          className="text-xs font-medium text-primary hover:underline disabled:opacity-50"
+          disabled={resetting}
+          onClick={() => void resetPassword()}
+        >
+          {resetting ? "جارٍ الإرسال..." : "نسيت كلمة المرور؟"}
+        </button>
+      </div>
+      <div className="relative">
+        <LockKeyhole className="absolute right-3 top-2.5 h-4 w-4 text-muted-foreground" />
+        <Input
+          id="login-password"
+          name="zc-login-secret"
+          type={showPassword ? "text" : "password"}
+          dir="ltr"
+          autoComplete="off"
+          data-lpignore="true"
+          data-1p-ignore="true"
+          readOnly={!passwordArmed}
+          onFocus={() => setPasswordArmed(true)}
+          className="pl-9 pr-9"
+          placeholder="••••••••"
+          value={password}
+          onChange={(event) => setPassword(event.target.value)}
+          autoFocus={effectiveMode === "names"}
+        />
+        <button
+          type="button"
+          className="absolute left-3 top-2.5 text-muted-foreground hover:text-foreground"
+          onClick={() => setShowPassword((current) => !current)}
+          aria-label={showPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
+        >
+          {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+        </button>
+      </div>
+    </div>
+  );
+
+  const userButton = (user: DirectoryUser) => (
+    <button
+      key={user.user_id}
+      type="button"
+      onClick={() => pick(user)}
+      className="flex items-center gap-3 rounded-xl border bg-background px-3 py-2.5 text-start transition-colors hover:border-primary hover:bg-primary/5"
+    >
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
+        {user.display_name.replace(/^د\.\s*/, "").trim().charAt(0) || "؟"}
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-sm font-semibold">{user.display_name}</span>
+        <span className="block truncate text-[11px] text-muted-foreground">{user.role_label}</span>
+      </span>
+    </button>
+  );
+
   return (
     <main dir="rtl" className="grid min-h-screen grid-cols-1 bg-background lg:grid-cols-2">
       {/* ── نموذج الدخول (يمين الشاشة في العربية) ─────────────────────────── */}
@@ -136,82 +251,119 @@ export default function Login() {
 
           <div className="rounded-2xl border bg-card p-6 shadow-sm sm:p-8">
             <h2 className="text-2xl font-bold">مرحبًا بعودتك</h2>
-            <p className="mt-1 text-sm text-muted-foreground">ادخل ببريدك وكلمة مرورك للمتابعة</p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              {effectiveMode === "names"
+                ? picked
+                  ? "اكتب كلمة مرورك للمتابعة"
+                  : "اختر اسمك ثم اكتب كلمة مرورك"
+                : "ادخل ببريدك وكلمة مرورك للمتابعة"}
+            </p>
 
-            <form className="mt-6 flex flex-col gap-4" onSubmit={signIn}>
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="login-email">البريد الإلكتروني</Label>
-                <div className="relative">
-                  <Mail className="absolute right-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="login-email"
-                    type="email"
-                    dir="ltr"
-                    autoComplete="username"
-                    inputMode="email"
-                    className="pr-9"
-                    placeholder="name@example.com"
-                    value={email}
-                    onChange={(event) => setEmail(event.target.value)}
-                    autoFocus
-                  />
-                </div>
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="login-password">كلمة المرور</Label>
-                  <button
-                    type="button"
-                    className="text-xs font-medium text-primary hover:underline disabled:opacity-50"
-                    disabled={resetting}
-                    onClick={() => void resetPassword()}
-                  >
-                    {resetting ? "جارٍ الإرسال..." : "نسيت كلمة المرور؟"}
-                  </button>
-                </div>
-                <div className="relative">
-                  <LockKeyhole className="absolute right-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="login-password"
-                    type={showPassword ? "text" : "password"}
-                    dir="ltr"
-                    autoComplete="current-password"
-                    className="pl-9 pr-9"
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                  />
-                  <button
-                    type="button"
-                    className="absolute left-3 top-2.5 text-muted-foreground hover:text-foreground"
-                    onClick={() => setShowPassword((current) => !current)}
-                    aria-label={showPassword ? "إخفاء كلمة المرور" : "إظهار كلمة المرور"}
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-
-              <Button type="submit" className="mt-2 h-11 text-base" disabled={busy || !email.trim() || !password}>
-                {busy ? "جارٍ الدخول..." : "تسجيل الدخول"}
-              </Button>
-            </form>
-
-            <div className="mt-6 border-t pt-4">
-              <p className="text-center text-[11px] font-medium text-muted-foreground">الأدوار في النظام</p>
-              <div className="mt-3 grid grid-cols-4 gap-2">
-                {ROLES.map(({ icon: Icon, label }) => (
-                  <div
-                    key={label}
-                    className="flex flex-col items-center gap-1 rounded-lg border bg-muted/30 px-1 py-2 text-[10px] text-muted-foreground"
-                  >
-                    <Icon className="h-4 w-4 text-primary" />
-                    {label}
+            {effectiveMode === "names" && !picked && (
+              <div className="mt-5 flex flex-col gap-3">
+                {users.length > 8 && (
+                  <div className="relative">
+                    <Search className="absolute right-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      className="pr-9"
+                      placeholder="ابحث عن اسمك"
+                      value={filter}
+                      autoComplete="off"
+                      onChange={(event) => setFilter(event.target.value)}
+                    />
                   </div>
-                ))}
+                )}
+                <div className="flex max-h-[52vh] flex-col gap-3 overflow-y-auto pe-1">
+                  {doctors.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                        <Stethoscope className="h-3.5 w-3.5" /> الأطباء
+                      </p>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{doctors.map(userButton)}</div>
+                    </div>
+                  )}
+                  {staff.length > 0 && (
+                    <div className="flex flex-col gap-2">
+                      <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                        <ShieldCheck className="h-3.5 w-3.5" /> الإدارة والموظفون
+                      </p>
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{staff.map(userButton)}</div>
+                    </div>
+                  )}
+                  {visibleUsers.length === 0 && (
+                    <p className="py-4 text-center text-sm text-muted-foreground">لا اسم بهذا البحث.</p>
+                  )}
+                </div>
               </div>
-              <p className="mt-3 text-center text-[11px] text-muted-foreground">
+            )}
+
+            {effectiveMode === "names" && picked && (
+              <form className="mt-5 flex flex-col gap-4" onSubmit={signIn} autoComplete="off">
+                <div className="flex items-center gap-3 rounded-xl border bg-muted/30 px-3 py-2.5">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary text-base font-bold text-primary-foreground">
+                    {picked.display_name.replace(/^د\.\s*/, "").trim().charAt(0) || "؟"}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-semibold">{picked.display_name}</span>
+                    <span className="block truncate text-xs text-muted-foreground">{picked.role_label}</span>
+                  </span>
+                  <Button type="button" variant="ghost" size="sm" className="gap-1" onClick={() => pick(null)}>
+                    <ArrowRight className="h-4 w-4" />
+                    تغيير
+                  </Button>
+                </div>
+                {passwordBlock}
+                <Button type="submit" className="mt-1 h-11 text-base" disabled={busy || !password}>
+                  {busy ? "جارٍ الدخول..." : "تسجيل الدخول"}
+                </Button>
+              </form>
+            )}
+
+            {effectiveMode === "email" && (
+              <form className="mt-6 flex flex-col gap-4" onSubmit={signIn} autoComplete="off">
+                <div className="flex flex-col gap-1.5">
+                  <Label htmlFor="login-email">البريد الإلكتروني</Label>
+                  <div className="relative">
+                    <Mail className="absolute right-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      id="login-email"
+                      type="email"
+                      dir="ltr"
+                      autoComplete="off"
+                      inputMode="email"
+                      className="pr-9"
+                      placeholder="name@example.com"
+                      value={email}
+                      onChange={(event) => setEmail(event.target.value)}
+                      autoFocus
+                    />
+                  </div>
+                </div>
+                {passwordBlock}
+                <Button type="submit" className="mt-2 h-11 text-base" disabled={busy || !email.trim() || !password}>
+                  {busy ? "جارٍ الدخول..." : "تسجيل الدخول"}
+                </Button>
+              </form>
+            )}
+
+            <div className="mt-4 text-center">
+              {namesAvailable && (
+                <button
+                  type="button"
+                  className="text-xs font-medium text-primary hover:underline"
+                  onClick={() => {
+                    setMode(effectiveMode === "names" ? "email" : "names");
+                    pick(null);
+                  }}
+                >
+                  {effectiveMode === "names" ? "الدخول بالبريد الإلكتروني" : "الدخول باختيار الاسم"}
+                </button>
+              )}
+              {directory.isLoading && <p className="text-xs text-muted-foreground">جارٍ تحميل الأسماء...</p>}
+            </div>
+
+            <div className="mt-4 border-t pt-4">
+              <p className="text-center text-[11px] text-muted-foreground">
                 لا حساب لك؟ الحسابات يُنشئها مسؤول النظام من شاشة الموظفين
               </p>
             </div>

@@ -35,6 +35,35 @@ function readDeviceName(): string {
 
 const deviceName = typeof window === "undefined" ? "" : readDeviceName();
 
+/**
+ * الجلسة تنتهي بإغلاق المتصفّح (0218).
+ *
+ * الحاسوب الواحد في العيادة يعمل عليه أكثر من طبيب: من أغلق المتصفّح أو
+ * الحاسوب ثم فتحه وجد شاشة الدخول لا حساب من كان قبله. Supabase يحفظ
+ * الجلسة في التخزين المحلّيّ فتبقى أيّامًا، فتُربط بكعكة جلسةٍ بلا تاريخ
+ * انتهاء — يمحوها المتصفّح عند إغلاقه، وتشترك فيها كلّ ألسنته. إن لم توجد
+ * عند الإقلاع فهذا فتحٌ جديد للمتصفّح: تُمحى الجلسة المحفوظة قبل إنشاء
+ * العميل، فيبدأ بلا دخول.
+ */
+const LIVE_COOKIE = "zc_live";
+
+function endSessionIfBrowserWasClosed() {
+  try {
+    const alive = document.cookie.split(";").some((part) => part.trim().startsWith(`${LIVE_COOKIE}=`));
+    if (!alive) {
+      for (const key of Object.keys(window.localStorage)) {
+        if (/^sb-.+-auth-token$/.test(key)) window.localStorage.removeItem(key);
+      }
+    }
+    const secure = window.location.protocol === "https:" ? "; Secure" : "";
+    document.cookie = `${LIVE_COOKIE}=1; path=/; SameSite=Lax${secure}`;
+  } catch {
+    // متصفّحٌ يمنع الكعكات أو التخزين: تبقى الجلسة كما كانت
+  }
+}
+
+if (typeof window !== "undefined") endSessionIfBrowserWasClosed();
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     persistSession: true,

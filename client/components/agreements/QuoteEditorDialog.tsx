@@ -766,7 +766,12 @@ export default function QuoteEditorDialog({
           </div>
         )}
 
-        <ServiceBrowserDialog open={browserOpen} onOpenChange={setBrowserOpen} onSelect={addService} />
+        <ServiceBrowserDialog
+          open={browserOpen}
+          onOpenChange={setBrowserOpen}
+          onSelect={addService}
+          doctorId={doctorId === NONE ? agreement?.doctor_id ?? null : doctorId}
+        />
       </DialogContent>
     </Dialog>
   );

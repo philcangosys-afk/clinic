@@ -41,6 +41,8 @@ function useDashboardStats(organizationId: string | undefined, doctorId: string 
   return useQuery({
     queryKey: ["dashboard-stats", organizationId, doctorId],
     enabled: Boolean(organizationId),
+    // لوحة الطبيب تتجدّد وحدها: «في انتظارك» يتغيّر مع كلّ تسجيل وصول
+    refetchInterval: doctorId ? 30_000 : false,
     queryFn: async () => {
       /**
        * كل عدّاد مقيَّد بالمؤسسة النشطة: سياسة RLS تسمح بكل مؤسسة **ينتمي
@@ -204,17 +206,26 @@ export default function Index() {
           value={stats.data?.patientsCount}
           loading={stats.isLoading}
         />
+        {/* للطبيب (0218): «في انتظارك» و«مواعيدي اليوم» بلونٍ مختلف، تومض ما
+            دام فيها أحد، وتُفتح بالضغط — منتظِرك في مساحة عملك، ومواعيدك في
+            شاشة المواعيد. */}
         <KpiCard
           icon={Stethoscope}
           label={doctorView ? "في انتظارك الآن" : "الأطباء النشطون"}
           value={doctorView ? stats.data?.waitingNow : stats.data?.doctorsCount}
           loading={stats.isLoading}
+          to={doctorView ? "/doctor-workspace" : undefined}
+          tone={doctorView ? "attention" : undefined}
+          blink={doctorView && (stats.data?.waitingNow ?? 0) > 0}
         />
         <KpiCard
           icon={CalendarDays}
           label={doctorView ? "مواعيدي اليوم" : "مواعيد اليوم"}
           value={stats.data?.todayAppointmentsCount}
           loading={stats.isLoading}
+          to={doctorView ? "/appointments" : undefined}
+          tone={doctorView ? "info" : undefined}
+          blink={doctorView && (stats.data?.todayAppointmentsCount ?? 0) > 0}
         />
         {doctorView ? (
           <KpiCard icon={Activity} label="أُنجز اليوم" value={stats.data?.doneToday} loading={stats.isLoading} />
@@ -311,34 +322,69 @@ export default function Index() {
   );
 }
 
+const KPI_TONES = {
+  warning: { card: "", icon: "bg-amber-100 text-amber-700", value: "" },
+  attention: {
+    card: "border-amber-400 bg-amber-50 hover:bg-amber-100",
+    icon: "bg-amber-500 text-white",
+    value: "text-amber-800",
+  },
+  info: {
+    card: "border-sky-400 bg-sky-50 hover:bg-sky-100",
+    icon: "bg-sky-600 text-white",
+    value: "text-sky-800",
+  },
+} as const;
+
 function KpiCard({
   icon: Icon,
   label,
   value,
   loading,
   tone,
+  to,
+  blink,
 }: {
   icon: typeof UsersRound;
   label: string;
   value: string | number | undefined;
   loading: boolean;
-  tone?: "warning";
+  tone?: keyof typeof KPI_TONES;
+  /** يُفتح بالضغط */
+  to?: string;
+  /** يومض ما دام فيه شيء */
+  blink?: boolean;
 }) {
-  return (
-    <Card>
+  const style = tone ? KPI_TONES[tone] : null;
+  const card = (
+    <Card className={`${style?.card ?? ""} ${to ? "cursor-pointer transition-colors" : ""} ${blink ? "animate-pulse" : ""}`}>
       <CardContent className="flex items-center gap-3 py-5">
-        <div
-          className={`flex h-11 w-11 items-center justify-center rounded-xl ${
-            tone === "warning" ? "bg-amber-100 text-amber-700" : "bg-primary/10 text-primary"
-          }`}
-        >
+        <div className={`relative flex h-11 w-11 items-center justify-center rounded-xl ${style?.icon ?? "bg-primary/10 text-primary"}`}>
           <Icon className="h-5 w-5" />
+          {blink && (
+            <span className="absolute -left-1 -top-1 flex h-3 w-3">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75" />
+              <span className="relative inline-flex h-3 w-3 rounded-full bg-rose-500" />
+            </span>
+          )}
         </div>
-        <div>
+        <div className="flex-1">
           <p className="text-xs text-muted-foreground">{label}</p>
-          {loading ? <Skeleton className="mt-1 h-5 w-16" /> : <p className="text-lg font-bold">{value ?? "—"}</p>}
+          {loading ? (
+            <Skeleton className="mt-1 h-5 w-16" />
+          ) : (
+            <p className={`text-lg font-bold ${style?.value ?? ""}`}>{value ?? "—"}</p>
+          )}
         </div>
+        {to && <ArrowLeft className="h-4 w-4 text-muted-foreground" />}
       </CardContent>
     </Card>
+  );
+  return to ? (
+    <Link to={to} className="block rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-primary">
+      {card}
+    </Link>
+  ) : (
+    card
   );
 }

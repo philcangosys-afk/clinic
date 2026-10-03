@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
+import { useIsMyPatient } from "@/lib/doctor-patient-scope";
 
 const BUCKET = "result-attachments";
 
@@ -22,10 +23,12 @@ const BUCKET = "result-attachments";
  */
 export default function RadiologyImagesTab({ patientId }: { patientId: string }) {
   const [openingId, setOpeningId] = useState<string | null>(null);
+  // الطبيب يرى أشعة مرضاه وحدهم (0218)
+  const scope = useIsMyPatient(patientId);
 
   const images = useQuery({
     queryKey: ["patient-radiology-images", patientId],
-    enabled: Boolean(patientId),
+    enabled: Boolean(patientId) && scope.allowed,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_patient_radiology_images")
@@ -56,6 +59,20 @@ export default function RadiologyImagesTab({ patientId }: { patientId: string })
     }
   };
 
+  if (scope.checking) return <Skeleton className="h-48 w-full" />;
+  if (!scope.allowed) {
+    return (
+      <Card>
+        <CardContent className="grid place-items-center gap-2 py-10 text-center">
+          <ImageOff className="h-9 w-9 text-muted-foreground" />
+          <span className="font-medium">أشعة هذا المريض لأطبائه</span>
+          <span className="text-sm text-muted-foreground">
+            ليس من مرضاك — لا أنت طبيبه المعالج، ولا لك معه موعدٌ أو زيارة.
+          </span>
+        </CardContent>
+      </Card>
+    );
+  }
   if (images.isLoading) return <Skeleton className="h-48 w-full" />;
 
   const rows = images.data ?? [];

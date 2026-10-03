@@ -67,6 +67,7 @@ function initialsOf(name: string | undefined | null) {
 function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
   const { canAccess, organization, branch, session } = useOrganizationAccess();
   const location = useLocation();
+  const navigate = useNavigate();
   const { doctorId: scopeDoctorId, isDoctorScope } = useSessionDoctor();
   const { role, isPreview } = useDemoRole();
 
@@ -124,7 +125,22 @@ function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
     }
   }, [activeSection]);
 
+  /**
+   * «لوحة التحكم» (0218): الضغط عليها يفتح «نظرة عامة» مباشرةً ويُبقي
+   * قائمتها مفتوحة — كان يطويها أو يفتحها فقط، فيضغط الداخل مرّتين ليصل.
+   * والضغط عليها وهو في «نظرة عامة» وقائمتها مفتوحة يطويها كعادتها.
+   */
+  const dashboardSection = useMemo(
+    () => groups.find((g) => g.items.some((i) => i.id === "dashboard"))?.section,
+    [groups],
+  );
+
   const toggleSection = (section: string) => {
+    if (section === dashboardSection && !(location.pathname === "/" && openSections.has(section))) {
+      setOpenSections((prev) => (prev.has(section) ? prev : new Set(prev).add(section)));
+      if (location.pathname !== "/") navigate("/");
+      return;
+    }
     setOpenSections((prev) => {
       const next = new Set(prev);
       if (next.has(section)) next.delete(section);

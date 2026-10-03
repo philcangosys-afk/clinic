@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Search, ShieldCheck, Stethoscope } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus, Search, ShieldCheck, Stethoscope } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
@@ -19,6 +19,48 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { GridFooterCount } from "@/components/shell/ScreenToolbar";
+import { usePermissions } from "@/lib/permissions";
+import ServiceEditorDialog from "@/components/catalog/ServiceEditorDialog";
+
+/** مجال الخدمة والطبيب (0218): أسنان أو جلدية. */
+type ServiceDomain = "dental" | "derma";
+const DOMAIN_LABEL: Record<ServiceDomain, string> = { dental: "خدمات الأسنان", derma: "خدمات الجلدية" };
+
+/**
+ * خدمات تخصّص الطبيب وحده (0218): طبيب الأسنان لا تظهر له خدمات الجلدية،
+ * والعكس. مجال الطبيب من تخصّصه أو عياداته (`v_doctor_service_domain`)،
+ * ومجال الخدمة من فئتها (`v_item_service_domain`). ما لا مجال له (كالإجازة
+ * المرضية) يظهر للجميع، والطبيب الذي لم يُعرف مجاله يرى الكلّ. وإن لم تُنفَّذ
+ * الترقية 0218 بعد فلا حصر — المنتقي يعمل كما كان.
+ */
+function useDoctorServiceDomain(organizationId: string | undefined, doctorId: string | null | undefined, open: boolean) {
+  return useQuery({
+    queryKey: ["service-domain", organizationId, doctorId ?? null],
+    enabled: open && Boolean(organizationId && doctorId),
+    staleTime: 10 * 60 * 1000,
+    queryFn: async () => {
+      const doctor = await supabase
+        .from("v_doctor_service_domain")
+        .select("service_domain")
+        .eq("doctor_id", doctorId!)
+        .maybeSingle();
+      if (doctor.error) return null;
+      const domain = ((doctor.data as { service_domain: ServiceDomain | null } | null)?.service_domain ?? null);
+      if (!domain) return null;
+      const items = await supabase
+        .from("v_item_service_domain")
+        .select("item_id, service_domain")
+        .eq("organization_id", organizationId!)
+        .limit(5000);
+      if (items.error) return null;
+      const map = new Map<string, ServiceDomain | null>();
+      for (const row of (items.data ?? []) as { item_id: string; service_domain: ServiceDomain | null }[]) {
+        map.set(row.item_id, row.service_domain);
+      }
+      return { domain, map };
+    },
+  });
+}
 
 /**
  * منتقي الخدمات — شجرة التصنيفات على اليمين وشبكة الأصناف على اليسار.
@@ -82,15 +124,23 @@ export default function ServiceBrowserDialog({
   open,
   onOpenChange,
   onSelect,
+  doctorId,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSelect: (item: PickedService) => void;
+  /** طبيب الاتفاقية أو الملاحظة: تُعرض خدمات تخصّصه وحده (0218). */
+  doctorId?: string | null;
 }) {
   const { organization } = useOrganizationAccess();
+  const { can } = usePermissions();
+  const queryClient = useQueryClient();
   const [categoryId, setCategoryId] = useState("");
   const [term, setTerm] = useState("");
+  const [creating, setCreating] = useState(false);
   const subtree = useCategorySubtree("item_categories");
+  const scope = useDoctorServiceDomain(organization?.id, doctorId, open);
+  const canCreate = can("catalog.manage");
 
   /**
    * الأصناف تُجلب مرّةً للمنشأة ويُرشَّح داخل المتصفّح.
@@ -115,7 +165,15 @@ export default function ServiceBrowserDialog({
     },
   });
 
-  const all = items.data ?? [];
+  const all = useMemo(() => {
+    const rows = items.data ?? [];
+    const s = scope.data;
+    if (!s) return rows;
+    return rows.filter((row) => {
+      const domain = s.map.get(row.item_id) ?? null;
+      return domain === null || domain === s.domain;
+    });
+  }, [items.data, scope.data]);
 
   /** عدد الأصناف تحت كل تصنيف — يُعرض بجانب اسمه في الشجرة. */
   const counts = useMemo(() => {
@@ -176,6 +234,22 @@ export default function ServiceBrowserDialog({
             <span className="font-semibold"> بالسعر</span> — اكتب الرقم مباشرةً.
           </DialogDescription>
         </DialogHeader>
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {scope.data ? (
+            <Badge variant="outline" className="border-sky-400 bg-sky-50 text-sky-800">
+              {DOMAIN_LABEL[scope.data.domain]} فقط — حسب تخصّص الطبيب
+            </Badge>
+          ) : (
+            <span />
+          )}
+          {canCreate && (
+            <Button type="button" size="sm" variant="outline" className="gap-1" onClick={() => setCreating(true)}>
+              <Plus className="h-4 w-4" />
+              إضافة خدمة جديدة للكتالوج
+            </Button>
+          )}
+        </div>
 
         <div className="flex flex-col gap-3">
           <div className="relative">
@@ -310,6 +384,20 @@ export default function ServiceBrowserDialog({
           </p>
         </div>
       </DialogContent>
+      {creating && (
+        <ServiceEditorDialog
+          open={creating}
+          onOpenChange={(value) => {
+            setCreating(value);
+            if (!value) {
+              // الخدمة الجديدة تظهر في القائمة فورًا لتُختار
+              queryClient.invalidateQueries({ queryKey: ["service-browser"] });
+              queryClient.invalidateQueries({ queryKey: ["service-domain"] });
+            }
+          }}
+          itemId={null}
+        />
+      )}
     </Dialog>
   );
 }

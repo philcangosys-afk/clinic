@@ -1,4 +1,4 @@
-import { Fragment, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, ChevronDown, ChevronLeft, ExternalLink, Loader2, RotateCcw, Search } from "lucide-react";
 import { supabase } from "@/lib/supabase";
@@ -55,15 +55,28 @@ type LegacyAgreementRow = {
   items: LegacyItem[] | null;
   invoices: LegacyInvoiceRef[] | null;
   migrated_agreement_id: string | null;
-  migrated?: { agreement_number: number; is_disabled: boolean } | null;
+  migrated?: { agreement_number: number; is_disabled: boolean; doctor_id: string | null } | null;
   patient?: { name_ar: string; file_number: number | null } | null;
 };
+
+/** «د. ماجد» و«دكتور ماجد» و«ماجد» اسمٌ واحد، بلا تشكيلٍ ولا همزات. */
+function normalizeDoctorName(name: string) {
+  return name
+    .replace(/^\s*(?:(?:دكتورة|دكتور)\s+|د\s*\.\s*|د\s+)/, "")
+    .replace(/[أإآٱ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/ى/g, "ي")
+    .replace(/[\u064B-\u0652ـ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 export default function LegacyAgreementsDialog({
   open,
   onOpenChange,
   organizationId,
   patientId,
+  doctorScopeId,
   onOpenAgreement,
 }: {
   open: boolean;
@@ -71,6 +84,8 @@ export default function LegacyAgreementsDialog({
   organizationId: string | undefined;
   /** ملفّ مريض: اتفاقياته وحده. وبدونه: بحثٌ برقم الاتفاقية أو رقم الملف. */
   patientId?: string | null;
+  /** الطبيب الداخل (0218): اتفاقياته هو وحده — باسمه في Kizen أو بطبيب نسختها الحيّة. */
+  doctorScopeId?: string | null;
   onOpenAgreement: (agreementId: string) => void;
 }) {
   const queryClient = useQueryClient();
@@ -88,7 +103,7 @@ export default function LegacyAgreementsDialog({
       let query = supabase
         .from("legacy_agreements")
         .select(
-          "*, migrated:treatment_agreements(agreement_number, is_disabled), patient:patients!legacy_agreements_patient_id_fkey(name_ar, file_number)",
+          "*, migrated:treatment_agreements(agreement_number, is_disabled, doctor_id), patient:patients!legacy_agreements_patient_id_fkey(name_ar, file_number)",
         )
         .eq("organization_id", organizationId!)
         .order("agreement_date", { ascending: false, nullsFirst: false })
@@ -121,7 +136,27 @@ export default function LegacyAgreementsDialog({
     onError: (error: unknown) => toast({ variant: "destructive", title: "تعذّر التنشيط", description: errorMessage(error) }),
   });
 
-  const rows = list.data ?? [];
+  const scopeDoctor = useQuery({
+    queryKey: ["legacy-agreements-doctor-name", doctorScopeId ?? null],
+    enabled: open && Boolean(doctorScopeId),
+    staleTime: 10 * 60 * 1000,
+    queryFn: async () => {
+      const { data, error } = await supabase.from("doctors").select("name_ar").eq("id", doctorScopeId!).maybeSingle();
+      if (error) throw error;
+      return (data as { name_ar: string } | null)?.name_ar ?? "";
+    },
+  });
+
+  const rows = useMemo(() => {
+    const all = list.data ?? [];
+    if (!doctorScopeId) return all;
+    const mine = normalizeDoctorName(scopeDoctor.data ?? "");
+    return all.filter((row) => {
+      if (row.migrated?.doctor_id) return row.migrated.doctor_id === doctorScopeId;
+      const theirs = normalizeDoctorName(row.doctor_name ?? "");
+      return Boolean(mine && theirs) && (theirs === mine || theirs.includes(mine) || mine.includes(theirs));
+    });
+  }, [list.data, doctorScopeId, scopeDoctor.data]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

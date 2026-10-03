@@ -4,6 +4,7 @@ import { Archive, Ban, CheckCircle2, FileSignature, FileSpreadsheet, Pencil, Plu
 import { formatAmount } from "@/lib/locale";
 import { errorMessage } from "@/lib/error-message";
 import { usePermissions } from "@/lib/permissions";
+import { useSessionDoctor } from "@/lib/session-doctor";
 import { useMemberNames } from "@/lib/member-names";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { useToast } from "@/hooks/use-toast";
@@ -47,6 +48,12 @@ export default function AgreementsPanel({
   const { organization } = useOrganizationAccess();
   const canManage = can("agreements.manage");
   const patientMode = Boolean(patientId);
+  /**
+   * الطبيب يرى اتفاقياته هو وحده (0218): المريض الذي عند ماجد وأُرسل إلى
+   * محمد له اتفاقيةٌ مع ماجد — لا تظهر لمحمد. والاستقبال والإدارة يرون الكلّ.
+   */
+  const { doctorId: sessionDoctorId, isDoctorScope } = useSessionDoctor();
+  const scopeDoctorId = isDoctorScope ? sessionDoctorId : null;
 
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -63,7 +70,7 @@ export default function AgreementsPanel({
     patientId: patientId ?? filterPatient?.id ?? null,
     from: from || null,
     to: to || null,
-    doctorId: doctorId === ALL ? null : doctorId,
+    doctorId: scopeDoctorId ?? (doctorId === ALL ? null : doctorId),
     activeOnly,
   };
   const list = useAgreementList(organizationId, filters);
@@ -219,6 +226,7 @@ export default function AgreementsPanel({
             <Label className="text-xs">إلى تاريخ</Label>
             <Input type="date" className="h-9 w-40" value={to} onChange={(event) => setTo(event.target.value)} />
           </div>
+          {!scopeDoctorId && (
           <div className="flex flex-col gap-1">
             <Label className="text-xs">الطبيب</Label>
             <Select value={doctorId} onValueChange={setDoctorId}>
@@ -231,6 +239,7 @@ export default function AgreementsPanel({
               </SelectContent>
             </Select>
           </div>
+          )}
           <div className="flex flex-col gap-1">
             <Label className="text-xs">المستخدم</Label>
             <Select value={registrarId} onValueChange={setRegistrarId}>
@@ -381,6 +390,7 @@ export default function AgreementsPanel({
           onOpenChange={setLegacyOpen}
           organizationId={organizationId}
           patientId={patientId ?? null}
+          doctorScopeId={scopeDoctorId}
           onOpenAgreement={(agreementId) => {
             setLegacyOpen(false);
             setSelectedId(agreementId);

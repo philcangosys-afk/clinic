@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/sheet";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import FollowUpServicesList from "@/components/follow-up/FollowUpServicesList";
 import {
   FOLLOW_UP_COLUMNS,
   FOLLOW_UP_QUERY_KEYS,
@@ -205,7 +206,8 @@ export default function FollowUpAlerts() {
                     )}
                   </div>
                   {row.body && <p className="mt-1.5 whitespace-pre-wrap text-sm">{row.body}</p>}
-                  {row.amount !== null && (
+                  <FollowUpServicesList services={row.services} />
+                  {row.amount !== null && !row.services?.length && (
                     <p className="mt-1 text-sm font-semibold tabular-nums">المبلغ: {formatAmount(row.amount)}</p>
                   )}
                   <div className="mt-2 flex justify-end">

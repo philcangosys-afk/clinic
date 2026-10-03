@@ -1,7 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, CheckCheck, CheckCircle2, Eye, Loader2, Search, Send, X } from "lucide-react";
+import {
+  AlertTriangle,
+  BellRing,
+  CheckCheck,
+  CheckCircle2,
+  Eye,
+  ListPlus,
+  Loader2,
+  Plus,
+  Search,
+  Send,
+  Trash2,
+  X,
+} from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { useSessionDoctor } from "@/lib/session-doctor";
@@ -25,6 +38,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import FollowUpServicesList from "@/components/follow-up/FollowUpServicesList";
+import ServiceBrowserDialog, { type PickedService } from "@/components/billing/ServiceBrowserDialog";
 import {
   FOLLOW_UP_COLUMNS,
   FOLLOW_UP_QUERY_KEYS,
@@ -105,6 +120,22 @@ export default function FollowUpCenter() {
 
 type PickedPatient = { id: string; name_ar: string; file_number: number | null };
 
+/** خدمةٌ في ملاحظة الطبيب (0218): السعر والخصم هنا فقط — الكتالوج لا يتغيّر. */
+type DraftService = {
+  key: string;
+  item_id: string;
+  name: string;
+  code: string | null;
+  catalogPrice: number;
+  price: string;
+  discount: string;
+};
+
+const num = (value: string) => {
+  const n = Number(String(value).replace(/,/g, ""));
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+};
+
 /** عباراتٌ تُضاف إلى النصّ بضغطة — تبقى نصًّا يُعدَّل لا خيارًا مُقيِّدًا. */
 const QUICK_PHRASES = ["اعملوا له خصم ", "يدفع كاملًا", "هذه الجلسة مجانًا", "حصّلوا المتبقّي"];
 
@@ -133,6 +164,26 @@ function ComposeCard({
   const [term, setTerm] = useState("");
   const [body, setBody] = useState("");
   const [urgent, setUrgent] = useState(false);
+  const [services, setServices] = useState<DraftService[]>([]);
+  const [browserOpen, setBrowserOpen] = useState(false);
+
+  const addService = (item: PickedService) =>
+    setServices((prev) => [
+      ...prev,
+      {
+        key: `${item.id}-${Date.now()}`,
+        item_id: item.id,
+        name: item.name_ar,
+        code: item.code,
+        catalogPrice: Number(item.price ?? 0),
+        price: String(Number(item.price ?? 0)),
+        discount: "0",
+      },
+    ]);
+  const updateService = (key: string, patch: Partial<DraftService>) =>
+    setServices((prev) => prev.map((s) => (s.key === key ? { ...s, ...patch } : s)));
+  const servicesTotal = services.reduce((sum, s) => sum + Math.max(num(s.price) - num(s.discount), 0), 0);
+  const badDiscount = services.some((s) => num(s.discount) > num(s.price));
 
   const todayPatients = useQuery({
     queryKey: ["follow-up-today-patients", organizationId, doctorId],
@@ -187,7 +238,8 @@ function ComposeCard({
     mutationFn: async () => {
       if (!patient) throw new Error("اختر المريض");
       const text = body.trim();
-      if (!text) throw new Error("اكتب الملاحظة");
+      if (!text && services.length === 0) throw new Error("اكتب الملاحظة أو اختر خدمة");
+      if (badDiscount) throw new Error("الخصم أكبر من السعر في إحدى الخدمات");
       const { error } = await supabase.rpc("app_send_follow_up_note", {
         p_organization_id: organizationId,
         p_patient_id: patient.id,
@@ -195,6 +247,15 @@ function ComposeCard({
         p_doctor_id: doctorId,
         p_priority: urgent ? "urgent" : "routine",
         p_branch_id: branchId,
+        ...(services.length > 0
+          ? {
+              p_services: services.map((s) => ({
+                item_id: s.item_id,
+                price: num(s.price),
+                discount: num(s.discount),
+              })),
+            }
+          : {}),
       });
       if (error) throw error;
     },
@@ -204,6 +265,7 @@ function ComposeCard({
       setBody("");
       setUrgent(false);
       setTerm("");
+      setServices([]);
       FOLLOW_UP_QUERY_KEYS.forEach((key) => queryClient.invalidateQueries({ queryKey: [...key] }));
     },
     onError: (error: unknown) =>
@@ -319,9 +381,127 @@ function ComposeCard({
           )}
         </div>
 
-        {/* ٢) الملاحظة */}
+        {/* ٢) الخدمات (0218): من الكتالوج بحسب تخصّص الطبيب، والسعر والخصم يُعدَّلان
+            هنا فقط — لا فاتورة، تصل إلى الاستقبال مع الملاحظة. */}
         <div className="flex flex-col gap-2">
-          <Label htmlFor="follow-up-body">الملاحظة</Label>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Label>الخدمات</Label>
+            <Button type="button" size="sm" variant="outline" className="h-8 gap-1" onClick={() => setBrowserOpen(true)}>
+              <ListPlus className="h-4 w-4" />
+              اختر خدمة / تصفّح الخدمات
+            </Button>
+          </div>
+          {services.length > 0 && (
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full min-w-[34rem] text-sm">
+                <thead className="bg-muted/50 text-xs">
+                  <tr className="[&>th]:px-2 [&>th]:py-1.5 [&>th]:text-start [&>th]:font-medium">
+                    <th>الخدمة</th>
+                    <th className="w-28">المبلغ</th>
+                    <th className="w-28">الخصم</th>
+                    <th className="w-24">الصافي</th>
+                    <th className="w-10" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {services.map((s) => {
+                    const net = num(s.price) - num(s.discount);
+                    return (
+                      <tr key={s.key} className="border-t [&>td]:px-2 [&>td]:py-1.5">
+                        <td>
+                          <span className="font-medium">{s.name}</span>
+                          {s.code && <span className="ms-1 font-mono text-[10px] text-muted-foreground">{s.code}</span>}
+                          {num(s.price) !== s.catalogPrice && (
+                            <span className="block text-[10px] text-muted-foreground">
+                              سعر الكتالوج {formatAmount(s.catalogPrice)} — لا يتغيّر
+                            </span>
+                          )}
+                        </td>
+                        <td>
+                          <Input
+                            inputMode="decimal"
+                            className="h-8 tabular-nums"
+                            value={s.price}
+                            onChange={(event) => updateService(s.key, { price: event.target.value })}
+                          />
+                        </td>
+                        <td>
+                          <Input
+                            inputMode="decimal"
+                            className={cn("h-8 tabular-nums", num(s.discount) > num(s.price) && "border-destructive")}
+                            value={s.discount}
+                            onChange={(event) => updateService(s.key, { discount: event.target.value })}
+                          />
+                        </td>
+                        <td className={cn("font-semibold tabular-nums", net < 0 && "text-destructive")}>
+                          {formatAmount(Math.max(net, 0))}
+                        </td>
+                        <td>
+                          <Button
+                            type="button"
+                            size="icon"
+                            variant="ghost"
+                            className="h-7 w-7"
+                            aria-label="حذف الخدمة"
+                            onClick={() => setServices((prev) => prev.filter((x) => x.key !== s.key))}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t bg-muted/30 font-bold [&>td]:px-2 [&>td]:py-1.5">
+                    <td colSpan={3}>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 gap-1 px-2 text-xs font-medium"
+                        onClick={() => setBrowserOpen(true)}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                        خدمة أخرى
+                      </Button>
+                    </td>
+                    <td className="tabular-nums">{formatAmount(servicesTotal)}</td>
+                    <td />
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+          {services.length > 0 && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm font-medium text-red-700">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                تذكير: إذا كان دفع هذه الخدمة على أكثر من مقابلة (جلسات أو دفعات) فيجب إنشاء{" "}
+                {patient ? (
+                  <Link className="underline underline-offset-2" to={`/patients/${patient.id}?section=agreements`}>
+                    اتفاقية داخل ملف المريض
+                  </Link>
+                ) : (
+                  "اتفاقية داخل ملف المريض"
+                )}
+                . هذه الخدمات لا تُصدر فاتورة — تصل إلى الاستقبال فقط.
+              </span>
+            </div>
+          )}
+          <ServiceBrowserDialog
+            open={browserOpen}
+            onOpenChange={setBrowserOpen}
+            onSelect={addService}
+            doctorId={doctorId}
+          />
+        </div>
+
+        {/* ٣) الملاحظة */}
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="follow-up-body">
+            الملاحظة{services.length > 0 && <span className="text-xs font-normal text-muted-foreground"> (اختيارية مع الخدمات)</span>}
+          </Label>
           <div className="flex flex-wrap gap-1.5">
             {QUICK_PHRASES.map((phrase) => (
               <Button
@@ -358,7 +538,7 @@ function ComposeCard({
         <div>
           <Button
             onClick={() => send.mutate()}
-            disabled={!patient || !body.trim() || send.isPending}
+            disabled={!patient || (!body.trim() && services.length === 0) || badDiscount || send.isPending}
             className="gap-2"
           >
             {send.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
@@ -638,7 +818,8 @@ function InboxCard({
                       </TableCell>
                       <TableCell className="text-sm">
                         {row.body && <p className="whitespace-pre-wrap">{row.body}</p>}
-                        {row.amount !== null && (
+                        <FollowUpServicesList services={row.services} />
+                        {row.amount !== null && !row.services?.length && (
                           <p className="font-semibold tabular-nums">المبلغ: {formatAmount(row.amount)}</p>
                         )}
                         {row.preferred_date && (

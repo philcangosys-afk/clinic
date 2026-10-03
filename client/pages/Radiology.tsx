@@ -38,6 +38,8 @@ import ItemPicker from "@/components/shared/ItemPicker";
 import BillingItemLink from "@/components/shared/BillingItemLink";
 import { errorMessage } from "@/lib/error-message";
 import { usePermissions, type PermissionKey } from "@/lib/permissions";
+import { useSessionDoctor } from "@/lib/session-doctor";
+import { filterMyPatientIds } from "@/lib/doctor-patient-scope";
 
 /**
  * دورة حياة طلب الأشعة (0084) — تسع حالات واثنتان استثنائيتان.
@@ -165,9 +167,9 @@ function useRadiologyExams(organizationId: string | undefined) {
  * `delivered_at`/`delivered_by` أبدًا. نضمّ المعتمدة صريحًا حتى يبقى زرّ
  * «تسليم» في متناول المستخدم.
  */
-function useRadiologyOrders(organizationId: string | undefined) {
+function useRadiologyOrders(organizationId: string | undefined, doctorScopeId: string | null) {
   return useQuery({
-    queryKey: ["radiology-orders", organizationId],
+    queryKey: ["radiology-orders", organizationId, doctorScopeId],
     enabled: Boolean(organizationId),
     queryFn: async () => {
       const [pending, verified] = await Promise.all([
@@ -191,7 +193,7 @@ function useRadiologyOrders(organizationId: string | undefined) {
       const embedded = (value: unknown) =>
         (Array.isArray(value) ? value[0] : value) as { name_ar?: string } | null | undefined;
 
-      const rows = [
+      let rows = [
         ...((pending.data ?? []) as any[]),
         ...((verified.data ?? []) as any[]).map((row) => ({
           radiology_order_id: row.id,
@@ -205,6 +207,12 @@ function useRadiologyOrders(organizationId: string | undefined) {
           ordered_at: row.ordered_at,
         })),
       ];
+
+      // الطبيب: طلبات أشعة مرضاه وحدهم (0218)
+      if (doctorScopeId) {
+        const mine = await filterMyPatientIds(doctorScopeId, rows.map((row) => row.patient_id));
+        rows = rows.filter((row) => mine.has(row.patient_id));
+      }
 
       // عدّادا «عدد الفحوصات» و«موجودات عاجلة» يُحسبان من البنود هنا: المنظور
       // لا يحمل عمودين بهذين الاسمين، فكانت الخانتان تظهران فارغتين دائمًا.
@@ -239,7 +247,8 @@ export default function Radiology() {
   const { organization } = useOrganizationAccess();
   const [createOpen, setCreateOpen] = useState(false);
   const [openOrderId, setOpenOrderId] = useState<string | null>(null);
-  const orders = useRadiologyOrders(organization?.id);
+  const { doctorId: sessionDoctorId, isDoctorScope } = useSessionDoctor();
+  const orders = useRadiologyOrders(organization?.id, isDoctorScope ? sessionDoctorId : null);
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-5 p-4 sm:p-6">
