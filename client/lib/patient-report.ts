@@ -6,7 +6,8 @@ import { supabase } from "@/lib/supabase";
  * والتذييل في كل صفحة: اسم المنشأة · الصفحة X من Y · المستخدم · تاريخ الطباعة.
  *
  * الطباعة بـCSS على A4: رؤوس الجداول تتكرّر في كل صفحة، وكلّ قسمٍ في الملف
- * الموحّد يبدأ صفحةً جديدة. «PDF» من نافذة الطباعة نفسها (حفظ بصيغة PDF).
+ * الموحّد يبدأ صفحةً جديدة. يُعرض التقرير أوّلًا معاينةً داخل النظام
+ * (report-preview.ts)، ومنها الطباعة أو «حفظ PDF».
  */
 
 export type ReportPatient = {
@@ -156,6 +157,13 @@ const REPORT_CSS = `
   .ph-title { text-align: center !important; font-weight: 700; background: #f2f2f2; }
   .muted { color: #666; }
   .empty { text-align: center; color: #666; padding: 8px; }
+  /* المعاينة على الشاشة: كلّ قسمٍ ورقةٌ بعرض A4 على خلفيةٍ رمادية */
+  @media screen {
+    html { background: #e5e7eb; }
+    body { padding: 16px 8px; }
+    .section { background: #fff; width: 210mm; max-width: 100%; min-height: 120mm; margin: 0 auto 16px;
+               padding: 12mm 10mm; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.18); overflow-x: auto; }
+  }
 `;
 
 export type ReportPrintOptions = {
@@ -167,26 +175,17 @@ export type ReportPrintOptions = {
   extraCss?: string;
 };
 
-/** يفتح نافذة الطباعة (ومنها «حفظ PDF»). تُفتح بضغطة المستخدم لتفادي حاجب النوافذ. */
-export function openPatientReport(opts: ReportPrintOptions, target?: Window | null) {
-  const win = target ?? window.open("", "_blank");
-  if (!win) {
-    window.alert("تعذّر فتح نافذة الطباعة — اسمح بالنوافذ المنبثقة لهذا الموقع ثم أعد المحاولة.");
-    return;
-  }
+/** مستند التقرير الكامل (للمعاينة داخل النظام ثمّ الطباعة أو «حفظ PDF»). */
+export function buildReportDocument(opts: ReportPrintOptions) {
   const printedAt = dateTimeText(new Date().toISOString());
   // التذييل في هامش كل صفحة (صناديق @page): المنشأة · المستخدم وتاريخ الطباعة · الصفحة
   const cssText = (value: string) => `"${value.replace(/["\\]/g, "")}"`;
   const footerCss = `@page { @bottom-right { content: ${cssText(opts.organizationName)}; font: 9px Tahoma, Arial; color: #555; }
     @bottom-center { content: ${cssText(`User : ${opts.userName}   Printing Date: ${printedAt}`)}; font: 9px Tahoma, Arial; color: #555; } }`;
-  win.document.write(
+  return (
     `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"/><title>${esc(opts.title)}</title>` +
-      `<style>${REPORT_CSS}${footerCss}${opts.extraCss ?? ""}</style></head><body>` +
-      opts.sections.map((html) => `<div class="section">${html}</div>`).join("") +
-      `</body></html>`,
+    `<style>${REPORT_CSS}${footerCss}${opts.extraCss ?? ""}</style></head><body>` +
+    opts.sections.map((html) => `<div class="section">${html}</div>`).join("") +
+    `</body></html>`
   );
-  win.document.close();
-  win.focus();
-  // الصور (التوقيعات) تُحمَّل قبل الطباعة
-  setTimeout(() => win.print(), 350);
 }

@@ -3,11 +3,12 @@ import {
   dateText,
   esc,
   escLines,
+  buildReportDocument,
   loadReportPatient,
-  openPatientReport,
   patientHeaderHtml,
   timeText,
 } from "@/lib/patient-report";
+import { previewReport } from "@/lib/report-preview";
 
 /**
  * سجلّ إجراءات الأسنان (0211) — الأهداف، والقراءة، وطباعة «كشف عيادات
@@ -252,30 +253,25 @@ export async function buildDentalReportSection(patientId: string, visitDate?: st
   };
 }
 
+/** يعرض «كشف عيادات الأسنان» معاينةً داخل النظام، ومنها الطباعة. */
 export async function printDentalReport(opts: {
   patientId: string;
   organizationName: string;
   userName: string;
   visitDate?: string | null;
 }) {
-  // النافذة تُفتح فورًا مع الضغطة، ثمّ تُملأ بعد القراءة — وإلّا حجبها المتصفّح
-  const win = window.open("", "_blank");
-  if (win) win.document.write('<p style="font-family:Tahoma;padding:24px">جارٍ تجهيز الكشف…</p>');
-  try {
+  await previewReport("كشف عيادات الأسنان", async () => {
     const section = await buildDentalReportSection(opts.patientId, opts.visitDate);
-    if (win) win.document.open();
-    openPatientReport(
-      {
-        title: `كشف عيادات الأسنان — ${section.patient.name_ar}`,
+    const title = `كشف عيادات الأسنان — ${section.patient.name_ar}`;
+    return {
+      title,
+      html: buildReportDocument({
+        title,
         organizationName: opts.organizationName,
         userName: opts.userName,
         sections: [section.html],
         extraCss: section.css,
-      },
-      win,
-    );
-  } catch (error) {
-    win?.close();
-    throw error;
-  }
+      }),
+    };
+  });
 }

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
 import LiveNotifier from "./LiveNotifier";
+import ReportPreviewDialog from "@/components/reports/ReportPreviewDialog";
 import FollowUpAlerts from "@/components/follow-up/FollowUpAlerts";
 import ZatcaAutoReporter from "@/components/billing/ZatcaAutoReporter";
 import SectionGuideButton from "./SectionGuideButton";
@@ -520,6 +521,8 @@ export default function AppShell() {
           <NotificationBell />
           {/* نافذة وصوت لكلّ تنبيهٍ جديد (0210) — لا يرسم شيئًا */}
           <LiveNotifier />
+          {/* معاينة تقارير المريض داخل النظام قبل الطباعة */}
+          <ReportPreviewDialog />
 
           <Link to="/operations-settings">
             <Button variant="ghost" size="icon">

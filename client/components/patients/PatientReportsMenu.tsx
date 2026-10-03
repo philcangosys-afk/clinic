@@ -213,7 +213,7 @@ export default function PatientReportsMenu({ patientId }: { patientId: string })
               }}
             >
               <Printer className="h-4 w-4" />
-              عرض وطباعة
+              عرض
             </Button>
           </DialogFooter>
         </DialogContent>

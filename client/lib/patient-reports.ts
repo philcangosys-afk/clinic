@@ -1,6 +1,7 @@
 import { supabase } from "@/lib/supabase";
 import { code128Svg } from "@/lib/barcode";
 import { buildDentalReportSection } from "@/lib/dental";
+import { previewReport } from "@/lib/report-preview";
 import {
   ageText,
   dateText,
@@ -9,7 +10,7 @@ import {
   escLines,
   loadReportPatient,
   money,
-  openPatientReport,
+  buildReportDocument,
   patientHeaderHtml,
   timeText,
   type ReportPatient,
@@ -508,13 +509,15 @@ async function statementSection(ctx: Ctx): Promise<Section> {
 
 /* ═══════════════════════ 4) كرت المريض (pr04) و 5) اللصاقة (pr05) ═══════════════════════ */
 
-async function logPrint(patientId: string, report: string) {
-  const { data } = await supabase.rpc("app_log_patient_print", { p_patient_id: patientId, p_report: report });
-  return Number(data ?? 0) || 1;
-}
+/**
+ * «Printed Count»: يُسجَّل ويُكتب عند الضغط على «طباعة» في المعاينة
+ * (ReportPreviewDialog يقرأ data-print-log)، لا عند فتح المعاينة.
+ */
+const printCount = (patientId: string, report: string) =>
+  `<span data-print-log="${esc(report)}" data-patient="${esc(patientId)}">—</span>`;
 
 async function cardSection(ctx: Ctx, organizationName: string): Promise<Section> {
-  const printed = await logPrint(ctx.patient.id, "كرت المريض");
+  const printed = printCount(ctx.patient.id, "كرت المريض");
   const p = ctx.patient;
   return {
     css: `.card { width: 90mm; height: 55mm; border: 1px dashed #999; padding: 5mm; display: flex; flex-direction: column; justify-content: space-between; margin-inline-start: auto; }
@@ -529,7 +532,7 @@ async function cardSection(ctx: Ctx, organizationName: string): Promise<Section>
 }
 
 async function labelSection(ctx: Ctx): Promise<Section> {
-  const printed = await logPrint(ctx.patient.id, "لصاقة المريض");
+  const printed = printCount(ctx.patient.id, "لصاقة المريض");
   const p = ctx.patient;
   const file = String(p.file_number ?? "");
   return {
@@ -939,8 +942,9 @@ async function buildSection(key: PatientReportKey, ctx: Ctx, organizationName: s
 }
 
 /**
- * يطبع تقريرًا واحدًا، أو الملف الموحّد (ملف المريض أوّلًا ثمّ الأقسام المختارة
- * بالترتيب، كلٌّ في صفحةٍ جديدة، والترقيم متّصل).
+ * يعرض تقريرًا واحدًا، أو الملف الموحّد (ملف المريض أوّلًا ثمّ الأقسام المختارة
+ * بالترتيب، كلٌّ في صفحةٍ جديدة، والترقيم متّصل) — معاينةً داخل النظام، ومنها
+ * الطباعة أو «حفظ PDF».
  */
 export async function printPatientReports(opts: {
   organizationId: string;
@@ -951,27 +955,22 @@ export async function printPatientReports(opts: {
   filters?: ReportFilters;
   unified?: boolean;
 }) {
-  const win = window.open("", "_blank");
-  if (win) win.document.write('<p style="font-family:Tahoma;padding:24px">جارٍ تجهيز التقرير…</p>');
-  try {
+  const keys = opts.unified ? (["patient_file", ...opts.keys.filter((k) => k !== "patient_file")] as PatientReportKey[]) : opts.keys;
+  const label = opts.unified ? "ملف المريض الموحد" : PATIENT_REPORTS.find((r) => r.key === keys[0])?.label ?? "تقرير المريض";
+  await previewReport(label, async () => {
     const ctx = await loadContext(opts.organizationId, opts.patientId, opts.filters ?? {});
-    const keys = opts.unified ? (["patient_file", ...opts.keys.filter((k) => k !== "patient_file")] as PatientReportKey[]) : opts.keys;
     const sections: Section[] = [];
     for (const key of keys) sections.push(await buildSection(key, ctx, opts.organizationName));
-    const label = opts.unified ? "ملف المريض الموحد" : PATIENT_REPORTS.find((r) => r.key === keys[0])?.label ?? "تقرير المريض";
-    if (win) win.document.open();
-    openPatientReport(
-      {
-        title: `${label} — ${ctx.patient.name_ar}`,
+    const title = `${label} — ${ctx.patient.name_ar}`;
+    return {
+      title,
+      html: buildReportDocument({
+        title,
         organizationName: opts.organizationName,
         userName: opts.userName,
         sections: sections.map((s) => s.html),
         extraCss: SHARED_CSS + sections.map((s) => s.css ?? "").join("\n"),
-      },
-      win,
-    );
-  } catch (error) {
-    win?.close();
-    throw error;
-  }
+      }),
+    };
+  });
 }
