@@ -13,6 +13,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import NotificationBell from "./NotificationBell";
+import LiveNotifier from "./LiveNotifier";
 import FollowUpAlerts from "@/components/follow-up/FollowUpAlerts";
 import ZatcaAutoReporter from "@/components/billing/ZatcaAutoReporter";
 import SectionGuideButton from "./SectionGuideButton";
@@ -517,6 +518,8 @@ export default function AppShell() {
           )}
 
           <NotificationBell />
+          {/* نافذة وصوت لكلّ تنبيهٍ جديد (0210) — لا يرسم شيئًا */}
+          <LiveNotifier />
 
           <Link to="/operations-settings">
             <Button variant="ghost" size="icon">

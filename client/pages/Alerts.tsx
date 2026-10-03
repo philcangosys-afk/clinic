@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { usePermissions } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
+import { isNotificationSoundOn, setNotificationSound } from "@/components/layout/LiveNotifier";
 
 /**
  * التنبيهات الموحّدة (لقطة 80).
@@ -277,6 +278,7 @@ function NotificationInbox() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [onlyUnread, setOnlyUnread] = useState(false);
+  const [soundOn, setSoundOn] = useState(isNotificationSoundOn);
 
   const notifications = useQuery({
     queryKey: ["my-notifications", organization?.id],
@@ -403,6 +405,16 @@ function NotificationInbox() {
           <div className="flex flex-wrap justify-start gap-2">
             <Button variant="ghost" onClick={() => setOnlyUnread((v) => !v)}>
               {onlyUnread ? "عرض الكل" : "غير المقروء فقط"}
+            </Button>
+            <Button
+              variant="outline"
+              title="صوت التنبيه الجديد على هذا الجهاز"
+              onClick={() => {
+                setNotificationSound(!soundOn);
+                setSoundOn(!soundOn);
+              }}
+            >
+              {soundOn ? "الصوت: مفعّل" : "الصوت: مكتوم"}
             </Button>
             <Button variant="outline" disabled={generate.isPending}
                     onClick={() => generate.mutate()}>
