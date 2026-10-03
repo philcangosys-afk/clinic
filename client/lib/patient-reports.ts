@@ -656,6 +656,13 @@ async function dentalLabSection(ctx: Ctx): Promise<Section> {
     supabase.from("tooth_shade_guides").select("id, name").eq("organization_id", ctx.orgId),
     supabase.from("tooth_shades").select("id, code"),
   ]);
+  // طلبيات معمل Kizen (0215) — للقراءة بعلامة «من النظام السابق»
+  const legacyOrders = (((await supabase
+    .from("legacy_patient_records")
+    .select("recorded_at, doctor_name, title, details, payload")
+    .eq("patient_id", p.id)
+    .eq("kind", "lab_order")
+    .order("recorded_at")).data ?? []) as any[]).filter((r) => inRange(r.recorded_at, ctx.filters));
   const labNames = new Map(((labs.data ?? []) as any[]).map((l) => [l.id, l.name_ar]));
   const guideNames = new Map(((guides.data ?? []) as any[]).map((g) => [g.id, g.name]));
   const shadeCodes = new Map(((shades.data ?? []) as any[]).map((s) => [s.id, s.code]));
@@ -686,11 +693,35 @@ async function dentalLabSection(ctx: Ctx): Promise<Section> {
     })
     .join("");
 
+  const legacyBody = legacyOrders
+    .map((r) => {
+      const x = r.payload ?? {};
+      const its = (Array.isArray(x.items) ? x.items : []) as any[];
+      return `<table class="grid" style="margin-bottom:6px"><tbody>
+        <tr class="inv"><td>تاريخ الطلبية : <span class="num">${esc(dateText(r.recorded_at))}</span>${LEGACY_TAG}</td><td>تاريخ التسليم : <span class="num">${esc(
+          x.delivery_at ? dateText(x.delivery_at) : "—",
+        )}</span></td><td>الطبيب : ${esc(r.doctor_name ?? "—")}</td><td>المعمل : ${esc(x.lab ?? "—")}</td></tr>
+        <tr><td>دليل الأسنان : ${esc(x.guide ?? "—")}</td><td>لون الأسنان : ${esc(x.color ?? "—")}</td><td>رقم الطلبية : <span class="num">${esc(
+          x.order_no ?? "—",
+        )}</span></td><td>فاتورة المعمل : <span class="num">${esc(x.lab_invoice ?? "—")}</span></td></tr>
+        ${x.note ? `<tr><td colspan="4" class="t">الملاحظات : ${escLines(x.note)}</td></tr>` : ""}
+        <tr><td colspan="4" style="padding:0"><table class="grid sub"><thead><tr><th>الأعمال</th><th>اللون</th><th>العدد</th><th>الصافي</th></tr></thead><tbody>${
+          its
+            .map(
+              (i) =>
+                `<tr><td class="t">${esc(i.work ?? "")}</td><td>${esc(i.color ?? "")}</td><td class="num">${esc(i.qty ?? "")}</td><td class="num">${money(i.net)}</td></tr>`,
+            )
+            .join("") || '<tr><td colspan="4" class="empty">—</td></tr>'
+        }</tbody></table></td></tr>
+      </tbody></table>`;
+    })
+    .join("");
+
   return {
     html:
       patientHeaderHtml(p, "تقرير طلبيات معمل الأسنان الخاصة بالمريض", "Dental labs") +
-      (body || '<p class="empty">لا طلبيات معمل لهذا المريض.</p>') +
-      `<table class="grid"><tbody><tr class="total"><td class="t">الإجمالي : ${list.length}</td></tr></tbody></table>`,
+      (body + legacyBody || '<p class="empty">لا طلبيات معمل لهذا المريض.</p>') +
+      `<table class="grid"><tbody><tr class="total"><td class="t">الإجمالي : ${list.length + legacyOrders.length}</td></tr></tbody></table>`,
   };
 }
 
@@ -863,6 +894,14 @@ async function prescriptionsSection(ctx: Ctx): Promise<Section> {
     }
   }
 
+  // وصفات Kizen (0215) — للقراءة بعلامة «من النظام السابق»
+  const legacyRx = (((await supabase
+    .from("legacy_patient_records")
+    .select("recorded_at, doctor_name, user_name, payload")
+    .eq("patient_id", p.id)
+    .eq("kind", "prescription")
+    .order("recorded_at")).data ?? []) as any[]).filter((r) => inRange(r.recorded_at, ctx.filters));
+
   const body = list
     .map((r, index) => {
       const its = items.filter((i) => i.prescription_id === r.id);
@@ -887,11 +926,24 @@ async function prescriptionsSection(ctx: Ctx): Promise<Section> {
     })
     .join("");
 
+  const legacyBody = legacyRx
+    .map((r) => {
+      const x = r.payload ?? {};
+      return `<table class="grid" style="margin-bottom:6px"><tbody>
+        <tr class="inv"><td>رقم الوصفة : <span class="num">${esc(x.number ?? "—")}</span>${LEGACY_TAG}</td><td>التاريخ : <span class="num">${esc(
+          dateText(r.recorded_at),
+        )}</span></td><td colspan="2">الطبيب المعالج : ${esc(r.doctor_name ?? r.user_name ?? "—")}</td></tr>
+        <tr><td colspan="4" class="t">الأدوية : ${escLines(String(x.medications ?? "").replace(/,\s*/g, "\n"))}</td></tr>
+        ${x.note ? `<tr><td colspan="4" class="t">ملاحظات : ${escLines(x.note)}</td></tr>` : ""}
+      </tbody></table>`;
+    })
+    .join("");
+
   return {
     html:
       patientHeaderHtml(p, "تقرير وصفات الأدوية الخاصة بالمريض", "Patient Prescriptions") +
-      (body || '<p class="empty">لا وصفات لهذا المريض.</p>') +
-      `<table class="grid"><tbody><tr class="total"><td class="t"><span class="en">Total count is</span> : ${list.length}</td></tr></tbody></table>`,
+      (body + legacyBody || '<p class="empty">لا وصفات لهذا المريض.</p>') +
+      `<table class="grid"><tbody><tr class="total"><td class="t"><span class="en">Total count is</span> : ${list.length + legacyRx.length}</td></tr></tbody></table>`,
   };
 }
 

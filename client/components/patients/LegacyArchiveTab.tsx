@@ -103,7 +103,7 @@ type LegacyAppointment = {
 
 type LegacyRecord = {
   id: string;
-  kind: "note" | "visit" | "dental_visit";
+  kind: "note" | "visit" | "dental_visit" | "prescription" | "lab_order" | "medical_report" | "quote";
   recorded_at: string | null;
   clinic_name: string | null;
   doctor_name: string | null;
@@ -116,13 +116,26 @@ type LegacyRecord = {
   details: string | null;
   is_disabled: boolean;
   match_method: string | null;
+  /** تصدير 03/10/2026 (0215) */
+  kizen_key?: string | null;
+  anesthesia?: string | null;
+  antibiotics?: string | null;
+  next_visit?: string | null;
+  complications?: string | null;
 };
 
 const KIND_LABEL: Record<LegacyRecord["kind"], string> = {
   note: "ملاحظة",
-  visit: "زيارة",
+  visit: "زيارة عيادة",
   dental_visit: "زيارة أسنان",
+  prescription: "وصفة",
+  lab_order: "طلبية معمل",
+  medical_report: "تقرير طبي",
+  quote: "عرض سعر",
 };
+
+/** طريقة ربط زيارة الأسنان برقم الملف — تُذكر إن لم تكن مطابقة الاسم لملفٍّ واحد. */
+const PLAIN_MATCH = new Set(["file", "الاسم مطابق لملف واحد"]);
 
 function useLegacy<T>(table: string, patientId: string, order: string, enabled = true, select = "*") {
   return useQuery({
@@ -276,6 +289,7 @@ export default function LegacyArchiveTab({ patientId }: { patientId: string }) {
   const canMedical = can("patients.view_medical");
   const canSettle = can("cashier.receive");
   const [openInvoice, setOpenInvoice] = useState<string | null>(null);
+  const [recordKind, setRecordKind] = useState<LegacyRecord["kind"] | "all">("all");
   const [settle, setSettle] = useState<LegacyInvoice | null>(null);
 
   const invoices = useLegacy<LegacyInvoice>("legacy_invoices", patientId, "issued_at", canBilling);
@@ -349,7 +363,7 @@ export default function LegacyArchiveTab({ patientId }: { patientId: string }) {
               </TabsTrigger>
               <TabsTrigger value="records" className="gap-1">
                 <Stethoscope className="h-3.5 w-3.5" />
-                الملاحظات والزيارات ({(records.data ?? []).length})
+                السجلّ الطبي ({(records.data ?? []).length})
               </TabsTrigger>
             </TabsList>
 
@@ -520,16 +534,38 @@ export default function LegacyArchiveTab({ patientId }: { patientId: string }) {
                 <Skeleton className="h-24 w-full" />
               ) : (
                 <div className="grid gap-2">
-                  {(records.data ?? []).map((row) => (
+                  {(records.data ?? []).length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {(["all", ...Object.keys(KIND_LABEL)] as (LegacyRecord["kind"] | "all")[])
+                        .map((kind) => ({
+                          kind,
+                          n: (records.data ?? []).filter((row) => kind === "all" || row.kind === kind).length,
+                        }))
+                        .filter(({ kind, n }) => kind === "all" || n > 0)
+                        .map(({ kind, n }) => (
+                          <Button
+                            key={kind}
+                            size="sm"
+                            variant={recordKind === kind ? "default" : "outline"}
+                            className="h-7 px-2 text-xs"
+                            onClick={() => setRecordKind(kind)}
+                          >
+                            {kind === "all" ? "الكل" : KIND_LABEL[kind]} ({n})
+                          </Button>
+                        ))}
+                    </div>
+                  )}
+                  {(records.data ?? []).filter((row) => recordKind === "all" || row.kind === recordKind).map((row) => (
                     <div key={row.id} className={`rounded-lg border p-3 text-sm ${row.is_disabled ? "opacity-60" : ""}`}>
                       <div className="flex flex-wrap items-center gap-2">
                         <Badge variant="outline">{KIND_LABEL[row.kind]}</Badge>
                         <span className="text-xs text-muted-foreground">{formatDateTime(row.recorded_at)}</span>
                         {row.doctor_name && <span className="text-xs">{row.doctor_name}</span>}
                         {row.clinic_name && <span className="text-xs text-muted-foreground">{row.clinic_name}</span>}
-                        {row.match_method && row.match_method !== "file" && (
-                          <span className="text-[10px] text-muted-foreground" title="تقرير Kizen بلا رقم ملف — رُبطت بالاسم">
-                            (رُبطت بالاسم)
+                        {row.is_disabled && <Badge variant="secondary">معطّلة</Badge>}
+                        {row.match_method && !PLAIN_MATCH.has(row.match_method) && (
+                          <span className="text-[10px] text-muted-foreground" title="كيف رُبطت زيارة الأسنان برقم الملف">
+                            ({row.kizen_key ? row.match_method : "رُبطت بالاسم"})
                           </span>
                         )}
                       </div>
@@ -539,7 +575,11 @@ export default function LegacyArchiveTab({ patientId }: { patientId: string }) {
                       {row.diagnosis && <p className="text-xs">التشخيص: {row.diagnosis}</p>}
                       {row.procedure_text && <p className="text-xs">الإجراء: {row.procedure_text}</p>}
                       {row.details && <p className="mt-1 whitespace-pre-wrap text-xs">{row.details}</p>}
-                      {row.user_name && row.kind === "note" && (
+                      {row.anesthesia && <p className="text-xs">التخدير: {row.anesthesia}</p>}
+                      {row.antibiotics && <p className="text-xs">المضادّات الوقائية: {row.antibiotics}</p>}
+                      {row.complications && <p className="text-xs">المضاعفات: {row.complications}</p>}
+                      {row.next_visit && <p className="text-xs">الزيارة القادمة: {row.next_visit}</p>}
+                      {row.user_name && row.kind !== "dental_visit" && (
                         <p className="mt-1 text-[10px] text-muted-foreground">{row.user_name}</p>
                       )}
                     </div>
