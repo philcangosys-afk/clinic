@@ -46,10 +46,19 @@ export default function ZatcaAutoReporter() {
     let cancelled = false;
 
     const tick = async () => {
-      if (running.current || halted.current || cancelled) return;
+      if (running.current || cancelled) return;
       running.current = true;
       try {
         const rows = await fetchZatcaPending(organizationId, 50);
+        // متوقّف على «غير محسومة»: يستأنف وحده بعد حسمها من «فواتير لم تُبلَّغ» (0224)
+        if (halted.current) {
+          if (rows.some((row) => row.zatca_status === "ambiguous")) return;
+          halted.current = false;
+        }
+        if (rows.some((row) => row.zatca_status === "ambiguous")) {
+          halted.current = true;
+          return;
+        }
         const now = Date.now();
         const due = rows.filter(
           (row) =>

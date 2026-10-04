@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Loader2, RefreshCw, Send } from "lucide-react";
+import { AlertTriangle, Loader2, RefreshCw, RotateCcw, Send } from "lucide-react";
 import { usePermissions } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
@@ -8,6 +8,7 @@ import { formatAmount, formatDateTime, useLocaleSettings } from "@/lib/locale";
 import {
   fetchZatcaPending,
   reportInvoiceToZatca,
+  resolveAmbiguousZatca,
   useZatcaAutoSettings,
   type ZatcaPendingRow,
 } from "@/lib/zatca-auto";
@@ -88,6 +89,23 @@ export default function ZatcaPendingDialog({
     return result;
   };
 
+  /** «غير محسومة»: إعادة المستند الموقّع نفسه — يحسمها ويُطلق الجهاز (0224) */
+  const resolveOne = async (row: ZatcaPendingRow) => {
+    setSendingId(row.invoice_id);
+    const result = await resolveAmbiguousZatca(row.invoice_id);
+    setSendingId(null);
+    refresh();
+    toast(
+      result.ok
+        ? { title: `${row.label}: ${result.message}`, description: "يمكن الآن إرسال بقيّة الفواتير، والإبلاغ التلقائيّ يستأنف وحده." }
+        : {
+            variant: "destructive",
+            title: result.resolved ? `${row.label}: حُسمت — مرفوضة` : `${row.label}: لم تُحسم بعد`,
+            description: result.message,
+          },
+    );
+  };
+
   const sendAll = async () => {
     const queue = rows.filter((row) => row.zatca_status !== "ambiguous" && row.zatca_status !== "submitted");
     setBulk({ done: 0, total: queue.length });
@@ -138,7 +156,8 @@ export default function ZatcaPendingDialog({
         {blocked && (
           <p className="flex items-center gap-2 rounded-md border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-900">
             <AlertTriangle className="h-4 w-4 shrink-0" />
-            فاتورةٌ نتيجتها غير محسومة أوقفت جهاز ZATCA — لا يُرسل شيءٌ حتى تُراجَع مع الدعم الفنّي.
+            فاتورةٌ نتيجتها غير محسومة (انقطع الاتصال بـZATCA أثناء إرسالها) أوقفت الإرسال. اضغط
+            «إعادة المستند نفسه» عليها: يُرسَل المستند الموقّع ذاته فيُحسم، ثمّ يستأنف الإبلاغ لبقيّة الفواتير.
           </p>
         )}
         {pending.isLoading && <Skeleton className="h-40 w-full" />}
@@ -189,6 +208,22 @@ export default function ZatcaPendingDialog({
                         {row.last_error ?? "—"}
                       </TableCell>
                       <TableCell>
+                        {canSend && row.zatca_status === "ambiguous" && (
+                          <Button
+                            size="sm"
+                            className="bg-rose-600 text-white hover:bg-rose-700"
+                            disabled={Boolean(sendingId)}
+                            title="يُعاد إرسال المستند الموقّع نفسه (نفس الرقم والبصمة) — لا يُنشأ مستند جديد"
+                            onClick={() => void resolveOne(row)}
+                          >
+                            {sendingId === row.invoice_id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <RotateCcw className="h-3.5 w-3.5" />
+                            )}
+                            إعادة المستند نفسه
+                          </Button>
+                        )}
                         {canSend && row.zatca_status !== "ambiguous" && (
                           <Button
                             size="sm"

@@ -81,6 +81,42 @@ export type ZatcaReportResult = {
   ambiguous?: boolean;
 };
 
+/**
+ * حسم فاتورةٍ «غير محسومة» بإعادة إرسال المستند الموقّع نفسه (0224).
+ *
+ * نفس UUID والبصمة والتسلسل — لا مستند جديد. إن قبلته ZATCA (أو كانت استلمته
+ * من قبل) ثُبِّت ورُفع إيقاف الجهاز، وإن رفضته صراحةً صارت «مرفوضة» وأُطلق
+ * الجهاز، وإن تعذّر الاتصال بقيت كما هي.
+ */
+export async function resolveAmbiguousZatca(invoiceId: string): Promise<ZatcaReportResult & { resolved?: boolean }> {
+  try {
+    const { data, error } = await supabase.functions.invoke("zatca-invoice", {
+      body: {
+        invoiceId,
+        mode: "production",
+        action: "resolve_ambiguous",
+        productionConfirmation: ZATCA_PRODUCTION_CONFIRMATION,
+      },
+    });
+    if (error || data?.error) {
+      let payload = data;
+      const context = (error as { context?: Response } | null)?.context;
+      if (!payload?.error && context) payload = await context.clone().json().catch(() => null);
+      const message = await readZatcaInvokeError(error, data);
+      return {
+        ok: false,
+        status: payload?.status,
+        message,
+        ambiguous: payload?.status === "ambiguous",
+        resolved: Boolean(payload?.resolved),
+      };
+    }
+    return { ok: true, status: data?.status, message: data?.message ?? "حُسمت الفاتورة", resolved: true };
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : "تعذّر الإرسال", ambiguous: true };
+  }
+}
+
 /** إبلاغ ZATCA (الإنتاج) بفاتورة. لا يرمي — يُعيد النتيجة. */
 export async function reportInvoiceToZatca(invoiceId: string): Promise<ZatcaReportResult> {
   try {

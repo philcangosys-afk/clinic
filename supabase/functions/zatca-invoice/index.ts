@@ -77,6 +77,214 @@ const respond = (body: unknown, status = 200) =>
 
 const clean = (value: unknown) => String(value ?? "").trim();
 
+/**
+ * خطأ اتصالٍ قبل أن يُرسَل الطلب أصلًا (0224).
+ *
+ * «client error (Connect)» من عميل Deno يعني أنّ الاتصال (TCP أو مصافحة TLS)
+ * فشل قبل إرسال أيّ بايتٍ من الطلب — مثل «tls handshake eof» الذي أوقف C-10216.
+ * فـZATCA لم تستلم المستند يقينًا: يُعامَل «تعذّر الإرسال» ويُعاد، ولا يُوقِف
+ * الجهاز. أمّا انقطاعٌ بعد الإرسال (مهلة، قطع أثناء القراءة) فيبقى «غير محسوم».
+ */
+function isPreSendConnectError(message: string) {
+  return /client error \(Connect\)|dns error|failed to lookup address|Connection refused/i.test(message);
+}
+
+/** ردّ ZATCA بأنّ المستند نفسه وصلها من قبل (إعادة إرسالٍ لمستندٍ مُبلَّغ). */
+function isAlreadySubmittedResponse(status: number, responseText: string, responseData: any) {
+  if (status !== 409 && status !== 400) return false;
+  const text = `${responseText} ${JSON.stringify(responseData ?? {})}`;
+  return /already\s+(been\s+)?(reported|cleared|submitted)|duplicate|previously\s+(reported|cleared|submitted)/i.test(text);
+}
+
+/**
+ * حسم مستندٍ «غير محسوم» بإعادة إرسال **المستند الموقّع نفسه** (0224).
+ *
+ * نفس UUID والبصمة وICV وPIH المحفوظة في سجلّ الإرسال — فلا يُنشأ مستندٌ
+ * جديد ولا يتغيّر التسلسل:
+ *   • قُبل أو «وصل من قبل» ⇒ يُثبَّت كالقبول العاديّ ويُرفع إيقاف الجهاز.
+ *   • رفضٌ صريح (4xx) ⇒ لم تقبله ZATCA: «مرفوضة» ويُحرَّر الجهاز بلا تقدّم.
+ *   • تعذّر الاتصال أو 5xx ⇒ يبقى غير محسوم ويُعاد لاحقًا.
+ */
+async function resolveAmbiguousSubmission(admin: any, log: any, mode: ZatcaMode) {
+  const signedXml = clean(log.signed_invoice_xml);
+  const invoiceHash = clean(log.invoice_hash);
+  const uuid = clean(log.request_uuid);
+  const icv = Number(log.icv);
+  const onboardingId = clean(log.onboarding_id);
+  const endpoint = clean(log.endpoint);
+  const simplified = clean(log.invoice_type) === "simplified";
+  if (!signedXml || !invoiceHash || !uuid || !onboardingId || !endpoint || !Number.isSafeInteger(icv)) {
+    return respond(
+      {
+        error: "لا يوجد مستند موقّع محفوظ لهذه المحاولة — يلزم الدعم الفنّي",
+        status: "ambiguous",
+        retryable: false,
+      },
+      409,
+    );
+  }
+
+  const { data: sequence, error: sequenceError } = await admin
+    .from("zatca_device_sequences")
+    .select("*")
+    .eq("onboarding_id", onboardingId)
+    .maybeSingle();
+  if (sequenceError) throw sequenceError;
+  const reservationToken = clean(sequence?.reservation_token);
+  if (!sequence?.blocked_at || !reservationToken) {
+    return respond({ error: "جهاز ZATCA غير موقوف على هذه الفاتورة — حدّث القائمة", status: "ambiguous" }, 409);
+  }
+  // المستند المعلّق يجب أن يكون رأس التسلسل: ICV التالي وPIH الأخير له بعينه
+  if (Number(sequence.next_icv) !== icv || clean(sequence.last_pih) !== clean(log.previous_pih)) {
+    return respond(
+      {
+        error: "المستند غير المحسوم ليس آخر ما في تسلسل الجهاز — يلزم الدعم الفنّي",
+        status: "ambiguous",
+        retryable: false,
+      },
+      409,
+    );
+  }
+
+  const credentials = await getZatcaCredentials(admin, onboardingId);
+  if (!credentials.production_csid || !credentials.production_secret) {
+    return respond({ error: "بيانات اعتماد ZATCA غير مكتملة", status: "ambiguous" }, 409);
+  }
+
+  const touchLog = async (message: string) => {
+    await admin
+      .from("zatca_invoice_submission_logs")
+      .update({
+        last_error: message,
+        attempt_count: Number(log.attempt_count ?? 1) + 1,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", log.id);
+  };
+
+  let zatcaResponse: Response;
+  let responseText = "";
+  try {
+    zatcaResponse = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        "Accept-Version": "V2",
+        "Accept-Language": "en",
+        "Clearance-Status": simplified ? "0" : "1",
+        Authorization: `Basic ${Buffer.from(`${credentials.production_csid}:${credentials.production_secret}`, "utf8").toString("base64")}`,
+      },
+      body: JSON.stringify({
+        invoiceHash,
+        uuid,
+        invoice: Buffer.from(signedXml, "utf8").toString("base64"),
+      }),
+      signal: AbortSignal.timeout(35_000),
+    });
+    responseText = await zatcaResponse.text();
+  } catch (error: any) {
+    const message = clean(error?.message) || "ZATCA network error";
+    await touchLog(`إعادة الإرسال: ${message}`);
+    return respond(
+      {
+        error: `تعذّر الاتصال بـZATCA مرّةً أخرى — أعد المحاولة بعد قليل (${message})`,
+        status: "ambiguous",
+        retryable: false,
+      },
+      503,
+    );
+  }
+
+  let responseData: any = {};
+  try {
+    responseData = responseText ? JSON.parse(responseText) : {};
+  } catch {
+    responseData = {};
+  }
+  const validation = getValidationResult(responseData);
+  const accepted = [200, 202].includes(zatcaResponse.status) && validation.accepted;
+  const already = !accepted && isAlreadySubmittedResponse(zatcaResponse.status, responseText, responseData);
+
+  if (accepted || already) {
+    const status = simplified ? "reported" : "cleared";
+    const artifacts = getAcceptedInvoiceArtifacts(responseData, {
+      signedXml,
+      qrCodeData: clean(log.qr_code_data),
+      signatureValue: clean(log.cryptographic_stamp),
+      simplified,
+    });
+    const { error: finalizeError } = await admin.rpc("finalize_zatca_accepted_submission", {
+      p_onboarding_id: onboardingId,
+      p_reservation_token: reservationToken,
+      p_invoice_hash: invoiceHash,
+      p_log_id: log.id,
+      p_status: status,
+      p_http_status: zatcaResponse.status,
+      p_request_uuid: uuid,
+      p_icv: icv,
+      p_previous_pih: clean(log.previous_pih),
+      p_request_payload: { ...(log.request_payload ?? {}), resolvedAmbiguous: true, alreadySubmitted: already },
+      p_response: responseData,
+      p_response_text: responseText,
+      p_invoice_id: log.invoice_id,
+      p_mode: mode,
+      p_qr_code_data: artifacts.qrCodeData,
+      p_cryptographic_stamp: artifacts.cryptographicStamp,
+      p_invoice_xml: artifacts.invoiceXml,
+      p_submitted_at: new Date().toISOString(),
+    });
+    if (finalizeError) {
+      await touchLog(`قُبلت عند إعادة الإرسال وتعذّر التثبيت: ${clean(finalizeError.message)}`);
+      return respond(
+        { error: "قبلت ZATCA المستند وتعذّر تثبيت النتيجة — أعد المحاولة", status: "ambiguous" },
+        503,
+      );
+    }
+    return respond({
+      status,
+      uuid,
+      icv,
+      resolved: true,
+      message: already
+        ? "كانت ZATCA قد استلمت الفاتورة — ثُبّتت النتيجة واستؤنف الإبلاغ"
+        : "أُبلغت ZATCA بالفاتورة واستؤنف الإبلاغ",
+    });
+  }
+
+  const errorMessage = validation.message || responseText || `ZATCA HTTP ${zatcaResponse.status}`;
+  if (zatcaResponse.status >= 500 || zatcaResponse.status === 409 || zatcaResponse.status === 429) {
+    await touchLog(`إعادة الإرسال: ${errorMessage}`);
+    return respond(
+      { error: `ZATCA لم تحسم الطلب (${zatcaResponse.status}) — أعد المحاولة لاحقًا: ${errorMessage}`, status: "ambiguous" },
+      503,
+    );
+  }
+
+  // رفضٌ صريح: لم تقبل ZATCA المستند ⇒ مرفوضة، ويُحرَّر الجهاز بلا تقدّم
+  const { error: rejectError } = await admin.rpc("resolve_zatca_rejected_submission", {
+    p_onboarding_id: onboardingId,
+    p_reservation_token: reservationToken,
+    p_log_id: log.id,
+    p_invoice_id: log.invoice_id,
+    p_http_status: zatcaResponse.status,
+    p_response: responseData,
+    p_response_text: responseText,
+    p_error: errorMessage,
+  });
+  if (rejectError) throw rejectError;
+  return respond(
+    {
+      error: `رفضت ZATCA الفاتورة: ${errorMessage} — صحّحها ثمّ أرسلها. استؤنف الإبلاغ لبقيّة الفواتير.`,
+      status: "rejected",
+      details: responseData,
+      resolved: true,
+      retryable: false,
+    },
+    422,
+  );
+}
+
 async function getZatcaCredentials(admin: any, onboardingId: string) {
   const { data, error } = await admin.rpc("get_zatca_credentials", {
     p_onboarding_id: onboardingId,
@@ -869,19 +1077,41 @@ Deno.serve(async (req) => {
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const admin = createClient(supabaseUrl, serviceKey);
+
+  /**
+   * نداء النظام من الإبلاغ المجدول (0225): `zatca-auto-report` يمرّر مفتاح
+   * التشغيل المحفوظ في Vault، ويُتحقَّق منه في القاعدة (لا يُخزَّن هنا). بلا
+   * مستخدم ولا صلاحية مستخدم — ومقصورٌ على منشأةٍ فعّلت الإبلاغ التلقائيّ.
+   */
+  const cronSecret = clean(req.headers.get("x-zatca-cron-secret"));
+  let systemCall = false;
+  if (cronSecret) {
+    const { data: cronValid, error: cronError } = await admin.rpc("zatca_cron_secret_valid", {
+      p_secret: cronSecret,
+    });
+    if (cronError || cronValid !== true) return respond({ error: "Unauthorized" }, 401);
+    systemCall = true;
+  }
+
   const authHeader = req.headers.get("Authorization");
-  if (!authHeader?.startsWith("Bearer "))
+  if (!systemCall && !authHeader?.startsWith("Bearer "))
     return respond({ error: "Unauthorized" }, 401);
 
-  const caller = createClient(supabaseUrl, anonKey, {
-    global: { headers: { Authorization: authHeader } },
-  });
-  const admin = createClient(supabaseUrl, serviceKey);
-  const {
-    data: { user },
-    error: authError,
-  } = await caller.auth.getUser(authHeader.slice(7));
-  if (authError || !user) return respond({ error: "Unauthorized" }, 401);
+  const caller = systemCall
+    ? null
+    : createClient(supabaseUrl, anonKey, {
+        global: { headers: { Authorization: authHeader! } },
+      });
+  let user: { id: string } | null = null;
+  if (!systemCall) {
+    const {
+      data: { user: authUser },
+      error: authError,
+    } = await caller!.auth.getUser(authHeader!.slice(7));
+    if (authError || !authUser) return respond({ error: "Unauthorized" }, 401);
+    user = authUser;
+  }
 
   try {
     const body = await req.json();
@@ -905,13 +1135,26 @@ Deno.serve(async (req) => {
     if (recordError) throw recordError;
     if (!record) return respond({ error: "الفاتورة غير موجودة" }, 404);
 
-    const { data: allowed, error: permissionError } = await caller.rpc(
-      "app_has_permission",
-      { target_org_id: record.organization_id, p_permission_key: "billing.issue" },
-    );
-    if (permissionError) throw permissionError;
-    if (allowed !== true) {
-      return respond({ error: "غير مصرح بإرسال فواتير هذه المنشأة إلى ZATCA" }, 403);
+    if (systemCall) {
+      // الإبلاغ المجدول لمنشأةٍ فعّلت الإبلاغ التلقائيّ وحدها
+      const { data: vat, error: vatError } = await admin
+        .from("organization_vat_settings")
+        .select("zatca_auto_report, zatca_report_from")
+        .eq("organization_id", record.organization_id)
+        .maybeSingle();
+      if (vatError) throw vatError;
+      if (!vat?.zatca_auto_report || !vat?.zatca_report_from || mode !== "production") {
+        return respond({ error: "الإبلاغ التلقائيّ غير مفعّل لهذه المنشأة" }, 403);
+      }
+    } else {
+      const { data: allowed, error: permissionError } = await caller!.rpc(
+        "app_has_permission",
+        { target_org_id: record.organization_id, p_permission_key: "billing.issue" },
+      );
+      if (permissionError) throw permissionError;
+      if (allowed !== true) {
+        return respond({ error: "غير مصرح بإرسال فواتير هذه المنشأة إلى ZATCA" }, 403);
+      }
     }
     const organizationId = clean(record.organization_id);
 
@@ -939,6 +1182,16 @@ Deno.serve(async (req) => {
       });
     }
     if (clean(existingLog?.status) === "ambiguous") {
+      // حسمٌ بإعادة المستند الموقّع نفسه — بطلبٍ صريح من «فواتير لم تُبلَّغ» (0224)
+      if (clean(body.action) === "resolve_ambiguous") {
+        if (mode === "production" && body.productionConfirmation !== PRODUCTION_CONFIRMATION) {
+          return respond({ error: `productionConfirmation must equal ${PRODUCTION_CONFIRMATION}` }, 400);
+        }
+        if (clean(existingLog.mode) !== mode) {
+          return respond({ error: "بيئة المستند غير المحسوم مختلفة" }, 409);
+        }
+        return await resolveAmbiguousSubmission(admin, existingLog, mode);
+      }
       return respond(
         {
           error: "نتيجة الإرسال السابق غير محسومة؛ لا تُعد إرسال الفاتورة قبل المراجعة اليدوية",
@@ -1183,7 +1436,7 @@ Deno.serve(async (req) => {
       idempotency_key: idempotencyKey,
       endpoint,
       attempt_count: attemptCount,
-      created_by: user.id,
+      created_by: user?.id ?? null,
       updated_at: new Date().toISOString(),
     };
     let durableLogId = clean(existingLog?.id);
@@ -1572,6 +1825,28 @@ Deno.serve(async (req) => {
         });
       } catch (error: any) {
         const message = clean(error?.message) || "ZATCA network error";
+        // فشل الاتصال قبل الإرسال: لم يصل ZATCA شيء ⇒ «تعذّر الإرسال» ويُعاد،
+        // والتسلسل يُحرَّر في finally بلا تقدّم ولا إيقاف (0224)
+        if (isPreSendConnectError(message)) {
+          await saveLog({
+            status: "failed",
+            http_status: null,
+            request_uuid: uuid,
+            invoice_hash: signed.invoiceHash,
+            icv,
+            previous_pih: previousHash,
+            request_payload: requestPayload,
+            response: {},
+            response_text: "",
+            retry_after: getRetryAfter(),
+            last_error: `لم يتمّ الاتصال بـZATCA (لم يُرسل شيء): ${message}`,
+          });
+          await setInvoiceStatus("failed", { message });
+          return respond(
+            { error: `تعذّر الاتصال بـZATCA — لم يُرسل شيء وسيُعاد: ${message}`, status: "failed", retryable: true },
+            503,
+          );
+        }
         await markAmbiguousAndBlock(
           {
             http_status: null,
