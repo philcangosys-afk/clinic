@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { storageFileName } from "@/lib/storage-key";
 import { usePermissions } from "@/lib/permissions";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -46,8 +47,8 @@ function isImageFile(name: string) {
 }
 
 function safePath(orgId: string, patientId: string, name: string) {
-  const safeName = name.replace(/[^\w.\-؀-ۿ]/g, "_");
-  return `${orgId}/${patientId}/${Date.now()}-${safeName}`;
+  // الاسم العربي يبقى في file_name؛ المسار لاتينيّ فقط (Supabase يرفض غيره)
+  return `${orgId}/${patientId}/${Date.now()}-${storageFileName(name)}`;
 }
 
 function usePatientDocuments(patientId: string) {

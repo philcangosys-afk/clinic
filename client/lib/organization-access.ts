@@ -159,7 +159,8 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "doctor_workspace",
     "quality",
   ]), "medical_records.write"],
-  receptionist: viewPermissions([
+  // إدارة الكتالوج للاستقبال: إضافة الخدمات وتعديلها وأسعارها (0222)
+  receptionist: [...viewPermissions([
     "core_dashboard",
     "reception",
     "appointments",
@@ -170,7 +171,7 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "notifications",
     "patient_portal",
     "follow_up_center",
-  ]),
+  ]), "catalog.view", "catalog.manage"],
   // فنّيو المختبر والأشعة يبلّغون عن أعطال أجهزتهم، فيحتاجون رؤية سجل الأصول.
   lab_technician: viewPermissions(["core_dashboard", "patients", "laboratory", "assets", "notifications"]),
   radiology_technician: viewPermissions(["core_dashboard", "patients", "radiology", "assets", "notifications"]),

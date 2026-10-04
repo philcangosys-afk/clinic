@@ -19,6 +19,7 @@ import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { errorMessage } from "@/lib/error-message";
+import { storageFileName } from "@/lib/storage-key";
 
 /**
  * مركز المستندات — المرحلة 22.
@@ -317,8 +318,7 @@ function EntityUploadDialog({
       const target = entityType === "organization" ? organization.id : entityId;
       if (!target) throw new Error("اختر الكيان المرتبط");
 
-      const safeName = file.name.replace(/[^\w.\-؀-ۿ]/g, "_");
-      const path = `${organization.id}/entities/${entityType}/${Date.now()}-${safeName}`;
+      const path = `${organization.id}/entities/${entityType}/${Date.now()}-${storageFileName(file.name)}`;
       const { error: upErr } = await supabase.storage.from(BUCKET).upload(path, file);
       if (upErr) throw upErr;
 

@@ -597,7 +597,7 @@ function LogoUploader({
     }
     setBusy(true);
     try {
-      const ext = (file.name.split(".").pop() || "png").toLowerCase();
+      const ext = (file.name.split(".").pop() || "png").toLowerCase().replace(/[^a-z0-9]/g, "") || "png";
       const path = `${organizationId}/logo-${Date.now()}.${ext}`;
       const { error } = await supabase.storage
         .from(BRANDING_BUCKET)

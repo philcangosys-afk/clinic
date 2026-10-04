@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Paperclip, Upload, Download, Trash2, ImageIcon, FileText } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { storageFileName } from "@/lib/storage-key";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/hooks/use-toast";
@@ -82,8 +83,7 @@ export default function ResultAttachments({
       // المسار يبدأ بمعرّف المنشأة لأن سياسات الدلو (0045) تبني عليه صلاحية
       // الوصول. الاسم يُنظَّف من المحارف التي قد تكسر المسار، ويُسبَق بطابع
       // زمني لتفادي تصادم الأسماء المتطابقة.
-      const safeName = file.name.replace(/[^\w.\-؀-ۿ]/g, "_");
-      const path = `${organization.id}/${kind}/${parentId}/${Date.now()}-${safeName}`;
+      const path = `${organization.id}/${kind}/${parentId}/${Date.now()}-${storageFileName(file.name)}`;
 
       const { error: uploadError } = await supabase.storage.from(BUCKET).upload(path, file);
       if (uploadError) throw uploadError;
