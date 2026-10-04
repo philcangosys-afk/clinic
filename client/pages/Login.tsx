@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
   BarChart3,
+  ChevronDown,
   CalendarCheck2,
   Eye,
   EyeOff,
@@ -11,9 +12,9 @@ import {
   LockKeyhole,
   Mail,
   ReceiptText,
-  Search,
   ShieldCheck,
   Stethoscope,
+  UserRound,
   UsersRound,
   type LucideIcon,
 } from "lucide-react";
@@ -82,7 +83,7 @@ export default function Login() {
   const directory = useLoginDirectory();
   const [mode, setMode] = useState<"names" | "email">("names");
   const [picked, setPicked] = useState<DirectoryUser | null>(null);
-  const [filter, setFilter] = useState("");
+  const [listOpen, setListOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -103,15 +104,12 @@ export default function Login() {
   const effectiveMode = namesAvailable ? mode : "email";
   const loginEmail = effectiveMode === "names" ? picked?.email ?? "" : email.trim();
 
-  const visibleUsers = useMemo(() => {
-    const term = filter.trim();
-    return term ? users.filter((u) => u.display_name.includes(term) || u.role_label.includes(term)) : users;
-  }, [users, filter]);
-  const doctors = visibleUsers.filter((u) => u.group_key === "doctor");
-  const staff = visibleUsers.filter((u) => u.group_key !== "doctor");
+  const doctors = useMemo(() => users.filter((u) => u.group_key === "doctor"), [users]);
+  const staff = useMemo(() => users.filter((u) => u.group_key !== "doctor"), [users]);
 
   const pick = (user: DirectoryUser | null) => {
     setPicked(user);
+    setListOpen(false);
     setPassword("");
     setShowPassword(false);
     setPasswordArmed(false);
@@ -222,17 +220,17 @@ export default function Login() {
     </div>
   );
 
-  const userButton = (user: DirectoryUser) => (
+  const userRow = (user: DirectoryUser) => (
     <button
       key={user.user_id}
       type="button"
       onClick={() => pick(user)}
-      className="flex items-center gap-3 rounded-xl border bg-background px-3 py-2.5 text-start transition-colors hover:border-primary hover:bg-primary/5"
+      className="flex w-full items-center gap-3 border-b px-3 py-2.5 text-start transition-colors last:border-b-0 hover:bg-primary/5"
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
         {user.display_name.replace(/^د\.\s*/, "").trim().charAt(0) || "؟"}
       </span>
-      <span className="min-w-0">
+      <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-semibold">{user.display_name}</span>
         <span className="block truncate text-[11px] text-muted-foreground">{user.role_label}</span>
       </span>
@@ -260,40 +258,38 @@ export default function Login() {
             </p>
 
             {effectiveMode === "names" && !picked && (
-              <div className="mt-5 flex flex-col gap-3">
-                {users.length > 8 && (
-                  <div className="relative">
-                    <Search className="absolute right-3 top-2.5 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      className="pr-9"
-                      placeholder="ابحث عن اسمك"
-                      value={filter}
-                      autoComplete="off"
-                      onChange={(event) => setFilter(event.target.value)}
-                    />
+              <div className="mt-5 flex flex-col gap-2">
+                {/* حقلٌ يُضغط فتنفتح الأسماء تحت بعضها — لا كتابة ولا بحث (0220) */}
+                <button
+                  type="button"
+                  onClick={() => setListOpen((v) => !v)}
+                  aria-expanded={listOpen}
+                  className="flex h-11 w-full items-center gap-2 rounded-md border bg-background px-3 text-start text-sm transition-colors hover:border-primary"
+                >
+                  <UserRound className="h-4 w-4 text-muted-foreground" />
+                  <span className="flex-1 text-muted-foreground">اختر اسمك</span>
+                  <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${listOpen ? "rotate-180" : ""}`} />
+                </button>
+                {listOpen && (
+                  <div className="flex max-h-[50vh] flex-col overflow-y-auto rounded-md border bg-background shadow-sm">
+                    {doctors.length > 0 && (
+                      <>
+                        <p className="sticky top-0 flex items-center gap-1.5 border-b bg-muted/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground backdrop-blur">
+                          <Stethoscope className="h-3.5 w-3.5" /> الأطباء
+                        </p>
+                        {doctors.map(userRow)}
+                      </>
+                    )}
+                    {staff.length > 0 && (
+                      <>
+                        <p className="sticky top-0 flex items-center gap-1.5 border-b bg-muted/80 px-3 py-1.5 text-xs font-semibold text-muted-foreground backdrop-blur">
+                          <ShieldCheck className="h-3.5 w-3.5" /> الإدارة والموظفون
+                        </p>
+                        {staff.map(userRow)}
+                      </>
+                    )}
                   </div>
                 )}
-                <div className="flex max-h-[52vh] flex-col gap-3 overflow-y-auto pe-1">
-                  {doctors.length > 0 && (
-                    <div className="flex flex-col gap-2">
-                      <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                        <Stethoscope className="h-3.5 w-3.5" /> الأطباء
-                      </p>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{doctors.map(userButton)}</div>
-                    </div>
-                  )}
-                  {staff.length > 0 && (
-                    <div className="flex flex-col gap-2">
-                      <p className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
-                        <ShieldCheck className="h-3.5 w-3.5" /> الإدارة والموظفون
-                      </p>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">{staff.map(userButton)}</div>
-                    </div>
-                  )}
-                  {visibleUsers.length === 0 && (
-                    <p className="py-4 text-center text-sm text-muted-foreground">لا اسم بهذا البحث.</p>
-                  )}
-                </div>
               </div>
             )}
 

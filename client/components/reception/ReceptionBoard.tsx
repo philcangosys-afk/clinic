@@ -598,7 +598,16 @@ export default function ReceptionBoard({
                       : "",
                   ]
                     .filter(Boolean)
+                    .concat("cursor-pointer")
                     .join(" ")}
+                  // الضغط على الصفّ يفتح ملفّ المريض مباشرةً (0220) — إلّا الأزرار
+                  // والقوائم داخله، وتحديد نصٍّ للنسخ.
+                  onClick={(event) => {
+                    const target = event.target as HTMLElement;
+                    if (target.closest("button, a, input, select, textarea, [role='menuitem'], [role='menu'], [role='link'], [role='dialog']")) return;
+                    if (window.getSelection()?.toString()) return;
+                    navigate(`/patients/${row.patient_id}`);
+                  }}
                 >
                   <TableCell className="text-center text-[11px] text-muted-foreground tabular-nums">
                     {rowIndex}
@@ -785,7 +794,7 @@ export default function ReceptionBoard({
                         className="flex items-center gap-1 whitespace-nowrap"
                         title={row.mobile_number ?? undefined}
                       >
-                        <span className="max-w-[11rem] truncate font-medium hover:text-primary">
+                        <span className="max-w-[11rem] truncate font-medium text-primary underline-offset-2 hover:underline">
                           {row.patient_name}
                         </span>
                         {(noteCounts.data?.[row.patient_id] ?? 0) > 0 && (

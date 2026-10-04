@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Archive, Download, FileSignature, FileText, Image as ImageIcon, Upload, Wand2,
+  Archive, Download, FileSignature, FileText, Image as ImageIcon, Trash2, Upload, Wand2,
 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
@@ -706,6 +706,89 @@ function ArchiveDialog({
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
+ * حذف الصور المؤرشفة (0220) — بطلب المالك
+ *
+ * الاستثناء الوحيد من «المستند لا يُحذف»: صورةٌ **مؤرشفة** غير موقَّعة وليست
+ * موافقة، للمالك والمدير وحدهما، بسببٍ يُكتب في سجلّ التدقيق. القاعدة تحذف
+ * السطر (وتتحقّق من كلّ ذلك)، ثم يُحذف الملفّ من التخزين.
+ * ════════════════════════════════════════════════════════════════════════ */
+const DELETE_ROLES = ["owner", "organization_admin", "branch_manager"];
+
+function DeleteArchivedImagesDialog({
+  images, onOpenChange, patientId,
+}: { images: any[]; onOpenChange: (open: boolean) => void; patientId: string }) {
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [reason, setReason] = useState("");
+
+  const remove = useMutation({
+    mutationFn: async () => {
+      let removed = 0;
+      const leftovers: string[] = [];
+      for (const image of images) {
+        const { data, error } = await supabase.rpc("app_delete_archived_patient_image", {
+          p_document_id: image.id,
+          p_reason: reason.trim(),
+        });
+        if (error) throw new Error(`${image.file_name ?? "صورة"}: ${errorMessage(error)}`);
+        removed += 1;
+        const path = (data as string | null) ?? image.storage_path;
+        if (path) {
+          const { error: storageError } = await supabase.storage.from(BUCKET).remove([path]);
+          if (storageError) leftovers.push(image.file_name ?? path);
+        }
+      }
+      return { removed, leftovers };
+    },
+    onSuccess: ({ removed, leftovers }) => {
+      setReason("");
+      toast({
+        title: removed === 1 ? "حُذفت الصورة" : `حُذفت ${removed} صور`,
+        description: leftovers.length
+          ? `حُذفت من الملفّ، وبقي ملفّها في التخزين: ${leftovers.join("، ")}`
+          : "من ملفّ المريض ومن التخزين، وسُجّل الحذف في سجلّ التدقيق.",
+      });
+      onOpenChange(false);
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر الحذف", description: errorMessage(error) }),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["patient-documents", patientId] }),
+  });
+
+  return (
+    <Dialog open={images.length > 0} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{images.length === 1 ? "حذف صورة مؤرشفة" : `حذف ${images.length} صور مؤرشفة`}</DialogTitle>
+          <DialogDescription>
+            حذفٌ نهائيّ من ملفّ المريض ومن التخزين — لا يُستعاد. يُسجَّل باسمك وبسببه في سجلّ التدقيق.
+          </DialogDescription>
+        </DialogHeader>
+        {images.length > 1 && (
+          <ul className="max-h-32 overflow-y-auto rounded-md border p-2 text-xs text-muted-foreground">
+            {images.map((image) => (
+              <li key={image.id} className="truncate">{image.file_name ?? "بلا اسم"}</li>
+            ))}
+          </ul>
+        )}
+        <div className="flex flex-col gap-1.5">
+          <Label>سبب الحذف *</Label>
+          <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} />
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>إلغاء</Button>
+          <Button variant="destructive" disabled={!reason.trim() || remove.isPending}
+                  onClick={() => remove.mutate()}>
+            <Trash2 className="h-4 w-4" />
+            {remove.isPending ? "جارٍ الحذف…" : "حذف نهائيّ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
  * التبويب
  * ════════════════════════════════════════════════════════════════════════ */
 /**
@@ -737,6 +820,9 @@ export default function DocumentsTab({
   const [generateOpen, setGenerateOpen] = useState(false);
   const [signing, setSigning] = useState<any | null>(null);
   const [archiving, setArchiving] = useState<any | null>(null);
+  const [deleting, setDeleting] = useState<any[]>([]);
+  const { membership } = useOrganizationAccess();
+  const canDeleteArchived = DELETE_ROLES.includes(String(membership?.role_key ?? ""));
   const [showArchived, setShowArchived] = useState(false);
   const [activeKind, setActiveKind] = useState<DocumentKind>(kind);
   // القسم يأتي من العنوان، فتغييره من الشريط الجانبي يجب أن يُغيّر الرشّاح
@@ -767,6 +853,9 @@ export default function DocumentsTab({
       // سيُخفي الموافقات المولَّدة من الجدول كلّه.
       return r.category !== "image";
     });
+  const deletableImage = (r: any) =>
+    r.is_archived && r.category === "image" && !r.is_consent && !r.signed_at;
+  const deletableShown = canDeleteArchived && showArchived ? rows.filter(deletableImage) : [];
 
   return (
     <div className="flex flex-col gap-4">
@@ -802,6 +891,13 @@ export default function DocumentsTab({
             <Button variant="ghost" onClick={() => setShowArchived((v) => !v)}>
               {showArchived ? "إخفاء المؤرشف" : "إظهار المؤرشف"}
             </Button>
+            {deletableShown.length > 0 && (
+              <Button variant="outline" className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                      onClick={() => setDeleting(deletableShown)}>
+                <Trash2 className="h-4 w-4" />
+                حذف الصور المؤرشفة ({deletableShown.length})
+              </Button>
+            )}
             {can("documents.upload") && (
               <Button variant="outline" onClick={() => setGenerateOpen(true)}>
                 <Wand2 className="h-4 w-4" />
@@ -819,7 +915,8 @@ export default function DocumentsTab({
         <CardContent>
           {documents.isLoading && <Skeleton className="h-32 w-full" />}
           {!documents.isLoading && (
-            <Table>
+            <div className="overflow-x-auto">
+            <Table className="min-w-[720px] [&_td]:whitespace-nowrap [&_th]:whitespace-nowrap">
               <TableHeader>
                 <TableRow>
                   <TableHead>الملف</TableHead>
@@ -840,7 +937,7 @@ export default function DocumentsTab({
                         ) : (
                           <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
                         )}
-                        <span className="truncate">{row.file_name ?? "بلا اسم"}</span>
+                        <span className="max-w-[22rem] truncate" title={row.file_name ?? ""}>{row.file_name ?? "بلا اسم"}</span>
                       </span>
                       {row.document_number && (
                         <span className="block text-[10px] text-muted-foreground">
@@ -864,7 +961,7 @@ export default function DocumentsTab({
                         <span className="text-xs text-muted-foreground">—</span>
                       )}
                       {row.archive_reason && (
-                        <span className="block text-[10px] text-muted-foreground">
+                        <span className="block max-w-[12rem] truncate text-[10px] text-muted-foreground" title={row.archive_reason}>
                           {row.archive_reason}
                         </span>
                       )}
@@ -896,6 +993,12 @@ export default function DocumentsTab({
                             <Archive className="h-3.5 w-3.5 text-destructive" />
                           </Button>
                         )}
+                        {canDeleteArchived && deletableImage(row) && (
+                          <Button variant="ghost" size="sm" title="حذف الصورة نهائيًّا"
+                                  onClick={() => setDeleting([row])}>
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -909,6 +1012,7 @@ export default function DocumentsTab({
                 )}
               </TableBody>
             </Table>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -932,6 +1036,8 @@ export default function DocumentsTab({
       )}
       <ArchiveDialog document={archiving} onOpenChange={(o) => !o && setArchiving(null)}
                      patientId={patientId} />
+      <DeleteArchivedImagesDialog images={deleting} onOpenChange={(o) => !o && setDeleting([])}
+                                  patientId={patientId} />
     </div>
   );
 }
