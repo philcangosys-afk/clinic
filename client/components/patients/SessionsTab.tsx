@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CalendarCheck, Plus, Check, X, Trash2, Info } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
+import { NO_DOCTOR, useSessionDoctor } from "@/lib/session-doctor";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -125,16 +126,20 @@ function useAgreementItems(patientId: string, organizationId: string | undefined
 }
 
 function useDoctors(organizationId: string | undefined) {
+  // الطبيب الداخل: نفسه وحده في القائمة (0221)
+  const { doctorId: sessionDoctorId, isDoctorScope } = useSessionDoctor();
+  const scopeDoctor = isDoctorScope && sessionDoctorId && sessionDoctorId !== NO_DOCTOR ? sessionDoctorId : null;
   return useQuery({
-    queryKey: ["sessions-doctors", organizationId],
+    queryKey: ["sessions-doctors", organizationId, scopeDoctor],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase
+      let query = supabase
         .from("doctors")
         .select("id, name_ar")
         .eq("organization_id", organizationId)
-        .eq("is_enabled", true)
-        .order("name_ar");
+        .eq("is_enabled", true);
+      if (scopeDoctor) query = query.eq("id", scopeDoctor);
+      const { data, error } = await query.order("name_ar");
       if (error) throw error;
       return (data ?? []) as { id: string; name_ar: string }[];
     },

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, CheckCheck, Eye } from "lucide-react";
+import { BellRing, CheckCheck, Eye, Printer } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { useSessionDoctor } from "@/lib/session-doctor";
@@ -21,6 +21,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import FollowUpServicesList from "@/components/follow-up/FollowUpServicesList";
+import { printPrescription } from "@/lib/prescriptions";
 import {
   FOLLOW_UP_COLUMNS,
   FOLLOW_UP_QUERY_KEYS,
@@ -207,6 +208,13 @@ export default function FollowUpAlerts() {
                   </div>
                   {row.body && <p className="mt-1.5 whitespace-pre-wrap text-sm">{row.body}</p>}
                   <FollowUpServicesList services={row.services} />
+                  {row.prescription_id && (
+                    <Button size="sm" variant="outline" className="mt-1.5 h-7 gap-1 text-xs"
+                            onClick={() => void printPrescription(row.prescription_id!)}>
+                      <Printer className="h-3.5 w-3.5" />
+                      طباعة الوصفة
+                    </Button>
+                  )}
                   {row.amount !== null && !row.services?.length && (
                     <p className="mt-1 text-sm font-semibold tabular-nums">المبلغ: {formatAmount(row.amount)}</p>
                   )}

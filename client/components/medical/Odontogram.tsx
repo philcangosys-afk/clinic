@@ -13,6 +13,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import DentalProcedureLog, { type DentalDraft } from "@/components/medical/DentalProcedureLog";
+import { TeethDefs, ToothGlyph } from "@/components/medical/TeethArch";
+import ServiceBrowserDialog, { type PickedService } from "@/components/billing/ServiceBrowserDialog";
+import { NO_DOCTOR, useSessionDoctor } from "@/lib/session-doctor";
 import { DENTAL_TARGETS, fetchDentalLog, markedTeeth, type DentalTarget } from "@/lib/dental";
 
 /**
@@ -34,6 +37,8 @@ const CONDITIONS: { key: string; label: string; color: string; ring: string }[] 
   { key: "bridge",          label: "جسر",           color: "bg-orange-500/25",  ring: "border-orange-500" },
   { key: "implant",         label: "زراعة",         color: "bg-teal-500/25",    ring: "border-teal-500" },
   { key: "veneer",          label: "قشرة تجميلية",  color: "bg-pink-500/20",    ring: "border-pink-500" },
+  // 0221: «خلع» — مقرَّرٌ خلعه ولم يُخلع بعد (قبل «مخلوع»)
+  { key: "to_extract",      label: "خلع",           color: "bg-red-500/25",     ring: "border-red-600" },
   { key: "extracted",       label: "مخلوع",         color: "bg-muted",          ring: "border-muted-foreground" },
   { key: "missing",         label: "مفقود",         color: "bg-muted",          ring: "border-muted-foreground" },
   { key: "impacted",        label: "منطمر",         color: "bg-yellow-500/20",  ring: "border-yellow-600" },
@@ -194,50 +199,40 @@ export default function Odontogram({ patientId }: { patientId: string }) {
         <CardContent className="flex flex-col gap-4">
           {chart.isLoading && <Skeleton className="h-40 w-full" />}
 
+          {/* 0221: الأسنان مرسومةً بتيجانها وجذورها (كـKizen) — العلوية فوق
+              والسفلية تحت، والحالة تلوّنها، والمحدَّد في إطارٍ أحمر. */}
           {!chart.isLoading && (
-            <div className="flex flex-col gap-3 overflow-x-auto">
+            <div className="overflow-x-auto rounded-xl border bg-gradient-to-b from-slate-50 to-white py-3">
+              <TeethDefs />
               {(["upper", "lower"] as const).map((jaw) => (
-                <div key={jaw} className="flex flex-col gap-1">
-                  <span className="text-xs font-medium text-muted-foreground">
-                    {jaw === "upper" ? "الفكّ العلوي" : "الفكّ السفلي"}
-                  </span>
-                  <div className="flex min-w-max justify-center gap-3">
-                    {arch[jaw].map((quad, qi) => (
-                      <div key={qi} className="flex gap-1">
-                        {quad.map((tooth) => {
-                          const row = byTooth[tooth];
-                          const cond = conditionOf(row?.condition);
-                          const planned = Number(row?.planned_count ?? 0);
-                          const gone = row?.condition === "extracted" || row?.condition === "missing";
-                          const hasRecord = marks.teeth.has(tooth);
-                          const picked = draft.teeth.includes(tooth);
-                          return (
-                            <button
-                              key={tooth}
-                              type="button"
-                              onClick={() => pickTooth(tooth)}
-                              title={`${tooth} — ${cond.label}${hasRecord ? " — له إجراء مسجّل" : ""}`}
-                              className={cn(
-                                "relative grid h-11 w-9 place-items-center rounded-md border-2 text-xs font-bold transition",
-                                cond.color,
-                                cond.ring,
-                                gone && "opacity-45 line-through",
-                                hasRecord && "outline outline-2 outline-offset-2 outline-red-600",
-                                picked && "ring-2 ring-slate-500 ring-offset-1",
-                              )}
-                            >
-                              {tooth}
-                              {planned > 0 && (
-                                <span className="absolute -top-1.5 -end-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[9px] font-bold text-primary-foreground">
-                                  {planned}
-                                </span>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    ))}
-                  </div>
+                <div
+                  key={jaw}
+                  className={cn(
+                    "flex min-w-max items-end justify-center gap-4 px-3",
+                    jaw === "lower" && "mt-1 items-start border-t border-dashed border-slate-300 pt-2",
+                  )}
+                >
+                  {arch[jaw].map((quad, qi) => (
+                    <div key={qi} className={cn("flex", jaw === "upper" ? "items-end" : "items-start")}>
+                      {quad.map((tooth) => {
+                        const row = byTooth[tooth];
+                        const cond = conditionOf(row?.condition);
+                        const hasRecord = marks.teeth.has(tooth);
+                        return (
+                          <ToothGlyph
+                            key={tooth}
+                            tooth={tooth}
+                            condition={row?.condition}
+                            selected={draft.teeth.includes(tooth)}
+                            hasRecord={hasRecord}
+                            planned={Number(row?.planned_count ?? 0)}
+                            onClick={() => pickTooth(tooth)}
+                            title={`${tooth} — ${cond.label}${hasRecord ? " — له إجراء مسجّل" : ""}`}
+                          />
+                        );
+                      })}
+                    </div>
+                  ))}
                 </div>
               ))}
             </div>
@@ -408,8 +403,11 @@ function ToothPanel({
 }) {
   const [surfaces, setSurfaces] = useState<string[]>(current?.surfaces ?? []);
   const [itemId, setItemId] = useState("");
+  const [picked, setPicked] = useState<PickedService | null>(null);
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [note, setNote] = useState("");
-  const [search, setSearch] = useState("");
+  const { doctorId: sessionDoctorId, isDoctorScope } = useSessionDoctor();
+  const sessionDoctor = isDoctorScope && sessionDoctorId && sessionDoctorId !== NO_DOCTOR ? sessionDoctorId : null;
   /* السياق السريريّ على السنّ نفسه (0154): من يفتح السنّ بعد سنة يحتاج أن
      يعرف ما الشكوى وما التخدير وهل أُعطي مضادّ وقائيّ — لا سطرًا واحدًا. */
   const [chiefComplaint, setChiefComplaint] = useState("");
@@ -421,25 +419,6 @@ function ToothPanel({
   const [nextVisit, setNextVisit] = useState("");
   const [clinicalOpen, setClinicalOpen] = useState(false);
 
-  const services = useQuery({
-    queryKey: ["dental-services", organizationId, search],
-    enabled: Boolean(organizationId),
-    queryFn: async () => {
-      let q = supabase
-        .from("items")
-        .select("id, name_ar, price, dental_procedure_kind")
-        .eq("organization_id", organizationId!)
-        .not("dental_procedure_kind", "is", null)
-        // المؤرشف لا يُقدَّم للمريض: قائمة الاختيار تعرض النشط وحده.
-        .eq("is_archived", false)
-        .order("name_ar")
-        .limit(60);
-      if (search.trim()) q = q.ilike("name_ar", `%${search.trim()}%`);
-      const { data, error } = await q;
-      if (error) throw error;
-      return (data ?? []) as any[];
-    },
-  });
 
   const history = useQuery({
     queryKey: ["tooth-history", patientId, tooth],
@@ -507,6 +486,7 @@ function ToothPanel({
     onSuccess: () => {
       toast({ title: "أُضيف للخطة" });
       setItemId("");
+      setPicked(null);
       setNote("");
       setChiefComplaint("");
       setDiagnosisText("");
@@ -583,32 +563,41 @@ function ToothPanel({
         </div>
 
         <div className="flex flex-col gap-1.5 border-t pt-3">
-          <Label htmlFor="tp-item">تخطيط إجراء</Label>
-          <Input
-            dir="rtl"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="ابحث عن خدمة"
+          <Label>تخطيط إجراء</Label>
+          {/* 0221: كلّ خدمات الأسنان كما في الاتفاقيات — بالمنتقي نفسه (شجرة
+              الأقسام والبحث بالاسم والكود والسعر)، لا الموسومة بنوع إجراء وحدها. */}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" variant="outline" onClick={() => setBrowserOpen(true)}>
+              <Plus className="h-4 w-4" />
+              {picked ? "تغيير الخدمة" : "اختر خدمة / تصفّح خدمات الأسنان"}
+            </Button>
+            {picked && (
+              <Badge variant="secondary" className="gap-2 px-2.5 py-1 text-sm">
+                {picked.name_ar}
+                <span className="tabular-nums text-muted-foreground">{Number(picked.price ?? 0).toLocaleString("ar")}</span>
+                <button
+                  type="button"
+                  aria-label="إلغاء الخدمة"
+                  onClick={() => {
+                    setPicked(null);
+                    setItemId("");
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </Badge>
+            )}
+          </div>
+          <ServiceBrowserDialog
+            open={browserOpen}
+            onOpenChange={setBrowserOpen}
+            domain="dental"
+            doctorId={sessionDoctor}
+            onSelect={(service) => {
+              setPicked(service);
+              setItemId(service.id);
+            }}
           />
-          <select
-            id="tp-item"
-            dir="rtl"
-            value={itemId}
-            onChange={(e) => setItemId(e.target.value)}
-            className="h-10 rounded-md border bg-background px-3 text-sm"
-          >
-            <option value="">— اختر الخدمة —</option>
-            {(services.data ?? []).map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name_ar} — {Number(s.price ?? 0).toLocaleString("ar")}
-              </option>
-            ))}
-          </select>
-          {!services.isLoading && (services.data ?? []).length === 0 && (
-            <span className="text-xs text-destructive">
-              لا خدمات أسنان موسومة بنوع إجراء — حدّد نوع الإجراء على الخدمة في الكتالوج.
-            </span>
-          )}
           <Input
             dir="rtl"
             value={note}

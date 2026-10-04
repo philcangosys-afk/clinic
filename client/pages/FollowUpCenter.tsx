@@ -10,6 +10,7 @@ import {
   ListPlus,
   Loader2,
   Plus,
+  Printer,
   Search,
   Send,
   Trash2,
@@ -39,6 +40,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import FollowUpServicesList from "@/components/follow-up/FollowUpServicesList";
+import { printPrescription } from "@/lib/prescriptions";
 import ServiceBrowserDialog, { type PickedService } from "@/components/billing/ServiceBrowserDialog";
 import {
   FOLLOW_UP_COLUMNS,
@@ -819,6 +821,13 @@ function InboxCard({
                       <TableCell className="text-sm">
                         {row.body && <p className="whitespace-pre-wrap">{row.body}</p>}
                         <FollowUpServicesList services={row.services} />
+                        {row.prescription_id && (
+                          <Button size="sm" variant="outline" className="mt-1 h-7 gap-1 text-xs"
+                                  onClick={() => void printPrescription(row.prescription_id!)}>
+                            <Printer className="h-3.5 w-3.5" />
+                            طباعة الوصفة
+                          </Button>
+                        )}
                         {row.amount !== null && !row.services?.length && (
                           <p className="font-semibold tabular-nums">المبلغ: {formatAmount(row.amount)}</p>
                         )}

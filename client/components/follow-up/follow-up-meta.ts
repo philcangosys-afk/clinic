@@ -34,6 +34,8 @@ export type FollowUpRow = {
   resolution_note: string | null;
   /** خدماتٌ اختارها الطبيب بسعرها وخصمها (0218) — لا فاتورة، للاستقبال. */
   services: FollowUpService[] | null;
+  /** وصفةٌ من الطبيب للطباعة (0221) */
+  prescription_id: string | null;
 };
 
 export type FollowUpService = {
@@ -47,7 +49,7 @@ export type FollowUpService = {
 };
 
 export const FOLLOW_UP_COLUMNS =
-  "source_kind, id, organization_id, branch_id, request_type, status, priority, patient_id, patient_name, file_number, patient_mobile, doctor_id, doctor_name, body, amount, preferred_date, requested_at, requested_by_name, seen_at, seen_by_name, resolved_at, resolved_by_name, resolution_note, services";
+  "source_kind, id, organization_id, branch_id, request_type, status, priority, patient_id, patient_name, file_number, patient_mobile, doctor_id, doctor_name, body, amount, preferred_date, requested_at, requested_by_name, seen_at, seen_by_name, resolved_at, resolved_by_name, resolution_note, services, prescription_id";
 
 export const FOLLOW_UP_TYPE: Record<FollowUpRow["request_type"], { label: string; icon: LucideIcon }> = {
   note: { label: "ملاحظة", icon: StickyNote },

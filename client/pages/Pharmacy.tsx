@@ -39,6 +39,8 @@ import {
 import { LookupTree, useCategorySubtree } from "@/components/shared/LookupTree";
 import { TreeGridLayout } from "@/components/shell/TreeGridLayout";
 import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
+import PrescriptionDialog from "@/components/prescriptions/PrescriptionDialog";
+import { printPrescription } from "@/lib/prescriptions";
 
 const DOSAGE_FORM_LABELS: Record<DrugDosageForm, string> = {
   tablet: "حبوب",
@@ -743,7 +745,7 @@ function usePrescriptionsList(organizationId: string | undefined, statusFilter: 
       let query = supabase
         .from("prescriptions")
         .select(
-          "id, status, issued_at, notes, insurance_company_name, insurance_policy_number, is_billed, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug:items!prescription_items_drug_item_id_fkey(name_ar)), dispensing_records(id, status, dispensing_items(id, prescription_item_id, quantity_dispensed, unit_price))",
+          "id, status, issued_at, notes, insurance_company_name, insurance_policy_number, is_billed, patient:patients(id, name_ar, file_number), doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug_name, drug:items!prescription_items_drug_item_id_fkey(name_ar)), dispensing_records(id, status, dispensing_items(id, prescription_item_id, quantity_dispensed, unit_price))",
         )
         .eq("organization_id", organizationId)
         .order("issued_at", { ascending: false })
@@ -886,7 +888,7 @@ function printPrescriptions(
           // مبلغٍ بسعر الصنف لا يُحصَّل (خاصة لمريض التأمين).
           const done = dispensed.get(line.id);
           const amount = done?.amount ?? 0;
-          return `<tr><td>${escapeHtml(drug?.name_ar ?? "—")}</td><td>${line.quantity_prescribed}</td><td>${
+          return `<tr><td>${escapeHtml(drug?.name_ar ?? (line as any).drug_name ?? "—")}</td><td>${line.quantity_prescribed}</td><td>${
             done?.quantity ?? 0
           }</td><td>${done && done.quantity > 0 ? amount.toFixed(2) : "لم يُصرف بعد"}</td></tr>`;
         })
@@ -1109,6 +1111,10 @@ function PrescriptionsTab() {
                         ) : (
                           <Badge variant="secondary">لم يُصرف</Badge>
                         )}
+                        <Button size="sm" variant="ghost" title="طباعة الوصفة بترويسة المجمع"
+                                onClick={() => void printPrescription(row.id)}>
+                          <Printer className="h-4 w-4" />
+                        </Button>
                         {can("pharmacy.prescribe") &&
                           !["cancelled", "dispensed"].includes(row.status) && (
                             <Button size="sm" variant="ghost" onClick={() => setCancelRow(row)}>
@@ -1132,7 +1138,8 @@ function PrescriptionsTab() {
           </Table>
         )}
       </CardContent>
-      <NewPrescriptionDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
+      {/* 0221: الطبيب يُصدر باسمه، والدواء من الكتالوج أو يُكتب، وتصل الاستقبالَ للطباعة */}
+      <PrescriptionDialog open={createOpen} onOpenChange={setCreateOpen} organizationId={organization?.id} />
 
       <Dialog open={Boolean(cancelRow)} onOpenChange={(next) => !next && setCancelRow(null)}>
         <DialogContent>

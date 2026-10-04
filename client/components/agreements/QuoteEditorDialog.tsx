@@ -5,7 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount } from "@/lib/locale";
 import { usePermissions } from "@/lib/permissions";
-import { useSessionDoctor } from "@/lib/session-doctor";
+import { NO_DOCTOR, useSessionDoctor } from "@/lib/session-doctor";
 import { useToast } from "@/hooks/use-toast";
 import {
   computeQuoteLine,
@@ -62,20 +62,49 @@ type DraftLine = {
   invoicedTaxable: number;
 };
 
+/**
+ * أطباء المنشأة وعياداتها لقوائم الاتفاقيات وعروضها.
+ *
+ * الطبيب الداخل (0221): **نفسه وحده وعياداته وحدها** — لا يختار من كلّ
+ * الأطباء ولا كلّ العيادات. و`clinicOf` عيادة كلّ طبيب الأساسية، تُملأ بها
+ * خانة العيادة تلقائيًّا حين يُختار الطبيب.
+ */
 function useDoctorsAndClinics(organizationId: string | undefined) {
+  const { doctorId: sessionDoctorId, isDoctorScope } = useSessionDoctor();
+  const scopeDoctor = isDoctorScope && sessionDoctorId && sessionDoctorId !== NO_DOCTOR ? sessionDoctorId : null;
   return useQuery({
-    queryKey: ["agreement-doctors-clinics", organizationId],
+    queryKey: ["agreement-doctors-clinics", organizationId, scopeDoctor],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const [doctors, clinics] = await Promise.all([
-        supabase.from("doctors").select("id, name_ar").eq("organization_id", organizationId).eq("is_enabled", true).order("name_ar"),
+      let doctorsQuery = supabase
+        .from("doctors")
+        .select("id, name_ar, clinic_id")
+        .eq("organization_id", organizationId)
+        .eq("is_enabled", true);
+      if (scopeDoctor) doctorsQuery = doctorsQuery.eq("id", scopeDoctor);
+      const [doctors, clinics, links] = await Promise.all([
+        doctorsQuery.order("name_ar"),
         supabase.from("clinics").select("id, name").eq("organization_id", organizationId).eq("is_disabled", false).order("name"),
+        scopeDoctor
+          ? supabase.from("doctor_clinics").select("clinic_id").eq("doctor_id", scopeDoctor).eq("is_active", true)
+          : Promise.resolve({ data: [] as { clinic_id: string }[], error: null }),
       ]);
       if (doctors.error) throw doctors.error;
       if (clinics.error) throw clinics.error;
+      const doctorRows = (doctors.data ?? []) as { id: string; name_ar: string; clinic_id: string | null }[];
+      let clinicRows = (clinics.data ?? []) as { id: string; name: string }[];
+      if (scopeDoctor) {
+        const mine = new Set<string>(((links.data ?? []) as { clinic_id: string }[]).map((row) => row.clinic_id));
+        doctorRows.forEach((row) => row.clinic_id && mine.add(row.clinic_id));
+        if (mine.size > 0) clinicRows = clinicRows.filter((clinic) => mine.has(clinic.id));
+      }
+      const clinicOf: Record<string, string | null> = {};
+      doctorRows.forEach((row) => (clinicOf[row.id] = row.clinic_id));
       return {
-        doctors: (doctors.data ?? []) as { id: string; name_ar: string }[],
-        clinics: (clinics.data ?? []) as { id: string; name: string }[],
+        doctors: doctorRows.map(({ id, name_ar }) => ({ id, name_ar })),
+        clinics: clinicRows,
+        clinicOf,
+        scopeDoctor,
       };
     },
   });

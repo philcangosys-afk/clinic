@@ -129,7 +129,7 @@ const viewPermissions = (features: FeatureKey[]) =>
 
 const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_admin">, string[]> = {
   // قوائم الأسعار والموارد صارتا مفتاحين مستقلّين عن «الخدمات» (0204)
-  branch_manager: [...viewPermissions(allFeatureKeys), "price_lists.view", "resources.view"],
+  branch_manager: [...viewPermissions(allFeatureKeys), "price_lists.view", "resources.view", "medical_records.write"],
   doctor: [...viewPermissions([
     "core_dashboard",
     "appointments",
@@ -144,8 +144,8 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "doctor_workspace",
     "quality",
     "follow_up_center",
-  ]), "doctors.self_edit"],
-  nurse: viewPermissions([
+  ]), "doctors.self_edit", "medical_records.write"],
+  nurse: [...viewPermissions([
     "core_dashboard",
     "reception",
     "appointments",
@@ -158,7 +158,7 @@ const rolePermissions: Record<Exclude<OrganizationRole, "owner" | "organization_
     "notifications",
     "doctor_workspace",
     "quality",
-  ]),
+  ]), "medical_records.write"],
   receptionist: viewPermissions([
     "core_dashboard",
     "reception",

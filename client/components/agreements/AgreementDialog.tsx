@@ -468,8 +468,11 @@ export default function AgreementDialog({
     } else {
       if (pickedPatientId && !patient.data) return;
       if (!sessionDoctor && pickedPatientId && todayDoctor.isLoading) return;
-      setDoctorId(sessionDoctor ?? todayDoctor.data ?? patient.data?.treating_doctor_id ?? NONE);
-      setClinicId(NONE);
+      if (!lists.data) return;
+      const initialDoctor = sessionDoctor ?? todayDoctor.data ?? patient.data?.treating_doctor_id ?? null;
+      setDoctorId(initialDoctor ?? NONE);
+      // عيادة الطبيب تلقائيًّا (0221) — لا يختارها الطبيب كلّ مرّة
+      setClinicId((initialDoctor && lists.data.clinicOf?.[initialDoctor]) || NONE);
       setRegistrarId(session?.user?.id ?? NONE);
       setAgreementDate(todayIso());
       setAgreementText("");
@@ -477,7 +480,7 @@ export default function AgreementDialog({
     }
     setDirty(false);
     setLoadedFor(key);
-  }, [open, currentId, pickedPatientId, agreement.data, patient.data, loadedFor, sessionDoctor, todayDoctor.data, todayDoctor.isLoading]);
+  }, [open, currentId, pickedPatientId, agreement.data, patient.data, loadedFor, sessionDoctor, todayDoctor.data, todayDoctor.isLoading, lists.data]);
 
   const row = agreement.data ?? null;
   const readOnly = !canManage || Boolean(row?.is_disabled);
@@ -681,7 +684,18 @@ export default function AgreementDialog({
               </div>
               <div className="flex flex-col gap-1">
                 <Label className="text-xs">الطبيب المعالج</Label>
-                <Select value={doctorId} onValueChange={(value) => { setDoctorId(value); setDirty(true); }} disabled={readOnly || (!currentId && Boolean(sessionDoctor))}>
+                <Select
+                  value={doctorId}
+                  onValueChange={(value) => {
+                    setDoctorId(value);
+                    // عيادة الطبيب المختار تُملأ إن كانت الخانة فارغة
+                    if (clinicId === NONE && value !== NONE && lists.data?.clinicOf?.[value]) {
+                      setClinicId(lists.data.clinicOf[value] as string);
+                    }
+                    setDirty(true);
+                  }}
+                  disabled={readOnly || (!currentId && Boolean(sessionDoctor))}
+                >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value={NONE}>— بلا طبيب —</SelectItem>

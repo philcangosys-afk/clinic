@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { usePermissions } from "@/lib/permissions";
+import { NO_DOCTOR, useSessionDoctor } from "@/lib/session-doctor";
 import { formatDate, formatDateTime, useLocaleSettings } from "@/lib/locale";
 import { printHtml } from "@/lib/document-merge";
 import { useToast } from "@/hooks/use-toast";
@@ -90,16 +91,20 @@ function escapeHtml(value: string) {
 }
 
 function useDoctorsList(organizationId: string | undefined) {
+  // الطبيب الداخل: نفسه وحده في القائمة (0221)
+  const { doctorId: sessionDoctorId, isDoctorScope } = useSessionDoctor();
+  const scopeDoctor = isDoctorScope && sessionDoctorId && sessionDoctorId !== NO_DOCTOR ? sessionDoctorId : null;
   return useQuery({
-    queryKey: ["medical-report-doctors", organizationId],
+    queryKey: ["medical-report-doctors", organizationId, scopeDoctor],
     enabled: Boolean(organizationId),
     queryFn: async () => {
-      const { data, error } = await supabase
+      let query = supabase
         .from("doctors")
         .select("id, name_ar")
         .eq("organization_id", organizationId)
-        .eq("is_enabled", true)
-        .order("name_ar");
+        .eq("is_enabled", true);
+      if (scopeDoctor) query = query.eq("id", scopeDoctor);
+      const { data, error } = await query.order("name_ar");
       if (error) throw error;
       return (data ?? []) as { id: string; name_ar: string }[];
     },

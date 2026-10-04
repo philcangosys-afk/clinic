@@ -1,8 +1,12 @@
 import { Fragment, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { Stethoscope, Pill, FileSignature, ExternalLink, ChevronDown, ChevronLeft } from "lucide-react";
+import { Stethoscope, Pill, FileSignature, ExternalLink, ChevronDown, ChevronLeft, Plus, Printer } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { usePermissions } from "@/lib/permissions";
+import { useSessionDoctor } from "@/lib/session-doctor";
+import { printPrescription } from "@/lib/prescriptions";
+import PrescriptionDialog from "@/components/prescriptions/PrescriptionDialog";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -172,6 +176,7 @@ type PrescriptionRow = {
     id: string;
     quantity_prescribed: number;
     dispensed_quantity: number | null;
+    drug_name?: string | null;
     drug: { name_ar: string } | null;
   }[];
 };
@@ -185,13 +190,29 @@ const PRESCRIPTION_STATUS: Record<string, string> = {
 };
 
 export function PatientPrescriptionsTab({ patientId }: { patientId: string }) {
+  const { can } = usePermissions();
+  const { isDoctorRole } = useSessionDoctor();
+  const canPrescribe = isDoctorRole || can("medical_records.write");
+  const [createOpen, setCreateOpen] = useState(false);
+  const patientCard = useQuery({
+    queryKey: ["prescription-patient-card", patientId],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("patients")
+        .select("id, name_ar, organization_id")
+        .eq("id", patientId)
+        .maybeSingle();
+      if (error) throw error;
+      return data as { id: string; name_ar: string; organization_id: string } | null;
+    },
+  });
   const prescriptions = useQuery({
     queryKey: ["patient-prescriptions-context", patientId],
     queryFn: async () => {
       const { data, error } = await supabase
         .from("prescriptions")
         .select(
-          "id, status, issued_at, is_billed, insurance_company_name, doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug:items!prescription_items_drug_item_id_fkey(name_ar))",
+          "id, status, issued_at, is_billed, insurance_company_name, doctor:doctors(name_ar), prescription_items(id, quantity_prescribed, dispensed_quantity, drug_name, drug:items!prescription_items_drug_item_id_fkey(name_ar))",
         )
         .eq("patient_id", patientId)
         .order("issued_at", { ascending: false })
@@ -211,15 +232,31 @@ export function PatientPrescriptionsTab({ patientId }: { patientId: string }) {
             <Pill className="h-4 w-4" />
             الوصفات
           </CardTitle>
-          <CardDescription>الإصدار والصرف من شاشة الصيدلية</CardDescription>
+          <CardDescription>الطبيب يكتب الوصفة فتصل إلى الاستقبال للطباعة بترويسة المجمع</CardDescription>
         </div>
-        <Button size="sm" variant="outline" asChild>
-          <Link to="/pharmacy">
-            <ExternalLink className="h-3.5 w-3.5" />
-            الصيدلية
-          </Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          {canPrescribe && patientCard.data && (
+            <Button size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-3.5 w-3.5" />
+              وصفة جديدة
+            </Button>
+          )}
+          <Button size="sm" variant="outline" asChild>
+            <Link to="/pharmacy">
+              <ExternalLink className="h-3.5 w-3.5" />
+              الصيدلية
+            </Link>
+          </Button>
+        </div>
       </CardHeader>
+      {createOpen && patientCard.data && (
+        <PrescriptionDialog
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          organizationId={patientCard.data.organization_id}
+          patient={{ id: patientCard.data.id, name_ar: patientCard.data.name_ar }}
+        />
+      )}
       <CardContent>
         {prescriptions.isLoading && <Skeleton className="h-32 w-full" />}
         {!prescriptions.isLoading && (
@@ -233,6 +270,7 @@ export function PatientPrescriptionsTab({ patientId }: { patientId: string }) {
                 <TableHead>الحالة</TableHead>
                 <TableHead>التأمين</TableHead>
                 <TableHead>الفوترة</TableHead>
+                <TableHead />
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -245,7 +283,7 @@ export function PatientPrescriptionsTab({ patientId }: { patientId: string }) {
                 const names = items
                   .map((line) => {
                     const drug = Array.isArray(line.drug) ? line.drug[0] : line.drug;
-                    return drug?.name_ar;
+                    return drug?.name_ar ?? line.drug_name;
                   })
                   .filter(Boolean)
                   .join("، ");
@@ -282,10 +320,15 @@ export function PatientPrescriptionsTab({ patientId }: { patientId: string }) {
                         {row.is_billed ? "مفوترة" : "غير مفوترة"}
                       </Badge>
                     </TableCell>
+                    <TableCell>
+                      <Button size="sm" variant="ghost" title="طباعة الوصفة" onClick={() => void printPrescription(row.id)}>
+                        <Printer className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 );
               })}
-              {rows.length === 0 && <EmptyRow colSpan={7} text="لا توجد وصفات لهذا المريض." />}
+              {rows.length === 0 && <EmptyRow colSpan={8} text="لا توجد وصفات لهذا المريض." />}
             </TableBody>
           </Table>
         )}

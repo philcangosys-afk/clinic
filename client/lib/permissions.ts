@@ -16,6 +16,8 @@ import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
  */
 
 export type PermissionKey =
+  // 0221: تعديل السجلّ الطبي (الأسنان، الإجراءات، التقارير، الوصفات)
+  | "medical_records.write"
   | "appointments.view"
   | "appointments.create"
   | "appointments.update"

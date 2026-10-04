@@ -23,7 +23,7 @@ import { usePermissions } from "@/lib/permissions";
 import ServiceEditorDialog from "@/components/catalog/ServiceEditorDialog";
 
 /** مجال الخدمة والطبيب (0218): أسنان أو جلدية. */
-type ServiceDomain = "dental" | "derma";
+export type ServiceDomain = "dental" | "derma";
 const DOMAIN_LABEL: Record<ServiceDomain, string> = { dental: "خدمات الأسنان", derma: "خدمات الجلدية" };
 
 /**
@@ -33,19 +33,27 @@ const DOMAIN_LABEL: Record<ServiceDomain, string> = { dental: "خدمات الأ
  * المرضية) يظهر للجميع، والطبيب الذي لم يُعرف مجاله يرى الكلّ. وإن لم تُنفَّذ
  * الترقية 0218 بعد فلا حصر — المنتقي يعمل كما كان.
  */
-function useDoctorServiceDomain(organizationId: string | undefined, doctorId: string | null | undefined, open: boolean) {
+function useDoctorServiceDomain(
+  organizationId: string | undefined,
+  doctorId: string | null | undefined,
+  open: boolean,
+  forcedDomain?: ServiceDomain | null,
+) {
   return useQuery({
-    queryKey: ["service-domain", organizationId, doctorId ?? null],
-    enabled: open && Boolean(organizationId && doctorId),
+    queryKey: ["service-domain", organizationId, doctorId ?? null, forcedDomain ?? null],
+    enabled: open && Boolean(organizationId && (doctorId || forcedDomain)),
     staleTime: 10 * 60 * 1000,
     queryFn: async () => {
-      const doctor = await supabase
-        .from("v_doctor_service_domain")
-        .select("service_domain")
-        .eq("doctor_id", doctorId!)
-        .maybeSingle();
-      if (doctor.error) return null;
-      const domain = ((doctor.data as { service_domain: ServiceDomain | null } | null)?.service_domain ?? null);
+      let domain: ServiceDomain | null = forcedDomain ?? null;
+      if (!domain) {
+        const doctor = await supabase
+          .from("v_doctor_service_domain")
+          .select("service_domain")
+          .eq("doctor_id", doctorId!)
+          .maybeSingle();
+        if (doctor.error) return null;
+        domain = (doctor.data as { service_domain: ServiceDomain | null } | null)?.service_domain ?? null;
+      }
       if (!domain) return null;
       const items = await supabase
         .from("v_item_service_domain")
@@ -125,12 +133,15 @@ export default function ServiceBrowserDialog({
   onOpenChange,
   onSelect,
   doctorId,
+  domain: forcedDomain,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSelect: (item: PickedService) => void;
   /** طبيب الاتفاقية أو الملاحظة: تُعرض خدمات تخصّصه وحده (0218). */
   doctorId?: string | null;
+  /** مجالٌ ثابت بصرف النظر عن الطبيب — مخطّط الأسنان: خدمات الأسنان كلّها (0221). */
+  domain?: ServiceDomain | null;
 }) {
   const { organization } = useOrganizationAccess();
   const { can } = usePermissions();
@@ -139,7 +150,7 @@ export default function ServiceBrowserDialog({
   const [term, setTerm] = useState("");
   const [creating, setCreating] = useState(false);
   const subtree = useCategorySubtree("item_categories");
-  const scope = useDoctorServiceDomain(organization?.id, doctorId, open);
+  const scope = useDoctorServiceDomain(organization?.id, doctorId, open, forcedDomain);
   const canCreate = can("catalog.manage");
 
   /**
