@@ -26,6 +26,8 @@ export type FileSectionItem = {
   hidden?: boolean;
   /** وسمٌ صغير بجانب الاسم — عدد أو حالة */
   badge?: string | number | null;
+  /** لونٌ يميّز القسم في القائمة (0223: «التقارير الطبية» بنفسجيّ) */
+  tone?: "violet";
 };
 
 export type FileSectionGroup = {
@@ -138,6 +140,10 @@ export function PatientFileShell({
                               isActive
                                 ? "border-e-primary bg-accent font-semibold text-accent-foreground"
                                 : "border-e-transparent text-muted-foreground hover:bg-accent/50 hover:text-foreground",
+                              item.tone === "violet" &&
+                                (isActive
+                                  ? "border-e-violet-600 bg-violet-100 text-violet-900"
+                                  : "bg-violet-50 font-semibold text-violet-700 hover:bg-violet-100 hover:text-violet-900"),
                             )}
                           >
                             <item.icon className="h-4 w-4 shrink-0" aria-hidden />

@@ -67,7 +67,8 @@ import LegacyArchiveTab from "@/components/patients/LegacyArchiveTab";
 import WalletTab from "@/components/patients/WalletTab";
 import DocumentsTab from "@/components/patients/DocumentsTab";
 import RadiologyImagesTab from "@/components/patients/RadiologyImagesTab";
-import MedicalReportsTab from "@/components/patients/MedicalReportsTab";
+import MedicalReportsTab, { MedicalReportsButton } from "@/components/patients/MedicalReportsTab";
+import TransferPatientButton from "@/components/patients/TransferPatientDialog";
 import OccupationalExamTab from "@/components/patients/OccupationalExamTab";
 import ClaimFormsTab from "@/components/patients/ClaimFormsTab";
 import GrowthChartTab from "@/components/patients/GrowthChartTab";
@@ -332,7 +333,7 @@ export default function PatientProfile() {
         { key: "vitals", label: "المؤشرات الحيوية", icon: Activity },
         { key: "prescriptions", label: "الوصفات الطبية", icon: Pill },
         { key: "radiology", label: "صور الأشعة", icon: ImageIcon },
-        { key: "medical-reports", label: "التقارير الطبية", icon: FileBadge },
+        { key: "medical-reports", label: "التقارير الطبية", icon: FileBadge, tone: "violet" },
         { key: "claim-forms", label: "نماذج المطالبات", icon: FileSpreadsheet },
         { key: "occupational", label: "الفحص المهنيّ", icon: Syringe },
         { key: "growth", label: "مخططات النمو", icon: LineChart },
@@ -402,6 +403,10 @@ export default function PatientProfile() {
               patientName={patient.data.name_ar}
               onOpenAll={() => setSection("notes")}
             />
+            {/* التقارير الطبية بجانب الملاحظات وبلونٍ مختلف — ومعها تقارير Kizen (0223) */}
+            <MedicalReportsButton patientId={patient.data.id} onOpen={() => setSection("medical-reports")} />
+            {/* تحويل المريض إلى طبيب آخر: يصير الملفّ مفتوحًا عند الطبيبين (0223) */}
+            <TransferPatientButton patient={patient.data} />
             {/* تقارير المريض بنموذج Kizen والملف الموحّد (0212) */}
             <PatientReportsMenu patientId={patient.data.id} />
             <PatientQuickActions patient={patient.data} />

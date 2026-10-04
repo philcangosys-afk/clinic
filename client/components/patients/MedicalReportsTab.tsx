@@ -1,6 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, FileText, Printer, RefreshCw } from "lucide-react";
+import { Ban, FileBadge, FileText, MessageSquarePlus, Printer, RefreshCw } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
@@ -29,6 +29,7 @@ import {
 } from "@/components/ui/dialog";
 import LookupSelect from "@/components/shared/LookupSelect";
 import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar";
+import { useMemberNames } from "@/components/patients/PatientNotesButton";
 
 /**
  * التقارير الطبية — الإجازة المرضية والإحالة ونموذج الدخول والخروج والتقرير الخاصّ.
@@ -44,6 +45,11 @@ import { GridFooterCount, ScreenToolbar } from "@/components/shell/ScreenToolbar
  *
  * **ولا حذف:** الإلغاء تعطيلٌ بسبب، والرقم يبقى — تقريرٌ ملغًى برقمه أوضح من
  * فجوةٍ لا تفسير لها.
+ *
+ * **0223:** تقارير Kizen منسوخةٌ في الجدول نفسه (`source = 'kizen'`) برقمها
+ * القديم (`legacy_number`) وطبيبها ومستخدمها — تُقرأ وتُطبع ويُضاف عليها
+ * ملاحظات ولا تُلغى. وكلّ تقرير تُلحق به ملاحظاتٌ بكاتبها ووقتها
+ * (`app_add_medical_report_note`) لا تُعدَّل ولا تُحذف.
  */
 
 type MedicalReportRow = {
@@ -68,8 +74,64 @@ type MedicalReportRow = {
   doctor_name: string | null;
   patient_name: string;
   patient_file_number: string | null;
+  created_by: string | null;
+  created_at: string;
+  // 0223
+  source: "zaincare" | "kizen";
+  kizen_key: string | null;
+  legacy_number: number | null;
+  legacy_user_name: string | null;
+  notes_count: number;
+};
+
+type ReportNoteRow = {
+  id: string;
+  body: string;
+  created_by_name: string | null;
   created_at: string;
 };
+
+const reportNumber = (report: Pick<MedicalReportRow, "report_number" | "legacy_number">) =>
+  report.report_number ?? report.legacy_number ?? null;
+
+/** عدد تقارير المريض — لزرّ «التقارير الطبية» أعلى الملفّ */
+function useMedicalReportsCount(patientId: string) {
+  const { organization } = useOrganizationAccess();
+  return useQuery({
+    queryKey: ["medical-reports-count", patientId, organization?.id],
+    enabled: Boolean(patientId && organization?.id),
+    staleTime: 60_000,
+    queryFn: async () => {
+      const { count, error } = await supabase
+        .from("medical_reports")
+        .select("id", { count: "exact", head: true })
+        .eq("organization_id", organization!.id)
+        .eq("patient_id", patientId)
+        .neq("status", "cancelled");
+      if (error) throw error;
+      return count ?? 0;
+    },
+  });
+}
+
+/**
+ * زرّ «التقارير الطبية» أعلى ملفّ المريض بجانب الملاحظات (0223) — بلونٍ
+ * مختلف ليُعرف من أوّل نظرة، وعليه عدد التقارير. لكلّ الأدوار: الطبيب يكتب
+ * ويضيف الملاحظات، والاستقبال يقرأ ويطبع.
+ */
+export function MedicalReportsButton({ patientId, onOpen }: { patientId: string; onOpen: () => void }) {
+  const count = useMedicalReportsCount(patientId);
+  return (
+    <Button size="sm" className="gap-1.5 bg-violet-600 text-white hover:bg-violet-700" onClick={onOpen}>
+      <FileBadge className="h-3.5 w-3.5" />
+      التقارير الطبية
+      {(count.data ?? 0) > 0 && (
+        <span className="rounded-full bg-white/25 px-1.5 text-[11px] font-bold tabular-nums">{count.data}</span>
+      )}
+    </Button>
+  );
+}
+
 
 const TYPE_LABELS: Record<MedicalReportRow["report_type"], string> = {
   medical_leave: "تقرير طبي وإجازة مرضية",
@@ -122,6 +184,10 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
   const [issueType, setIssueType] = useState<MedicalReportRow["report_type"] | null>(null);
   const [cancelFor, setCancelFor] = useState<MedicalReportRow | null>(null);
   const [cancelReason, setCancelReason] = useState("");
+  const [noteText, setNoteText] = useState("");
+  // ملاحظةٌ مكتوبة لا تنتقل إلى تقريرٍ آخر عند تغيير الاختيار
+  useEffect(() => setNoteText(""), [selectedId]);
+  const memberNames = useMemberNames();
 
   const reports = useQuery({
     queryKey: ["medical-reports", patientId, organization?.id],
@@ -145,6 +211,55 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
      جديد: زرٌّ يظهر ثمّ تردّ القاعدة عمليته أسوأ من زرٍّ غائب. */
   const canIssue = can("medical_records.write");
 
+  const userName = (report: MedicalReportRow) =>
+    report.source === "kizen"
+      ? report.legacy_user_name
+      : report.created_by
+        ? memberNames.data?.[report.created_by] ?? null
+        : null;
+
+  const fetchNotes = async (reportId: string) => {
+    const { data, error } = await supabase
+      .from("medical_report_notes")
+      .select("id, body, created_by_name, created_at")
+      .eq("report_id", reportId)
+      .order("created_at", { ascending: true });
+    if (error) throw error;
+    return (data ?? []) as ReportNoteRow[];
+  };
+
+  const notes = useQuery({
+    queryKey: ["medical-report-notes", selectedId],
+    enabled: Boolean(selectedId),
+    queryFn: () => fetchNotes(selectedId!),
+  });
+
+  const refreshReports = () => {
+    queryClient.invalidateQueries({ queryKey: ["medical-reports", patientId] });
+    queryClient.invalidateQueries({ queryKey: ["medical-reports-count", patientId] });
+  };
+
+  const addNote = useMutation({
+    mutationFn: async () => {
+      if (!selected) throw new Error("اختر تقريرًا من الجدول أوّلًا");
+      const text = noteText.trim();
+      if (!text) throw new Error("اكتب نصّ الملاحظة");
+      const { error } = await supabase.rpc("app_add_medical_report_note", {
+        p_report_id: selected.id,
+        p_body: text,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      setNoteText("");
+      queryClient.invalidateQueries({ queryKey: ["medical-report-notes", selectedId] });
+      refreshReports();
+      toast({ title: "حُفظت الملاحظة على التقرير" });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر حفظ الملاحظة", description: errorMessage(error) }),
+  });
+
   const cancelReport = useMutation({
     mutationFn: async () => {
       if (!cancelFor) throw new Error("لم يُختَر تقرير");
@@ -157,19 +272,26 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
     onSuccess: () => {
       setCancelFor(null);
       setCancelReason("");
-      queryClient.invalidateQueries({ queryKey: ["medical-reports", patientId] });
+      refreshReports();
       toast({ title: "أُلغي التقرير" });
     },
     onError: (error: unknown) =>
       toast({ variant: "destructive", title: "تعذّر الإلغاء", description: errorMessage(error) }),
   });
 
-  const printReport = (report: MedicalReportRow) => {
+  const printReport = async (report: MedicalReportRow) => {
+    let reportNotes: ReportNoteRow[] = [];
+    try {
+      reportNotes = await fetchNotes(report.id);
+    } catch (error) {
+      toast({ variant: "destructive", title: "تعذّر جلب ملاحظات التقرير", description: errorMessage(error) });
+      return;
+    }
     const line = (label: string, value: string | null | undefined) =>
       value ? `<tr><th style="text-align:start;width:9rem">${escapeHtml(label)}</th><td>${escapeHtml(value)}</td></tr>` : "";
     const rowsHtml = [
-      line("رقم التقرير", report.report_number ? String(report.report_number) : "—"),
-      line("التاريخ", formatDate(report.report_date, calendarDisplay)),
+      line("رقم التقرير", reportNumber(report) ? String(reportNumber(report)) : "—"),
+      line("التاريخ", formatDateTime(report.created_at, calendarDisplay)),
       line("المريض", `${report.patient_name}${report.patient_file_number ? ` (ملف ${report.patient_file_number})` : ""}`),
       line("الطبيب", report.doctor_name),
       line("إلى", report.issued_to),
@@ -202,6 +324,18 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
        ${report.status === "cancelled" ? '<p style="color:#b91c1c;font-weight:700">هذا التقرير ملغى</p>' : ""}
        <table style="width:100%;border-collapse:collapse" border="1" cellpadding="6">${rowsHtml}</table>
        ${report.body ? `<p style="white-space:pre-wrap;margin-top:1rem">${escapeHtml(report.body)}</p>` : ""}
+       ${
+         reportNotes.length
+           ? `<h4 style="margin-top:1.25rem">ملاحظات على التقرير</h4><ul>${reportNotes
+               .map(
+                 (note) =>
+                   `<li style="white-space:pre-wrap;margin-bottom:.4rem">${escapeHtml(note.body)}<br/><small style="color:#6b7280">${escapeHtml(
+                     note.created_by_name ?? "",
+                   )} — ${escapeHtml(formatDateTime(note.created_at, calendarDisplay))}</small></li>`,
+               )
+               .join("")}</ul>`
+           : ""
+       }
        <p style="margin-top:3rem">التوقيع: ..............................</p>`,
     );
   };
@@ -245,7 +379,7 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
             icon: Printer,
             disabled: !selected,
             title: selected ? "طباعة التقرير المختار" : "اختر تقريرًا من الجدول أوّلًا",
-            onClick: () => selected && printReport(selected),
+            onClick: () => selected && void printReport(selected),
           },
           {
             key: "cancel",
@@ -253,8 +387,11 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
             icon: Ban,
             tone: "danger",
             hidden: !canIssue,
-            disabled: !selected || selected.status === "cancelled",
-            title: "التقرير الطبي لا يُحذف — يُلغى بسبب ويبقى رقمه",
+            disabled: !selected || selected.status === "cancelled" || selected.source === "kizen",
+            title:
+              selected?.source === "kizen"
+                ? "تقارير النظام السابق (Kizen) أرشيفٌ لا يُلغى — أضف عليه ملاحظة"
+                : "التقرير الطبي لا يُحذف — يُلغى بسبب ويبقى رقمه",
             onClick: () => selected && setCancelFor(selected),
           },
           { key: "sep2", separator: true },
@@ -266,7 +403,8 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
         <CardHeader>
           <CardTitle>التقارير الطبية</CardTitle>
           <CardDescription>
-            سجلّ ما صدر لهذا المريض — اختر صفًّا ليظهر نصّه كاملًا تحت الجدول
+            سجلّ ما صدر لهذا المريض، ومعه تقاريره من النظام السابق (Kizen) — اختر صفًّا ليظهر نصّه
+            وملاحظاته تحت الجدول، ومن هناك تُضاف ملاحظة جديدة على التقرير
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -283,8 +421,11 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
                   <TableHead>النوع</TableHead>
                   <TableHead>الرقم</TableHead>
                   <TableHead>التاريخ</TableHead>
+                  <TableHead>الوقت</TableHead>
                   <TableHead>الطبيب</TableHead>
+                  <TableHead>المستخدم</TableHead>
                   <TableHead>إلى</TableHead>
+                  <TableHead>ملاحظات</TableHead>
                   <TableHead>الحالة</TableHead>
                 </TableRow>
               </TableHeader>
@@ -298,13 +439,33 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
                       report.id === selectedId ? "cursor-pointer bg-accent" : "cursor-pointer hover:bg-accent/50"
                     }
                   >
-                    <TableCell className="font-medium">{TYPE_LABELS[report.report_type]}</TableCell>
-                    <TableCell className="font-mono text-xs">{report.report_number ?? "—"}</TableCell>
+                    <TableCell className="font-medium">
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {TYPE_LABELS[report.report_type]}
+                        {report.source === "kizen" && (
+                          <Badge variant="outline" className="border-amber-400 bg-amber-50 text-[10px] text-amber-800">
+                            Kizen
+                          </Badge>
+                        )}
+                      </span>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{reportNumber(report) ?? "—"}</TableCell>
                     <TableCell className="whitespace-nowrap text-xs">
                       {formatDate(report.report_date, calendarDisplay)}
                     </TableCell>
+                    <TableCell className="whitespace-nowrap text-xs tabular-nums" dir="ltr">
+                      {new Date(report.created_at).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })}
+                    </TableCell>
                     <TableCell className="text-xs text-muted-foreground">{report.doctor_name ?? "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{userName(report) ?? "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{report.issued_to ?? "—"}</TableCell>
+                    <TableCell className="text-xs">
+                      {report.notes_count > 0 ? (
+                        <Badge variant="secondary">{report.notes_count}</Badge>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
                     <TableCell>
                       {report.status === "cancelled" ? (
                         <Badge variant="destructive">{STATUS_LABELS.cancelled}</Badge>
@@ -318,7 +479,7 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
                 ))}
                 {rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={9} className="py-8 text-center text-sm text-muted-foreground">
                       لم يصدر لهذا المريض تقرير طبيّ بعد.
                     </TableCell>
                   </TableRow>
@@ -333,13 +494,19 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
       {selected && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">
+            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
               {TYPE_LABELS[selected.report_type]}
-              {selected.report_number ? ` #${selected.report_number}` : ""}
+              {reportNumber(selected) ? ` #${reportNumber(selected)}` : ""}
+              {selected.source === "kizen" && (
+                <Badge variant="outline" className="border-amber-400 bg-amber-50 text-amber-800">
+                  من النظام السابق — Kizen
+                </Badge>
+              )}
             </CardTitle>
             <CardDescription>
-              {formatDate(selected.report_date, calendarDisplay)}
+              {formatDateTime(selected.created_at, calendarDisplay)}
               {selected.doctor_name ? ` · ${selected.doctor_name}` : ""}
+              {userName(selected) ? ` · المستخدم: ${userName(selected)}` : ""}
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-2 text-sm">
@@ -369,7 +536,57 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
             {selected.diagnosis_text && <p>التشخيص: {selected.diagnosis_text}</p>}
             {selected.issued_to && <p>إلى: {selected.issued_to}</p>}
             {selected.insurance_company_name && <p>شركة التأمين: {selected.insurance_company_name}</p>}
-            {selected.body && <p className="whitespace-pre-wrap">{selected.body}</p>}
+            {selected.body && (
+              <p className="whitespace-pre-wrap rounded-md border bg-muted/30 p-3" dir="auto">
+                {selected.body}
+              </p>
+            )}
+
+            <div className="mt-2 flex flex-col gap-2 border-t pt-3">
+              <p className="flex items-center gap-1.5 font-semibold">
+                <MessageSquarePlus className="h-4 w-4 text-violet-600" />
+                ملاحظات على التقرير
+              </p>
+              {notes.isLoading && <Skeleton className="h-10 w-full" />}
+              {notes.isError && (
+                <p className="text-xs text-destructive">تعذّر تحميل الملاحظات: {errorMessage(notes.error)}</p>
+              )}
+              {!notes.isLoading && (notes.data ?? []).length === 0 && (
+                <p className="text-xs text-muted-foreground">لا ملاحظات على هذا التقرير بعد.</p>
+              )}
+              {(notes.data ?? []).map((note) => (
+                <div key={note.id} className="rounded-md border-s-4 border-violet-400 bg-violet-50/60 p-2">
+                  <p className="whitespace-pre-wrap" dir="auto">
+                    {note.body}
+                  </p>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    {note.created_by_name ?? "—"} — {formatDateTime(note.created_at, calendarDisplay)}
+                  </p>
+                </div>
+              ))}
+
+              {canIssue && selected.status !== "cancelled" && (
+                <div className="flex flex-col gap-2">
+                  <Textarea
+                    value={noteText}
+                    onChange={(e) => setNoteText(e.target.value)}
+                    rows={3}
+                    maxLength={4000}
+                    placeholder="اكتب ملاحظة تُحفظ على هذا التقرير بكاتبها ووقتها..."
+                  />
+                  <div className="flex justify-end">
+                    <Button
+                      size="sm"
+                      className="bg-violet-600 text-white hover:bg-violet-700"
+                      disabled={!noteText.trim() || addNote.isPending}
+                      onClick={() => addNote.mutate()}
+                    >
+                      {addNote.isPending ? "جارٍ الحفظ..." : "حفظ الملاحظة"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
           </CardContent>
         </Card>
       )}
@@ -380,7 +597,7 @@ export default function MedicalReportsTab({ patientId }: { patientId: string }) 
         onOpenChange={(next) => !next && setIssueType(null)}
         onIssued={(id) => {
           setSelectedId(id);
-          queryClient.invalidateQueries({ queryKey: ["medical-reports", patientId] });
+          refreshReports();
         }}
       />
 
@@ -458,6 +675,11 @@ function IssueReportDialog({
 
   /* عدد الأيام يُعرض وهو يُكتب لا بعد الحفظ: طبيبٌ يكتب تاريخين ويقصد ثلاثة
      أيام فيخرجان أربعة يجب أن يراها قبل أن يوقّع. */
+  // طبيبٌ واحد في القائمة (الطبيب الداخل) يُختار تلقائيًّا
+  useEffect(() => {
+    if (reportType && !doctorId && (doctors.data ?? []).length === 1) setDoctorId(doctors.data![0].id);
+  }, [reportType, doctorId, doctors.data]);
+
   const leaveDays = useMemo(() => {
     if (!leaveStart || !leaveEnd) return null;
     const start = new Date(`${leaveStart}T00:00:00`);
