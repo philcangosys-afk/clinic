@@ -9,6 +9,7 @@ import { formatAmount } from "@/lib/locale";
 import { usePermissions } from "@/lib/permissions";
 import { useMemberNames } from "@/lib/member-names";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { NO_DOCTOR, useSessionDoctor } from "@/lib/session-doctor";
 import { useToast } from "@/hooks/use-toast";
 import { printAgreement, useAgreement, useAgreementQuotes, type AgreementListRow } from "@/lib/agreements";
 import QuoteEditorDialog, { useDoctorsAndClinics } from "@/components/agreements/QuoteEditorDialog";
@@ -408,6 +409,39 @@ export default function AgreementDialog({
   const lists = useDoctorsAndClinics(organizationId);
   const members = useMemberNames(organizationId);
 
+  /**
+   * طبيب الاتفاقية الجديدة (0221): كان «الطبيب المعالج» في ملفّ المريض دائمًا —
+   * فمريضةٌ سُجّل لها ماجد أوّل مرّة ثم صارت عند محمد تُنشأ اتفاقيتها باسم
+   * ماجد، فلا يراها محمد (الطبيب يرى اتفاقياته وحده).
+   *   • الطبيب الداخل ⇐ هو نفسه، ولا يُغيَّر.
+   *   • غيره (الاستقبال) ⇐ طبيب موعد المريض اليوم، وإلّا الطبيب المعالج.
+   */
+  const { doctorId: sessionDoctorId, isDoctorScope } = useSessionDoctor();
+  const sessionDoctor = isDoctorScope && sessionDoctorId && sessionDoctorId !== NO_DOCTOR ? sessionDoctorId : null;
+  const todayDoctor = useQuery({
+    queryKey: ["agreement-today-doctor", organizationId, pickedPatientId],
+    enabled: open && !currentId && !sessionDoctor && Boolean(organizationId && pickedPatientId),
+    queryFn: async () => {
+      const start = new Date();
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 1);
+      const { data, error } = await supabase
+        .from("appointments")
+        .select("doctor_id, scheduled_start")
+        .eq("organization_id", organizationId!)
+        .eq("patient_id", pickedPatientId!)
+        .gte("scheduled_start", start.toISOString())
+        .lt("scheduled_start", end.toISOString())
+        .not("doctor_id", "is", null)
+        .not("status", "in", "(cancelled_by_patient,cancelled_by_staff,no_show)")
+        .order("scheduled_start", { ascending: false })
+        .limit(1);
+      if (error) throw error;
+      return ((data ?? [])[0] as { doctor_id: string } | undefined)?.doctor_id ?? null;
+    },
+  });
+
   useEffect(() => {
     if (open) {
       setCurrentId(agreementId);
@@ -433,7 +467,8 @@ export default function AgreementDialog({
       setNote(row.note ?? "");
     } else {
       if (pickedPatientId && !patient.data) return;
-      setDoctorId(patient.data?.treating_doctor_id ?? NONE);
+      if (!sessionDoctor && pickedPatientId && todayDoctor.isLoading) return;
+      setDoctorId(sessionDoctor ?? todayDoctor.data ?? patient.data?.treating_doctor_id ?? NONE);
       setClinicId(NONE);
       setRegistrarId(session?.user?.id ?? NONE);
       setAgreementDate(todayIso());
@@ -442,7 +477,7 @@ export default function AgreementDialog({
     }
     setDirty(false);
     setLoadedFor(key);
-  }, [open, currentId, pickedPatientId, agreement.data, patient.data, loadedFor]);
+  }, [open, currentId, pickedPatientId, agreement.data, patient.data, loadedFor, sessionDoctor, todayDoctor.data, todayDoctor.isLoading]);
 
   const row = agreement.data ?? null;
   const readOnly = !canManage || Boolean(row?.is_disabled);
@@ -646,7 +681,7 @@ export default function AgreementDialog({
               </div>
               <div className="flex flex-col gap-1">
                 <Label className="text-xs">الطبيب المعالج</Label>
-                <Select value={doctorId} onValueChange={(value) => { setDoctorId(value); setDirty(true); }} disabled={readOnly}>
+                <Select value={doctorId} onValueChange={(value) => { setDoctorId(value); setDirty(true); }} disabled={readOnly || (!currentId && Boolean(sessionDoctor))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value={NONE}>— بلا طبيب —</SelectItem>
