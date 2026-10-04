@@ -187,7 +187,9 @@ export default function ZatcaPendingDialog({
                     <TableRow key={row.invoice_id}>
                       <TableCell className="whitespace-nowrap font-mono text-xs">
                         {row.label}
-                        {row.document_type !== "invoice" && (
+                        {/* document_type للفاتورة العادية «simplified/standard» لا «invoice» —
+                            الوسم للإشعارين وحدهما */}
+                        {(row.document_type === "credit_note" || row.document_type === "debit_note") && (
                           <span className="ms-1 text-muted-foreground">
                             ({row.document_type === "credit_note" ? "إشعار دائن" : "إشعار مدين"})
                           </span>
