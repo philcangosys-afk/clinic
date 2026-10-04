@@ -33,7 +33,7 @@ import ExamCategoryManager, { ExamCategorySelect } from "@/components/shared/Exa
 import ResultAttachments from "@/components/shared/ResultAttachments";
 import { useToast } from "@/hooks/use-toast";
 import PatientPicker from "@/components/shared/PatientPicker";
-import ItemPicker from "@/components/shared/ItemPicker";
+import ItemPicker, { findItemByExactName } from "@/components/shared/ItemPicker";
 import BillingItemLink from "@/components/shared/BillingItemLink";
 import { errorMessage } from "@/lib/error-message";
 
@@ -390,6 +390,8 @@ function NewLabTestDialog({
   const [categoryId, setCategoryId] = useState("");
   // صنف الفوترة: عمود `billing_item_id` موجود منذ 0013 ولم يكن يُقرأ ولا يُكتب
   const [billingItem, setBillingItem] = useState<{ id: string; name_ar: string } | null>(null);
+  // ما كُتب في حقل صنف الفوترة ولم يُضغط عليه من القائمة (0223)
+  const [pickerTerm, setPickerTerm] = useState("");
 
   const createTest = useMutation({
     mutationFn: async () => {
@@ -399,8 +401,16 @@ function NewLabTestDialog({
       // النموذج يمرّر `null` فيفشل الحفظ دائمًا برسالة قاعدة غير مفهومة، وهذا
       // يمنع إضافة فحص واحد إلى الكتالوج. الفحص هنا يقول للمستخدم ما ينقص.
       if (!nameAr.trim()) throw new Error("اسم الفحص مطلوب");
-      if (!billingItem?.id)
-        throw new Error("اربط الفحص بصنف فوترة — بدونه لا يظهر الفحص في فاتورة الزيارة");
+      // كُتب اسم الخدمة ولم يُضغط عليها؟ تُربط إن طابق صنفًا واحدًا حرفيًّا
+      // (المكتوب في الحقل، ثم اسم الفحص نفسه)، ولا يُخمَّن عند التعدّد (0223).
+      const linked =
+        billingItem ?? (await findItemByExactName(organizationId, [pickerTerm, nameAr]));
+      if (!linked?.id)
+        throw new Error(
+          pickerTerm.trim()
+            ? `كتبت «${pickerTerm.trim()}» في صنف الفوترة ولم تختر الخدمة — اضغط على اسمها من القائمة تحت الخانة حتى يظهر فوقها`
+            : "اربط الفحص بصنف فوترة: اكتب اسم الخدمة في حقل «صنف الفوترة» واضغط عليها من القائمة — بدونه لا يظهر الفحص في فاتورة الزيارة",
+        );
       const { error } = await supabase.from("lab_tests").insert({
         organization_id: organizationId,
         name_ar: nameAr.trim(),
@@ -409,13 +419,14 @@ function NewLabTestDialog({
         normal_range_min: rangeMin ? Number(rangeMin) : null,
         normal_range_max: rangeMax ? Number(rangeMax) : null,
         normal_range_text: rangeText.trim() || null,
-        billing_item_id: billingItem.id,
+        billing_item_id: linked.id,
       });
       if (error) throw error;
+      return linked.name_ar;
     },
-    onSuccess: () => {
+    onSuccess: (linkedName) => {
       queryClient.invalidateQueries({ queryKey: ["lab-tests", organizationId] });
-      toast({ title: "تم حفظ الفحص" });
+      toast({ title: "تم حفظ الفحص", description: `صنف الفوترة: ${linkedName}` });
       setNameAr("");
       setUnit("");
       setRangeMin("");
@@ -423,6 +434,7 @@ function NewLabTestDialog({
       setRangeText("");
       setCategoryId("");
       setBillingItem(null);
+      setPickerTerm("");
       onOpenChange(false);
     },
     onError: (error: unknown) =>
@@ -481,7 +493,11 @@ function NewLabTestDialog({
                 </Button>
               </div>
             ) : (
-              <ItemPicker onSelect={(item) => setBillingItem({ id: item.id, name_ar: item.name_ar })} />
+              <ItemPicker
+                inline
+                onTermChange={setPickerTerm}
+                onSelect={(item) => setBillingItem({ id: item.id, name_ar: item.name_ar })}
+              />
             )}
           </div>
         </div>
