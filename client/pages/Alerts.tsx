@@ -15,6 +15,7 @@ import { usePermissions } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
 import { isNotificationSoundOn, setNotificationSound } from "@/components/layout/LiveNotifier";
+import { hasArabicVoice, isNotificationVoiceOn, isSpeechSupported, setNotificationVoice } from "@/lib/speech";
 
 /**
  * التنبيهات الموحّدة (لقطة 80).
@@ -279,6 +280,7 @@ function NotificationInbox() {
   const { toast } = useToast();
   const [onlyUnread, setOnlyUnread] = useState(false);
   const [soundOn, setSoundOn] = useState(isNotificationSoundOn);
+  const [voiceOn, setVoiceOn] = useState(isNotificationVoiceOn);
 
   const notifications = useQuery({
     queryKey: ["my-notifications", organization?.id],
@@ -415,6 +417,29 @@ function NotificationInbox() {
               }}
             >
               {soundOn ? "الصوت: مفعّل" : "الصوت: مكتوم"}
+            </Button>
+            {/* قراءة التنبيه بالعربي (0224): «دكتور أمجد، لديك مريض جديد…» */}
+            <Button
+              variant="outline"
+              title={
+                !isSpeechSupported()
+                  ? "المتصفّح لا يدعم النطق"
+                  : hasArabicVoice()
+                    ? "قراءة التنبيه بالصوت على هذا الجهاز"
+                    : "لا يوجد صوت عربي في هذا الجهاز — ثبّت اللغة العربية في إعدادات ويندوز (الكلام) أو استخدم كروم"
+              }
+              disabled={!isSpeechSupported()}
+              onClick={() => {
+                setNotificationVoice(!voiceOn);
+                setVoiceOn(!voiceOn);
+                if (!voiceOn && "speechSynthesis" in window) {
+                  const u = new SpeechSynthesisUtterance("تم تفعيل قراءة التنبيهات بالصوت");
+                  u.lang = "ar-SA";
+                  window.speechSynthesis.speak(u);
+                }
+              }}
+            >
+              {voiceOn ? "النطق: مفعّل" : "النطق: مكتوم"}
             </Button>
             <Button variant="outline" disabled={generate.isPending}
                     onClick={() => generate.mutate()}>

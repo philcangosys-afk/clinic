@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabase";
 import { useToast } from "@/hooks/use-toast";
 import { ToastAction } from "@/components/ui/toast";
 import { Button } from "@/components/ui/button";
+import { flushPendingSpeech, speakNotification, speechForNotification } from "@/lib/speech";
 
 /**
  * التنبيه الحيّ — نافذةٌ منبثقة وصوت لكلّ تنبيهٍ جديد في صندوق المستخدم.
@@ -31,6 +32,7 @@ const NO_SOUND_KEY = "zaincare:notify-sound-off";
 
 type LiveRow = {
   id: string;
+  event_key: string | null;
   title: string;
   body: string | null;
   severity: "info" | "warning" | "critical";
@@ -84,6 +86,8 @@ function unlockAudio() {
       pendingChime = null;
       playChime(urgent);
     }
+    // ما وصل قبل الإذن يُنطق بعد النغمة (0224)
+    if (ctx.state === "running") window.setTimeout(flushPendingSpeech, 700);
   };
   if (ctx.state === "running") after();
   else void ctx.resume().then(after, after);
@@ -142,6 +146,23 @@ export default function LiveNotifier() {
 
   const audioOn = useAudioRunning();
 
+  // اسم الطبيب الداخل — «دكتور أمجد، لديك مريض جديد» (0224)
+  const myDoctor = useQuery({
+    queryKey: ["my-doctor-name", orgId, userId],
+    enabled: Boolean(orgId && userId),
+    staleTime: 30 * 60_000,
+    queryFn: async () => {
+      const { data } = await supabase
+        .from("doctors")
+        .select("name_ar")
+        .eq("organization_id", orgId!)
+        .eq("user_id", userId!)
+        .eq("is_enabled", true)
+        .limit(1);
+      return ((data ?? [])[0] as { name_ar: string } | undefined)?.name_ar ?? null;
+    },
+  });
+
   // كلّ نقرة أو ضغطة مفتاح: يُفتح الصوت إن كان مقفلًا (لا مرّةً واحدة فقط —
   // فقد يُعلَّق السياق لاحقًا)، ويُطلب إذن تنبيهات سطح المكتب
   useEffect(() => {
@@ -197,7 +218,7 @@ export default function LiveNotifier() {
       }
       const { data, error } = await supabase
         .from("v_my_notifications")
-        .select("id, title, body, severity, action_path, created_at")
+        .select("id, event_key, title, body, severity, action_path, created_at")
         .eq("organization_id", orgId!)
         .is("read_at", null)
         .gt("created_at", sinceRef.current)
@@ -218,6 +239,15 @@ export default function LiveNotifier() {
     fresh.forEach((row) => shownRef.current.add(row.id));
 
     playChime(fresh.some((row) => row.severity !== "info"));
+
+    // قراءة التنبيه بالصوت بعد النغمة: مريض جديد للطبيب، ودخل/خرج للاستقبال (0224)
+    const canSpeak = audioRunning();
+    for (const row of fresh.slice(-3)) {
+      const text = speechForNotification(row, myDoctor.data ?? null);
+      if (!text) continue;
+      if (canSpeak) window.setTimeout(() => speakNotification(text, true), 700);
+      else speakNotification(text, false);
+    }
 
     // ثلاثة على الأكثر في المرّة — والبقية في شاشة التنبيهات
     for (const row of fresh.slice(-3)) {
@@ -256,7 +286,7 @@ export default function LiveNotifier() {
     }
     queryClient.invalidateQueries({ queryKey: ["notification-summary"] });
     queryClient.invalidateQueries({ queryKey: ["my-notifications"] });
-  }, [live.data, orgId, userId, navigate, queryClient, toast]);
+  }, [live.data, orgId, userId, navigate, queryClient, toast, myDoctor.data]);
 
   if (audioOn || !isNotificationSoundOn() || !orgId || !userId) return null;
   return (
