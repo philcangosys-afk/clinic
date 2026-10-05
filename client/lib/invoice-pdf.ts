@@ -199,6 +199,28 @@ const PAPER_CSS: Record<string, string> = {
  * على خلفيةٍ داكنة لمن يستعمل الوضع الليليّ.
  */
 export async function downloadInvoicePdf(data: InvoicePrintData): Promise<void> {
+  const { blob, fileName } = await buildInvoicePdf(data);
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
+/**
+ * الفاتورة ملفًّا (Blob) — الورقة نفسها التي تُطبع. يستعملها التحميل والإرسال.
+ *
+ * `mono` (الافتراض): أبيض وأسود خالصان للورق الحراريّ. والإرسال للمريض يطلبه
+ * `false`: الملفّ يُقرأ على شاشة جوال لا على طابعة، فيبقى الشعار بألوانه.
+ */
+export async function buildInvoicePdf(
+  data: InvoicePrintData,
+  options: { mono?: boolean } = {},
+): Promise<{ blob: Blob; fileName: string }> {
+  const mono = options.mono ?? true;
   const paper = data.header.paper_size ?? "thermal_80mm";
   const widthMm = PAPER_MM[paper] ?? 72;
   const widthPx = Math.round((widthMm * 96) / 25.4);
@@ -284,7 +306,7 @@ export async function downloadInvoicePdf(data: InvoicePrintData): Promise<void> 
       }
     }
 
-    if (paper !== "a4") {
+    if (paper !== "a4" && mono) {
       const ctx = canvas.getContext("2d");
       if (ctx) {
         const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
@@ -330,12 +352,49 @@ export async function downloadInvoicePdf(data: InvoicePrintData): Promise<void> 
         offset += pageHeight;
       }
     } else {
-      pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, widthMm, heightMm);
+      // الملوّن للشاشة JPEG (أصغر بكثير)، والأبيض والأسود للطابعة PNG بلا فقد
+      if (mono) pdf.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, widthMm, heightMm);
+      else pdf.addImage(canvas.toDataURL("image/jpeg", 0.9), "JPEG", 0, 0, widthMm, heightMm);
     }
 
-    pdf.save(`فاتورة-${invoiceLabel(data.header)}.pdf`);
+    return { blob: pdf.output("blob"), fileName: `فاتورة-${invoiceLabel(data.header)}.pdf` };
   } finally {
     // الإطار يُزال مهما جرى: إطارٌ متروكٌ في كل ضغطةٍ يُراكم مستندات في الذاكرة
     frame.remove();
   }
+}
+
+/**
+ * رابط الفاتورة للإرسال بالواتساب أو البريد (0230).
+ *
+ * روابط `wa.me` و`mailto` لا تحمل مرفقًا، فتُرفع الفاتورة PDF — الورقة نفسها
+ * التي تُطبع — إلى حاوية `invoice-shares` ويُرسَل رابطها في الرسالة؛ يضغطه
+ * المريض فتُفتح الفاتورة كاملة على جواله.
+ *
+ * المسار `<المنشأة>/<معرّف عشوائي>/invoice-<الرقم>.pdf`: المعرّف العشوائيّ هو
+ * ما يحمي الرابط (لا يُخمَّن، والحاوية لا تُسرَد)، والاسم بحروفٍ لاتينية لأنّ
+ * التخزين يرفض المفاتيح العربية.
+ */
+export async function uploadInvoicePdfForSharing(
+  data: InvoicePrintData,
+  organizationId: string,
+): Promise<string> {
+  const { blob } = await buildInvoicePdf(data, { mono: false });
+  const safeNumber = invoiceLabel(data.header).replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "invoice";
+  const token =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+  const path = `${organizationId}/${token}/invoice-${safeNumber}.pdf`;
+  const { error } = await supabase.storage
+    .from("invoice-shares")
+    .upload(path, blob, { contentType: "application/pdf", upsert: false, cacheControl: "31536000" });
+  if (error) {
+    const text = String(error.message ?? "");
+    if (/bucket not found/i.test(text)) {
+      throw new Error("حاوية روابط الفواتير غير موجودة — نفّذ الترقية 0230 أوّلًا");
+    }
+    throw error;
+  }
+  return supabase.storage.from("invoice-shares").getPublicUrl(path).data.publicUrl;
 }

@@ -1,5 +1,6 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Printer, Receipt, RefreshCw, WalletCards } from "lucide-react";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { CreditCard, Printer, Receipt, RefreshCw, WalletCards } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
@@ -14,6 +15,11 @@ import InvoiceActions from "@/components/billing/InvoiceActions";
 import ZatcaInvoicePanel from "@/components/billing/ZatcaInvoicePanel";
 import { printPaymentReceipt } from "@/lib/payment-receipt";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { usePermissions } from "@/lib/permissions";
+import { useToast } from "@/hooks/use-toast";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { SalesInvoiceStatus, SalesInvoiceWithPatient } from "@/lib/database.types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -154,6 +160,9 @@ export function InvoiceDetailsDialog({
   const queryClient = useQueryClient();
   const details = useInvoiceDetails(invoiceId);
   const payments = useInvoicePaymentGrid(invoiceId);
+  const { can } = usePermissions();
+  const canCorrectMethod = can("billing.issue") || can("billing.void");
+  const [correcting, setCorrecting] = useState<any | null>(null);
 
   const invoice = details.data?.invoice;
   const items = details.data?.items ?? [];
@@ -336,6 +345,17 @@ export function InvoiceDetailsDialog({
                               {row.payment_method_name && (
                                 <span className="ms-1 text-muted-foreground">{row.payment_method_name}</span>
                               )}
+                              {canCorrectMethod && !row.is_void && (
+                                <button
+                                  type="button"
+                                  onClick={() => setCorrecting(row)}
+                                  title="تصحيح طريقة الدفع — لا يمسّ الفاتورة ولا ZATCA"
+                                  className="ms-1.5 inline-flex items-center gap-0.5 rounded border border-primary/40 px-1.5 py-0.5 text-[10px] font-medium text-primary hover:bg-primary/10"
+                                >
+                                  <CreditCard className="h-3 w-3" />
+                                  تصحيح
+                                </button>
+                              )}
                             </TableCell>
                             <TableCell className="whitespace-nowrap text-xs">{row.register_name ?? "—"}</TableCell>
                             <TableCell className="whitespace-nowrap text-xs">{row.doctor_name ?? "—"}</TableCell>
@@ -385,6 +405,17 @@ export function InvoiceDetailsDialog({
           </div>
         )}
 
+        <CorrectPaymentMethodDialog
+          row={correcting}
+          organizationId={organization?.id}
+          onClose={() => setCorrecting(null)}
+          onDone={() => {
+            setCorrecting(null);
+            queryClient.invalidateQueries({ queryKey: ["invoice-payment-grid", invoiceId] });
+            queryClient.invalidateQueries({ queryKey: ["invoice-payments"] });
+          }}
+        />
+
         <DialogFooter className="gap-2">
           {invoice && canPay && payable && onPay && (
             <Button onClick={() => onPay(invoice)}>
@@ -428,3 +459,136 @@ function Amount({
 }
 
 export default InvoiceDetailsDialog;
+
+/**
+ * تصحيح طريقة الدفع على سندٍ واحد (0232).
+ *
+ * طريقة الدفع تعيش في سند القبض لا في الفاتورة، ولا تدخل مستند ZATCA للفاتورة
+ * العادية — فتصحيحها لا يمسّ الفاتورة ولا توقيعها ولا رمزها. بسببٍ مكتوب
+ * وسطرٍ في سجلّ التدقيق. وما يمسّ النقد (نقدي ↔ بطاقة) تمنعه القاعدة بعد
+ * إقفال المناوبة أو اليومية.
+ */
+function CorrectPaymentMethodDialog({
+  row,
+  organizationId,
+  onClose,
+  onDone,
+}: {
+  row: any | null;
+  organizationId: string | undefined;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { toast } = useToast();
+  const [methodId, setMethodId] = useState("");
+  const [reason, setReason] = useState("");
+
+  const voucher = useQuery({
+    queryKey: ["voucher-method", row?.voucher_id],
+    enabled: Boolean(row?.voucher_id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("financial_vouchers")
+        .select("id, payment_method_value_id")
+        .eq("id", row!.voucher_id)
+        .maybeSingle();
+      if (error) throw error;
+      return data as { id: string; payment_method_value_id: string | null } | null;
+    },
+  });
+
+  const methods = useQuery({
+    queryKey: ["pc-payment-methods", organizationId],
+    enabled: Boolean(organizationId) && Boolean(row),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_reference_data")
+        .select("value_id, code, name_ar, category_key, is_disabled, organization_id, sort_order")
+        .eq("category_key", "payment_methods")
+        .eq("is_disabled", false)
+        .or(`organization_id.is.null,organization_id.eq.${organizationId}`)
+        .order("sort_order")
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { value_id: string; name_ar: string }[];
+    },
+  });
+
+  const currentId = voucher.data?.payment_method_value_id ?? null;
+  const choices = (methods.data ?? []).filter((m) => m.value_id !== currentId);
+
+  const close = () => {
+    setMethodId("");
+    setReason("");
+    onClose();
+  };
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!row) return;
+      if (!methodId) throw new Error("اختر طريقة الدفع الصحيحة");
+      if (!reason.trim()) throw new Error("اكتب سبب التصحيح");
+      const { error } = await supabase.rpc("app_correct_voucher_payment_method", {
+        p_voucher_id: row.voucher_id,
+        p_payment_method_value_id: methodId,
+        p_reason: reason.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      const name = (methods.data ?? []).find((m) => m.value_id === methodId)?.name_ar ?? "";
+      toast({ title: "صُحّحت طريقة الدفع", description: `السند ${row?.voucher_number ?? ""} صار «${name}».` });
+      setMethodId("");
+      setReason("");
+      onDone();
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر التصحيح", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open={Boolean(row)} onOpenChange={(open) => !open && !save.isPending && close()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>تصحيح طريقة الدفع — سند {row?.voucher_number ?? ""}</DialogTitle>
+          <DialogDescription>
+            المبلغ {formatAmount(Number(row?.amount ?? 0))} ر.س · المسجَّل الآن: «{row?.payment_method_name ?? "غير محدَّدة"}».
+            التصحيح على السند وحده — الفاتورة ورمز ZATCA لا يتغيّران.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>طريقة الدفع الصحيحة *</Label>
+            <Select value={methodId} onValueChange={setMethodId}>
+              <SelectTrigger>
+                <SelectValue placeholder={methods.isLoading ? "جارٍ التحميل..." : "اختر الطريقة"} />
+              </SelectTrigger>
+              <SelectContent>
+                {choices.map((m) => (
+                  <SelectItem key={m.value_id} value={m.value_id}>
+                    {m.name_ar}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>سبب التصحيح *</Label>
+            <Textarea rows={2} value={reason} onChange={(e) => setReason(e.target.value)} placeholder="مثال: اختيرت فيزا بالخطأ والدفع كان بمدى" />
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            بين البطاقات والتحويلات يُصحَّح دائمًا. وبين النقد والبطاقة لا يُصحَّح بعد إقفال المناوبة أو اليومية — لأنّه يغيّر جرد الصندوق.
+          </p>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" disabled={save.isPending} onClick={close}>
+            إلغاء
+          </Button>
+          <Button disabled={!methodId || !reason.trim() || save.isPending} onClick={() => save.mutate()}>
+            {save.isPending ? "جارٍ الحفظ..." : "حفظ التصحيح"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

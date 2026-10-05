@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Pencil, Plus, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { usePermissions } from "@/lib/permissions";
@@ -590,6 +590,80 @@ function ServicesTab({
 }
 
 // ---------------------------------------------------------------------------
+type ScheduleRow = {
+  id: string;
+  clinic_id: string | null;
+  recurrence_type: "weekly" | "alternate_days" | "monthly";
+  pattern_anchor_date: string | null;
+  day_of_week: number | null;
+  day_of_month: number | null;
+  start_time: string;
+  end_time: string;
+  slot_duration_minutes: number;
+  capacity: number;
+  effective_from: string;
+  effective_to: string | null;
+  is_active: boolean;
+  clinic: { name: string } | { name: string }[] | null;
+};
+
+const RECURRENCE_LABEL: Record<string, string> = {
+  weekly: "أسبوعي",
+  monthly: "شهري",
+  alternate_days: "يوم عمل / يوم إجازة",
+};
+
+const hhmm = (value: string) => String(value).slice(0, 5);
+
+/** وصف يوم الفترة: «الأحد» / «يوم 15 من كلّ شهر» / «يوم ويوم من 2026-10-05». */
+function scheduleDayLabel(row: Pick<ScheduleRow, "recurrence_type" | "day_of_week" | "day_of_month" | "pattern_anchor_date">) {
+  if (row.recurrence_type === "monthly") return `يوم ${row.day_of_month} من كلّ شهر`;
+  if (row.recurrence_type === "alternate_days") return `يوم ويوم من ${row.pattern_anchor_date}`;
+  return DAY_LABEL[row.day_of_week ?? 0] ?? String(row.day_of_week);
+}
+
+/**
+ * الفترات القائمة التي ستتغيّر بحفظ فترةٍ جديدة — القاعدة نفسها التي في
+ * مُحفِّز 0231: النمط نفسه واليوم نفسه والعيادة نفسها، وتقاطع السريان والوقت.
+ */
+function schedulesReplacedBy(
+  existing: ScheduleRow[],
+  draft: {
+    recurrence_type: string;
+    day_of_week: number | null;
+    day_of_month: number | null;
+    pattern_anchor_date: string | null;
+    clinic_id: string | null;
+    start_time: string;
+    end_time: string;
+    effective_from: string;
+    effective_to: string | null;
+  },
+  ignoreId?: string,
+) {
+  const far = "9999-12-31";
+  const dayDiff = (a: string, b: string) => Math.round((Date.parse(a) - Date.parse(b)) / 86_400_000);
+  return existing.filter((row) => {
+    if (!row.is_active || row.id === ignoreId) return false;
+    if (row.recurrence_type !== draft.recurrence_type) return false;
+    if (draft.recurrence_type === "weekly" && row.day_of_week !== draft.day_of_week) return false;
+    if (draft.recurrence_type === "monthly" && row.day_of_month !== draft.day_of_month) return false;
+    if (
+      draft.recurrence_type === "alternate_days" &&
+      (!row.pattern_anchor_date || !draft.pattern_anchor_date ||
+        Math.abs(dayDiff(row.pattern_anchor_date, draft.pattern_anchor_date)) % 2 !== 0)
+    )
+      return false;
+    if ((row.clinic_id ?? "") !== (draft.clinic_id ?? "")) return false;
+    const datesOverlap =
+      row.effective_from <= (draft.effective_to || far) && draft.effective_from <= (row.effective_to || far);
+    const timesOverlap = hhmm(row.start_time) < draft.end_time && draft.start_time < hhmm(row.end_time);
+    return datesOverlap && timesOverlap;
+  });
+}
+
+const todayKey = () => new Date().toLocaleDateString("en-CA");
+
 function ScheduleTab({
   doctorId,
   organizationId,
@@ -604,14 +678,18 @@ function ScheduleTab({
   const clinics = useClinics(organizationId);
   const [form, setForm] = useState<any>({
     recurrence_type: "weekly",
-    day_of_week: 7,
-    pattern_anchor_date: new Date().toISOString().slice(0, 10),
+    pattern_anchor_date: todayKey(),
     start_time: "08:00",
     end_time: "14:00",
     slot_duration_minutes: 15,
     capacity: 1,
-    effective_from: new Date().toISOString().slice(0, 10),
+    effective_from: todayKey(),
   });
+  // أيّامٌ عدّة في إضافةٍ واحدة: فترةٌ لكلّ يومٍ مختار
+  const [weekDays, setWeekDays] = useState<number[]>([7]);
+  const [monthDays, setMonthDays] = useState<number[]>([]);
+  const [showInactive, setShowInactive] = useState(false);
+  const [editing, setEditing] = useState<ScheduleRow | null>(null);
 
   const rows = useQuery({
     queryKey: ["doctor-schedules", doctorId],
@@ -619,39 +697,85 @@ function ScheduleTab({
       const { data, error } = await supabase
         .from("doctor_schedules")
         .select(
-          "id, clinic_id, recurrence_type, pattern_anchor_date, day_of_week, start_time, end_time, slot_duration_minutes, capacity, effective_from, effective_to, is_active, clinic:clinics!doctor_schedules_clinic_id_fkey(name)",
+          "id, clinic_id, recurrence_type, pattern_anchor_date, day_of_week, day_of_month, start_time, end_time, slot_duration_minutes, capacity, effective_from, effective_to, is_active, clinic:clinics!doctor_schedules_clinic_id_fkey(name)",
         )
         .eq("doctor_id", doctorId)
-        .order("day_of_week")
-        .order("start_time");
+        .order("effective_from");
       if (error) throw error;
-      return (data ?? []) as any[];
+      return (data ?? []) as unknown as ScheduleRow[];
     },
   });
 
   const set = (field: string, value: any) => setForm((prev: any) => ({ ...prev, [field]: value }));
+  const toggle = (list: number[], value: number) =>
+    list.includes(value) ? list.filter((v) => v !== value) : [...list, value].sort((a, b) => a - b);
+
+  /** الفترات الجديدة كما ستُكتب — واحدة لكلّ يوم مختار. */
+  const drafts = useMemo(() => {
+    const base = {
+      clinic_id: form.clinic_id || null,
+      start_time: form.start_time,
+      end_time: form.end_time,
+      effective_from: form.effective_from,
+      effective_to: form.effective_to || null,
+    };
+    if (form.recurrence_type === "weekly")
+      return weekDays.map((d) => ({ ...base, recurrence_type: "weekly", day_of_week: d, day_of_month: null, pattern_anchor_date: null }));
+    if (form.recurrence_type === "monthly")
+      return monthDays.map((d) => ({ ...base, recurrence_type: "monthly", day_of_week: null, day_of_month: d, pattern_anchor_date: null }));
+    return [{ ...base, recurrence_type: "alternate_days", day_of_week: null, day_of_month: null, pattern_anchor_date: form.pattern_anchor_date }];
+  }, [form, weekDays, monthDays]);
+
+  const replaced = useMemo(() => {
+    const ids = new Set<string>();
+    const list: ScheduleRow[] = [];
+    for (const draft of drafts) {
+      for (const row of schedulesReplacedBy(rows.data ?? [], draft)) {
+        if (!ids.has(row.id)) {
+          ids.add(row.id);
+          list.push(row);
+        }
+      }
+    }
+    return list;
+  }, [drafts, rows.data]);
+
+  const problem =
+    drafts.length === 0
+      ? form.recurrence_type === "monthly"
+        ? "اختر يومًا واحدًا على الأقل من أيّام الشهر"
+        : "اختر يومًا واحدًا على الأقل"
+      : !form.start_time || !form.end_time || form.end_time <= form.start_time
+        ? "وقت «إلى» يجب أن يكون بعد «من»"
+        : !form.effective_from
+          ? "اختر تاريخ السريان"
+          : form.effective_to && form.effective_to < form.effective_from
+            ? "تاريخ «حتى» قبل «يسري من»"
+            : null;
 
   const add = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from("doctor_schedules").insert({
-        organization_id: organizationId,
-        doctor_id: doctorId,
-        clinic_id: form.clinic_id || null,
-        recurrence_type: form.recurrence_type,
-        day_of_week: Number(form.day_of_week),
-        pattern_anchor_date: form.recurrence_type === "alternate_days" ? form.pattern_anchor_date : null,
-        start_time: form.start_time,
-        end_time: form.end_time,
-        slot_duration_minutes: Number(form.slot_duration_minutes) || 15,
-        capacity: Number(form.capacity) || 1,
-        effective_from: form.effective_from,
-        effective_to: form.effective_to || null,
-      });
+      if (problem) throw new Error(problem);
+      const { error } = await supabase.from("doctor_schedules").insert(
+        drafts.map((draft) => ({
+          organization_id: organizationId,
+          doctor_id: doctorId,
+          ...draft,
+          slot_duration_minutes: Number(form.slot_duration_minutes) || 15,
+          capacity: Number(form.capacity) || 1,
+        })),
+      );
       if (error) throw error;
+      return { count: drafts.length, replaced: replaced.length };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["doctor-schedules", doctorId] });
-      toast({ title: "أُضيفت فترة الدوام" });
+      queryClient.invalidateQueries({ queryKey: ["calendar-availability"] });
+      queryClient.invalidateQueries({ queryKey: ["calendar-schedule-bounds"] });
+      toast({
+        title: result.count > 1 ? `أُضيفت ${result.count} فترات دوام` : "أُضيفت فترة الدوام",
+        description: result.replaced > 0 ? `وحلّت محلّ ${result.replaced} فترة سابقة من تاريخ سريانها.` : undefined,
+      });
     },
     onError: (error: unknown) =>
       toast({
@@ -667,7 +791,11 @@ function ScheduleTab({
       if (error) throw error;
       if (!data || data.length === 0) throw new Error("لم يُحذف شيء — تحقّق من صلاحيتك");
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["doctor-schedules", doctorId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["doctor-schedules", doctorId] });
+      queryClient.invalidateQueries({ queryKey: ["calendar-availability"] });
+      queryClient.invalidateQueries({ queryKey: ["calendar-schedule-bounds"] });
+    },
     onError: (error: unknown) =>
       toast({
         variant: "destructive",
@@ -677,184 +805,402 @@ function ScheduleTab({
   });
 
   const one = (value: any) => (Array.isArray(value) ? value[0] : value);
+  const visibleRows = (rows.data ?? [])
+    .filter((row) => showInactive || row.is_active)
+    .sort((a, b) => {
+      const order = (r: ScheduleRow) =>
+        r.recurrence_type === "weekly" ? DAYS.findIndex((d) => d.value === r.day_of_week) : r.recurrence_type === "monthly" ? 10 + (r.day_of_month ?? 0) : 50;
+      return order(a) - order(b) || hhmm(a.start_time).localeCompare(hhmm(b.start_time)) || a.effective_from.localeCompare(b.effective_from);
+    });
+  const inactiveCount = (rows.data ?? []).filter((row) => !row.is_active).length;
 
   return (
     <div className="flex flex-col gap-4">
       <p className="text-xs text-muted-foreground">
-        اختر دوامًا أسبوعيًا لأيام محددة أو نمط يوم عمل ويوم إجازة. ويمكن تسجيل الإجازات والدوام الاستثنائي من تبويب الاستثناءات.
+        دوامٌ أسبوعيّ لأيّامٍ محدّدة، أو شهريّ لأيّامٍ من الشهر، أو يوم عمل ويوم إجازة. الفترة الجديدة التي تتداخل مع
+        فترةٍ قائمة <strong>تحلّ محلّها من تاريخ سريانها</strong> — لا حاجة لحذف القديمة. والإجازات والدوام الاستثنائي
+        من تبويب الاستثناءات.
       </p>
 
       {canManage && (
-        <div className="flex flex-wrap items-end gap-2 rounded-md border p-3">
-          <div className="w-44">
+        <div className="flex flex-col gap-3 rounded-md border p-3">
+          <div className="flex flex-wrap items-end gap-2">
             <div className="flex flex-col gap-1.5">
               <Label>نمط الدوام</Label>
-              <Select value={form.recurrence_type} onValueChange={(value) => set("recurrence_type", value)}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="weekly">أسبوعي حسب الأيام</SelectItem>
-                  <SelectItem value="alternate_days">يوم عمل ويوم إجازة</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="flex rounded-md border p-0.5 text-xs">
+                {(["weekly", "monthly", "alternate_days"] as const).map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => set("recurrence_type", key)}
+                    className={`rounded px-3 py-1.5 ${form.recurrence_type === key ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                  >
+                    {key === "weekly" ? "أسبوعي" : key === "monthly" ? "شهري" : "يوم عمل ويوم إجازة"}
+                  </button>
+                ))}
+              </div>
             </div>
+            {form.recurrence_type === "alternate_days" && (
+              <div className="w-40">
+                <div className="flex flex-col gap-1.5">
+                  <Label>أول يوم عمل</Label>
+                  <Input type="date" value={form.pattern_anchor_date} onChange={(e) => set("pattern_anchor_date", e.target.value)} />
+                </div>
+              </div>
+            )}
           </div>
-          {form.recurrence_type === "weekly" ? (
+
+          {form.recurrence_type === "weekly" && (
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">الأيام (اختر يومًا أو أكثر)</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {DAYS.map((day) => (
+                  <button
+                    key={day.value}
+                    type="button"
+                    onClick={() => setWeekDays((list) => toggle(list, day.value))}
+                    className={`rounded-md border px-3 py-1.5 text-sm ${
+                      weekDays.includes(day.value) ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted"
+                    }`}
+                  >
+                    {day.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {form.recurrence_type === "monthly" && (
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">أيّام الشهر (تتكرّر كلّ شهر)</Label>
+              <div className="grid w-fit grid-cols-7 gap-1">
+                {Array.from({ length: 31 }, (_, i) => i + 1).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setMonthDays((list) => toggle(list, d))}
+                    className={`h-8 w-9 rounded-md border font-mono text-sm tabular-nums ${
+                      monthDays.includes(d) ? "border-primary bg-primary text-primary-foreground" : "hover:bg-muted"
+                    }`}
+                  >
+                    {d}
+                  </button>
+                ))}
+              </div>
+              <span className="text-[11px] text-muted-foreground">الشهر الذي لا يوم فيه بالرقم المختار (31 في الأشهر القصيرة) لا دوام فيه بهذه الفترة.</span>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-end gap-2">
             <div className="w-28">
               <div className="flex flex-col gap-1.5">
-                <Label>اليوم</Label>
-                <Select value={String(form.day_of_week)} onValueChange={(value) => set("day_of_week", Number(value))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                <Label>من</Label>
+                <Input type="time" value={form.start_time} onChange={(e) => set("start_time", e.target.value)} />
+              </div>
+            </div>
+            <div className="w-28">
+              <div className="flex flex-col gap-1.5">
+                <Label>إلى</Label>
+                <Input type="time" value={form.end_time} onChange={(e) => set("end_time", e.target.value)} />
+              </div>
+            </div>
+            <div className="w-24">
+              <div className="flex flex-col gap-1.5">
+                <Label>الفتحة (د)</Label>
+                <Input type="number" min={5} value={form.slot_duration_minutes} onChange={(e) => set("slot_duration_minutes", e.target.value)} />
+              </div>
+            </div>
+            <div className="w-20">
+              <div className="flex flex-col gap-1.5">
+                <Label>السعة</Label>
+                <Input type="number" min={1} value={form.capacity} onChange={(e) => set("capacity", e.target.value)} />
+              </div>
+            </div>
+            <div className="w-44">
+              <div className="flex flex-col gap-1.5">
+                <Label>العيادة</Label>
+                <Select value={form.clinic_id || NONE} onValueChange={(value) => set("clinic_id", value === NONE ? "" : value)}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
                   <SelectContent>
-                    {DAYS.map((day) => <SelectItem key={day.value} value={String(day.value)}>{day.label}</SelectItem>)}
+                    <SelectItem value={NONE}>أي عيادة</SelectItem>
+                    {(clinics.data ?? []).map((clinic) => (
+                      <SelectItem key={clinic.id} value={clinic.id}>
+                        {clinic.name_ar}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
             </div>
-          ) : (
             <div className="w-40">
               <div className="flex flex-col gap-1.5">
-                <Label>أول يوم عمل</Label>
-                <Input type="date" value={form.pattern_anchor_date} onChange={(e) => set("pattern_anchor_date", e.target.value)} />
+                <Label>يسري من</Label>
+                <Input type="date" value={form.effective_from} onChange={(e) => set("effective_from", e.target.value)} />
               </div>
             </div>
+            <div className="w-40">
+              <div className="flex flex-col gap-1.5">
+                <Label>حتى (اختياري)</Label>
+                <Input type="date" value={form.effective_to ?? ""} onChange={(e) => set("effective_to", e.target.value)} />
+              </div>
+            </div>
+            <Button disabled={add.isPending || Boolean(problem)} onClick={() => add.mutate()}>
+              <Plus className="h-4 w-4" />
+              {replaced.length > 0 ? "إضافة واستبدال" : drafts.length > 1 ? `إضافة ${drafts.length} فترات` : "إضافة"}
+            </Button>
+          </div>
+
+          {problem && <p className="text-xs text-destructive">{problem}</p>}
+          {!problem && replaced.length > 0 && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+              <p className="flex items-center gap-1.5 font-semibold">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                تتداخل مع فترات قائمة — ستحلّ الجديدة محلّها من {form.effective_from}
+                {form.effective_to ? ` حتى ${form.effective_to} (وتعود القديمة بعده)` : ""}:
+              </p>
+              <ul className="mt-1 list-inside list-disc">
+                {replaced.map((row) => (
+                  <li key={row.id}>
+                    {scheduleDayLabel(row)} · {hhmm(row.start_time)}–{hhmm(row.end_time)} · {row.effective_from} → {row.effective_to ?? "مفتوح"}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
-          <div className="w-28">
-            <div className="flex flex-col gap-1.5">
-              <Label>من</Label>
-              <Input
-                type="time"
-                value={form.start_time}
-                onChange={(e) => set("start_time", e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="w-28">
-            <div className="flex flex-col gap-1.5">
-              <Label>إلى</Label>
-              <Input type="time" value={form.end_time} onChange={(e) => set("end_time", e.target.value)} />
-            </div>
-          </div>
-          <div className="w-24">
-            <div className="flex flex-col gap-1.5">
-              <Label>الفتحة (د)</Label>
-              <Input
-                type="number"
-                min={5}
-                value={form.slot_duration_minutes}
-                onChange={(e) => set("slot_duration_minutes", e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="w-20">
-            <div className="flex flex-col gap-1.5">
-              <Label>السعة</Label>
-              <Input
-                type="number"
-                min={1}
-                value={form.capacity}
-                onChange={(e) => set("capacity", e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="w-44">
-            <div className="flex flex-col gap-1.5">
-              <Label>العيادة</Label>
-              <Select
-                value={form.clinic_id || NONE}
-                onValueChange={(value) => set("clinic_id", value === NONE ? "" : value)}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NONE}>أي عيادة</SelectItem>
-                  {(clinics.data ?? []).map((clinic) => (
-                    <SelectItem key={clinic.id} value={clinic.id}>
-                      {clinic.name_ar}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <div className="w-40">
-            <div className="flex flex-col gap-1.5">
-              <Label>يسري من</Label>
-              <Input
-                type="date"
-                value={form.effective_from}
-                onChange={(e) => set("effective_from", e.target.value)}
-              />
-            </div>
-          </div>
-          <div className="w-40">
-            <div className="flex flex-col gap-1.5">
-              <Label>حتى (اختياري)</Label>
-              <Input
-                type="date"
-                value={form.effective_to ?? ""}
-                onChange={(e) => set("effective_to", e.target.value)}
-              />
-            </div>
-          </div>
-          <Button disabled={add.isPending} onClick={() => add.mutate()}>
-            <Plus className="h-4 w-4" />
-            إضافة
-          </Button>
         </div>
       )}
 
       {rows.isLoading && <Skeleton className="h-24 w-full" />}
       {!rows.isLoading && (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>النمط</TableHead>
-              <TableHead>اليوم / البداية</TableHead>
-              <TableHead>الوقت</TableHead>
-              <TableHead>العيادة</TableHead>
-              <TableHead>الفتحة</TableHead>
-              <TableHead>السعة</TableHead>
-              <TableHead>السريان</TableHead>
-              <TableHead />
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(rows.data ?? []).map((row) => (
-              <TableRow key={row.id} className={row.is_active ? "" : "text-muted-foreground"}>
-                <TableCell>{row.recurrence_type === "alternate_days" ? "يوم عمل / يوم إجازة" : "أسبوعي"}</TableCell>
-                <TableCell>{row.recurrence_type === "alternate_days" ? row.pattern_anchor_date : (DAY_LABEL[row.day_of_week] ?? row.day_of_week)}</TableCell>
-                <TableCell className="font-mono text-xs">
-                  {String(row.start_time).slice(0, 5)} — {String(row.end_time).slice(0, 5)}
-                </TableCell>
-                <TableCell className="text-sm text-muted-foreground">
-                  {one(row.clinic)?.name ?? "أي عيادة"}
-                </TableCell>
-                <TableCell>{row.slot_duration_minutes} د</TableCell>
-                <TableCell>{row.capacity}</TableCell>
-                <TableCell className="font-mono text-xs">
-                  {row.effective_from} → {row.effective_to ?? "مفتوح"}
-                </TableCell>
-                <TableCell className="text-end">
-                  {canManage && (
-                    <Button size="sm" variant="ghost" onClick={() => remove.mutate(row.id)}>
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  )}
-                </TableCell>
-              </TableRow>
-            ))}
-            {(rows.data ?? []).length === 0 && (
+        <>
+          {inactiveCount > 0 && (
+            <label className="flex items-center gap-2 self-start text-xs text-muted-foreground">
+              <input type="checkbox" checked={showInactive} onChange={(e) => setShowInactive(e.target.checked)} />
+              إظهار الفترات الموقوفة ({inactiveCount})
+            </label>
+          )}
+          <Table>
+            <TableHeader>
               <TableRow>
-                <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
-                  لا جدول دوام مسجَّل — الحجز مفتوح في أي وقت.
-                </TableCell>
+                <TableHead>النمط</TableHead>
+                <TableHead>اليوم</TableHead>
+                <TableHead>الوقت</TableHead>
+                <TableHead>العيادة</TableHead>
+                <TableHead>الفتحة</TableHead>
+                <TableHead>السعة</TableHead>
+                <TableHead>السريان</TableHead>
+                <TableHead />
               </TableRow>
-            )}
-          </TableBody>
-        </Table>
+            </TableHeader>
+            <TableBody>
+              {visibleRows.map((row) => (
+                <TableRow key={row.id} className={row.is_active ? "" : "text-muted-foreground line-through"}>
+                  <TableCell>{RECURRENCE_LABEL[row.recurrence_type] ?? row.recurrence_type}</TableCell>
+                  <TableCell>{scheduleDayLabel(row)}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {hhmm(row.start_time)} — {hhmm(row.end_time)}
+                  </TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{one(row.clinic)?.name ?? "أي عيادة"}</TableCell>
+                  <TableCell>{row.slot_duration_minutes} د</TableCell>
+                  <TableCell>{row.capacity}</TableCell>
+                  <TableCell className="font-mono text-xs">
+                    {row.effective_from} → {row.effective_to ?? "مفتوح"}
+                  </TableCell>
+                  <TableCell className="text-end">
+                    {canManage && (
+                      <div className="flex justify-end gap-1">
+                        {row.is_active && (
+                          <Button size="sm" variant="ghost" title="تعديل" onClick={() => setEditing(row)}>
+                            <Pencil className="h-4 w-4" />
+                          </Button>
+                        )}
+                        <Button size="sm" variant="ghost" title="حذف" onClick={() => remove.mutate(row.id)}>
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {visibleRows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={8} className="py-6 text-center text-sm text-muted-foreground">
+                    لا جدول دوام مسجَّل — الحجز مفتوح في أي وقت.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </>
       )}
+
+      <EditScheduleDialog
+        row={editing}
+        allRows={rows.data ?? []}
+        clinics={(clinics.data ?? []).map((c: any) => ({ id: c.id, name: c.name_ar }))}
+        onClose={() => setEditing(null)}
+        onSaved={() => {
+          setEditing(null);
+          queryClient.invalidateQueries({ queryKey: ["doctor-schedules", doctorId] });
+          queryClient.invalidateQueries({ queryKey: ["calendar-availability"] });
+          queryClient.invalidateQueries({ queryKey: ["calendar-schedule-bounds"] });
+        }}
+      />
     </div>
+  );
+}
+
+/** تعديل فترة دوامٍ قائمة: الوقت والفتحة والسعة والعيادة والسريان. */
+function EditScheduleDialog({
+  row,
+  allRows,
+  clinics,
+  onClose,
+  onSaved,
+}: {
+  row: ScheduleRow | null;
+  allRows: ScheduleRow[];
+  clinics: { id: string; name: string }[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const { toast } = useToast();
+  const [draft, setDraft] = useState<any>(null);
+  const current = row && draft?.id === row.id ? draft : row
+    ? {
+        id: row.id,
+        start_time: hhmm(row.start_time),
+        end_time: hhmm(row.end_time),
+        slot_duration_minutes: row.slot_duration_minutes,
+        capacity: row.capacity,
+        clinic_id: row.clinic_id ?? "",
+        effective_from: row.effective_from,
+        effective_to: row.effective_to ?? "",
+      }
+    : null;
+  const set = (field: string, value: any) => setDraft({ ...current, [field]: value });
+
+  const replaced = row && current
+    ? schedulesReplacedBy(
+        allRows,
+        {
+          recurrence_type: row.recurrence_type,
+          day_of_week: row.day_of_week,
+          day_of_month: row.day_of_month,
+          pattern_anchor_date: row.pattern_anchor_date,
+          clinic_id: current.clinic_id || null,
+          start_time: current.start_time,
+          end_time: current.end_time,
+          effective_from: current.effective_from,
+          effective_to: current.effective_to || null,
+        },
+        row.id,
+      )
+    : [];
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!row || !current) return;
+      if (!current.start_time || !current.end_time || current.end_time <= current.start_time)
+        throw new Error("وقت «إلى» يجب أن يكون بعد «من»");
+      if (current.effective_to && current.effective_to < current.effective_from)
+        throw new Error("تاريخ «حتى» قبل «يسري من»");
+      const { data, error } = await supabase
+        .from("doctor_schedules")
+        .update({
+          start_time: current.start_time,
+          end_time: current.end_time,
+          slot_duration_minutes: Number(current.slot_duration_minutes) || 15,
+          capacity: Number(current.capacity) || 1,
+          clinic_id: current.clinic_id || null,
+          effective_from: current.effective_from,
+          effective_to: current.effective_to || null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", row.id)
+        .select("id");
+      if (error) throw error;
+      if (!data || data.length === 0) throw new Error("لم يُحفظ شيء — تحقّق من صلاحيتك");
+    },
+    onSuccess: () => {
+      toast({ title: "حُفظ تعديل فترة الدوام" });
+      setDraft(null);
+      onSaved();
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر الحفظ", description: errorMessage(error, "خطأ غير متوقع") }),
+  });
+
+  return (
+    <Dialog open={Boolean(row)} onOpenChange={(open) => { if (!open) { setDraft(null); onClose(); } }}>
+      <DialogContent className="max-w-lg">
+        <DialogHeader>
+          <DialogTitle>تعديل فترة الدوام</DialogTitle>
+          <DialogDescription>
+            {row ? `${RECURRENCE_LABEL[row.recurrence_type]} — ${scheduleDayLabel(row)}` : ""}
+          </DialogDescription>
+        </DialogHeader>
+        {current && (
+          <div className="grid grid-cols-2 gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>من</Label>
+              <Input type="time" value={current.start_time} onChange={(e) => set("start_time", e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>إلى</Label>
+              <Input type="time" value={current.end_time} onChange={(e) => set("end_time", e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>الفتحة (د)</Label>
+              <Input type="number" min={5} value={current.slot_duration_minutes} onChange={(e) => set("slot_duration_minutes", e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>السعة</Label>
+              <Input type="number" min={1} value={current.capacity} onChange={(e) => set("capacity", e.target.value)} />
+            </div>
+            <div className="col-span-2 flex flex-col gap-1.5">
+              <Label>العيادة</Label>
+              <Select value={current.clinic_id || NONE} onValueChange={(value) => set("clinic_id", value === NONE ? "" : value)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>أي عيادة</SelectItem>
+                  {clinics.map((clinic) => (
+                    <SelectItem key={clinic.id} value={clinic.id}>
+                      {clinic.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>يسري من</Label>
+              <Input type="date" value={current.effective_from} onChange={(e) => set("effective_from", e.target.value)} />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <Label>حتى (اختياري)</Label>
+              <Input type="date" value={current.effective_to} onChange={(e) => set("effective_to", e.target.value)} />
+            </div>
+            {replaced.length > 0 && (
+              <p className="col-span-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                تتداخل مع {replaced.length} فترة قائمة — ستحلّ هذه محلّها في المدّة المشتركة.
+              </p>
+            )}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => { setDraft(null); onClose(); }} disabled={save.isPending}>
+            إلغاء
+          </Button>
+          <Button onClick={() => save.mutate()} disabled={save.isPending}>
+            {save.isPending ? "جارٍ الحفظ..." : "حفظ"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

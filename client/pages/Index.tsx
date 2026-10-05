@@ -159,6 +159,11 @@ export default function Index() {
   const access = useOrganizationAccess();
   const { doctorId: scopeDoctorId, isDoctorScope } = useSessionDoctor();
   const doctorView = isDoctorScope && Boolean(scopeDoctorId);
+  // «مستحقات غير مُحصّلة» لا تظهر للأطباء (طلب المالك): لا لصفة الطبيب، ولا لمن
+  // حسابه مربوطٌ ببطاقة طبيب بصفةٍ أخرى (مدير فرع مثلًا) — إلّا المالك ومدير المنشأة.
+  const roleKey = access.membership?.role_key ?? "";
+  const hideDues =
+    doctorView || (Boolean(scopeDoctorId) && !["owner", "organization_admin"].includes(roleKey));
   const stats = useDashboardStats(access.organization?.id, doctorView ? scopeDoctorId : null);
   const quickLinks = doctorView ? DOCTOR_QUICK_LINKS : QUICK_LINKS;
 
@@ -234,7 +239,7 @@ export default function Index() {
         />
         {doctorView ? (
           <KpiCard icon={Activity} label="أُنجز اليوم" value={stats.data?.doneToday} loading={stats.isLoading} />
-        ) : (
+        ) : hideDues ? null : (
           <KpiCard
             icon={WalletCards}
             label="مستحقات غير مُحصّلة"

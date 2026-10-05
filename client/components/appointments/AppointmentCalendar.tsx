@@ -483,6 +483,39 @@ export default function AppointmentCalendar({
    * الدوام الأسبوعيّ والاستثنائيّ، ومن لا يعمل اليوم، والإجازات والمنع.
    * إن لم تُنفَّذ الترقية بعد يُعاد الرسم القديم من `doctor_working_hours` وحده.
    */
+  /**
+   * حدود الشبكة من جداول العمل الأسبوعية النشطة لكلّ الأطباء — لا من اليوم
+   * المعروض وحده. كانت الشبكة 8–20 وتتّسع فقط بدوام اليوم المعروض في عرض اليوم،
+   * فطبيبٌ دوامه حتى العاشرة مساءً لا تظهر له خانات بعد التاسعة في عرض الأسبوع
+   * أو في يومٍ لا يعمل فيه غيره (شكوى المالك 05/10/2026).
+   */
+  const scheduleBounds = useQuery({
+    queryKey: ["calendar-schedule-bounds", organizationId],
+    enabled: Boolean(organizationId),
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const today = toDateKey(new Date());
+      const { data, error } = await supabase
+        .from("doctor_schedules")
+        .select("start_time, end_time, effective_to")
+        .eq("organization_id", organizationId)
+        .eq("is_active", true);
+      if (error) throw error;
+      let start: number | null = null;
+      let end: number | null = null;
+      for (const row of (data ?? []) as { start_time: string; end_time: string; effective_to: string | null }[]) {
+        if (row.effective_to && row.effective_to < today) continue;
+        const [sh, sm] = row.start_time.split(":").map(Number);
+        const [eh, em] = row.end_time.split(":").map(Number);
+        const s = sh + (sm || 0) / 60;
+        const e = eh + (em || 0) / 60;
+        start = start === null ? s : Math.min(start, s);
+        end = end === null ? e : Math.max(end, e);
+      }
+      return start === null || end === null ? null : { start, end };
+    },
+  });
+
   const dayKey = toDateKey(anchor);
   const availability = useQuery({
     queryKey: ["calendar-availability", organizationId, dayKey],
@@ -570,14 +603,23 @@ export default function AppointmentCalendar({
     let endHour = 20;
     const dayStart = startOfDay(anchor).getTime();
     const hourOf = (iso: string) => (new Date(iso).getTime() - dayStart) / 3_600_000;
+    if (scheduleBounds.data) {
+      startHour = Math.min(startHour, Math.floor(scheduleBounds.data.start));
+      endHour = Math.max(endHour, Math.ceil(scheduleBounds.data.end));
+    }
     for (const row of availability.data ?? []) {
       if (row.kind !== "work") continue;
       startHour = Math.min(startHour, Math.floor(hourOf(row.starts_at)));
       endHour = Math.max(endHour, Math.ceil(hourOf(row.ends_at)));
     }
+    // ساعة اليوم لكلّ موعد (لا بُعده عن يوم المرساة): في عرض الأسبوع مواعيد
+    // الأيّام التالية كانت ستُحسب 24+ ساعة فتمتدّ الشبكة إلى آخر حدّها.
     for (const row of gridRows) {
-      startHour = Math.min(startHour, Math.floor(hourOf(row.scheduled_start)));
-      endHour = Math.max(endHour, Math.ceil(hourOf(row.scheduled_end)));
+      const s = new Date(row.scheduled_start);
+      const startOfRow = s.getHours() + s.getMinutes() / 60;
+      const durationHours = (new Date(row.scheduled_end).getTime() - s.getTime()) / 3_600_000;
+      startHour = Math.min(startHour, Math.floor(startOfRow));
+      endHour = Math.max(endHour, Math.ceil(startOfRow + Math.max(durationHours, 0.25)));
     }
     // المقياس: خانة 15 أو 30 أو 60 دقيقة، والتكبير يضاعف ارتفاع الدقيقة
     const basePx = settings.slotMinutes === 60 ? 0.9 : settings.slotMinutes === 30 ? 1.1 : 1.4;
@@ -587,7 +629,7 @@ export default function AppointmentCalendar({
       slotMinutes: settings.slotMinutes,
       px: basePx * settings.zoom,
     };
-  }, [anchor, availability.data, gridRows, settings.slotMinutes, settings.zoom]);
+  }, [anchor, availability.data, scheduleBounds.data, gridRows, settings.slotMinutes, settings.zoom]);
 
   const columns = useMemo(() => {
     if (view !== "day") return [];
@@ -651,107 +693,91 @@ export default function AppointmentCalendar({
     return anchor.toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   }, [anchor, view]);
 
+  const filterActive =
+    Boolean((search ?? "").trim()) ||
+    (Array.isArray(statusFilter) ? statusFilter.length > 0 : Boolean(statusFilter) && statusFilter !== "all");
+
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="outline" onClick={() => shift(1)} title="التالي">
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => goTo(new Date())}>
-            اليوم
-          </Button>
-          <Button size="sm" variant="outline" onClick={() => shift(-1)} title="السابق">
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          <Popover>
-            <PopoverTrigger asChild>
+      {/* شريط التقويم: التنقّل والتاريخ يمينًا، ونمط العرض يسارًا، والمرشّحات والأدوات في سطرٍ ثانٍ */}
+      <div className="flex flex-col gap-3 rounded-xl border bg-card p-3 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex overflow-hidden rounded-lg border bg-background">
               <button
                 type="button"
-                className="mr-2 flex items-center gap-1.5 rounded px-1.5 py-1 text-sm font-medium hover:bg-muted"
-                title="تقويم الأشهر — اختر أيّ يوم"
+                onClick={() => shift(-1)}
+                title="السابق"
+                className="flex h-9 w-9 items-center justify-center hover:bg-muted"
               >
-                <CalendarDays className="h-4 w-4 text-muted-foreground" />
-                {headerLabel}
+                <ChevronRight className="h-4 w-4" />
               </button>
-            </PopoverTrigger>
-            <PopoverContent className="w-72 p-2" align="start">
-              <MiniMonth
-                selected={anchor}
-                onSelect={(date) => {
-                  goTo(date);
-                  if (view === "month" || view === "list") setView("day");
-                }}
-              />
-            </PopoverContent>
-          </Popover>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={nearestDay.isPending}
-            onClick={() => nearestDay.mutate()}
-            title="أقرب يوم قادم فيه مواعيد"
-          >
-            <CalendarClock className="h-4 w-4" />
-            أقرب يوم فيه مواعيد
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-8 w-8"
-            title="تحديث"
-            onClick={() => {
-              void appointments.refetch();
-              void availability.refetch();
-            }}
-          >
-            <RefreshCw className={`h-4 w-4 ${appointments.isFetching ? "animate-spin" : ""}`} />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="h-8 w-8"
-            title="طباعة الجدول المعروض (بمرشّحاته)"
-            disabled={visible.length === 0}
-            onClick={printSchedule}
-          >
-            <Printer className="h-4 w-4" />
-          </Button>
-          {/* تقويم فارغ بسبب التصفية يبدو كتقويم بلا مواعيد: الشارة تفرّق
-              بين الحالتين حتى لا يظنّ الموظف أن مواعيد اليوم اختفت. */}
-          {(Boolean((search ?? "").trim()) ||
-            (Array.isArray(statusFilter) ? statusFilter.length > 0 : Boolean(statusFilter) && statusFilter !== "all")) && (
-            <Badge variant="outline">تصفية نشطة · {visible.length}</Badge>
-          )}
-        </div>
+              <button
+                type="button"
+                onClick={() => goTo(new Date())}
+                className="h-9 border-x px-3 text-sm font-medium hover:bg-muted"
+              >
+                اليوم
+              </button>
+              <button
+                type="button"
+                onClick={() => shift(1)}
+                title="التالي"
+                className="flex h-9 w-9 items-center justify-center hover:bg-muted"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+            </div>
+            <Popover>
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-base font-bold hover:bg-muted"
+                  title="اختر أيّ يوم من التقويم"
+                >
+                  <CalendarDays className="h-5 w-5 text-primary" />
+                  {headerLabel}
+                </button>
+              </PopoverTrigger>
+              <PopoverContent className="w-72 p-2" align="start">
+                <MiniMonth
+                  selected={anchor}
+                  onSelect={(date) => {
+                    goTo(date);
+                    if (view === "month" || view === "list") setView("day");
+                  }}
+                />
+              </PopoverContent>
+            </Popover>
+            <Badge variant="secondary" className="font-mono tabular-nums">
+              {visible.length} موعد
+            </Badge>
+            {/* تقويم فارغ بسبب التصفية يبدو كتقويم بلا مواعيد: الشارة تفرّق بين الحالتين */}
+            {filterActive && <Badge variant="outline">تصفية نشطة</Badge>}
+          </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="flex rounded-md border p-0.5">
+          <div className="flex rounded-lg bg-muted p-1" role="tablist" aria-label="نمط العرض">
             {(Object.keys(VIEW_LABELS) as CalendarView[]).map((key) => (
               <button
                 key={key}
                 type="button"
+                role="tab"
+                aria-selected={view === key}
                 onClick={() => setView(key)}
-                className={`rounded px-2.5 py-1 text-xs ${view === key ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                  view === key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
               >
                 {VIEW_LABELS[key]}
               </button>
             ))}
           </div>
-          {view === "day" && (
-            <Select value={groupBy} onValueChange={(value) => setGroupBy(value as GroupBy)}>
-              <SelectTrigger className="h-8 w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="doctor">حسب الطبيب</SelectItem>
-                <SelectItem value="clinic">حسب العيادة</SelectItem>
-              </SelectContent>
-            </Select>
-          )}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 border-t pt-3">
           <Popover>
             <PopoverTrigger asChild>
-              <Button size="sm" variant="outline" className="h-8 w-44 justify-between">
+              <Button size="sm" variant="outline" className="h-8 w-48 justify-between">
                 <span className="flex items-center gap-1.5 truncate">
                   <Users className="h-3.5 w-3.5" />
                   {selectedDoctors.length === 0
@@ -762,7 +788,7 @@ export default function AppointmentCalendar({
                 </span>
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-64 p-2" align="end">
+            <PopoverContent className="w-64 p-2" align="start">
               <div className="flex items-center justify-between gap-2 border-b pb-1.5">
                 <button
                   type="button"
@@ -812,9 +838,8 @@ export default function AppointmentCalendar({
               </div>
             </PopoverContent>
           </Popover>
-          <ScheduleSettingsPopover settings={settings} onChange={setSettings} />
           <Select value={clinicFilter} onValueChange={setClinicFilter}>
-            <SelectTrigger className="h-8 w-40">
+            <SelectTrigger className="h-8 w-44">
               <SelectValue placeholder="كل العيادات" />
             </SelectTrigger>
             <SelectContent>
@@ -826,7 +851,57 @@ export default function AppointmentCalendar({
               ))}
             </SelectContent>
           </Select>
+          {view === "day" && (
+            <Select value={groupBy} onValueChange={(value) => setGroupBy(value as GroupBy)}>
+              <SelectTrigger className="h-8 w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="doctor">أعمدة حسب الطبيب</SelectItem>
+                <SelectItem value="clinic">أعمدة حسب العيادة</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+
+          <div className="ms-auto flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-8"
+              disabled={nearestDay.isPending}
+              onClick={() => nearestDay.mutate()}
+              title="أقرب يوم قادم فيه مواعيد"
+            >
+              <CalendarClock className="h-4 w-4" />
+              أقرب يوم فيه مواعيد
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8"
+              title="تحديث"
+              onClick={() => {
+                void appointments.refetch();
+                void availability.refetch();
+              }}
+            >
+              <RefreshCw className={`h-4 w-4 ${appointments.isFetching ? "animate-spin" : ""}`} />
+            </Button>
+            <Button
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8"
+              title="طباعة الجدول المعروض (بمرشّحاته)"
+              disabled={visible.length === 0}
+              onClick={printSchedule}
+            >
+              <Printer className="h-4 w-4" />
+            </Button>
+            <ScheduleSettingsPopover settings={settings} onChange={setSettings} />
+          </div>
         </div>
+
+        {(view === "day" || view === "week" || view === "workweek") && <CalendarLegend />}
       </div>
 
       {appointments.isLoading && <Skeleton className="h-96 w-full" />}
@@ -868,6 +943,7 @@ export default function AppointmentCalendar({
           dayCount={view === "workweek" ? 6 : 7}
           appointments={gridRows}
           waiting={settings.showWaiting ? waitingRows : []}
+          frame={frame}
           onSelectDay={(date) => {
             goTo(date);
             setView("day");
@@ -903,6 +979,51 @@ export default function AppointmentCalendar({
       />
     </div>
   );
+}
+
+/* ------------------------------------------------------------- مفتاح الألوان */
+
+/** ما تعنيه خلفيات الشبكة وعلاماتها — يقرأه الموظف مرّة فيفهم التقويم كلّه. */
+function CalendarLegend() {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[11px] text-muted-foreground">
+      <span className="flex items-center gap-1.5">
+        <span className="h-3 w-5 rounded-sm border border-emerald-200 bg-emerald-50" />
+        دوام الطبيب — متاح للحجز
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="h-3 w-5 rounded-sm border bg-slate-100 bg-[repeating-linear-gradient(135deg,transparent,transparent_3px,rgba(100,116,139,0.35)_3px,rgba(100,116,139,0.35)_4px)]" />
+        خارج الدوام / لا يعمل
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="h-3 w-5 rounded-sm border border-rose-200 bg-rose-50 bg-[repeating-linear-gradient(135deg,transparent,transparent_3px,rgba(225,29,72,0.35)_3px,rgba(225,29,72,0.35)_4px)]" />
+        إجازة أو منع
+      </span>
+      <span className="flex items-center gap-1.5">
+        <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
+        غير مؤكَّد
+      </span>
+      <span className="flex items-center gap-1.5">
+        <ArrowUpCircle className="h-3.5 w-3.5 text-primary" />
+        يقبل موعدًا أبكر
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span className="h-0.5 w-5 bg-red-500" />
+        الوقت الآن
+      </span>
+      <span className="hidden items-center gap-1.5 sm:flex">اضغط خانةً فارغة للحجز · اسحب الموعد لنقله · الزرّ الأيمن للأوامر</span>
+    </div>
+  );
+}
+
+/** ساعات دوام العمود من توفّر اليوم: «10:00–22:00» أو null. */
+function workRangeLabel(rows: DayAvailability[] | null) {
+  const work = (rows ?? []).filter((row) => row.kind === "work");
+  if (work.length === 0) return null;
+  const fmt = (iso: string) => new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+  const start = work.reduce((min, row) => (row.starts_at < min ? row.starts_at : min), work[0].starts_at);
+  const end = work.reduce((max, row) => (row.ends_at > max ? row.ends_at : max), work[0].ends_at);
+  return `${fmt(start)}–${fmt(end)}`;
 }
 
 /* ------------------------------------------------------------------ اليوم */
@@ -986,11 +1107,13 @@ function DayGrid({
   }
 
   return (
-    <div className="max-h-[70vh] overflow-auto rounded-lg border">
+    <div className="max-h-[72vh] overflow-auto rounded-xl border bg-card shadow-sm">
       <div className="flex min-w-[36rem]">
         {/* عمود الساعات — الساعة كاملةً بخطٍّ واضح، والأرباع باهتة */}
-        <div className="sticky right-0 z-30 w-16 shrink-0 border-s bg-muted/60">
-          <div className="sticky top-0 z-30 h-10 border-b bg-muted" />
+        <div className="sticky right-0 z-30 w-[4.5rem] shrink-0 border-s bg-card">
+          <div className="sticky top-0 z-30 flex h-14 items-end justify-center border-b bg-card pb-1 text-[10px] text-muted-foreground">
+            الوقت
+          </div>
           {waitingStripHeight > 0 && (
             <div
               className="flex items-center justify-center border-b bg-amber-50 text-[10px] font-medium text-amber-800 dark:bg-amber-950/30"
@@ -1005,15 +1128,17 @@ function DayGrid({
               return (
                 <div
                   key={index}
-                  className={`absolute right-0 left-0 border-b text-muted-foreground ${
-                    isHour ? "border-solid" : "border-dashed"
-                  }`}
+                  className={`absolute right-0 left-0 ${isHour ? "border-t border-border" : ""}`}
                   style={{ top: index * slotHeight, height: slotHeight }}
                 >
-                  <span className={`px-1 ${isHour ? "text-[11px] font-semibold text-foreground" : "text-[9px]"}`}>
+                  <span
+                    className={`block -translate-y-px px-2 text-end ${
+                      isHour ? "text-xs font-bold text-foreground" : "text-[9px] text-muted-foreground/70"
+                    }`}
+                  >
                     {isHour
-                      ? slot.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })
-                      : String(slot.getMinutes()).padStart(2, "0")}
+                      ? slot.toLocaleTimeString("ar-SA", { hour: "numeric", minute: "2-digit" })
+                      : `:${String(slot.getMinutes()).padStart(2, "0")}`}
                   </span>
                 </div>
               );
@@ -1032,18 +1157,31 @@ function DayGrid({
               ? availability.filter((row) => row.doctor_id === column.id)
               : null;
           const isOff = Boolean(columnAvailability?.some((row) => row.kind === "off"));
+          const hoursLabel = isOff ? null : workRangeLabel(columnAvailability);
+          const initial = column.name.replace(/^(د\.?|دكتور|دكتورة|الدكتور|الدكتورة|الأخصائية|الاخصائية)\s*/, "").trim().charAt(0) || "؟";
 
           return (
-            <div key={column.id} className="min-w-[11rem] flex-1 border-s last:border-s-0">
+            <div key={column.id} className="min-w-[12rem] flex-1 border-s last:border-s-0">
               <div
-                className={`sticky top-0 z-20 flex h-10 flex-col items-center justify-center border-b px-2 text-xs font-semibold ${
-                  isOff ? "bg-muted text-muted-foreground" : "bg-primary/10"
+                className={`sticky top-0 z-20 flex h-14 items-center gap-2 border-b px-2.5 ${
+                  isOff ? "bg-muted/80 text-muted-foreground" : "bg-card"
                 }`}
               >
-                <span className="truncate">{column.name}</span>
-                <span className="text-[9px] font-normal text-muted-foreground">
-                  {isOff ? "لا يعمل اليوم" : date.toLocaleDateString("ar-SA-u-nu-latn", { weekday: "short", day: "numeric", month: "numeric" })}
+                <span
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-bold ${
+                    isOff ? "bg-muted-foreground/15" : "bg-primary/15 text-primary"
+                  }`}
+                >
+                  {initial}
                 </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-semibold leading-tight">{column.name}</p>
+                  <p className="truncate text-[10px] text-muted-foreground">
+                    {isOff
+                      ? "لا يعمل اليوم"
+                      : `${columnAppointments.length} موعد${hoursLabel ? ` · الدوام ${hoursLabel}` : ""}`}
+                  </p>
+                </div>
               </div>
               {waitingStripHeight > 0 && (
                 <div
@@ -1081,9 +1219,9 @@ function DayGrid({
                 {slots.map((slot, index) => (
                   <div
                     key={index}
-                    className={`group absolute right-0 left-0 border-b ${
-                      slot.getMinutes() === 0 ? "border-solid border-border" : "border-dashed border-border/60"
-                    } ${canCreate ? "cursor-pointer hover:bg-primary/15" : ""}`}
+                    className={`group absolute right-0 left-0 ${
+                      slot.getMinutes() === 0 ? "border-t border-border" : "border-t border-dashed border-border/40"
+                    } ${canCreate ? "cursor-pointer hover:bg-primary/10" : ""}`}
                     style={{ top: index * slotHeight, height: slotHeight }}
                     onDragOver={(event) => {
                       if (dragged && canReschedule) event.preventDefault();
@@ -1104,8 +1242,8 @@ function DayGrid({
                     }}
                   >
                     {canCreate && (
-                      <span className="pointer-events-none hidden px-1 text-[10px] font-medium text-primary group-hover:inline">
-                        + {slot.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
+                      <span className="pointer-events-none hidden px-1.5 text-[10px] font-semibold text-primary group-hover:inline">
+                        + حجز {slot.toLocaleTimeString("ar-SA", { hour: "numeric", minute: "2-digit" })}
                       </span>
                     )}
                   </div>
@@ -1135,7 +1273,7 @@ function DayGrid({
                     className="pointer-events-none absolute right-0 left-0 z-20 border-t-2 border-red-500"
                     style={{ top: nowOffset * frame.px }}
                   >
-                    <span className="absolute -top-2 right-0 rounded bg-red-500 px-1 text-[9px] text-white">الآن</span>
+                    <span className="absolute -top-[5px] -right-[5px] h-2 w-2 rounded-full bg-red-500" />
                   </div>
                 )}
               </div>
@@ -1192,7 +1330,7 @@ function AvailabilityLayer({ date, frame, rows }: { date: Date; frame: DayFrame;
         work.map((band, index) => (
           <div
             key={`w${index}`}
-            className="pointer-events-none absolute right-0 left-0 bg-emerald-50 dark:bg-emerald-950/30"
+            className="pointer-events-none absolute right-0 left-0 bg-emerald-50/70 dark:bg-emerald-950/20"
             style={{ top: band.from * frame.px, height: (band.to - band.from) * frame.px }}
           />
         ))}
@@ -1201,14 +1339,14 @@ function AvailabilityLayer({ date, frame, rows }: { date: Date; frame: DayFrame;
           key={`h${index}`}
           className={`pointer-events-none absolute right-0 left-0 ${
             band.tone === "rose"
-              ? "bg-[repeating-linear-gradient(45deg,transparent,transparent_6px,rgba(225,29,72,0.14)_6px,rgba(225,29,72,0.14)_12px)]"
-              : "bg-[repeating-linear-gradient(45deg,transparent,transparent_6px,rgba(100,116,139,0.16)_6px,rgba(100,116,139,0.16)_12px)]"
+              ? "bg-rose-50/70 bg-[repeating-linear-gradient(135deg,transparent,transparent_7px,rgba(225,29,72,0.16)_7px,rgba(225,29,72,0.16)_8px)] dark:bg-rose-950/20"
+              : "bg-slate-50 bg-[repeating-linear-gradient(135deg,transparent,transparent_7px,rgba(100,116,139,0.10)_7px,rgba(100,116,139,0.10)_8px)] dark:bg-slate-900/40"
           }`}
           style={{ top: band.top * frame.px, height: band.height * frame.px }}
         >
           {band.label && band.height > 30 && (
             <span
-              className={`sticky top-12 block px-1 text-[10px] font-medium ${
+              className={`sticky top-16 m-1 inline-block rounded bg-background/80 px-1.5 py-0.5 text-[10px] font-medium ${
                 band.tone === "rose" ? "text-rose-700" : "text-muted-foreground"
               }`}
             >
@@ -1287,7 +1425,7 @@ function UnavailableLayer({
       {bands.map((band, index) => (
         <div
           key={index}
-          className="pointer-events-none absolute right-0 left-0 bg-[repeating-linear-gradient(45deg,transparent,transparent_6px,rgba(100,116,139,0.12)_6px,rgba(100,116,139,0.12)_12px)]"
+          className="pointer-events-none absolute right-0 left-0 bg-slate-50 bg-[repeating-linear-gradient(135deg,transparent,transparent_7px,rgba(100,116,139,0.10)_7px,rgba(100,116,139,0.10)_8px)] dark:bg-slate-900/40"
           style={{ top: band.top * PX_PER_MINUTE, height: band.height * PX_PER_MINUTE }}
         >
           {band.label && band.height > 40 && (
@@ -1355,7 +1493,7 @@ const EventBlock = forwardRef<HTMLDivElement, EventBlockProps>(function EventBlo
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onClick}
-      className={`absolute z-10 cursor-pointer overflow-hidden rounded border-e-4 px-1.5 py-0.5 text-[11px] shadow-sm ${style.className} ${
+      className={`absolute z-10 cursor-pointer overflow-hidden rounded-md border border-s-4 px-1.5 py-0.5 text-[11px] leading-tight shadow-sm transition hover:z-20 hover:shadow-md ${style.className} ${
         highlighted ? "animate-pulse ring-2 ring-primary ring-offset-1" : ""
       }`}
       style={{
@@ -1364,8 +1502,9 @@ const EventBlock = forwardRef<HTMLDivElement, EventBlockProps>(function EventBlo
         right: `calc(${(lane?.lane ?? 0) * width}% + 2px)`,
         width: `calc(${width}% - 4px)`,
       }}
-      title={`${fileTag}${appointment.patient?.name_ar ?? ""} — ${fmtTime(appointment.scheduled_start)}${unconfirmed ? " — غير مؤكَّد" : ""}`}
+      title={`${appointment.patient?.name_ar ?? ""}${fileTag ? ` — ملف ${appointment.patient?.file_number}` : ""} — ${fmtTime(appointment.scheduled_start)}–${fmtTime(appointment.scheduled_end)} — ${style.label}${unconfirmed ? " — غير مؤكَّد" : ""}`}
     >
+      {/* السطر الأوّل: الوقت والعلامات — والموعد القصير يحمل الاسم في السطر نفسه */}
       <div className="flex items-center gap-1">
         {unconfirmed && <AlertTriangle className="h-3 w-3 shrink-0 text-amber-600" aria-label="غير مؤكَّد" />}
         {appointment.accepts_earlier && (
@@ -1374,22 +1513,32 @@ const EventBlock = forwardRef<HTMLDivElement, EventBlockProps>(function EventBlo
         {priority && (
           <span className={`rounded px-1 text-[9px] ${priority.className}`}>{priority.label}</span>
         )}
-        <span className="truncate font-medium">
-          {fileTag}
-          {appointment.patient?.name_ar ?? "بلا اسم"}
+        <span className="shrink-0 font-mono text-[10px] font-semibold tabular-nums opacity-80">
+          {fmtTime(appointment.scheduled_start)}
         </span>
+        {duration < 30 && (
+          <span className="truncate font-semibold">{appointment.patient?.name_ar ?? "بلا اسم"}</span>
+        )}
+        {duration >= 30 && (
+          <span className="ms-auto shrink-0 rounded bg-white/60 px-1 text-[9px] font-medium dark:bg-black/20">
+            {style.label}
+          </span>
+        )}
       </div>
+      {duration >= 30 && (
+        <div className="truncate text-[12px] font-bold">{appointment.patient?.name_ar ?? "بلا اسم"}</div>
+      )}
       {labelName && <div className="truncate text-[9px] font-semibold opacity-90">{labelName}</div>}
       {showDetails && duration >= 30 && (
         <div className="truncate text-[10px] opacity-80">
-          {fmtTime(appointment.scheduled_start)} · {Math.round(duration)}د
-          {appointment.patient?.file_number ? ` · ملف ${appointment.patient.file_number}` : ""}
+          {appointment.patient?.file_number != null ? `ملف ${appointment.patient.file_number} · ` : ""}
+          {Math.round(duration)} د
+          {appointment.visit_type?.name_ar ? ` · ${appointment.visit_type.name_ar}` : ""}
         </div>
       )}
       {showDetails && duration >= 45 && (
         <div className="flex items-center gap-1 truncate text-[10px] opacity-80">
-          {appointment.patient?.mobile_number ?? ""}
-          {appointment.visit_type?.name_ar ? ` · ${appointment.visit_type.name_ar}` : ""}
+          <span dir="ltr">{appointment.patient?.mobile_number ?? ""}</span>
           {appointment.patient?.insurance_company_name && (
             <span className="rounded bg-white/60 px-1">تأمين</span>
           )}
@@ -1413,7 +1562,10 @@ function WeekGrid({
   setDragged,
   onOpenAppointment,
   onDropAt,
+  frame,
 }: {
+  /** حدود الساعات نفسها التي في عرض اليوم (جداول العمل والمواعيد). */
+  frame: DayFrame;
   anchor: Date;
   /** 7 = الأسبوع كاملًا، 6 = أسبوع العمل (السبت إلى الخميس). */
   dayCount?: number;
@@ -1429,22 +1581,26 @@ function WeekGrid({
 }) {
   const from = startOfWeek(anchor);
   const days = Array.from({ length: dayCount }, (_, index) => addDays(from, index));
+  const startHour = frame.startHour;
+  const TOTAL_MINUTES = (frame.endHour - frame.startHour) * 60;
+  const weekFrame: DayFrame = { startHour, endHour: frame.endHour, slotMinutes: SLOT_MINUTES, px: PX_PER_MINUTE };
   const slots = Array.from({ length: TOTAL_MINUTES / SLOT_MINUTES }, (_, index) => index * SLOT_MINUTES);
 
   return (
-    <div className="overflow-x-auto rounded-lg border">
+    <div className="max-h-[72vh] overflow-auto rounded-xl border bg-card shadow-sm">
       <div className="flex min-w-[48rem]">
-        <div className="w-14 shrink-0 border-s bg-muted/30">
-          <div className="h-10 border-b" />
+        <div className="sticky right-0 z-20 w-16 shrink-0 border-s bg-card">
+          <div className="sticky top-0 z-20 h-14 border-b bg-card" />
           <div className="relative" style={{ height: TOTAL_MINUTES * PX_PER_MINUTE }}>
             {slots.map((minute) => (
               <div
                 key={minute}
-                className="absolute right-0 left-0 border-b border-dashed px-1 text-[10px] text-muted-foreground"
+                className={`absolute right-0 left-0 px-1.5 text-end ${minute % 60 === 0 ? "border-t border-border text-xs font-bold" : "text-[9px] text-muted-foreground/70"}`}
                 style={{ top: minute * PX_PER_MINUTE, height: SLOT_MINUTES * PX_PER_MINUTE }}
               >
-                {String(DAY_START_HOUR + Math.floor(minute / 60)).padStart(2, "0")}:
-                {String(minute % 60).padStart(2, "0")}
+                {minute % 60 === 0
+                  ? `${String((startHour + Math.floor(minute / 60)) % 24).padStart(2, "0")}:00`
+                  : `:${String(minute % 60).padStart(2, "0")}`}
               </div>
             ))}
           </div>
@@ -1460,11 +1616,20 @@ function WeekGrid({
                 type="button"
                 onClick={() => onSelectDay?.(startOfDay(day))}
                 title="افتح هذا اليوم"
-                className={`flex h-10 w-full flex-col items-center justify-center border-b text-xs hover:bg-primary/10 ${isToday ? "bg-primary/10 font-bold" : "bg-muted/30"}`}
+                className={`sticky top-0 z-10 flex h-14 w-full flex-col items-center justify-center gap-0.5 border-b bg-card text-xs hover:bg-primary/10 ${isToday ? "text-primary" : ""}`}
               >
-                <span>{day.toLocaleDateString("ar-SA", { weekday: "short" })}</span>
-                <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-                  {day.toLocaleDateString("ar-SA", { day: "numeric", month: "short" })}
+                <span className="text-[11px] text-muted-foreground">{day.toLocaleDateString("ar-SA", { weekday: "long" })}</span>
+                <span className="flex items-center gap-1.5">
+                  <span
+                    className={`flex h-7 min-w-[1.75rem] items-center justify-center rounded-full px-1 text-sm font-bold ${
+                      isToday ? "bg-primary text-primary-foreground" : ""
+                    }`}
+                  >
+                    {day.toLocaleDateString("ar-SA", { day: "numeric" })}
+                  </span>
+                  {dayAppointments.length > 0 && (
+                    <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{dayAppointments.length}</span>
+                  )}
                   {dayWaiting > 0 && (
                     <span className="flex items-center gap-0.5 rounded bg-amber-100 px-1 text-amber-800">
                       <Clock className="h-2.5 w-2.5" />
@@ -1476,11 +1641,11 @@ function WeekGrid({
               <div className="relative" style={{ height: TOTAL_MINUTES * PX_PER_MINUTE }}>
                 {slots.map((minute) => {
                   const slotDate = new Date(day);
-                  slotDate.setHours(DAY_START_HOUR, minute, 0, 0);
+                  slotDate.setHours(startHour, minute, 0, 0);
                   return (
                     <div
                       key={minute}
-                      className="absolute right-0 left-0 border-b border-dashed"
+                      className={`absolute right-0 left-0 ${minute % 60 === 0 ? "border-t border-border" : "border-t border-dashed border-border/40"}`}
                       style={{ top: minute * PX_PER_MINUTE, height: SLOT_MINUTES * PX_PER_MINUTE }}
                       onDragOver={(event) => {
                         if (dragged && canReschedule) event.preventDefault();
@@ -1503,6 +1668,8 @@ function WeekGrid({
                       onDragEnd={() => setDragged(null)}
                       onClick={() => onOpenAppointment(row.id)}
                       lane={lanes.get(row.id)}
+                      frame={weekFrame}
+                      day={day}
                     />
                   </BlockMenu>
                 ))}

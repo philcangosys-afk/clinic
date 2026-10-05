@@ -1,8 +1,9 @@
 /**
  * قراءة التنبيهات بالصوت (نطق عربي من المتصفّح نفسه — بلا خدمة خارجية).
  *
- * طلب المالك: بدل النغمة وحدها يقول النظام «دكتور أمجد، لديك مريض جديد: …»،
- * ويقول للاستقبال «دخل المريض … عند دكتور …» و«خرج المريض … من عند دكتور …».
+ * طلب المالك: بدل النغمة وحدها يقول النظام للطبيب «لديك مريض جديد» فقط — بلا
+ * اسم المريض ولا اسم الطبيب (05/10/2026) — ويقول للاستقبال «دخل المريض عند
+ * دكتور …» و«خرج المريض من عند دكتور …»، بلا اسم المريض كذلك.
  *
  * — الصوت من `speechSynthesis` في المتصفّح: مجّاني ويعمل بلا إنترنت إن كان في
  *   الجهاز صوتٌ عربيّ (ويندوز: «Microsoft Hoda/Naayf»، كروم: «Google العربية»
@@ -113,17 +114,18 @@ export function speechForNotification(
   row: { event_key: string | null; title: string; body: string | null },
   myDoctorName: string | null,
 ): string | null {
-  const patient = patientFromBody(row.body);
+  // اسم المريض لا يُنطق (طلب المالك) — يُقرأ من الشاشة لا من مكبّر الصوت
+  void myDoctorName;
   switch (row.event_key) {
     case "patient_waiting_for_doctor":
-      return `${spokenDoctor(myDoctorName)}، لديك مريض جديد${patient ? `: ${patient}` : ""}`;
+      return "لديك مريض جديد";
     case "doctor_queue_start": {
       const doctor = row.title.replace(/^دخل المريض عند\s*/, "");
-      return `دخل المريض ${patient} عند ${spokenDoctor(doctor)}`;
+      return `دخل المريض عند ${spokenDoctor(doctor)}`;
     }
     case "doctor_queue_finish": {
       const doctor = row.title.replace(/^خرج المريض من عند\s*/, "");
-      return `خرج المريض ${patient} من عند ${spokenDoctor(doctor)}`;
+      return `خرج المريض من عند ${spokenDoctor(doctor)}`;
     }
     default:
       return null;

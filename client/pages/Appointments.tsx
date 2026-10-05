@@ -884,29 +884,41 @@ export default function Appointments() {
           <strong>العلاج:</strong> يربط المدير حسابك من «الأطباء» ← زرّ «حساب الدخول» في صفّك.
         </p>
       )}
+      {/* الترويسة: العنوان يمينًا والإجراءات الأساسية يسارًا. التنقّل بين الأيّام
+          في شريط التقويم نفسه — وأسهم اليوم هنا لعرضَي «الجدول» و«بطاقات الأطباء» فقط،
+          فلا يظهر للموظّف مِقبضان للتاريخ على شاشةٍ واحدة. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold">المواعيد</h1>
-          <p className="text-sm text-muted-foreground">
-            {isDoctorScope ? "جدولك أنت" : "جدول الأطباء اليومي"}
-          </p>
+        <div className="flex items-center gap-3">
+          <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <CalendarClock className="h-6 w-6" />
+          </div>
+          <div>
+            <h1 className="text-2xl font-bold leading-tight">المواعيد</h1>
+            <p className="text-sm text-muted-foreground">
+              {isDoctorScope ? "جدولك أنت" : "جدول الأطباء — احجز بالضغط على خانةٍ فارغة"}
+            </p>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {/* أسهم اليوم وحقل التاريخ معطَّلة أثناء مرشّح فترة قادم من التقارير:
-              الاستعلام يتبع تلك الفترة، فمقبضٌ يتحرّك ولا يغيّر النتيجة كذب. */}
-          <Button variant="outline" size="icon" disabled={rangeActive} onClick={() => shiftDay(-1)}>
-            <ChevronRight className="h-4 w-4" />
-          </Button>
-          <Input
-            type="date"
-            value={day}
-            disabled={rangeActive}
-            onChange={(e) => setDay(e.target.value)}
-            className="w-40"
-          />
-          <Button variant="outline" size="icon" disabled={rangeActive} onClick={() => shiftDay(1)}>
-            <ChevronLeft className="h-4 w-4" />
-          </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {(mode !== "calendar" || urlFilterActive) && (
+            <div className="flex items-center overflow-hidden rounded-lg border bg-background">
+              {/* أسهم اليوم وحقل التاريخ معطَّلة أثناء مرشّح فترة قادم من التقارير:
+                  الاستعلام يتبع تلك الفترة، فمقبضٌ يتحرّك ولا يغيّر النتيجة كذب. */}
+              <Button variant="ghost" size="icon" className="rounded-none" disabled={rangeActive} onClick={() => shiftDay(-1)} title="اليوم السابق">
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+              <Input
+                type="date"
+                value={day}
+                disabled={rangeActive}
+                onChange={(e) => setDay(e.target.value)}
+                className="h-9 w-40 rounded-none border-y-0"
+              />
+              <Button variant="ghost" size="icon" className="rounded-none" disabled={rangeActive} onClick={() => shiftDay(1)} title="اليوم التالي">
+                <ChevronLeft className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
           {canSchedule && (
             <Button
               variant="outline"
@@ -920,48 +932,48 @@ export default function Appointments() {
               موعد انتظار
             </Button>
           )}
-          {canSchedule && <Button onClick={() => { setCreateAsWaiting(false); setCreateOpen(true); }}>
-            <Plus className="h-4 w-4" />
-            موعد جديد
-          </Button>}
+          {canSchedule && (
+            <Button size="lg" className="h-10" onClick={() => { setCreateAsWaiting(false); setCreateOpen(true); }}>
+              <Plus className="h-4 w-4" />
+              موعد جديد
+            </Button>
+          )}
         </div>
       </div>
 
-      <Card>
-        <CardContent className="flex flex-wrap items-center gap-2 p-3">
-          <PatientSearchInput
-            value={search}
-            onChange={setSearch}
-            scopes={searchScopes}
-            onScopesChange={setSearchScopes}
-            className="min-w-56 flex-1"
-          />
-          {!urlFilterActive && (
-            <div className="flex rounded-md border p-0.5">
+      {/* شريط الأدوات: البحث ونمط الشاشة يمينًا، والأدوات المساندة يسارًا */}
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-2.5 shadow-sm">
+        <PatientSearchInput
+          value={search}
+          onChange={setSearch}
+          scopes={searchScopes}
+          onScopesChange={setSearchScopes}
+          className="min-w-56 flex-1"
+        />
+        {!urlFilterActive && (
+          <div className="flex rounded-lg bg-muted p-1" role="tablist" aria-label="شكل الشاشة">
+            {([
+              ["calendar", "التقويم"],
+              ["table", "جدول"],
+              ["classic", "بطاقات الأطباء"],
+            ] as const).map(([key, label]) => (
               <button
+                key={key}
                 type="button"
-                onClick={() => setMode("calendar")}
-                className={`rounded px-2.5 py-1 text-xs ${mode === "calendar" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                role="tab"
+                aria-selected={mode === key}
+                onClick={() => setMode(key)}
+                className={`rounded-md px-3 py-1.5 text-xs font-medium transition ${
+                  mode === key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"
+                }`}
               >
-                التقويم
+                {label}
               </button>
-              <button
-                type="button"
-                onClick={() => setMode("classic")}
-                className={`rounded px-2.5 py-1 text-xs ${mode === "classic" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
-              >
-                بطاقات الأطباء
-              </button>
-              <button
-                type="button"
-                onClick={() => setMode("table")}
-                className={`rounded px-2.5 py-1 text-xs ${mode === "table" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
-              >
-                جدول
-              </button>
-            </div>
-          )}
-          <Button variant="outline" onClick={() => setNotesOpen(true)} title="ملاحظات اليوم والاجتماعات">
+            ))}
+          </div>
+        )}
+        <div className="flex flex-wrap items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={() => setNotesOpen(true)} title="ملاحظات اليوم والاجتماعات">
             <StickyNote className="h-4 w-4" />
             ملاحظات اليوم
             {(dayNotesCount.data ?? 0) > 0 && (
@@ -970,17 +982,20 @@ export default function Appointments() {
               </Badge>
             )}
           </Button>
-          <Button variant="outline" onClick={() => setSearchOpen(true)} title="بحث في المواعيد بفترة ومرشّحات وطباعتها">
+          <Button variant="ghost" size="sm" onClick={() => setSearchOpen(true)} title="بحث في المواعيد بفترة ومرشّحات وطباعتها">
             <ListChecks className="h-4 w-4" />
             البحث والطباعة
           </Button>
-          <Button variant="outline" onClick={() => navigate("/reception")}>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/reception")}>
             <Users className="h-4 w-4" />
             نظام الدور
           </Button>
-          <Button variant="outline" onClick={() => navigate("/waitlist")}>قائمة انتظار المواعيد</Button>
-        </CardContent>
-      </Card>
+          <Button variant="ghost" size="sm" onClick={() => navigate("/waitlist")}>
+            <Clock className="h-4 w-4" />
+            قائمة الانتظار
+          </Button>
+        </div>
+      </div>
 
       {bookForId && (
         <Card className="sticky top-0 z-40 border-primary/50 bg-primary/5 shadow-sm">
@@ -1160,37 +1175,32 @@ export default function Appointments() {
 
       {/* شريط الحالات — يقيس الفترة كلّها، ولونه مفتاح ألوان التقويم، ويحصر كلّ العروض بالضغط (0176) */}
       {!appointments.isLoading && searchedAppointments.length > 0 && (
-        <Card>
-          <CardContent className="flex flex-wrap gap-2 p-3">
-            {summary.map((bucket) => {
-              const active = summaryKey === bucket.key;
-              return (
-                <button
-                  key={bucket.key}
-                  type="button"
-                  disabled={urlFilterActive}
-                  onClick={() => setSummaryKey(active ? "all" : bucket.key)}
-                  className={`rounded-md border px-3 py-1.5 text-start transition disabled:opacity-50 ${
-                    active ? "border-primary bg-primary/5" : "hover:border-primary/40"
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                    {bucket.dot && <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${bucket.dot}`} />}
-                    {bucket.label}
-                  </div>
-                  <div className="font-mono text-lg font-bold leading-tight tabular-nums">
-                    {bucket.value}
-                  </div>
-                </button>
-              );
-            })}
-            {urlFilterActive && (
-              <span className="self-center text-[11px] text-muted-foreground">
-                المرشّح يأتي من التقرير — امسحه لتفعيل الشريط.
-              </span>
-            )}
-          </CardContent>
-        </Card>
+        <div className="flex flex-wrap items-center gap-2">
+          {summary.map((bucket) => {
+            const active = summaryKey === bucket.key;
+            return (
+              <button
+                key={bucket.key}
+                type="button"
+                disabled={urlFilterActive}
+                onClick={() => setSummaryKey(active ? "all" : bucket.key)}
+                title={active ? "إلغاء التصفية" : `عرض «${bucket.label}» فقط`}
+                className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition disabled:opacity-50 ${
+                  active ? "border-primary bg-primary text-primary-foreground shadow-sm" : "bg-card hover:border-primary/50"
+                }`}
+              >
+                {bucket.dot && <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${bucket.dot}`} />}
+                <span className={active ? "" : "text-muted-foreground"}>{bucket.label}</span>
+                <span className="font-mono text-sm font-bold tabular-nums">{bucket.value}</span>
+              </button>
+            );
+          })}
+          {urlFilterActive && (
+            <span className="self-center text-[11px] text-muted-foreground">
+              المرشّح يأتي من التقرير — امسحه لتفعيل الشريط.
+            </span>
+          )}
+        </div>
       )}
 
       {/* مرشّح متعدّد الحالات أو فترة أطول من يوم لا يعبّر عنهما التقويم
