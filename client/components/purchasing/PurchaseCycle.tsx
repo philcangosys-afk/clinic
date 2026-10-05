@@ -1500,7 +1500,7 @@ export function SupplierBalancesPanel() {
  * القيم النظامية في `v_reference_data` تحمل `organization_id = null`، فالتقييد
  * هو «بلا منشأة أو منشأتي» لا «منشأتي» وحدها.
  */
-function PaySupplierDialog({ invoice, onClose }: { invoice: any | null; onClose: () => void }) {
+export function PaySupplierDialog({ invoice, onClose }: { invoice: any | null; onClose: () => void }) {
   const { organization } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -1587,6 +1587,7 @@ function PaySupplierDialog({ invoice, onClose }: { invoice: any | null; onClose:
       queryClient.invalidateQueries({ queryKey: ["supplier-balances", organization?.id] });
       queryClient.invalidateQueries({ queryKey: ["supplier-ledger", invoice?.distributorId] });
       queryClient.invalidateQueries({ queryKey: ["pc-invoice-due", invoice?.invoiceId] });
+      queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
       toast({ title: "سُجّل السداد" });
       setAmount(""); setMethodId(""); setRegisterId(""); setReference(""); setNote("");
       onClose();
@@ -1972,52 +1973,129 @@ function NewPurchaseReturnDialog({
   const { organization } = useOrganizationAccess();
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const receipts = usePostedReceipts(organization?.id);
-  const [receiptId, setReceiptId] = useState("");
+  // المصدر: فاتورة شراء مباشرة (0228) — وهي الطريقة المعتمدة الآن — أو مستند
+  // استلام من دورة الشراء السابقة.
+  const [source, setSource] = useState<"invoice" | "receipt">("invoice");
+  const receipts = usePostedReceipts(open && source === "receipt" ? organization?.id : undefined);
+  const [sourceId, setSourceId] = useState("");
   const [returnNumber, setReturnNumber] = useState("");
   const [reason, setReason] = useState("");
   const [qtyByLine, setQtyByLine] = useState<Record<string, string>>({});
 
-  const receipt = (receipts.data ?? []).find((r) => r.id === receiptId);
-
-  const receiptItems = useQuery({
-    queryKey: ["receipt-items-for-return", receiptId],
-    enabled: Boolean(receiptId),
+  const invoices = useQuery({
+    queryKey: ["direct-invoices-for-return", organization?.id],
+    enabled: open && source === "invoice" && Boolean(organization?.id),
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("goods_receipt_items")
-        .select("id, item_id, qty_received, free_qty, unit_cost, lot_id, item:items(name_ar), lot:inventory_lots(lot_number, qty_remaining, expiry_date)")
-        .eq("goods_receipt_id", receiptId);
+        .from("purchase_invoices")
+        .select("id, invoice_number, invoice_date, branch_id, warehouse_id, distributor_id, distributor:distributors(name_ar)")
+        .eq("organization_id", organization!.id)
+        .is("goods_receipt_id", null)
+        .neq("status", "cancelled")
+        .order("invoice_date", { ascending: false })
+        .limit(300);
       if (error) throw error;
-      return (data ?? []) as any[];
+      return (data ?? []).map((r: any) => ({
+        ...r, distributor: Array.isArray(r.distributor) ? r.distributor[0] : r.distributor,
+      })) as any[];
     },
   });
+
+  const receipt = (receipts.data ?? []).find((r) => r.id === sourceId);
+  const invoice = (invoices.data ?? []).find((r) => r.id === sourceId);
+  const header = source === "invoice" ? invoice : receipt;
+
+  /** بنود المصدر بشكلٍ واحد: الصنف، المستلَم، التشغيلة ورصيدها، التكلفة. */
+  type ReturnLine = {
+    id: string; item_id: string; name: string; received: number;
+    lot_id: string | null; lot_number: string | null; qty_remaining: number | null;
+    unit_cost: number; vat_rate: number; receipt_item_id: string | null;
+  };
+
+  const sourceLines = useQuery({
+    queryKey: ["return-source-lines", source, sourceId],
+    enabled: Boolean(sourceId) && Boolean(header),
+    queryFn: async (): Promise<ReturnLine[]> => {
+      if (source === "receipt") {
+        const { data, error } = await supabase
+          .from("goods_receipt_items")
+          .select("id, item_id, qty_received, free_qty, unit_cost, lot_id, item:items(name_ar), lot:inventory_lots(lot_number, qty_remaining, expiry_date)")
+          .eq("goods_receipt_id", sourceId);
+        if (error) throw error;
+        return ((data ?? []) as any[]).map((li) => {
+          const lot = Array.isArray(li.lot) ? li.lot[0] : li.lot;
+          const item = Array.isArray(li.item) ? li.item[0] : li.item;
+          return {
+            id: li.id, item_id: li.item_id, name: item?.name_ar ?? "—",
+            received: Number(li.qty_received ?? 0) + Number(li.free_qty ?? 0),
+            lot_id: li.lot_id, lot_number: lot?.lot_number ?? null,
+            qty_remaining: lot ? Number(lot.qty_remaining ?? 0) : null,
+            unit_cost: Number(li.unit_cost ?? 0), vat_rate: 0, receipt_item_id: li.id,
+          };
+        });
+      }
+      const { data: items, error } = await supabase
+        .from("purchase_invoice_items")
+        .select("id, item_id, qty, free_qty, vat_rate, item:items(name_ar)")
+        .eq("purchase_invoice_id", sourceId);
+      if (error) throw error;
+      const ids = ((items ?? []) as any[]).map((i) => i.id);
+      // تشغيلة كلّ بند: التي تحمل رقمه في مستودع الفاتورة — المرتجع يخرج منها هي.
+      const { data: lots, error: lotsError } = ids.length
+        ? await supabase
+            .from("inventory_lots")
+            .select("id, lot_number, qty_remaining, unit_cost, purchase_invoice_item_id")
+            .in("purchase_invoice_item_id", ids)
+            .eq("warehouse_id", invoice!.warehouse_id)
+        : { data: [], error: null };
+      if (lotsError) throw lotsError;
+      const lotByLine = new Map(((lots ?? []) as any[]).map((l) => [l.purchase_invoice_item_id, l]));
+      return ((items ?? []) as any[]).map((li) => {
+        const lot = lotByLine.get(li.id);
+        const item = Array.isArray(li.item) ? li.item[0] : li.item;
+        return {
+          id: li.id, item_id: li.item_id, name: item?.name_ar ?? "—",
+          received: Number(li.qty ?? 0) + Number(li.free_qty ?? 0),
+          lot_id: lot?.id ?? null, lot_number: lot?.lot_number ?? null,
+          qty_remaining: lot ? Number(lot.qty_remaining ?? 0) : null,
+          unit_cost: Number(lot?.unit_cost ?? 0), vat_rate: Number(li.vat_rate ?? 0),
+          receipt_item_id: null,
+        };
+      });
+    },
+  });
+
+  const reset = () => {
+    setSourceId(""); setReturnNumber(""); setReason(""); setQtyByLine({});
+  };
 
   const create = useMutation({
     mutationFn: async () => {
       if (!organization?.id) throw new Error("لا توجد منشأة نشطة");
-      if (!receipt) throw new Error("اختر مستند الاستلام");
+      if (!header) throw new Error(source === "invoice" ? "اختر فاتورة الشراء" : "اختر مستند الاستلام");
       if (!reason.trim()) throw new Error("سبب المرتجع مطلوب");
-      const chosen = (receiptItems.data ?? [])
+      const chosen = (sourceLines.data ?? [])
         .map((li) => ({ line: li, qty: Number(qtyByLine[li.id] ?? 0) }))
         .filter((row) => row.qty > 0);
       if (chosen.length === 0) throw new Error("أدخل كمّية مرتجعة لبند واحد على الأقل");
       for (const row of chosen) {
-        const received = Number(row.line.qty_received ?? 0) + Number(row.line.free_qty ?? 0);
-        if (row.qty > received)
-          throw new Error(
-            `مرتجع «${row.line.item?.name_ar ?? ""}» يتجاوز المستلَم (${received})`,
-          );
+        if (row.qty > row.line.received)
+          throw new Error(`مرتجع «${row.line.name}» يتجاوز المستلَم (${row.line.received})`);
+        if (source === "invoice" && !row.line.lot_id)
+          throw new Error(`«${row.line.name}» بلا تشغيلة في مستودع الفاتورة — لا يُرتجع منها`);
+        if (row.line.qty_remaining !== null && row.qty > row.line.qty_remaining)
+          throw new Error(`مرتجع «${row.line.name}» يتجاوز المتبقّي في التشغيلة (${row.line.qty_remaining})`);
       }
 
-      const { data: header, error } = await supabase
+      const { data: created, error } = await supabase
         .from("purchase_returns")
         .insert({
           organization_id: organization.id,
-          branch_id: receipt.branch_id,
-          warehouse_id: receipt.warehouse_id,
-          distributor_id: receipt.distributor_id,
-          goods_receipt_id: receipt.id,
+          branch_id: header.branch_id,
+          warehouse_id: header.warehouse_id,
+          distributor_id: header.distributor_id,
+          purchase_invoice_id: source === "invoice" ? header.id : null,
+          goods_receipt_id: source === "receipt" ? header.id : null,
           return_number: returnNumber.trim() || null,
           reason: reason.trim(),
         })
@@ -2026,23 +2104,31 @@ function NewPurchaseReturnDialog({
       if (error) throw error;
 
       const { error: linesError } = await supabase.from("purchase_return_items").insert(
-        chosen.map((row) => ({
-          organization_id: organization.id,
-          purchase_return_id: header.id,
-          item_id: row.line.item_id,
-          // التشغيلة تُمرَّر كما هي: المرتجع يخرج من الدفعة نفسها التي دخلت،
-          // لا من أقرب دفعة انتهاءً — وإلا خرجت بضاعة مورّد آخر.
-          lot_id: row.line.lot_id,
-          receipt_item_id: row.line.id,
-          qty_returned: row.qty,
-          unit_cost: Number(row.line.unit_cost ?? 0),
-        })),
+        chosen.map((row) => {
+          const base = Math.round(row.qty * row.line.unit_cost * 100) / 100;
+          // ضريبة المدخلات تُردّ بنسبة بند الفاتورة: المورد يُنقص حسابه بالصافي شاملًا الضريبة.
+          const vat = Math.round(base * row.line.vat_rate) / 100;
+          return {
+            organization_id: organization.id,
+            purchase_return_id: created.id,
+            item_id: row.line.item_id,
+            // التشغيلة تُمرَّر كما هي: المرتجع يخرج من الدفعة نفسها التي دخلت،
+            // لا من أقرب دفعة انتهاءً — وإلا خرجت بضاعة مورّد آخر.
+            lot_id: row.line.lot_id,
+            receipt_item_id: row.line.receipt_item_id,
+            qty_returned: row.qty,
+            unit_cost: row.line.unit_cost,
+            vat_rate: row.line.vat_rate,
+            vat_amount: vat,
+            net_amount: Math.round((base + vat) * 100) / 100,
+          };
+        }),
       );
       if (linesError) throw linesError;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["purchase-returns", organization?.id] });
-      setReceiptId(""); setReturnNumber(""); setReason(""); setQtyByLine({});
+      reset();
       onOpenChange(false);
       toast({
         title: "سُجّل المرتجع مسوّدةً",
@@ -2056,34 +2142,56 @@ function NewPurchaseReturnDialog({
       }),
   });
 
+  const sourceOptions = source === "invoice" ? invoices : receipts;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>مرتجع مشتريات جديد</DialogTitle>
           <DialogDescription>
-            يُنشأ مسوّدةً من مستند استلام مرحَّل، ثم يُرحَّل من الجدول فيخرج من تشغيلاته.
+            يُنشأ مسوّدةً من فاتورة الشراء، ثم يُرحَّل من الجدول فيخرج من تشغيلاتها ويُنقص حساب المورد.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
+          <div className="flex gap-1 rounded-md border p-1 text-xs">
+            {([["invoice", "فاتورة شراء"], ["receipt", "مستند استلام (سابق)"]] as const).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => { setSource(key); reset(); }}
+                className={`flex-1 rounded px-2 py-1 ${source === key ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="flex flex-col gap-1.5">
-              <Label>مستند الاستلام *</Label>
-              <Select value={receiptId} onValueChange={(v) => { setReceiptId(v); setQtyByLine({}); }}>
+              <Label>{source === "invoice" ? "فاتورة الشراء *" : "مستند الاستلام *"}</Label>
+              <Select value={sourceId} onValueChange={(v) => { setSourceId(v); setQtyByLine({}); }}>
                 <SelectTrigger>
-                  <SelectValue placeholder="اختر الاستلام" />
+                  <SelectValue placeholder={source === "invoice" ? "اختر الفاتورة" : "اختر الاستلام"} />
                 </SelectTrigger>
                 <SelectContent>
-                  {(receipts.data ?? []).map((r) => (
-                    <SelectItem key={r.id} value={r.id}>
-                      {(r.receipt_number ?? r.id.slice(0, 8))} — {r.distributor?.name_ar ?? "—"}
-                    </SelectItem>
-                  ))}
+                  {source === "invoice"
+                    ? (invoices.data ?? []).map((r) => (
+                        <SelectItem key={r.id} value={r.id}>
+                          {(r.invoice_number ?? r.id.slice(0, 8))} — {r.distributor?.name_ar ?? "—"} — {r.invoice_date}
+                        </SelectItem>
+                      ))
+                    : (receipts.data ?? []).map((r) => (
+                        <SelectItem key={r.id} value={r.id}>
+                          {(r.receipt_number ?? r.id.slice(0, 8))} — {r.distributor?.name_ar ?? "—"}
+                        </SelectItem>
+                      ))}
                 </SelectContent>
               </Select>
-              {!receipts.isLoading && (receipts.data ?? []).length === 0 && (
+              {!sourceOptions.isLoading && (sourceOptions.data ?? []).length === 0 && (
                 <p className="text-xs text-muted-foreground">
-                  لا استلامات مرحَّلة — المرتجع لا يُنشأ إلا من بضاعة دخلت فعلًا.
+                  {source === "invoice"
+                    ? "لا فواتير شراء — المرتجع لا يُنشأ إلا من بضاعة دخلت فعلًا."
+                    : "لا استلامات مرحَّلة."}
                 </p>
               )}
             </div>
@@ -2093,26 +2201,25 @@ function NewPurchaseReturnDialog({
             </div>
           </div>
 
-          {receiptId && (
+          {sourceId && (
             <div className="max-h-72 overflow-y-auto">
-              {receiptItems.isLoading && <Skeleton className="h-20 w-full" />}
-              {(receiptItems.data ?? []).map((li) => {
-                const lot = Array.isArray(li.lot) ? li.lot[0] : li.lot;
-                const received = Number(li.qty_received ?? 0) + Number(li.free_qty ?? 0);
-                return (
-                  <div key={li.id} className="mb-2 flex flex-wrap items-center gap-2 rounded-md border p-2">
-                    <span className="flex-1 text-sm font-medium">{li.item?.name_ar ?? "—"}</span>
-                    <span className="font-mono text-xs text-muted-foreground">
-                      المستلَم {received}
-                      {lot ? ` · تشغيلة ${lot.lot_number ?? "بلا رقم"} متبقٍّ ${lot.qty_remaining}` : " · بلا تشغيلة"}
-                    </span>
-                    <Input type="number" min={0} max={received} className="w-24" placeholder="المرتجع"
-                           value={qtyByLine[li.id] ?? ""}
-                           onChange={(e) => setQtyByLine((s) => ({ ...s, [li.id]: e.target.value }))} />
-                  </div>
-                );
-              })}
-              {!receiptItems.isLoading && (receiptItems.data ?? []).length === 0 && (
+              {sourceLines.isLoading && <Skeleton className="h-20 w-full" />}
+              {(sourceLines.data ?? []).map((li) => (
+                <div key={li.id} className="mb-2 flex flex-wrap items-center gap-2 rounded-md border p-2">
+                  <span className="flex-1 text-sm font-medium">{li.name}</span>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    المستلَم {li.received}
+                    {li.lot_id
+                      ? ` · تشغيلة ${li.lot_number ?? "بلا رقم"} متبقٍّ ${li.qty_remaining ?? 0}`
+                      : " · بلا تشغيلة"}
+                  </span>
+                  <Input type="number" min={0} max={Math.min(li.received, li.qty_remaining ?? li.received)}
+                         className="w-24" placeholder="المرتجع"
+                         value={qtyByLine[li.id] ?? ""}
+                         onChange={(e) => setQtyByLine((s) => ({ ...s, [li.id]: e.target.value }))} />
+                </div>
+              ))}
+              {!sourceLines.isLoading && (sourceLines.data ?? []).length === 0 && (
                 <p className="py-4 text-center text-sm text-muted-foreground">لا بنود في هذا المستند.</p>
               )}
             </div>
@@ -2125,7 +2232,7 @@ function NewPurchaseReturnDialog({
           </div>
         </div>
         <DialogFooter>
-          <Button disabled={!receiptId || !reason.trim() || create.isPending}
+          <Button disabled={!sourceId || !reason.trim() || create.isPending}
                   onClick={() => create.mutate()}>
             {create.isPending ? "جارٍ الحفظ..." : "حفظ المرتجع مسوّدةً"}
           </Button>

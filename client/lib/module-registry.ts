@@ -8,10 +8,7 @@ import {
   CalendarDays,
   CalendarRange,
   CircleDollarSign,
-  ClipboardCheck,
-  ClipboardPen,
   FileSpreadsheet,
-  PackageCheck,
   PackageMinus,
   Truck,
   Wallet,
@@ -120,10 +117,8 @@ export const moduleRegistry: ModuleRegistryItem[] = [
   { id: "analytics", label: "التحليلات", icon: TrendingUp, featureKey: "advanced_analytics", requiredPermission: "advanced_analytics.view", category: "الإدارة", order: 303 },
   { id: "custom-reports", label: "تقارير مخصصة", icon: LayoutGrid, featureKey: "reports", requiredPermission: "reports.view", category: "الإدارة", order: 305 },
   { id: "accounting", label: "الحسابات ودليل الحسابات", icon: CircleDollarSign, featureKey: "accounting", requiredPermission: "accounting.view", category: "التشغيل والإدارة", order: 310 },
-  // المشتريات (0177): شاشةٌ لكلّ خطوة، بترتيب العمل — لا تبويباتٌ داخل تبويبات
-  { id: "purchase-requests", label: "طلبات الشراء", icon: ClipboardPen, featureKey: "procurement", requiredPermission: "procurement.view", category: "المشتريات", order: 320 },
-  { id: "purchase-orders", label: "أوامر الشراء", icon: ClipboardCheck, featureKey: "procurement", requiredPermission: "procurement.view", category: "المشتريات", order: 321 },
-  { id: "goods-receipts", label: "استلام البضاعة", icon: PackageCheck, featureKey: "procurement", requiredPermission: "procurement.view", category: "المشتريات", order: 322 },
+  // المشتريات (0228): بالطريقة العادية — فاتورة الشراء في نافذةٍ واحدة تُدخل الأصناف
+  // المستودع وتُسجَّل على المورد. طلب الشراء وأمره واستلامه خرجت من القائمة بطلب المالك.
   { id: "purchase-invoices", label: "فواتير الشراء", icon: ReceiptText, featureKey: "procurement", requiredPermission: "procurement.view", category: "المشتريات", order: 323 },
   { id: "purchase-returns", label: "مرتجعات المشتريات", icon: PackageMinus, featureKey: "procurement", requiredPermission: "procurement.view", category: "المشتريات", order: 324 },
   { id: "cash-expenses", label: "المصروفات النقدية", icon: Wallet, featureKey: "procurement", requiredPermission: "procurement.view", category: "المشتريات", order: 325 },
