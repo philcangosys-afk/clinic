@@ -1286,6 +1286,16 @@ export default function NewInvoiceDialog({
     paymentsTotal > totals.net + 0.009;
 
   /**
+   * الدفع وطريقته إلزاميّان لحفظ الفاتورة (طلب المالك 05/10/2026): فاتورةٌ
+   * تُحفظ بلا سند قبضٍ تظهر «غير مدفوعة» ولا يُعرف أدُفعت أم لا. يلزم سطر دفعٍ
+   * واحد على الأقلّ بمبلغٍ وطريقة. لا يُشترط في عرض السعر، ولا في فاتورة
+   * التأمين (حصّة المريض فيها قد تكون صفرًا)، ولا في فاتورةٍ صافيها صفر.
+   */
+  const paymentRequired = !isQuote && !isInsurance && totals.net > 0.009;
+  const missingPayment =
+    paymentRequired && !payments.some((row) => Number(row.amount) > 0 && Boolean(row.methodId));
+
+  /**
    * الطبيب والعيادة إلزاميّان لفاتورة المريض (قرار المالك 01/10/2026): عليهما
    * تُبنى إيرادات الطبيب والعيادة وعمولته وتقارير اليومية، وفاتورةٌ بلا طبيب
    * تخرج منها كلّها. عرض السعر ليس فاتورة، وفاتورة العميل الخارجيّ بلا ملفٍّ
@@ -1314,6 +1324,10 @@ export default function NewInvoiceDialog({
       if (missingDoctor) throw new Error("اختر الطبيب المعالج — إلزاميّ لفاتورة المريض");
       if (missingClinic) throw new Error("اختر العيادة — إلزاميّة لفاتورة المريض");
       if (cashWithoutRegister) throw new Error("اختر الصندوق للدفع النقدي");
+      if (missingPayment) throw new Error("أضف الدفع واختر طريقته — لا تُحفظ الفاتورة بلا دفع");
+      if (payments.some((row) => Number(row.amount) > 0 && !row.methodId)) {
+        throw new Error("اختر طريقة الدفع لكل مبلغ");
+      }
 
       /**
        * ما ترفضه القاعدة يُمنع هنا قبل الإرسال.
@@ -2199,8 +2213,8 @@ export default function NewInvoiceDialog({
           {!isQuote && (
             <div className="flex flex-col gap-2 rounded-lg border p-3">
               <div className="flex items-center justify-between">
-                <Label>
-                  الدفع (اختياري — يمكن التحصيل لاحقًا)
+                <Label className={missingPayment ? "text-destructive" : undefined}>
+                  {paymentRequired ? "الدفع وطريقته (إلزامي) *" : "الدفع (اختياري)"}
                 </Label>
                 <Button
                   type="button"
@@ -2350,6 +2364,12 @@ export default function NewInvoiceDialog({
                 );
               })}
 
+              {missingPayment && (
+                <p className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  لا تُحفظ الفاتورة بلا دفع: اضغط «طريقة دفع» واختر الطريقة والمبلغ.
+                </p>
+              )}
+
               {payments.length > 0 && (
                 <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-2 text-sm">
                   <span className="tabular-nums">
@@ -2409,6 +2429,9 @@ export default function NewInvoiceDialog({
         </div>
 
         <DialogFooter className="items-center gap-2">
+          {missingPayment && !missingDoctor && !missingClinic && (
+            <span className="text-xs text-destructive">أضف الدفع وطريقته قبل الحفظ.</span>
+          )}
           {(missingDoctor || missingClinic) && (
             <span className="text-xs text-destructive">
               {missingDoctor && missingClinic
@@ -2425,6 +2448,7 @@ export default function NewInvoiceDialog({
               missingDoctor ||
               missingClinic ||
               paymentsInvalid ||
+              missingPayment ||
               vatUnresolved ||
               vatBlocked
             }
