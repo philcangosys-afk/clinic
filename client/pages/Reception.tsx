@@ -51,6 +51,7 @@ import PatientPicker from "@/components/shared/PatientPicker";
 import QuickAddPatientDialog from "@/components/shared/QuickAddPatientDialog";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
+import WebsiteBookingsButton from "@/components/reception/WebsiteBookings";
 
 /** تاريخ اليوم المحلّيّ بصيغة حقل التاريخ. */
 function todayInputValue() {
@@ -333,6 +334,8 @@ export default function Reception() {
             </button>
           </div>
           {!isDoctorScope && (<>
+          {/* حجوزات الموقع الإلكتروني (0226) */}
+          <WebsiteBookingsButton />
           <Button variant="outline" onClick={() => setToolOpen("present")}>
             الموجودون الآن
           </Button>

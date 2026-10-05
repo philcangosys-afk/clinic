@@ -13,6 +13,7 @@ import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { useSessionDoctor } from "@/lib/session-doctor";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { supabase } from "@/lib/supabase";
+import WebsiteBookingsButton from "@/components/reception/WebsiteBookings";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -190,13 +191,17 @@ export default function Index() {
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-6 p-4 sm:p-6">
-      <div>
-        <h1 className="text-2xl font-bold">نظرة عامة</h1>
-        <p className="text-sm text-muted-foreground">
-          {doctorView
-            ? "يومك أنت: مرضاك ومواعيدك ومن ينتظرك."
-            : `ملخص سريع لحركة اليوم في ${access.organization?.name ?? "منشأتك"}.`}
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold">نظرة عامة</h1>
+          <p className="text-sm text-muted-foreground">
+            {doctorView
+              ? "يومك أنت: مرضاك ومواعيدك ومن ينتظرك."
+              : `ملخص سريع لحركة اليوم في ${access.organization?.name ?? "منشأتك"}.`}
+          </p>
+        </div>
+        {/* حجوزات الموقع الإلكتروني (0226) — للاستقبال والإدارة */}
+        {!doctorView && <WebsiteBookingsButton />}
       </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
