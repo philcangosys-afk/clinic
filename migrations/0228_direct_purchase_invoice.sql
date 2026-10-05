@@ -20,6 +20,10 @@
 --       رقم فاتورة المورد لا يتكرّر للمورد نفسه. صنفٌ يُتتبَّع بالصلاحية لا يدخل
 --       بلا تاريخ. الضريبة نسبةٌ يكتبها المُدخِل لكلّ بند (ضريبة المدخلات كما في
 --       فاتورة المورد — لا قواعد إعفاء المرضى).
+--     الضريبة لا تُقبل من موردٍ بلا رقمٍ ضريبيّ: الفاتورة إمّا «ضريبية» برقم
+--     المورد (يُكتب في النافذة إن لم يكن في بطاقته فيُحفظ فيها)، أو «بدون ضريبة».
+--   • `app_quick_create_supplier` و`app_quick_create_stock_item`: إنشاء موردٍ
+--     أو صنفٍ مخزنيّ من داخل نافذة الفاتورة دون مغادرتها.
 --   • `app_cancel_purchase_invoice(id, reason)`: لا حذف — إلغاءٌ بسبب، بشرط ألّا
 --     يكون عليها سداد وألّا يكون صُرف شيءٌ من تشغيلاتها؛ فتخرج كمّياتها من
 --     المخزون بحركة `return_out` ويُصحَّح حساب المورد.
@@ -68,6 +72,7 @@ declare
   v_pii      uuid;
   v_lot      uuid;
   v_n        int := 0;
+  v_tax_no   text := nullif(regexp_replace(coalesce(p_payload->>'supplier_tax_number', ''), '\s', '', 'g'), '');
 begin
   if auth.uid() is null then raise exception 'يجب تسجيل الدخول'; end if;
   if v_org is null or not public.app_is_member(v_org) then
@@ -137,6 +142,18 @@ begin
   end loop;
   v_net := v_sub - v_disc_sum + v_vat_sum;
 
+  -- الرقم الضريبي: المكتوب في النافذة، وإلّا الذي في بطاقة المورد
+  if v_tax_no is not null and v_tax_no !~ '^[0-9]{15}$' then
+    raise exception 'الرقم الضريبي للمورد 15 رقمًا';
+  end if;
+  v_tax_no := coalesce(v_tax_no, nullif(btrim(coalesce(v_dist.tax_number, '')), ''));
+  if v_vat_sum > 0 and v_tax_no is null then
+    raise exception 'المورد % بلا رقم ضريبي — اكتب رقمه، أو احفظ الفاتورة «بدون ضريبة»', v_dist.name_ar;
+  end if;
+  if v_tax_no is not null and nullif(btrim(coalesce(v_dist.tax_number, '')), '') is null then
+    update public.distributors set tax_number = v_tax_no, updated_at = now() where id = v_dist.id;
+  end if;
+
   if v_pay_amt < 0 or v_pay_amt > v_net + 0.001 then
     raise exception 'المبلغ المدفوع يتجاوز صافي الفاتورة (%)', v_net;
   end if;
@@ -151,7 +168,7 @@ begin
     v_org, v_wh.branch_id, v_wh.id, v_dist.id, v_number, v_date,
     v_date + coalesce(v_dist.payment_terms_days, 0),
     case when v_pay_amt >= v_net - 0.001 then 'cash' else 'credit' end,
-    v_dist.tax_number, v_vat_sum > 0, 0,
+    v_tax_no, v_vat_sum > 0, 0,
     0, 0, 0, v_note, 'direct', v_purpose,
     'unpaid', 0, auth.uid())
   returning id into v_inv;
@@ -289,6 +306,121 @@ end $$;
 revoke all on function public.app_cancel_purchase_invoice(uuid, text) from public, anon;
 grant execute on function public.app_cancel_purchase_invoice(uuid, text) to authenticated;
 
+-- ── مورد جديد من نافذة الفاتورة ────────────────────────────────────────────
+create or replace function public.app_quick_create_supplier(
+  p_organization_id uuid,
+  p_name            text,
+  p_tax_number      text default null,
+  p_mobile          text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_name text := nullif(regexp_replace(btrim(coalesce(p_name, '')), '\s+', ' ', 'g'), '');
+  v_tax  text := nullif(regexp_replace(coalesce(p_tax_number, ''), '\s', '', 'g'), '');
+  v_id   uuid;
+begin
+  if auth.uid() is null or not public.app_is_member(p_organization_id) then
+    raise exception 'لا تملك صلاحية على هذه المنشأة';
+  end if;
+  if not (public.app_has_permission(p_organization_id, 'purchasing.invoice')
+          or public.app_has_permission(p_organization_id, 'suppliers.manage')) then
+    raise exception 'صلاحيتك لا تسمح بإضافة موردين';
+  end if;
+  if v_name is null then raise exception 'اكتب اسم المورد'; end if;
+  if v_tax is not null and v_tax !~ '^[0-9]{15}$' then
+    raise exception 'الرقم الضريبي 15 رقمًا';
+  end if;
+  if exists (select 1 from public.distributors
+              where organization_id = p_organization_id and lower(btrim(name_ar)) = lower(v_name)
+                and not coalesce(is_archived, false)) then
+    raise exception 'يوجد مورد بالاسم «%» — اختره من القائمة (أو فعّله من «الموردون» إن كان معطّلًا)', v_name;
+  end if;
+
+  insert into public.distributors (organization_id, name_ar, tax_number, mobile_1, created_by)
+  values (p_organization_id, v_name, v_tax, nullif(btrim(coalesce(p_mobile, '')), ''), auth.uid())
+  returning id into v_id;
+  return v_id;
+end $$;
+
+revoke all on function public.app_quick_create_supplier(uuid, text, text, text) from public, anon;
+grant execute on function public.app_quick_create_supplier(uuid, text, text, text) to authenticated;
+
+-- ── صنف مخزنيّ جديد من نافذة الفاتورة ──────────────────────────────────────
+-- يُنشأ منتجًا أو دواءً **يُتابَع مخزونه** — وإلّا لم تقبله الفاتورة. رمزه
+-- يُولَّد (P1001، P1002…) ويُعدَّل لاحقًا من الكتالوج إن شاء.
+create or replace function public.app_quick_create_stock_item(
+  p_organization_id uuid,
+  p_name            text,
+  p_item_type       text default 'product',
+  p_unit            text default null,
+  p_cost_price      numeric default null,
+  p_sale_price      numeric default null,
+  p_track_expiry    boolean default false,
+  p_barcode         text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_name    text := nullif(regexp_replace(btrim(coalesce(p_name, '')), '\s+', ' ', 'g'), '');
+  v_barcode text := nullif(btrim(coalesce(p_barcode, '')), '');
+  v_code    text;
+  v_id      uuid;
+begin
+  if auth.uid() is null or not public.app_is_member(p_organization_id) then
+    raise exception 'لا تملك صلاحية على هذه المنشأة';
+  end if;
+  if not (public.app_has_permission(p_organization_id, 'purchasing.invoice')
+          or public.app_has_permission(p_organization_id, 'catalog.manage')) then
+    raise exception 'صلاحيتك لا تسمح بإضافة أصناف';
+  end if;
+  if v_name is null then raise exception 'اكتب اسم الصنف'; end if;
+  if coalesce(p_item_type, 'product') not in ('product', 'drug') then
+    raise exception 'نوع الصنف: منتج أو دواء';
+  end if;
+  if coalesce(p_cost_price, 0) < 0 or coalesce(p_sale_price, 0) < 0 then
+    raise exception 'الأسعار لا تكون سالبة';
+  end if;
+  if exists (select 1 from public.items
+              where organization_id = p_organization_id and lower(btrim(name_ar)) = lower(v_name)
+                and not coalesce(is_archived, false)) then
+    raise exception 'يوجد صنف بالاسم «%» — ابحث عنه (وإن لم يظهر ففعّل «متابعة المخزون» في بطاقته)', v_name;
+  end if;
+  if v_barcode is not null and exists (select 1 from public.items
+              where organization_id = p_organization_id and barcode = v_barcode
+                and not coalesce(is_archived, false)) then
+    raise exception 'الباركود % مستعمل لصنفٍ آخر', v_barcode;
+  end if;
+
+  -- القفل يمنع صنفين متزامنين من أخذ الرمز نفسه
+  perform pg_advisory_xact_lock(hashtext('stock-item-code:' || p_organization_id::text));
+  select 'P' || (coalesce(max(substring(code from '^P([0-9]+)$')::int), 1000) + 1)
+    into v_code
+    from public.items
+   where organization_id = p_organization_id and code ~ '^P[0-9]+$';
+
+  insert into public.items (organization_id, item_type, code, barcode, name_ar, unit, price,
+                            cost_price, track_inventory, track_expiry)
+  values (p_organization_id, coalesce(p_item_type, 'product'), v_code, v_barcode, v_name,
+          nullif(btrim(coalesce(p_unit, '')), ''), coalesce(p_sale_price, 0),
+          p_cost_price, true, coalesce(p_track_expiry, false))
+  returning id into v_id;
+
+  insert into public.audit_log (organization_id, user_id, module, action_type, entity_id, entity_title, details)
+  values (p_organization_id, auth.uid(), 'catalog', 'add', v_id, v_name,
+          format('صنف مخزنيّ جديد من فاتورة الشراء — الرمز %s', v_code));
+  return v_id;
+end $$;
+
+revoke all on function public.app_quick_create_stock_item(uuid, text, text, text, numeric, numeric, boolean, text) from public, anon;
+grant execute on function public.app_quick_create_stock_item(uuid, text, text, text, numeric, numeric, boolean, text) to authenticated;
+
 commit;
 
 notify pgrst, 'reload schema';
@@ -298,6 +430,11 @@ select 'فاتورة الشراء المباشرة' as "البند",
 union all
 select 'إلغاء فاتورة الشراء',
        case when to_regprocedure('public.app_cancel_purchase_invoice(uuid,text)') is not null then 'جاهزة' else 'مفقودة' end
+union all
+select 'إنشاء مورد / صنف من الفاتورة',
+       case when to_regprocedure('public.app_quick_create_supplier(uuid,text,text,text)') is not null
+             and to_regprocedure('public.app_quick_create_stock_item(uuid,text,text,text,numeric,numeric,boolean,text)') is not null
+            then 'جاهزة' else 'مفقودة' end
 union all
 select 'مستودعات نشطة', count(*)::text from public.warehouses where not coalesce(is_disabled, false)
 union all

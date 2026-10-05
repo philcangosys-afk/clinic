@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Building2, Eye, Plus, Search, Trash2, Wallet } from "lucide-react";
+import { Ban, Building2, Eye, PackagePlus, Plus, Search, Trash2, UserPlus, Wallet } from "lucide-react";
 
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
@@ -201,7 +201,7 @@ export function PurchaseInvoicesPanel() {
       let query = supabase
         .from("purchase_invoices")
         .select(
-          "id, invoice_number, invoice_date, due_date, payment_term, subtotal_amount, vat_amount, net_amount, paid_amount, status, goods_receipt_id, source_document, purchase_purpose, note, cancel_reason, distributor_id, warehouse_id, distributor:distributors(name_ar, tax_number), warehouse:warehouses(name)",
+          "id, invoice_number, invoice_date, due_date, payment_term, subtotal_amount, vat_amount, net_amount, paid_amount, status, goods_receipt_id, source_document, purchase_purpose, supplier_tax_number, note, cancel_reason, distributor_id, warehouse_id, distributor:distributors(name_ar, tax_number), warehouse:warehouses(name)",
         )
         .eq("organization_id", orgId)
         .order("invoice_date", { ascending: false })
@@ -227,7 +227,8 @@ export function PurchaseInvoicesPanel() {
     return (
       String(inv.invoice_number ?? "").toLowerCase().includes(term) ||
       String(inv.distributor?.name_ar ?? "").toLowerCase().includes(term) ||
-      String(inv.warehouse?.name ?? "").toLowerCase().includes(term)
+      String(inv.warehouse?.name ?? "").toLowerCase().includes(term) ||
+      String(inv.supplier_tax_number ?? inv.distributor?.tax_number ?? "").includes(term)
     );
   });
   const active = rows.filter((inv) => inv.status !== "cancelled");
@@ -274,7 +275,7 @@ export function PurchaseInvoicesPanel() {
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              placeholder="بحث برقم الفاتورة أو المورد أو المستودع"
+              placeholder="بحث برقم الفاتورة أو المورد أو رقمه الضريبي أو المستودع"
               className="ps-8"
             />
           </div>
@@ -306,6 +307,8 @@ export function PurchaseInvoicesPanel() {
                   <TableHead>المورد</TableHead>
                   <TableHead>المستودع</TableHead>
                   <TableHead>الجهة</TableHead>
+                  <TableHead>الرقم الضريبي للمورد</TableHead>
+                  <TableHead>الضريبة</TableHead>
                   <TableHead>الصافي</TableHead>
                   <TableHead>المسدَّد</TableHead>
                   <TableHead>المتبقّي</TableHead>
@@ -336,6 +339,12 @@ export function PurchaseInvoicesPanel() {
                       </TableCell>
                       <TableCell className="text-xs">{inv.warehouse?.name ?? "—"}</TableCell>
                       <TableCell><PurposeBadge purpose={inv.purchase_purpose} /></TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {inv.supplier_tax_number || inv.distributor?.tax_number || (
+                          <span className="font-sans text-muted-foreground">بدون رقم ضريبي</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">{money(Number(inv.vat_amount ?? 0))}</TableCell>
                       <TableCell className="font-mono text-xs">{money(Number(inv.net_amount ?? 0))}</TableCell>
                       <TableCell className="font-mono text-xs">{money(Number(inv.paid_amount ?? 0))}</TableCell>
                       <TableCell className="font-mono text-xs">
@@ -382,7 +391,7 @@ export function PurchaseInvoicesPanel() {
                 })}
                 {rows.length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={10} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={12} className="py-8 text-center text-sm text-muted-foreground">
                       لا فواتير شراء في هذه الفترة.
                     </TableCell>
                   </TableRow>
@@ -452,12 +461,18 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
   const [methodId, setMethodId] = useState("");
   const [registerId, setRegisterId] = useState("");
   const [reference, setReference] = useState("");
+  // فاتورة ضريبية (برقم المورد الضريبي) أو بدون ضريبة — يتبع المورد ويُبدَّل يدويًّا
+  const [taxed, setTaxed] = useState(false);
+  const [taxNo, setTaxNo] = useState("");
+  const [supplierFormOpen, setSupplierFormOpen] = useState(false);
+  const [itemFormOpen, setItemFormOpen] = useState(false);
 
   const supplier = (suppliers.data ?? []).find((s) => s.id === supplierId);
   const warehouse = (warehouses.data ?? []).find((w) => w.id === warehouseId);
   const warehousePurpose = warehouse?.purpose && warehouse.purpose !== "general" ? (warehouse.purpose as PurchasePurpose) : null;
   const effectivePurpose = warehousePurpose ?? (purpose || null);
-  const defaultVat = supplier?.tax_number ? "15" : "0";
+  const defaultVat = taxed ? "15" : "0";
+  const needsTaxNo = taxed && Boolean(supplierId) && !supplier?.tax_number;
   const method = (methods.data ?? []).find((m) => m.value_id === methodId);
   const isCash = method?.code === "cash";
 
@@ -465,14 +480,20 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
     setSupplierId(""); setInvoiceNumber(""); setInvoiceDate(todayIso()); setWarehouseId("");
     setPurpose(""); setNote(""); setLines([]); setItemSearch(""); setPayNow(false);
     setPayAmount(""); setMethodId(""); setRegisterId(""); setReference("");
+    setTaxed(false); setTaxNo(""); setSupplierFormOpen(false); setItemFormOpen(false);
   };
 
-  const chooseSupplier = (id: string) => {
+  const applyTaxMode = (next: boolean) => {
+    setTaxed(next);
+    setLines((current) => current.map((l) => ({ ...l, vat_rate: next ? "15" : "0" })));
+  };
+
+  const chooseSupplier = (id: string, taxNumber?: string | null) => {
     setSupplierId(id);
+    setTaxNo("");
     const next = (suppliers.data ?? []).find((s) => s.id === id);
-    const vat = next?.tax_number ? "15" : "0";
-    // نسبة الضريبة تتبع المورد: مسجَّلٌ ضريبيًّا ← 15٪، وإلّا صفر. تبقى قابلة للتعديل لكلّ صنف.
-    setLines((current) => current.map((l) => ({ ...l, vat_rate: vat })));
+    // نوع الفاتورة يتبع المورد: مسجَّلٌ ضريبيًّا ← ضريبية 15٪، وإلّا بدون ضريبة. ويُبدَّل يدويًّا.
+    applyTaxMode(Boolean(taxNumber ?? next?.tax_number));
   };
 
   const term = itemSearch.trim().toLowerCase();
@@ -527,6 +548,8 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
 
   const problems: string[] = [];
   if (!supplierId) problems.push("اختر المورد");
+  if (needsTaxNo && !/^[0-9]{15}$/.test(taxNo.trim()))
+    problems.push("اكتب الرقم الضريبي للمورد (15 رقمًا) أو اختر «بدون ضريبة»");
   if (!invoiceNumber.trim()) problems.push("اكتب رقم فاتورة المورد");
   if (!invoiceDate) problems.push("اختر تاريخ الفاتورة");
   else if (invoiceDate > today) problems.push("تاريخ الفاتورة في المستقبل");
@@ -559,6 +582,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
         invoice_number: invoiceNumber.trim(),
         invoice_date: invoiceDate,
         purchase_purpose: effectivePurpose,
+        supplier_tax_number: needsTaxNo ? taxNo.trim() : null,
         note: note.trim() || null,
         lines: lines.map((l) => ({
           item_id: l.item.id,
@@ -589,6 +613,8 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
       queryClient.invalidateQueries({ queryKey: ["supplier-balances"] });
       queryClient.invalidateQueries({ queryKey: ["supplier-ledger"] });
       queryClient.invalidateQueries({ queryKey: ["procurement-spend"] });
+      queryClient.invalidateQueries({ queryKey: ["pi-suppliers"] });
+      queryClient.invalidateQueries({ queryKey: ["distributors"] });
       // شاشات المخزون بمفاتيحها المختلفة: كلّ مفتاحٍ يذكر المخزون أو التشغيلات
       queryClient.invalidateQueries({
         predicate: (q) =>
@@ -627,8 +653,18 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
         {/* ── ١) بيانات الفاتورة ── */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex flex-col gap-1.5">
-            <Label>المورد *</Label>
-            <Select value={supplierId} onValueChange={chooseSupplier}>
+            <div className="flex items-center justify-between gap-2">
+              <Label>المورد *</Label>
+              <button
+                type="button"
+                className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                onClick={() => setSupplierFormOpen((o) => !o)}
+              >
+                <UserPlus className="h-3.5 w-3.5" />
+                مورد جديد
+              </button>
+            </div>
+            <Select value={supplierId} onValueChange={(v) => chooseSupplier(v)}>
               <SelectTrigger>
                 <SelectValue placeholder={suppliers.isLoading ? "جارٍ التحميل..." : "اختر المورد"} />
               </SelectTrigger>
@@ -640,12 +676,12 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
             </Select>
             {supplier && (
               <p className="text-[11px] text-muted-foreground">
-                {supplier.tax_number ? `الرقم الضريبي ${supplier.tax_number}` : "غير مسجَّل ضريبيًّا"}
+                {supplier.tax_number ? `الرقم الضريبي ${supplier.tax_number}` : "بلا رقم ضريبي في بطاقته"}
                 {supplier.payment_terms_days ? ` · مهلة السداد ${supplier.payment_terms_days} يومًا` : ""}
               </p>
             )}
-            {!suppliers.isLoading && (suppliers.data ?? []).length === 0 && (
-              <p className="text-[11px] text-destructive">لا موردين — أضف موردًا من «الموردون» أوّلًا.</p>
+            {!suppliers.isLoading && (suppliers.data ?? []).length === 0 && !supplierFormOpen && (
+              <p className="text-[11px] text-muted-foreground">لا موردين بعد — اضغط «مورد جديد».</p>
             )}
           </div>
           <div className="flex flex-col gap-1.5">
@@ -674,6 +710,61 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
           </div>
         </div>
 
+        {supplierFormOpen && (
+          <QuickSupplierForm
+            onCancel={() => setSupplierFormOpen(false)}
+            onCreated={(id, taxNumber) => {
+              setSupplierFormOpen(false);
+              chooseSupplier(id, taxNumber);
+            }}
+          />
+        )}
+
+        {supplierId && (
+          <div className="flex flex-wrap items-end gap-3 rounded-lg border p-3">
+            <div className="flex flex-col gap-1.5">
+              <Label className="text-xs">نوع الفاتورة</Label>
+              <div className="flex gap-1 rounded-md border p-1 text-sm" role="radiogroup" aria-label="نوع الفاتورة">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={taxed}
+                  onClick={() => applyTaxMode(true)}
+                  className={`rounded px-3 py-1 ${taxed ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                >
+                  فاتورة ضريبية (15٪)
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!taxed}
+                  onClick={() => applyTaxMode(false)}
+                  className={`rounded px-3 py-1 ${!taxed ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                >
+                  بدون ضريبة — لا رقم ضريبي
+                </button>
+              </div>
+            </div>
+            {taxed && supplier?.tax_number && (
+              <p className="pb-1.5 text-sm">
+                الرقم الضريبي للمورد: <span className="font-mono font-semibold">{supplier.tax_number}</span>
+              </p>
+            )}
+            {needsTaxNo && (
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">الرقم الضريبي للمورد * (يُحفظ في بطاقته)</Label>
+                <Input
+                  value={taxNo}
+                  onChange={(e) => setTaxNo(e.target.value.replace(/\D/g, "").slice(0, 15))}
+                  inputMode="numeric"
+                  placeholder="15 رقمًا"
+                  className="w-48 font-mono"
+                />
+              </div>
+            )}
+          </div>
+        )}
+
         {warehouseId && (
           <div className="flex flex-col gap-1.5">
             <Label className="text-xs">
@@ -691,10 +782,21 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
         <div className="flex flex-col gap-2 rounded-lg border p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm font-semibold">الأصناف</p>
-            <p className="text-[11px] text-muted-foreground">
-              تظهر الأصناف التي يُتابَع مخزونها — صنفٌ جديد يُضاف من «الكتالوج» مع تفعيل «متابعة المخزون».
-            </p>
+            <Button size="sm" variant="outline" onClick={() => setItemFormOpen((o) => !o)}>
+              <PackagePlus className="h-4 w-4" />
+              صنف جديد
+            </Button>
           </div>
+          {itemFormOpen && (
+            <QuickItemForm
+              initialName={itemSearch}
+              onCancel={() => setItemFormOpen(false)}
+              onCreated={(item) => {
+                setItemFormOpen(false);
+                addItem(item);
+              }}
+            />
+          )}
           <div className="relative">
             <Search className="pointer-events-none absolute start-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
@@ -726,7 +828,15 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
                 </button>
               ))}
               {matches.length === 0 && !items.isLoading && (
-                <p className="px-3 py-2 text-xs text-muted-foreground">لا صنف يطابق «{itemSearch}».</p>
+                <p className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs text-muted-foreground">
+                  لا صنف يطابق «{itemSearch}».
+                  {!itemFormOpen && (
+                    <button type="button" className="font-medium text-primary hover:underline"
+                            onClick={() => setItemFormOpen(true)}>
+                      أنشئه صنفًا جديدًا
+                    </button>
+                  )}
+                </p>
               )}
             </div>
           )}
@@ -775,6 +885,8 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
                         </TableCell>
                         <TableCell>
                           <Input type="number" min={0} max={100} step="any" className="w-16" value={line.vat_rate}
+                                 disabled={!taxed}
+                                 title={taxed ? undefined : "فاتورة بدون ضريبة"}
                                  onChange={(e) => updateLine(line.key, { vat_rate: e.target.value })} />
                         </TableCell>
                         <TableCell>
@@ -898,6 +1010,168 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
   );
 }
 
+/* ── مورد جديد من داخل الفاتورة ─────────────────────────────────────────── */
+function QuickSupplierForm({
+  onCreated, onCancel,
+}: { onCreated: (id: string, taxNumber: string | null) => void; onCancel: () => void }) {
+  const { organization } = useOrganizationAccess();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [name, setName] = useState("");
+  const [taxNumber, setTaxNumber] = useState("");
+  const [mobile, setMobile] = useState("");
+  const taxOk = taxNumber === "" || /^[0-9]{15}$/.test(taxNumber);
+
+  const create = useMutation({
+    mutationFn: async () => {
+      if (!organization?.id) throw new Error("لا توجد منشأة نشطة");
+      const { data, error } = await supabase.rpc("app_quick_create_supplier", {
+        p_organization_id: organization.id,
+        p_name: name.trim(),
+        p_tax_number: taxNumber || null,
+        p_mobile: mobile.trim() || null,
+      });
+      if (error) throw error;
+      return data as string;
+    },
+    onSuccess: async (id) => {
+      await queryClient.invalidateQueries({ queryKey: ["pi-suppliers"] });
+      queryClient.invalidateQueries({ queryKey: ["distributors"] });
+      toast({ title: `أُضيف المورد «${name.trim()}»` });
+      onCreated(id, taxNumber || null);
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر إضافة المورد", description: errorMessage(error) }),
+  });
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
+      <p className="text-sm font-semibold">مورد جديد</p>
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">اسم المورد *</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">الرقم الضريبي (إن وُجد)</Label>
+          <Input value={taxNumber} inputMode="numeric" placeholder="15 رقمًا" className="font-mono"
+                 onChange={(e) => setTaxNumber(e.target.value.replace(/\D/g, "").slice(0, 15))} />
+          {!taxOk && <span className="text-[10px] text-destructive">الرقم الضريبي 15 رقمًا</span>}
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">الجوال</Label>
+          <Input value={mobile} inputMode="tel" onChange={(e) => setMobile(e.target.value)} />
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" disabled={!name.trim() || !taxOk || create.isPending} onClick={() => create.mutate()}>
+          {create.isPending ? "جارٍ الإضافة..." : "إضافة واختيار"}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={create.isPending} onClick={onCancel}>إلغاء</Button>
+      </div>
+      <p className="text-[11px] text-muted-foreground">بقيّة بياناته (البنك، مهلة السداد…) تُكمَل لاحقًا من «الموردون».</p>
+    </div>
+  );
+}
+
+/* ── صنف جديد من داخل الفاتورة ─────────────────────────────────────────── */
+function QuickItemForm({
+  initialName, onCreated, onCancel,
+}: { initialName: string; onCreated: (item: StockItem) => void; onCancel: () => void }) {
+  const { organization } = useOrganizationAccess();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const [name, setName] = useState(initialName.trim());
+  const [itemType, setItemType] = useState<"product" | "drug">("product");
+  const [unit, setUnit] = useState("");
+  const [cost, setCost] = useState("");
+  const [sale, setSale] = useState("");
+  const [trackExpiry, setTrackExpiry] = useState(false);
+  const [barcode, setBarcode] = useState("");
+
+  const create = useMutation({
+    mutationFn: async () => {
+      if (!organization?.id) throw new Error("لا توجد منشأة نشطة");
+      const { data, error } = await supabase.rpc("app_quick_create_stock_item", {
+        p_organization_id: organization.id,
+        p_name: name.trim(),
+        p_item_type: itemType,
+        p_unit: unit.trim() || null,
+        p_cost_price: cost === "" ? null : num(cost),
+        p_sale_price: sale === "" ? null : num(sale),
+        p_track_expiry: trackExpiry,
+        p_barcode: barcode.trim() || null,
+      });
+      if (error) throw error;
+      return data as string;
+    },
+    onSuccess: (id) => {
+      queryClient.invalidateQueries({ queryKey: ["pi-stock-items"] });
+      toast({ title: `أُضيف الصنف «${name.trim()}» وأُدرج في الفاتورة` });
+      onCreated({
+        id,
+        name_ar: name.trim(),
+        code: null,
+        barcode: barcode.trim() || null,
+        unit: unit.trim() || null,
+        cost_price: cost === "" ? null : num(cost),
+        track_expiry: trackExpiry,
+      });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر إضافة الصنف", description: errorMessage(error) }),
+  });
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-primary/40 bg-primary/5 p-3">
+      <p className="text-sm font-semibold">صنف جديد — يُتابَع مخزونه</p>
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <div className="col-span-2 flex flex-col gap-1">
+          <Label className="text-xs">اسم الصنف *</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">النوع</Label>
+          <div className="flex gap-1 rounded-md border p-1 text-xs">
+            {([["product", "منتج / مستلزم"], ["drug", "دواء"]] as const).map(([key, label]) => (
+              <button key={key} type="button" onClick={() => setItemType(key)}
+                      className={`flex-1 rounded px-2 py-1 ${itemType === key ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">الوحدة</Label>
+          <Input value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="علبة، حبة، شريط…" />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">سعر الشراء</Label>
+          <Input type="number" min={0} step="0.01" value={cost} onChange={(e) => setCost(e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">سعر البيع</Label>
+          <Input type="number" min={0} step="0.01" value={sale} onChange={(e) => setSale(e.target.value)} />
+        </div>
+        <div className="flex flex-col gap-1">
+          <Label className="text-xs">الباركود</Label>
+          <Input value={barcode} onChange={(e) => setBarcode(e.target.value)} />
+        </div>
+        <label className="flex items-center gap-2 self-end pb-2 text-xs">
+          <input type="checkbox" checked={trackExpiry} onChange={(e) => setTrackExpiry(e.target.checked)} />
+          له تاريخ صلاحية
+        </label>
+      </div>
+      <div className="flex gap-2">
+        <Button size="sm" disabled={!name.trim() || create.isPending} onClick={() => create.mutate()}>
+          {create.isPending ? "جارٍ الإضافة..." : "إضافة وإدراج في الفاتورة"}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={create.isPending} onClick={onCancel}>إلغاء</Button>
+      </div>
+    </div>
+  );
+}
+
 function Row({ label, value, strong }: { label: string; value: string; strong?: boolean }) {
   return (
     <div className="flex items-center justify-between">
@@ -939,6 +1213,10 @@ function PurchaseInvoiceDetailsDialog({
           <DialogDescription>
             {invoice?.distributor?.name_ar ?? "—"} · {invoice?.invoice_date} · إلى «{invoice?.warehouse?.name ?? "—"}»
             {invoice?.due_date ? ` · الاستحقاق ${invoice.due_date}` : ""}
+            {" · "}
+            {invoice?.supplier_tax_number || invoice?.distributor?.tax_number
+              ? `الرقم الضريبي للمورد ${invoice.supplier_tax_number || invoice.distributor.tax_number}`
+              : "بدون رقم ضريبي"}
           </DialogDescription>
         </DialogHeader>
 

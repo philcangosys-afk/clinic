@@ -30,8 +30,9 @@ import {
  * يبني «مرضى الطبيب» (0164) — فيظهر الملفّ عند الطبيبين، ولا يُزال أحد.
  * ويُكتب سطرٌ في ملاحظات الملفّ، ويصل الطبيبَ المحوَّلَ إليه تنبيه.
  *
- * يظهر للأطباء ولإدارة المنشأة (المالك، مدير المنشأة، مدير الفرع) — الصفات
- * نفسها التي تقبلها الدالّة. القائمة كلّ الأطباء النشطين لا طبيب الجلسة وحده:
+ * يظهر للأطباء وللاستقبال (0229) ولإدارة المنشأة (المالك، مدير المنشأة، مدير
+ * الفرع) — الصفات نفسها التي تقبلها الدالّة. الاستقبال لا بطاقة طبيب له، فيُسجَّل
+ * المحوِّل الطبيبَ المعالج. القائمة كلّ الأطباء النشطين لا طبيب الجلسة وحده:
  * التحويل إلى زميل.
  */
 
@@ -42,7 +43,7 @@ type PatientLite = {
   participating_doctor_ids?: string[] | null;
 };
 
-const TRANSFER_ROLES = ["owner", "organization_admin", "branch_manager", "doctor"];
+const TRANSFER_ROLES = ["owner", "organization_admin", "branch_manager", "doctor", "receptionist"];
 
 export function useCanTransferPatient() {
   const { membership } = useOrganizationAccess();
@@ -169,7 +170,8 @@ function TransferPatientDialog({
         <DialogHeader>
           <DialogTitle>تحويل المريض إلى طبيب آخر</DialogTitle>
           <DialogDescription>
-            {patient.name_ar} — يصير الملفّ مفتوحًا عندك وعند الطبيب المحوَّل إليه، ولا يُزال أيّ طبيب من الملفّ.
+            {patient.name_ar} — يصير الملفّ مفتوحًا {selfDoctor ? "عندك" : "عند طبيبه الحالي"} وعند الطبيب المحوَّل إليه،
+            ولا يُزال أيّ طبيب من الملفّ.
           </DialogDescription>
         </DialogHeader>
 
