@@ -57,6 +57,7 @@ import TaxSettingsTab, {
   VatReturnPanel,
   TaxInvoicePreview,
 } from "@/components/billing/TaxSettingsTab";
+import TaxInvoicesPanel from "@/components/billing/TaxInvoicesPanel";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { INVOICE_STATUS_BADGE, INVOICE_STATUS_LABELS } from "@/lib/invoice-status";
@@ -492,6 +493,8 @@ export default function Billing() {
       {showShifts && <CashShiftsPanel organizationId={organization?.id} />}
       {showTax && (
         <div className="flex flex-col gap-4">
+          {/* الفواتير الضريبية بوعائها وضريبتها ومجموعها (05/10/2026) */}
+          <TaxInvoicesPanel />
           <TaxSettingsTab />
           <VatReturnPanel />
           {/* «الفواتير الإلكترونية» (0092) كانت محاكاةً محليّة قبل الربط الفعليّ مع
