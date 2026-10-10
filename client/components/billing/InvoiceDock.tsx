@@ -108,7 +108,23 @@ export function InvoiceDockProvider({ children }: { children: ReactNode }) {
           {...session.props}
           open
           minimized={minimized}
-          onMinimize={() => setMinimized(true)}
+          onMinimize={() => {
+            /**
+             * الإنزال يفكّ الفاتورة عن الشاشة التي فتحتها (0242): تُبلَّغ أنّ
+             * نافذتها أُغلقت، فيعمل زرّ «فاتورة جديدة» فيها من جديد — ويرفع
+             * المُنزَلة بتنبيه — وتبقى الفاتورة حيّةً هنا.
+             */
+            const current = sessionRef.current;
+            if (current) {
+              const detach = current.onClosed;
+              const detached = { ...current, onClosed: () => undefined };
+              sessionRef.current = detached;
+              setSession(detached);
+              detach();
+            }
+            minimizedRef.current = true;
+            setMinimized(true);
+          }}
           onOpenChange={(next) => {
             if (!next) close();
           }}

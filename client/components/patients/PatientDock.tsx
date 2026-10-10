@@ -14,7 +14,8 @@ import { useToast } from "@/hooks/use-toast";
  * ملفٍّ جديد، أو ملفٍّ محفوظ نفتحه وننزله تحت».
  *
  * ١) **الملفّ الجديد**: نافذته تُركَّب هنا في قشرة النظام (كالفاتورة)، و«إنزال
- *    الملف» يخفيها ويبقيها حيّةً بكلّ ما كُتب فيها. ملفٌّ جديد واحد مُنزَل.
+ *    الملف» يخفيها ويبقيها حيّةً بكلّ ما كُتب فيها. وأكثر من ملفٍّ جديد يُنزَل
+ *    معًا (0242، حتى 5)، كلٌّ باسمه المكتوب على شريحته.
  *
  * ٢) **الملفّ المحفوظ**: صفحةٌ لا نافذة، فإنزاله يحفظ عنوانه (بقسمه المفتوح)
  *    وما كُتب في «المعلومات الشخصية» ولم يُحفظ بعد، ويعود الموظّف إلى حيث كان.
@@ -47,47 +48,70 @@ const PatientDockContext = createContext<PatientDockApi | null>(null);
 
 const MAX_PINNED = 6;
 
+type NewSession = {
+  id: number;
+  props: NewProps;
+  onClosed: () => void;
+  minimized: boolean;
+  /** الاسم المكتوب في الملف — يظهر على شريحته */
+  name: string;
+  confirmDiscard: boolean;
+};
+
+/** حدّ الملفّات الجديدة المُنزَلة معًا. */
+const MAX_NEW = 5;
+
 export function PatientDockProvider({ children }: { children: ReactNode }) {
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  // ── الملف الجديد
-  const [newSession, setNewSession] = useState<{ id: number; props: NewProps; onClosed: () => void } | null>(null);
-  const [newMinimized, setNewMinimized] = useState(false);
-  const [confirmDiscard, setConfirmDiscard] = useState(false);
-  const sessionRef = useRef(newSession);
-  const minimizedRef = useRef(newMinimized);
+  /**
+   * ── الملفّات الجديدة (0242: أكثر من ملفّ)
+   *
+   * كلّ ملفٍّ جديد جلسةٌ بنافذته وما كُتب فيها. نافذةٌ واحدة تُعرض في كلّ لحظة،
+   * والباقي مُنزَل في الشريط؛ ورفع ملفٍّ يُنزل المعروض قبله فلا يضيع شيء.
+   */
+  const [sessions, setSessions] = useState<NewSession[]>([]);
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const nextId = useRef(1);
-  sessionRef.current = newSession;
-  minimizedRef.current = newMinimized;
 
   // ── الملفّات المحفوظة المُنزَلة
   const [pinned, setPinned] = useState<PinnedFile[]>([]);
   const drafts = useRef(new Map<string, unknown>());
 
-  const closeNew = useCallback(() => {
-    const current = sessionRef.current;
-    sessionRef.current = null;
-    setNewSession(null);
-    setNewMinimized(false);
-    setConfirmDiscard(false);
+  const patch = (id: number, change: Partial<NewSession>) =>
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, ...change } : s)));
+
+  const closeNew = useCallback((id: number) => {
+    const current = sessionsRef.current.find((s) => s.id === id);
+    sessionsRef.current = sessionsRef.current.filter((s) => s.id !== id);
+    setSessions((prev) => prev.filter((s) => s.id !== id));
     current?.onClosed();
   }, []);
 
+  /** يرفع ملفًّا ويُنزل المعروض قبله — نافذةٌ واحدة في كلّ لحظة. */
+  const restore = (id: number) =>
+    setSessions((prev) =>
+      prev.map((s) => ({ ...s, minimized: s.id !== id, confirmDiscard: s.id === id ? false : s.confirmDiscard })),
+    );
+
   const startNew = useCallback<PatientDockApi["startNew"]>(
     (props, onClosed) => {
-      if (sessionRef.current) {
-        if (minimizedRef.current) {
-          setNewMinimized(false);
-          toast({ title: "لديك ملفّ مريض جديد مُنزَل", description: "رُفع لك لتكمله أو تلغيه أوّلًا." });
-        }
+      const list = sessionsRef.current;
+      // ملفٌّ معروضٌ الآن (لم يُنزَل): لا يُفتح فوقه آخر
+      if (list.some((s) => !s.minimized)) return null;
+      if (list.length >= MAX_NEW) {
+        toast({
+          title: `لديك ${MAX_NEW} ملفّات جديدة مُنزَلة`,
+          description: "أكمل أحدها أو ألغِه من الشريط أسفل الشاشة قبل فتح ملفٍّ جديد آخر.",
+        });
         return null;
       }
       const id = nextId.current++;
-      const created = { id, props, onClosed };
-      sessionRef.current = created;
-      setNewSession(created);
-      setNewMinimized(false);
+      const created: NewSession = { id, props, onClosed, minimized: false, name: "", confirmDiscard: false };
+      sessionsRef.current = [...list, created];
+      setSessions((prev) => [...prev, created]);
       return id;
     },
     [toast],
@@ -95,7 +119,8 @@ export function PatientDockProvider({ children }: { children: ReactNode }) {
 
   const releaseNew = useCallback<PatientDockApi["releaseNew"]>(
     (id) => {
-      if (sessionRef.current?.id === id && !minimizedRef.current) closeNew();
+      const current = sessionsRef.current.find((s) => s.id === id);
+      if (current && !current.minimized) closeNew(id);
     },
     [closeNew],
   );
@@ -133,45 +158,62 @@ export function PatientDockProvider({ children }: { children: ReactNode }) {
     <PatientDockContext.Provider value={api}>
       {children}
 
-      {newSession && (
+      {sessions.map((session) => (
         <NewPatientDialog
-          key={newSession.id}
-          {...newSession.props}
+          key={session.id}
+          {...session.props}
           open
-          minimized={newMinimized}
-          onMinimize={() => setNewMinimized(true)}
+          minimized={session.minimized}
+          onMinimize={() => {
+            /**
+             * الإنزال يفكّ الملف عن الشاشة التي فتحته: تُبلَّغ أنّ نافذتها أُغلقت،
+             * فيعمل زرّ «ملف جديد» فيها من جديد، ويبقى الملف حيًّا هنا.
+             */
+            const detach = session.onClosed;
+            patch(session.id, { minimized: true, confirmDiscard: false, onClosed: () => undefined });
+            sessionsRef.current = sessionsRef.current.map((s) =>
+              s.id === session.id ? { ...s, minimized: true, onClosed: () => undefined } : s,
+            );
+            detach();
+          }}
+          onNameChange={(name) => {
+            if (name !== session.name) patch(session.id, { name });
+          }}
           onOpenChange={(next) => {
-            if (!next) closeNew();
+            if (!next) closeNew(session.id);
           }}
         />
-      )}
+      ))}
 
-      {newSession && newMinimized && (
-        <DockChip>
-          <UserPlus className="h-4 w-4 shrink-0 text-primary" />
-          <span className="truncate text-sm font-semibold">ملف مريض جديد</span>
-          <span className="hidden text-xs text-muted-foreground sm:inline">مُنزَل — ما كُتب محفوظ</span>
-          <Button size="sm" className="h-8" onClick={() => setNewMinimized(false)}>
-            <Maximize2 className="h-4 w-4" />
-            رفع الملف
-          </Button>
-          {confirmDiscard ? (
-            <Button size="sm" variant="destructive" className="h-8" onClick={closeNew}>
-              تأكيد الإلغاء
+      {sessions
+        .filter((session) => session.minimized)
+        .map((session, index) => (
+          <DockChip key={`new-${session.id}`}>
+            <UserPlus className="h-4 w-4 shrink-0 text-primary" />
+            <span className="max-w-[12rem] truncate text-sm font-semibold" title={session.name || undefined}>
+              {session.name ? `ملف جديد — ${session.name}` : `ملف مريض جديد ${index + 1}`}
+            </span>
+            <Button size="sm" className="h-8" onClick={() => restore(session.id)}>
+              <Maximize2 className="h-4 w-4" />
+              رفع الملف
             </Button>
-          ) : (
-            <Button
-              size="sm"
-              variant="ghost"
-              className="h-8 px-2"
-              title="إلغاء الملف الجديد المُنزَل بلا حفظ"
-              onClick={() => setConfirmDiscard(true)}
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          )}
-        </DockChip>
-      )}
+            {session.confirmDiscard ? (
+              <Button size="sm" variant="destructive" className="h-8" onClick={() => closeNew(session.id)}>
+                تأكيد الإلغاء
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="ghost"
+                className="h-8 px-2"
+                title="إلغاء الملف الجديد المُنزَل بلا حفظ"
+                onClick={() => patch(session.id, { confirmDiscard: true })}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            )}
+          </DockChip>
+        ))}
 
       {pinned.map((file) => (
         <DockChip key={file.id}>

@@ -97,6 +97,7 @@ export default function NewPatientDialog({
   onOpenChange,
   minimized,
   onMinimize,
+  onNameChange,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -106,6 +107,8 @@ export default function NewPatientDialog({
    */
   minimized?: boolean;
   onMinimize?: () => void;
+  /** الاسم المكتوب — ليظهر على شريحة الملف المُنزَل فيُعرف أيّ ملفٍّ هو (0242). */
+  onNameChange?: (name: string) => void;
 }) {
   const { organization } = useOrganizationAccess();
   const { toast } = useToast();
@@ -172,6 +175,12 @@ export default function NewPatientDialog({
       name_ar: value,
       name_en: nameEnTouched.current ? prev.name_en : transliterateArabicName(value),
     }));
+
+  const reportName = useRef(onNameChange);
+  reportName.current = onNameChange;
+  useEffect(() => {
+    reportName.current?.(form.name_ar.trim());
+  }, [form.name_ar]);
 
   const missing = {
     name_ar: !form.name_ar.trim(),
