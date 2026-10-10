@@ -50,7 +50,8 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import NewPatientDialog from "@/components/patients/NewPatientDialog";
+// تُفتح في قشرة النظام فتقبل «إنزال الملف» والتنقّل بين الشاشات (0241)
+import NewPatientDialog from "@/components/patients/PatientDock";
 import CsvImportDialog, { type CsvColumn } from "@/components/shared/CsvImportDialog";
 import { errorMessage } from "@/lib/error-message";
 import { formatDate, useLocaleSettings } from "@/lib/locale";

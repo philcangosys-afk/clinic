@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { TriangleAlert } from "lucide-react";
+import { Minimize2, TriangleAlert } from "lucide-react";
 import { birthDateFromAge, nameWordCount, transliterateArabicName } from "@/lib/arabic-name";
 import { useDirtyDialogClose } from "@/hooks/use-unsaved-guard";
 import RequiredLabel, {
@@ -95,9 +95,17 @@ const BLOOD_TYPES = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"];
 export default function NewPatientDialog({
   open,
   onOpenChange,
+  minimized,
+  onMinimize,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * الملف «مُنزَل» إلى شريط أسفل الشاشة (0241): النافذة تختفي وتبقى بياناتها،
+   * فيذهب الموظّف إلى شاشةٍ أخرى ويعود فيكمل. تديره `PatientDockProvider`.
+   */
+  minimized?: boolean;
+  onMinimize?: () => void;
 }) {
   const { organization } = useOrganizationAccess();
   const { toast } = useToast();
@@ -425,7 +433,7 @@ export default function NewPatientDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={guardedOpenChange}>
+    <Dialog open={open && !minimized} onOpenChange={guardedOpenChange}>
       <DialogContent
         className="max-w-2xl"
         /**
@@ -442,7 +450,22 @@ export default function NewPatientDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>فتح ملف مريض جديد</DialogTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2 pe-8">
+            <DialogTitle>فتح ملف مريض جديد</DialogTitle>
+            {onMinimize && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8"
+                title="يُنزَل الملف إلى أسفل الشاشة بما كُتب فيه — اذهب إلى أيّ شاشة ثمّ ارفعه وأكمل"
+                onClick={onMinimize}
+              >
+                <Minimize2 className="h-4 w-4" />
+                إنزال الملف
+              </Button>
+            )}
+          </div>
           <DialogDescription>
             الحقول المعلَّمة بالأحمر أساسية ولا يُحفظ الملف بدونها. يمكن استكمال الباقي من ملف المريض لاحقًا.
           </DialogDescription>
@@ -812,3 +835,5 @@ function Field({
     </div>
   );
 }
+
+export type NewPatientDialogProps = ComponentProps<typeof NewPatientDialog>;

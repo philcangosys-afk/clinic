@@ -18,6 +18,8 @@ import ReportPreviewDialog from "@/components/reports/ReportPreviewDialog";
 import FollowUpAlerts from "@/components/follow-up/FollowUpAlerts";
 import ZatcaAutoReporter from "@/components/billing/ZatcaAutoReporter";
 import { InvoiceDockProvider } from "@/components/billing/InvoiceDock";
+import { PatientDockProvider } from "@/components/patients/PatientDock";
+import { DockTrayProvider } from "@/components/layout/DockTray";
 import SectionGuideButton from "./SectionGuideButton";
 import { guideKeyForPath } from "@/lib/section-guides";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
@@ -513,8 +515,10 @@ export default function AppShell() {
   };
 
   return (
-    // نافذة الفاتورة تعيش هنا لا في الشاشة: «إنزال الفاتورة» يُبقيها مع التنقّل (0237)
+    // نافذتا الفاتورة والملف الجديد تعيشان هنا لا في الشاشة، وشريط الإنزال أسفل الشاشة (0237، 0241)
+    <DockTrayProvider>
     <InvoiceDockProvider>
+    <PatientDockProvider>
     <div dir="rtl" className="flex h-screen w-full overflow-hidden bg-muted/30 text-start">
       {/* الشريط الجانبي — سطح المكتب */}
       <aside className="hidden w-72 shrink-0 border-s border-sidebar-border bg-background shadow-sm md:flex">
@@ -624,6 +628,8 @@ export default function AppShell() {
       {/* إبلاغ ZATCA بما فات من الفواتير — في الإطار ليعمل في أيّ شاشة (0200) */}
       <ZatcaAutoReporter />
     </div>
+    </PatientDockProvider>
     </InvoiceDockProvider>
+    </DockTrayProvider>
   );
 }

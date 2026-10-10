@@ -4,6 +4,7 @@ import { Maximize2, Receipt, X } from "lucide-react";
 import NewInvoiceDialog, { type NewInvoiceDialogProps } from "@/components/billing/NewInvoiceDialog";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
+import { DockChip } from "@/components/layout/DockTray";
 
 /**
  * ═══ إنزال الفاتورة إلى أسفل الشاشة (0237) ══════════════════════════════════
@@ -114,10 +115,7 @@ export function InvoiceDockProvider({ children }: { children: ReactNode }) {
         />
       )}
       {session && minimized && (
-        <div
-          dir="rtl"
-          className="fixed bottom-4 left-1/2 z-50 flex max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2 rounded-xl border border-primary/40 bg-background px-3 py-2 shadow-xl"
-        >
+        <DockChip>
           <Receipt className="h-4 w-4 shrink-0 text-primary" />
           <span className="truncate text-sm font-semibold">{session.label}</span>
           <span className="hidden text-xs text-muted-foreground sm:inline">مُنزَلة — بياناتها محفوظة</span>
@@ -140,7 +138,7 @@ export function InvoiceDockProvider({ children }: { children: ReactNode }) {
               <X className="h-4 w-4" />
             </Button>
           )}
-        </div>
+        </DockChip>
       )}
     </InvoiceDockContext.Provider>
   );

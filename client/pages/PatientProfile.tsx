@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useParams, Link, useSearchParams } from "react-router-dom";
+import { useParams, Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -36,7 +36,9 @@ import {
   UserRound,
   Wallet,
   MoreHorizontal,
+  Minimize2,
 } from "lucide-react";
+import { usePatientDock } from "@/components/patients/PatientDock";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
@@ -138,7 +140,28 @@ export default function PatientProfile() {
    * `null` يعني «لا تعديل بعد، اقرأ من السجل»، فلا تُجمَّد قيمة قديمة في
    * الذاكرة بعد أن يُحدَّث السجل من مكان آخر.
    */
-  const [overviewDraft, setOverviewDraft] = useState<PatientFormState | null>(null);
+  const patientDock = usePatientDock();
+  const navigate = useNavigate();
+  const location = useLocation();
+  // المسوّدة تبدأ ممّا تُرك عند «إنزال الملف» إن وُجد (0241)
+  const [overviewDraft, setOverviewDraft] = useState<PatientFormState | null>(
+    () => (id && patientDock ? ((patientDock.peekDraft(id) as PatientFormState | null) ?? null) : null),
+  );
+  /**
+   * فُتح الملف (من الشريط أو من أيّ مكان): تُرفع شريحته من أسفل الشاشة وتُستهلك
+   * مسوّدته. وتبديل المريض في الشاشة نفسها يبدأ بمسوّدته هو لا بمسوّدة السابق.
+   */
+  const draftFor = useRef(id);
+  useEffect(() => {
+    if (draftFor.current !== id) {
+      draftFor.current = id;
+      setOverviewDraft(id && patientDock ? ((patientDock.peekDraft(id) as PatientFormState | null) ?? null) : null);
+    }
+    if (id && patientDock) {
+      patientDock.clearDraft(id);
+      patientDock.unpinFile(id);
+    }
+  }, [id, patientDock]);
   const overviewDirty = Boolean(
     overviewDraft && patient.data && isFormDirty(overviewDraft, patient.data),
   );
@@ -397,6 +420,31 @@ export default function PatientProfile() {
             <OpenAgreementsBadge patientId={patient.data.id} onOpen={() => setSection("agreements")} />
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {/* إنزال الملف إلى أسفل الشاشة بقسمه وما كُتب فيه — يُرفع من الشريط (0241) */}
+            {patientDock && (
+              <Button
+                size="sm"
+                variant="outline"
+                title="يُنزَل الملف إلى أسفل الشاشة — اذهب إلى أيّ شاشة ثمّ ارفعه وأكمل"
+                onClick={() => {
+                  patientDock.pinFile(
+                    {
+                      id: patient.data.id,
+                      name: patient.data.name_ar,
+                      fileNumber: (patient.data as { file_number?: number | string | null }).file_number ?? null,
+                      path: `${location.pathname}${location.search}`,
+                    },
+                    overviewDirty ? overviewDraft : null,
+                  );
+                  // يعود إلى حيث كان قبل فتح الملف، وإلّا إلى قائمة المرضى
+                  if (((window.history.state as { idx?: number } | null)?.idx ?? 0) > 0) navigate(-1);
+                  else navigate("/patients");
+                }}
+              >
+                <Minimize2 className="h-4 w-4" />
+                إنزال الملف
+              </Button>
+            )}
             {/* الملاحظات أوّل الأزرار ولكلّ الأدوار: الطبيب يكتب، والاستقبال يرى */}
             <PatientNotesButton
               patientId={patient.data.id}
