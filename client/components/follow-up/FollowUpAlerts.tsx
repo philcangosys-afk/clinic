@@ -71,7 +71,8 @@ export default function FollowUpAlerts() {
   const unseen = useQuery({
     queryKey: ["follow-up-unseen", organizationId],
     enabled,
-    refetchInterval: 20_000,
+    // البثّ الفوريّ يُحدّثها عند كلّ طلب؛ الدورة احتياط (0234)
+    refetchInterval: 60_000,
     queryFn: async () => {
       const { fromIso } = localDayBounds(todayLocalDate());
       const { data, error } = await supabase

@@ -52,8 +52,8 @@ export function usePatientNotes(patientId: string | undefined) {
   return useQuery({
     queryKey: PATIENT_NOTES_KEY(patientId ?? ""),
     enabled: Boolean(patientId),
-    // ملاحظة زميلٍ على مريضٍ مفتوح تصل بلا تحديث يدويّ
-    refetchInterval: 30_000,
+    // ملاحظة زميلٍ على مريضٍ مفتوح تصل بلا تحديث يدويّ — كلّ دقيقتين (0234)
+    refetchInterval: 120_000,
     queryFn: () => fetchPatientNotes(patientId!),
   });
 }
@@ -94,7 +94,7 @@ export function usePatientNoteCounts(patientIds: string[]) {
   return useQuery({
     queryKey: ["patient-note-counts", ids],
     enabled: ids.length > 0,
-    refetchInterval: 30_000,
+    refetchInterval: 120_000,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("patient_notes")

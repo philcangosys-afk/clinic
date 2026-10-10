@@ -266,6 +266,25 @@ type AgreementItemOption = {
   remainingTaxable: number;
 };
 
+/**
+ * قيمة رقمية من حقل إدخال، لا تنزل تحت الصفر (0235).
+ *
+ * `min={0}` في حقل الأرقام لا يمنع كتابة «-99» بلوحة المفاتيح — يمنع الأسهم
+ * فقط. فيُقصّ الرقم هنا، وما ليس رقمًا يصير صفرًا بدل NaN.
+ */
+function nonNegative(raw: string): number {
+  const value = Number(raw);
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+/** سبب رفض السطر، باسمه — ليعرف الصرّاف أيّ سطرٍ يصحّح. */
+function invalidLineMessage(line: DraftLine): string {
+  const name = line.description || "بند";
+  if (!Number.isFinite(line.qty) || line.qty <= 0) return `الكمية في «${name}» يجب أن تكون أكبر من صفر`;
+  if (!Number.isFinite(line.price) || line.price < 0) return `السعر في «${name}» لا يكون سالبًا`;
+  return `الخصم في «${name}» لا يكون سالبًا ولا تتجاوز نسبته 100%`;
+}
+
 /** البند فُوتر منه بالكمية تمامًا (لا دفعاتٍ جزئية) وبقيت منه وحدات. */
 function billsByQty(option: AgreementItemOption) {
   const remainingQty = option.qty - option.invoicedQty;
@@ -1249,9 +1268,12 @@ export default function NewInvoiceDialog({
       const lineSubtotal = unitPrice * line.qty;
       const lineDiscount = complimentary
         ? 0
-        : Math.min(
-            (lineSubtotal * line.discount_percent) / 100 + (line.discount_amount ?? 0),
-            lineSubtotal,
+        : Math.max(
+            0,
+            Math.min(
+              (lineSubtotal * line.discount_percent) / 100 + (line.discount_amount ?? 0),
+              lineSubtotal,
+            ),
           );
       const taxable = lineSubtotal - lineDiscount;
       const lineVat = line.is_vat_exempt || complimentary ? 0 : (taxable * vatRate) / 100;
@@ -1296,6 +1318,26 @@ export default function NewInvoiceDialog({
     paymentRequired && !payments.some((row) => Number(row.amount) > 0 && Boolean(row.methodId));
 
   /**
+   * **لا سعر سالب ولا كمية صفرية ولا خصم سالب (0235).**
+   *
+   * فاتورتان (175 و181) حُفظتا بسعر −99 و−20: الخصم المسقوف بمجموع السطر
+   * صار هو الآخر سالبًا فخرج الصافي صفرًا والفاتورة «مدفوعة»، ورفضها الربط
+   * مع ZATCA قبل الإرسال. القاعدة تمنع ذلك الآن (`app_guard_invoice_line_values`)،
+   * وهذا الفحص يمنعه قبل الإرسال ويسمّي السطر.
+   */
+  const invalidLine = lines.find(
+    (line) =>
+      !line.is_complimentary &&
+      (!Number.isFinite(line.price) ||
+        line.price < 0 ||
+        !Number.isFinite(line.qty) ||
+        line.qty <= 0 ||
+        (line.discount_amount ?? 0) < 0 ||
+        line.discount_percent < 0 ||
+        line.discount_percent > 100),
+  ) ?? lines.find((line) => line.is_complimentary && (!Number.isFinite(line.qty) || line.qty <= 0));
+
+  /**
    * الطبيب والعيادة إلزاميّان لفاتورة المريض (قرار المالك 01/10/2026): عليهما
    * تُبنى إيرادات الطبيب والعيادة وعمولته وتقارير اليومية، وفاتورةٌ بلا طبيب
    * تخرج منها كلّها. عرض السعر ليس فاتورة، وفاتورة العميل الخارجيّ بلا ملفٍّ
@@ -1321,6 +1363,7 @@ export default function NewInvoiceDialog({
         if (isInsurance) throw new Error("فاتورة التأمين تُصدَر مبسّطة باسم المريض — أزل «فاتورة أعمال»");
       }
       if (lines.length === 0) throw new Error("أضف بندًا واحدًا على الأقل");
+      if (invalidLine) throw new Error(invalidLineMessage(invalidLine));
       if (missingDoctor) throw new Error("اختر الطبيب المعالج — إلزاميّ لفاتورة المريض");
       if (missingClinic) throw new Error("اختر العيادة — إلزاميّة لفاتورة المريض");
       if (cashWithoutRegister) throw new Error("اختر الصندوق للدفع النقدي");
@@ -2064,14 +2107,16 @@ export default function NewInvoiceDialog({
                         ? `الحد الأدنى ${line.min_price.toFixed(2)}`
                         : "السعر"
                   }
-                  onChange={(e) => updateLine(line.key, { price: Number(e.target.value) })}
+                  min={0}
+                  step="0.01"
+                  onChange={(e) => updateLine(line.key, { price: nonNegative(e.target.value) })}
                 />
                 <Input
                   className="col-span-2 h-8"
                   type="number"
                   min={1}
                   value={line.qty}
-                  onChange={(e) => updateLine(line.key, { qty: Number(e.target.value) })}
+                  onChange={(e) => updateLine(line.key, { qty: nonNegative(e.target.value) })}
                 />
                 <Input
                   className="col-span-1 h-8"
@@ -2080,7 +2125,9 @@ export default function NewInvoiceDialog({
                   max={100}
                   value={line.discount_percent}
                   disabled={Boolean(line.is_complimentary)}
-                  onChange={(e) => updateLine(line.key, { discount_percent: Number(e.target.value) })}
+                  onChange={(e) =>
+                    updateLine(line.key, { discount_percent: Math.min(100, nonNegative(e.target.value)) })
+                  }
                   title={
                     line.auto_discount_percent > 0
                       ? `نسبة الخصم % — اقترح النظام ${line.auto_discount_percent}%`
@@ -2132,7 +2179,7 @@ export default function NewInvoiceDialog({
                           value={line.discount_amount ?? 0}
                           placeholder="مثال: 10 ليدفع 90 عن خدمة بـ100"
                           onChange={(e) =>
-                            updateLine(line.key, { discount_amount: Number(e.target.value) || 0 })
+                            updateLine(line.key, { discount_amount: nonNegative(e.target.value) })
                           }
                         />
                       </div>
@@ -2429,6 +2476,9 @@ export default function NewInvoiceDialog({
         </div>
 
         <DialogFooter className="items-center gap-2">
+          {invalidLine && (
+            <span className="text-xs text-destructive">{invalidLineMessage(invalidLine)}</span>
+          )}
           {missingPayment && !missingDoctor && !missingClinic && (
             <span className="text-xs text-destructive">أضف الدفع وطريقته قبل الحفظ.</span>
           )}
@@ -2449,6 +2499,7 @@ export default function NewInvoiceDialog({
               missingClinic ||
               paymentsInvalid ||
               missingPayment ||
+              Boolean(invalidLine) ||
               vatUnresolved ||
               vatBlocked
             }

@@ -114,9 +114,11 @@ export function buildPatientSearchOr(
   if (active.includes("mobile") && digits) {
     for (const column of columns.mobile) parts.push(`${column}.ilike.%${digits}%`);
   }
-  if (active.includes("id")) {
-    const value = digits || term;
-    for (const column of columns.id) parts.push(`${column}.ilike.%${value}%`);
+  // الهوية أرقامٌ فقط: البحث باسمٍ عربيّ لا يُطابق هويةً أبدًا، وإدخالُها في
+  // المرشّح يُجبر القاعدة على حساب التقنيع لكلّ مريض (ثوانٍ لكلّ بحث، ومهلة
+  // الاستعلام تُقطع — 0234). فلا يدخل عمود الهوية إلّا مع الأرقام.
+  if (active.includes("id") && digits) {
+    for (const column of columns.id) parts.push(`${column}.ilike.%${digits}%`);
   }
   // رقم الملفّ لا زرّ له؛ يدخل في البحث الشامل وحده وبمطابقة تامّة
   if (scopes.length === 0 && columns.fileNumber && digits && digits === term && digits.length <= 12) {

@@ -267,8 +267,9 @@ export default function ReceptionBoard({
     queryKey: ["reception-board", organizationId, shownDay],
     enabled: Boolean(organizationId),
     // التحديث الدوري لا التحديث اليدوي: الطابور يتغيّر بفعل زملاء آخرين،
-    // وشاشة لا تتحدّث تجعل الموظف ينادي مريضًا نُودي قبل دقيقة.
-    refetchInterval: 20_000,
+    // وشاشة لا تتحدّث تجعل الموظف ينادي مريضًا نُودي قبل دقيقة. والبثّ الفوريّ
+    // للمواعيد يُحدّثها عند كلّ تغيير، فالدورة احتياطٌ كلّ دقيقة لا كلّ 20 ثانية (0234).
+    refetchInterval: 60_000,
     queryFn: async () => {
       // يومٌ واحد بتوقيت العيادة (0176): المنظور يحمل كلّ الأيام
       const start = new Date(`${shownDay}T00:00:00`);
@@ -362,7 +363,7 @@ export default function ReceptionBoard({
   const pressure = useQuery({
     queryKey: ["reception-doctor-pressure", organizationId],
     enabled: Boolean(organizationId),
-    refetchInterval: 20_000,
+    refetchInterval: 60_000,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_reception_queue_by_doctor")

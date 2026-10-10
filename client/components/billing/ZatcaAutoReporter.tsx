@@ -30,7 +30,7 @@ export default function ZatcaAutoReporter() {
   const { can } = usePermissions();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const settings = useZatcaAutoSettings(organization?.id);
+  const settings = useZatcaAutoSettings(organization?.id, can("billing.issue"));
   const organizationId = organization?.id;
   const enabled = Boolean(
     organizationId &&

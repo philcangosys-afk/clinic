@@ -27,7 +27,9 @@ import { flushPendingSpeech, speakNotification, speechForNotification } from "@/
  *   شاشة الطبيب التي تبقى مفتوحة بلا نقر بعد تحميلها.
  */
 
-const POLL_MS = 10_000;
+// كلّ 30 ثانية لا 10 (0234): الاستطلاع كان أكثر من نصف طلبات القاعدة كلّها
+// (18 ألف طلب يوميًّا) وهو ما استنزف رصيد قراءة/كتابة القرص في الخطة المجانية.
+const POLL_MS = 30_000;
 const NO_SOUND_KEY = "zaincare:notify-sound-off";
 
 type LiveRow = {

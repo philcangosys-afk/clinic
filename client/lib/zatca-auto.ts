@@ -16,10 +16,12 @@ export type ZatcaAutoSettings = {
   zatca_report_from: string | null;
 };
 
-export function useZatcaAutoSettings(organizationId: string | undefined) {
+export function useZatcaAutoSettings(organizationId: string | undefined, active = true) {
   return useQuery({
     queryKey: ["zatca-auto-settings", organizationId],
-    enabled: Boolean(organizationId),
+    // لا يُقرأ الضبط لمن لا يُصدر فواتير: كان يُقرأ لكلّ مستخدم في كلّ شاشة
+    // فيرفضه الخادم لمن لا يملك القراءة (أخطاء 42501 في سجلّ القاعدة).
+    enabled: Boolean(organizationId) && active,
     staleTime: 5 * 60 * 1000,
     retry: false,
     queryFn: async () => {
