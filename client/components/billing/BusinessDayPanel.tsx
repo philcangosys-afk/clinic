@@ -109,9 +109,12 @@ type DayInvoice = {
   file_number: number | null;
   external_customer_name: string | null;
   doctor_name: string | null;
+  /** 0236 — من أصدر الفاتورة؛ قد يغيب إن لم تُنفَّذ الترقية بعد */
+  issued_by?: string | null;
 };
 
 const ALL_DOCTORS = "__all__";
+const ALL_ISSUERS = "__all__";
 const NO_DOCTOR_KEY = "__none__";
 
 const MANAGER_ROLES = ["owner", "organization_admin", "branch_manager", "accountant"];
@@ -149,6 +152,12 @@ export default function BusinessDayPanel() {
   const [exporting, setExporting] = useState<"xlsx" | "pdf" | null>(null);
   /** فلتر الطبيب في «فواتير اليومية» — ويتبعه التنزيل (إيرادات الطبيب المختار). */
   const [doctorFilter, setDoctorFilter] = useState<string>(ALL_DOCTORS);
+  /**
+   * فلتر المُصدِر (0236): فواتير مستخدمٍ واحد وحده. ويُضبط تلقائيًّا حين تُفتح
+   * يوميةٌ من السجلّ وفيه مستخدمٌ مختار — فيرى فواتير ذلك المستخدم لا اليومية كلّها.
+   */
+  const [issuerFilter, setIssuerFilter] = useState<string>(ALL_ISSUERS);
+  const memberNames = useMemberNames(organizationId);
 
   const settings = useBusinessDaySettings(organizationId);
   const currentDate = useCurrentBusinessDate(organizationId);
@@ -221,9 +230,10 @@ export default function BusinessDayPanel() {
   });
 
   /** يفتح يوميةً من السجلّ: تاريخها ثمّ هي نفسها، ويصعد إلى بياناتها. */
-  const openDay = (row: { business_day_id: string; business_date: string }) => {
+  const openDay = (row: { business_day_id: string; business_date: string }, userId?: string | null) => {
     setSelectedDate(row.business_date);
     setPickedDayId(row.business_day_id);
+    setIssuerFilter(userId ?? ALL_ISSUERS);
     topRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
@@ -274,10 +284,23 @@ export default function BusinessDayPanel() {
     }, new Map<string, number>()),
   ).sort(([a], [b]) => (a === NO_DOCTOR_KEY ? 1 : b === NO_DOCTOR_KEY ? -1 : a.localeCompare(b, "ar")));
   const activeDoctor = doctorOptions.some(([key]) => key === doctorFilter) ? doctorFilter : ALL_DOCTORS;
-  const filteredInvoices =
-    activeDoctor === ALL_DOCTORS
-      ? dayInvoiceRows
-      : dayInvoiceRows.filter((row) => (row.doctor_name ?? NO_DOCTOR_KEY) === activeDoctor);
+  // المُصدِرون من فواتير اليومية نفسها، بأسمائهم من أعضاء المنشأة
+  const issuerOptions = Array.from(
+    dayInvoiceRows.reduce((map, row) => {
+      if (row.issued_by) map.set(row.issued_by, (map.get(row.issued_by) ?? 0) + 1);
+      return map;
+    }, new Map<string, number>()),
+  )
+    .map(([id, count]) => ({ id, count, name: memberNames.data?.get(id) ?? "مستخدم" }))
+    .sort((a, b) => a.name.localeCompare(b.name, "ar"));
+  const activeIssuer = issuerOptions.some((option) => option.id === issuerFilter) ? issuerFilter : ALL_ISSUERS;
+  const issuerLabel =
+    activeIssuer === ALL_ISSUERS ? null : issuerOptions.find((option) => option.id === activeIssuer)?.name ?? null;
+  const filteredInvoices = dayInvoiceRows.filter(
+    (row) =>
+      (activeDoctor === ALL_DOCTORS || (row.doctor_name ?? NO_DOCTOR_KEY) === activeDoctor) &&
+      (activeIssuer === ALL_ISSUERS || row.issued_by === activeIssuer),
+  );
   const doctorLabel =
     activeDoctor === ALL_DOCTORS ? null : activeDoctor === NO_DOCTOR_KEY ? "بلا طبيب" : activeDoctor;
   // الإجمالي بلا الملغاة وعروض الأسعار — كإجمالي التقرير المنزَّل
@@ -318,6 +341,7 @@ export default function BusinessDayPanel() {
         collections: collections.data ?? [],
         people: people.data ?? null,
         doctorName: doctorLabel,
+        issuerName: issuerLabel,
         invoices: dayInvoices.map((row) => {
           const more = extra.get(row.invoice_id);
           return {
@@ -567,9 +591,28 @@ export default function BusinessDayPanel() {
             <CardTitle className="text-base">فواتير اليومية</CardTitle>
             <CardDescription>
               راجعها قبل التقفيل.
-              {doctorLabel && " تنزيل Excel وPDF في الأعلى يُخرج إيرادات الطبيب المختار وحده."}
+              {(doctorLabel || issuerLabel) && " تنزيل Excel وPDF في الأعلى يُخرج الفواتير المفلترة وحدها."}
             </CardDescription>
           </div>
+          <div className="flex flex-wrap items-end gap-2">
+          {issuerOptions.length > 0 && (
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs">أصدرها</Label>
+              <Select value={activeIssuer} onValueChange={setIssuerFilter}>
+                <SelectTrigger className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_ISSUERS}>كلّ المستخدمين ({dayInvoiceRows.length})</SelectItem>
+                  {issuerOptions.map((option) => (
+                    <SelectItem key={option.id} value={option.id}>
+                      {option.name} ({option.count})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
           {doctorOptions.length > 0 && (
             <div className="flex flex-col gap-1">
               <Label className="text-xs">الطبيب</Label>
@@ -588,6 +631,7 @@ export default function BusinessDayPanel() {
               </Select>
             </div>
           )}
+          </div>
         </CardHeader>
         <CardContent>
           {invoices.isLoading && <Skeleton className="h-24 w-full" />}
@@ -650,7 +694,7 @@ export default function BusinessDayPanel() {
                 ))}
                 <TableRow className="bg-emerald-50/70 font-semibold hover:bg-emerald-50/70">
                   <TableCell colSpan={3} className="text-sm">
-                    الإجمالي{doctorLabel ? ` — ${doctorLabel}` : ""} · {countedInvoices.length} فاتورة
+                    الإجمالي{doctorLabel ? ` — ${doctorLabel}` : ""}{issuerLabel ? ` — أصدرها ${issuerLabel}` : ""} · {countedInvoices.length} فاتورة
                     <span className="block text-[10px] font-normal text-muted-foreground">بلا الملغاة وعروض الأسعار</span>
                   </TableCell>
                   <TableCell className="hidden lg:table-cell" />
@@ -832,7 +876,7 @@ function BusinessDayHistory({
   organizationId: string;
   currentDate: string | null;
   shownId: string | null;
-  onOpen: (row: { business_day_id: string; business_date: string }) => void;
+  onOpen: (row: { business_day_id: string; business_date: string }, userId?: string | null) => void;
 }) {
   const { calendarDisplay } = useLocaleSettings();
   const members = useMemberNames(organizationId);
@@ -869,7 +913,9 @@ function BusinessDayHistory({
           <History className="h-4 w-4" />
           اليوميات السابقة
         </CardTitle>
-        <CardDescription>اضغط أيّ يوميةٍ لتفتح بياناتها كاملة أعلى الشاشة.</CardDescription>
+        <CardDescription>
+          اضغط أيّ يوميةٍ لتفتح بياناتها أعلى الشاشة. باختيار مستخدم تُعرض أرقام فواتيره هو وحده، وتُفتح اليومية على فواتيره.
+        </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-wrap items-end gap-2">
@@ -931,7 +977,7 @@ function BusinessDayHistory({
                 <TableRow
                   key={row.business_day_id}
                   className={`cursor-pointer ${row.business_day_id === shownId ? "bg-primary/5" : ""}`}
-                  onClick={() => onOpen(row)}
+                  onClick={() => onOpen(row, userId === ALL_USERS ? null : userId)}
                 >
                   <TableCell className="whitespace-nowrap font-medium tabular-nums">رقم {row.day_number}</TableCell>
                   <TableCell className="whitespace-nowrap tabular-nums">

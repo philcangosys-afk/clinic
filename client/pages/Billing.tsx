@@ -8,9 +8,9 @@ import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount, formatDate, formatDateTime, formatTime, useLocaleSettings } from "@/lib/locale";
-import NewInvoiceDialog, {
-  type BillingAppointmentContext,
-} from "@/components/billing/NewInvoiceDialog";
+import { type BillingAppointmentContext } from "@/components/billing/NewInvoiceDialog";
+// تُفتح في قشرة النظام فتقبل «إنزال الفاتورة» والتنقّل بين الشاشات (0237)
+import NewInvoiceDialog from "@/components/billing/InvoiceDock";
 import BusinessDayPanel from "@/components/billing/BusinessDayPanel";
 import CashRegistersDialog from "@/components/billing/CashRegistersDialog";
 import { useCurrentBusinessDate } from "@/lib/business-day";

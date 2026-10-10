@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CreditCard, Printer, Receipt, RefreshCw, WalletCards } from "lucide-react";
+import { CreditCard, Printer, Receipt, RefreshCw, Stethoscope, WalletCards } from "lucide-react";
 
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
@@ -61,7 +61,7 @@ type InvoiceItemRow = {
 const INVOICE_COLUMNS =
   "id, invoice_number, invoice_type, created_at, status, is_temporary, note, " +
   "subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, " +
-  "paid_amount, remaining_amount, patient_id, external_customer_name, " +
+  "paid_amount, remaining_amount, patient_id, external_customer_name, doctor_id, " +
   "patient:patients!sales_invoices_patient_tenant_fk(name_ar, file_number), " +
   "insurance_share_amount, patient_share_amount, is_insurance_invoice";
 
@@ -155,7 +155,7 @@ export function InvoiceDetailsDialog({
   canPay?: boolean;
 }) {
   const { calendarDisplay } = useLocaleSettings();
-  const { organization, session } = useOrganizationAccess();
+  const { organization, session, membership } = useOrganizationAccess();
   const printSettings = useReceiptPrintSettings(organization?.id);
   const queryClient = useQueryClient();
   const details = useInvoiceDetails(invoiceId);
@@ -163,6 +163,8 @@ export function InvoiceDetailsDialog({
   const { can } = usePermissions();
   const canCorrectMethod = can("billing.issue") || can("billing.void");
   const [correcting, setCorrecting] = useState<any | null>(null);
+  const [fixingDoctor, setFixingDoctor] = useState(false);
+  const canFixDoctor = DOCTOR_FIX_ROLES.includes(membership?.role_key ?? "");
 
   const invoice = details.data?.invoice;
   const items = details.data?.items ?? [];
@@ -250,6 +252,13 @@ export function InvoiceDetailsDialog({
                 </Table>
               </div>
             </div>
+
+            <InvoiceDoctorLine
+              organizationId={organization?.id}
+              doctorId={(invoice as any).doctor_id ?? null}
+              canFix={canFixDoctor && status !== "void"}
+              onFix={() => setFixingDoctor(true)}
+            />
 
             <div className="grid gap-1 rounded-md border bg-muted/30 p-3 text-sm sm:grid-cols-2">
               <Amount label="الإجمالي قبل الضريبة" value={invoice.subtotal_amount} />
@@ -415,6 +424,27 @@ export function InvoiceDetailsDialog({
             queryClient.invalidateQueries({ queryKey: ["invoice-payments"] });
           }}
         />
+
+        {fixingDoctor && invoice && (
+          <CorrectInvoiceDoctorDialog
+            invoiceId={invoice.id}
+            invoiceNumber={invoice.invoice_number}
+            organizationId={organization?.id}
+            currentDoctorId={(invoice as any).doctor_id ?? null}
+            onClose={() => setFixingDoctor(false)}
+            onDone={() => {
+              setFixingDoctor(false);
+              queryClient.invalidateQueries({ queryKey: ["invoice-details", invoiceId] });
+              queryClient.invalidateQueries({ queryKey: ["invoice-payment-grid", invoiceId] });
+              // قوائم الفواتير واليومية وتقارير الأطباء تقرأ الطبيب من الفاتورة
+              queryClient.invalidateQueries({
+                predicate: (query) =>
+                  typeof query.queryKey[0] === "string" &&
+                  /invoice|business-day|report|revenue|doctor/i.test(query.queryKey[0] as string),
+              });
+            }}
+          />
+        )}
 
         <DialogFooter className="gap-2">
           {invoice && canPay && payable && onPay && (
@@ -585,6 +615,158 @@ function CorrectPaymentMethodDialog({
             إلغاء
           </Button>
           <Button disabled={!methodId || !reason.trim() || save.isPending} onClick={() => save.mutate()}>
+            {save.isPending ? "جارٍ الحفظ..." : "حفظ التصحيح"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** من يصحّح طبيب الفاتورة (0236): الاستقبال وإدارة المنشأة — والقاعدة تفرضه. */
+const DOCTOR_FIX_ROLES = ["owner", "organization_admin", "receptionist"];
+
+type DoctorOption = { id: string; name_ar: string; is_enabled: boolean };
+
+function useOrgDoctors(organizationId: string | undefined) {
+  return useQuery({
+    queryKey: ["invoice-fix-doctors", organizationId],
+    enabled: Boolean(organizationId),
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("doctors")
+        .select("id, name_ar, is_enabled")
+        .eq("organization_id", organizationId)
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as DoctorOption[];
+    },
+  });
+}
+
+/** سطر «الطبيب المعالج» في الفاتورة، وزرّ تصحيحه لمن يملكه. */
+function InvoiceDoctorLine({
+  organizationId,
+  doctorId,
+  canFix,
+  onFix,
+}: {
+  organizationId: string | undefined;
+  doctorId: string | null;
+  canFix: boolean;
+  onFix: () => void;
+}) {
+  const doctors = useOrgDoctors(organizationId);
+  const name = doctorId ? (doctors.data ?? []).find((d) => d.id === doctorId)?.name_ar ?? null : null;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2 text-sm">
+      <span className="flex items-center gap-1.5">
+        <Stethoscope className="h-4 w-4 text-muted-foreground" />
+        <span className="text-muted-foreground">الطبيب المعالج:</span>
+        <span className="font-semibold">{doctorId ? name ?? (doctors.isLoading ? "…" : "—") : "بلا طبيب"}</span>
+      </span>
+      {canFix && (
+        <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={onFix}>
+          تصحيح الطبيب
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * تصحيح طبيب الفاتورة (0236).
+ *
+ * الطبيب لا يدخل مستند ZATCA ولا مبالغ الفاتورة، فتصحيحه لا يمسّ الإبلاغ.
+ * يتبعه طبيب سندات القبض التي كانت على الطبيب القديم، فتنتقل إيرادات
+ * الفاتورة في تقارير الأطباء إلى الطبيب الصحيح. بسببٍ مكتوب وسطرٍ في سجلّ
+ * التدقيق.
+ */
+function CorrectInvoiceDoctorDialog({
+  invoiceId,
+  invoiceNumber,
+  organizationId,
+  currentDoctorId,
+  onClose,
+  onDone,
+}: {
+  invoiceId: string;
+  invoiceNumber: number | string | null | undefined;
+  organizationId: string | undefined;
+  currentDoctorId: string | null;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { toast } = useToast();
+  const doctors = useOrgDoctors(organizationId);
+  const [doctorId, setDoctorId] = useState("");
+  const [reason, setReason] = useState("");
+  const currentName = currentDoctorId
+    ? (doctors.data ?? []).find((d) => d.id === currentDoctorId)?.name_ar ?? "—"
+    : "بلا طبيب";
+  const choices = (doctors.data ?? []).filter((d) => d.is_enabled && d.id !== currentDoctorId);
+
+  const save = useMutation({
+    mutationFn: async () => {
+      if (!doctorId) throw new Error("اختر الطبيب الصحيح");
+      if (!reason.trim()) throw new Error("اكتب سبب التصحيح");
+      const { error } = await supabase.rpc("app_correct_invoice_doctor", {
+        p_invoice_id: invoiceId,
+        p_doctor_id: doctorId,
+        p_reason: reason.trim(),
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      const name = choices.find((d) => d.id === doctorId)?.name_ar ?? "";
+      toast({ title: "صُحّح طبيب الفاتورة", description: `الفاتورة #${invoiceNumber ?? ""} صارت على «${name}».` });
+      onDone();
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر التصحيح", description: errorMessage(error) }),
+  });
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && !save.isPending && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>تصحيح طبيب الفاتورة #{invoiceNumber ?? ""}</DialogTitle>
+          <DialogDescription>
+            المسجَّل الآن: «{currentName}». يتغيّر الطبيب على الفاتورة وسندات قبضها فقط — المبالغ وZATCA لا تتغيّر.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label>الطبيب الصحيح *</Label>
+            <Select value={doctorId} onValueChange={setDoctorId}>
+              <SelectTrigger>
+                <SelectValue placeholder={doctors.isLoading ? "جارٍ التحميل..." : "اختر الطبيب"} />
+              </SelectTrigger>
+              <SelectContent>
+                {choices.map((d) => (
+                  <SelectItem key={d.id} value={d.id}>
+                    {d.name_ar}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>سبب التصحيح *</Label>
+            <Textarea
+              rows={2}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="مثال: اختير د. فلان بالخطأ والمعالج د. فلان"
+            />
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" disabled={save.isPending} onClick={onClose}>
+            إلغاء
+          </Button>
+          <Button disabled={!doctorId || !reason.trim() || save.isPending} onClick={() => save.mutate()}>
             {save.isPending ? "جارٍ الحفظ..." : "حفظ التصحيح"}
           </Button>
         </DialogFooter>

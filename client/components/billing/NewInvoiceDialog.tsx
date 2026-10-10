@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Gift, LayoutGrid, Percent, Plus, Receipt } from "lucide-react";
+import { Gift, LayoutGrid, Minimize2, Percent, Plus, Receipt } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { assertPatientNotBlocked } from "@/lib/patient-blocks";
 import { formatAmount } from "@/lib/locale";
+import { toLatinDigits } from "@/lib/digits";
 import { invoiceLineText, isKizenBalanceText } from "@/lib/agreements";
 import { usePatientOpenAgreements } from "@/components/patients/PatientCommandsDialog";
 import { useInsuranceSettings } from "@/lib/insurance-settings";
@@ -539,9 +540,18 @@ export default function NewInvoiceDialog({
   isQuote,
   appointment,
   agreementQuoteId,
+  minimized,
+  onMinimize,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * الفاتورة «مُنزَلة» إلى شريط أسفل الشاشة (0237): النافذة تختفي وتبقى
+   * بياناتها كلّها، فيذهب الموظّف إلى شاشةٍ أخرى ويعود فيكمل. تديره
+   * `InvoiceDockProvider` في قشرة النظام.
+   */
+  minimized?: boolean;
+  onMinimize?: () => void;
   organizationId: string | undefined;
   /**
    * «فوترة» من عرض سعر اتفاقية (0193): تُفتح النافذة وفيها ما لم يُفوتَر بعدُ
@@ -1580,11 +1590,26 @@ export default function NewInvoiceDialog({
   });
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open && !minimized} onOpenChange={onOpenChange}>
       {/* عريضة بعرض الشاشة: بنود الاتفاقيات وأعمدة البنود تُقرأ كاملةً بلا تمريرٍ أفقيّ */}
       <DialogContent className="max-h-[95vh] w-[min(96vw,1100px)] max-w-none overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isQuote ? "عرض سعر جديد" : "فاتورة مبيعات جديدة"}</DialogTitle>
+          <div className="flex flex-wrap items-center justify-between gap-2 pe-8">
+            <DialogTitle>{isQuote ? "عرض سعر جديد" : "فاتورة مبيعات جديدة"}</DialogTitle>
+            {onMinimize && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-8"
+                title="تُنزَل الفاتورة إلى أسفل الشاشة ببياناتها — اذهب إلى أيّ شاشة ثمّ ارفعها وأكمل"
+                onClick={onMinimize}
+              >
+                <Minimize2 className="h-4 w-4" />
+                إنزال الفاتورة
+              </Button>
+            )}
+          </div>
           <DialogDescription>
             {isQuote
               ? "عرض السعر لا يُعد فاتورة فعلية ولا يؤثر على المخزون أو السندات حتى يتم تحويله."
@@ -1624,7 +1649,7 @@ export default function NewInvoiceDialog({
           {!patient && (
             <div className="flex flex-col gap-1.5">
               <Label>أو اسم عميل خارجي (بلا ملف)</Label>
-              <Input value={externalName} onChange={(e) => setExternalName(e.target.value)} />
+              <Input dir="auto" value={externalName} onChange={(e) => setExternalName(e.target.value)} />
             </div>
           )}
 
@@ -1695,7 +1720,7 @@ export default function NewInvoiceDialog({
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>رقم الهوية</Label>
-              <Input value={idNumber} onChange={(e) => setIdNumber(e.target.value)} />
+              <Input dir="ltr" value={idNumber} onChange={(e) => setIdNumber(toLatinDigits(e.target.value))} />
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>المصدر</Label>
@@ -2187,6 +2212,7 @@ export default function NewInvoiceDialog({
                         <Label className="text-xs">سبب الخصم (إلزاميّ مع أيّ خصم)</Label>
                         <Input
                           className="h-8"
+                          dir="auto"
                           value={line.discount_reason ?? ""}
                           placeholder="قرار الطبيب · مريض متكرّر · تسوية"
                           onChange={(e) => updateLine(line.key, { discount_reason: e.target.value })}
@@ -2226,6 +2252,7 @@ export default function NewInvoiceDialog({
                       {line.is_complimentary && (
                         <Input
                           className="h-8"
+                          dir="auto"
                           value={line.complimentary_reason ?? ""}
                           placeholder="سبب المنح — مثال: الجلسة الخامسة بعد أربع مدفوعة"
                           onChange={(e) =>
@@ -2243,7 +2270,8 @@ export default function NewInvoiceDialog({
 
           <div className="flex flex-col gap-1.5">
             <Label>ملاحظات الفاتورة</Label>
-            <Input value={note} onChange={(e) => setNote(e.target.value)} />
+            {/* dir="auto": الاتّجاه من أوّل حرف — العربية والإنجليزية تُكتبان كلتاهما بلا قفز */}
+            <Input dir="auto" value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
 
           {/**
@@ -2513,3 +2541,5 @@ export default function NewInvoiceDialog({
     </Dialog>
   );
 }
+
+export type NewInvoiceDialogProps = ComponentProps<typeof NewInvoiceDialog>;

@@ -13,7 +13,7 @@ import { NO_DOCTOR, useSessionDoctor } from "@/lib/session-doctor";
 import { useToast } from "@/hooks/use-toast";
 import { printAgreement, useAgreement, useAgreementQuotes, type AgreementListRow } from "@/lib/agreements";
 import QuoteEditorDialog, { useDoctorsAndClinics } from "@/components/agreements/QuoteEditorDialog";
-import NewInvoiceDialog from "@/components/billing/NewInvoiceDialog";
+import NewInvoiceDialog from "@/components/billing/InvoiceDock";
 import PatientPicker from "@/components/shared/PatientPicker";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";

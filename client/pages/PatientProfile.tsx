@@ -86,7 +86,7 @@ import {
   type FileSectionGroup,
   type IdentityField,
 } from "@/components/patients/PatientFileShell";
-import NewInvoiceDialog from "@/components/billing/NewInvoiceDialog";
+import NewInvoiceDialog from "@/components/billing/InvoiceDock";
 import PatientBenefitsTab from "@/components/patients/PatientBenefitsTab";
 import InvoiceActions from "@/components/billing/InvoiceActions";
 import InvoiceDetailsDialog from "@/components/billing/InvoiceDetailsDialog";

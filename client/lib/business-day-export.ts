@@ -69,6 +69,8 @@ export type ExportDayData = {
   people?: ExportDayPeople | null;
   /** إن حُدِّد: التقرير لإيرادات هذا الطبيب وحده، والفواتير المُمرَّرة فواتيره فقط */
   doctorName?: string | null;
+  /** إن حُدِّد (0236): الفواتير المُمرَّرة هي ما أصدره هذا المستخدم وحده */
+  issuerName?: string | null;
 };
 
 const STATUS_AR: Record<string, string> = {
@@ -117,17 +119,24 @@ const docNumber = (row: ExportDayInvoice) => row.document_label || `#${row.invoi
 /** ما يدخل في الإجمالي: لا الملغاة ولا عروض الأسعار */
 const counts = (row: ExportDayInvoice) => row.status !== "void" && !row.is_temporary;
 
+/** التقرير مقصورٌ على طبيبٍ أو مُصدِر: مبالغه من فواتيره المُمرَّرة لا من اليومية كاملة. */
+const scoped = (data: ExportDayData) => Boolean(data.doctorName || data.issuerName);
+
+const safeName = (value: string) => value.replace(/[\\/:*?"<>|]/g, " ").trim();
+
 const fileBase = (data: ExportDayData) =>
   `اليومية-${data.day.day_number}-${data.day.business_date}${
-    data.doctorName ? `-${data.doctorName.replace(/[\\/:*?"<>|]/g, " ").trim()}` : ""
-  }`;
+    data.doctorName ? `-${safeName(data.doctorName)}` : ""
+  }${data.issuerName ? `-${safeName(data.issuerName)}` : ""}`;
 
 const reportTitle = (data: ExportDayData) =>
   data.doctorName
-    ? `إيرادات الطبيب ${data.doctorName} — اليومية رقم ${data.day.day_number}`
-    : `تقرير اليومية رقم ${data.day.day_number}`;
+    ? `إيرادات الطبيب ${data.doctorName}${data.issuerName ? ` من فواتير ${data.issuerName}` : ""} — اليومية رقم ${data.day.day_number}`
+    : data.issuerName
+      ? `فواتير ${data.issuerName} — اليومية رقم ${data.day.day_number}`
+      : `تقرير اليومية رقم ${data.day.day_number}`;
 
-const DOCTOR_COLLECTION_NOTE = "التحصيل حسب طريقة الدفع يُحسب لليومية كاملة ولا يُفصل لكل طبيب.";
+const DOCTOR_COLLECTION_NOTE = "التحصيل حسب طريقة الدفع يُحسب لليومية كاملة ولا يُفصل لكل طبيب أو مستخدم.";
 
 /** مبالغ الطبيب من فواتيره (بلا الملغاة وعروض الأسعار). */
 function doctorTotals(data: ExportDayData) {
@@ -158,6 +167,7 @@ function infoPairs(data: ExportDayData): [string, string][] {
   const d = data.day;
   return [
     ...(data.doctorName ? ([["الطبيب", data.doctorName]] as [string, string][]) : []),
+    ...(data.issuerName ? ([["المستخدم", data.issuerName]] as [string, string][]) : []),
     ["رقم اليومية", String(d.day_number)],
     ["يوم العمل", d.business_date],
     ["فُتحت", localTime(d.opened_at)],
@@ -172,7 +182,7 @@ type AmountRow = { label: string; value: number; kind: "int" | "money"; strong?:
 
 function amountRows(data: ExportDayData): AmountRow[] {
   const d = data.day;
-  if (data.doctorName) {
+  if (scoped(data)) {
     const t = doctorTotals(data);
     return [
       { label: "عدد الفواتير", value: t.count, kind: "int" },
@@ -235,7 +245,7 @@ export function downloadDayXlsx(data: ExportDayData) {
     mergeValue();
   }
   push([]);
-  if (data.doctorName) {
+  if (scoped(data)) {
     push([c(DOCTOR_COLLECTION_NOTE, "textMuted")]);
     sMerges.push(`A${summary.length}:D${summary.length}`);
   } else {
@@ -281,7 +291,7 @@ export function downloadDayXlsx(data: ExportDayData) {
   ];
   const lastCol = String.fromCharCode(64 + head.length);
   const list: XlsxCell[][] = [
-    [c(data.doctorName ? `فواتير الطبيب ${data.doctorName} — اليومية رقم ${d.day_number}` : `فواتير اليومية رقم ${d.day_number}`, "title")],
+    [c(scoped(data) ? reportTitle(data).replace("إيرادات الطبيب", "فواتير الطبيب") : `فواتير اليومية رقم ${d.day_number}`, "title")],
     [c(subtitle, "subtitle")],
     [],
     head.map((h) => c(h, "header")),
@@ -412,7 +422,7 @@ function pageShell(data: ExportDayData, printedAt: string) {
 
 function kpiHtml(data: ExportDayData) {
   const d = data.day;
-  const t = data.doctorName ? doctorTotals(data) : null;
+  const t = scoped(data) ? doctorTotals(data) : null;
   const cards: [string, string, boolean][] = t
     ? [
         ["عدد الفواتير", String(t.count), false],
@@ -442,7 +452,7 @@ function kpiHtml(data: ExportDayData) {
 function infoHtml(data: ExportDayData) {
   const pairs = infoPairs(data).filter(([label]) => label !== "رقم اليومية" && label !== "يوم العمل");
   // مبالغ اليومية كاملة لا تُعرض في تقرير الطبيب
-  const extra: [string, string][] = data.doctorName
+  const extra: [string, string][] = scoped(data)
     ? []
     : [
         ["المحصَّل", money(data.day.collected_amount)],
@@ -539,7 +549,7 @@ export async function downloadDayPdf(data: ExportDayData) {
 
     place(kpiHtml(data));
     place(infoHtml(data));
-    place(data.doctorName ? `<p class="note">${esc(DOCTOR_COLLECTION_NOTE)}</p>` : collectionsHtml(data));
+    place(scoped(data) ? `<p class="note">${esc(DOCTOR_COLLECTION_NOTE)}</p>` : collectionsHtml(data));
 
     // ── جدول الفواتير: يُقسَم عند حدود الصفوف ويتكرّر رأسه
     const invoices = sortedInvoices(data);
