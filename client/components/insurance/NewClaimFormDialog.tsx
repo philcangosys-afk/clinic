@@ -523,8 +523,8 @@ export default function NewClaimFormDialog({
                 {(linkableInvoices.data ?? []).map((invoice) => (
                   <SelectItem key={invoice.id} value={invoice.id}>
                     #{invoice.invoice_number} — حصّة الشركة{" "}
-                    {Number(invoice.insurance_share_amount ?? 0).toLocaleString("ar-SA")} ر.س (صافي{" "}
-                    {Number(invoice.net_amount ?? 0).toLocaleString("ar-SA")})
+                    {Number(invoice.insurance_share_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")} ر.س (صافي{" "}
+                    {Number(invoice.net_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")})
                   </SelectItem>
                 ))}
               </SelectContent>

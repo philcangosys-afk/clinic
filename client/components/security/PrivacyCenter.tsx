@@ -343,11 +343,11 @@ function ConsentsPanel() {
                           </Badge>
                         </TableCell>
                         <TableCell className="font-mono text-xs">
-                          {new Date(c.granted_at).toLocaleDateString("ar-SA")}
+                          {new Date(c.granted_at).toLocaleDateString("ar-SA-u-nu-latn")}
                         </TableCell>
                         <TableCell className="font-mono text-xs">
                           {c.expires_at
-                            ? new Date(c.expires_at).toLocaleDateString("ar-SA")
+                            ? new Date(c.expires_at).toLocaleDateString("ar-SA-u-nu-latn")
                             : "—"}
                         </TableCell>
                         <TableCell className="max-w-48 truncate text-xs text-muted-foreground">
@@ -506,7 +506,7 @@ function AccessLogPanel() {
                 {(log.data ?? []).map((r: any) => (
                   <TableRow key={r.id}>
                     <TableCell className="whitespace-nowrap font-mono text-xs">
-                      {new Date(r.occurred_at).toLocaleString("ar-SA")}
+                      {new Date(r.occurred_at).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-sm">
                       <p className="font-medium">{r.user_name ?? "—"}</p>
@@ -616,7 +616,7 @@ function RetentionPanel() {
       queryClient.invalidateQueries({ queryKey: ["retention-policies", organization?.id] });
       toast({
         title: "حُسب أثر السياسة",
-        description: `${count.toLocaleString("ar-SA")} سجلًّا تجاوز المدّة — لم يُحذف ولم يُعدَّل شيء`,
+        description: `${count.toLocaleString("ar-SA-u-nu-latn")} سجلًّا تجاوز المدّة — لم يُحذف ولم يُعدَّل شيء`,
       });
     },
     onError: (error: unknown) =>
@@ -776,7 +776,7 @@ function RetentionPanel() {
                             onClick={() => review.mutate(p.id)}
                             title={
                               p.last_run_at
-                                ? `آخر مراجعة: ${new Date(p.last_run_at).toLocaleString("ar-SA")}`
+                                ? `آخر مراجعة: ${new Date(p.last_run_at).toLocaleString("ar-SA-u-nu-latn")}`
                                 : "لم تُراجَع بعد"
                             }
                           >

@@ -589,7 +589,7 @@ export default function SessionsTab({ patientId }: { patientId: string }) {
                     <TableCell className="text-sm text-muted-foreground">{doctor?.name_ar ?? "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {row.scheduled_date
-                        ? new Date(row.scheduled_date).toLocaleDateString("ar-SA")
+                        ? new Date(row.scheduled_date).toLocaleDateString("ar-SA-u-nu-latn")
                         : "غير محدَّد"}
                     </TableCell>
                     <TableCell>

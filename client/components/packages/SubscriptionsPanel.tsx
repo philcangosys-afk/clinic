@@ -204,7 +204,7 @@ export default function SubscriptionsPanel() {
         title: "أُلغي الاشتراك",
         description:
           Number(result?.refunded_amount ?? 0) > 0
-            ? `صدر إشعار دائن بـ ${Number(result.refunded_amount).toLocaleString("ar-SA")}`
+            ? `صدر إشعار دائن بـ ${Number(result.refunded_amount).toLocaleString("ar-SA-u-nu-latn")}`
             : "بلا استرداد",
       });
     },
@@ -307,7 +307,7 @@ export default function SubscriptionsPanel() {
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       {r.expires_at
-                        ? `${new Date(r.expires_at).toLocaleDateString("ar-SA")}${
+                        ? `${new Date(r.expires_at).toLocaleDateString("ar-SA-u-nu-latn")}${
                             r.days_remaining !== null ? ` (${r.days_remaining} يومًا)` : ""
                           }`
                         : "بلا انتهاء"}
@@ -318,13 +318,13 @@ export default function SubscriptionsPanel() {
                       )}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {Number(r.price_paid ?? 0).toLocaleString("ar-SA")}
+                      {Number(r.price_paid ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {Number(r.unused_value ?? 0).toLocaleString("ar-SA")}
+                      {Number(r.unused_value ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                       {Number(r.refunded_amount ?? 0) > 0 && (
                         <span className="block text-[10px] text-muted-foreground">
-                          استُرِدّ {Number(r.refunded_amount).toLocaleString("ar-SA")}
+                          استُرِدّ {Number(r.refunded_amount).toLocaleString("ar-SA-u-nu-latn")}
                         </span>
                       )}
                     </TableCell>
@@ -512,7 +512,7 @@ export default function SubscriptionsPanel() {
             <div className="rounded-md border p-3 text-sm">
               قيمة غير المستخدَم:{" "}
               <span className="font-mono">
-                {Number(cancelling?.unused_value ?? 0).toLocaleString("ar-SA")}
+                {Number(cancelling?.unused_value ?? 0).toLocaleString("ar-SA-u-nu-latn")}
               </span>
             </div>
             <div className="flex items-center gap-2">
@@ -635,7 +635,7 @@ function UsageLogPanel() {
               {(log.data ?? []).map((u) => (
                 <TableRow key={u.usage_id}>
                   <TableCell className="whitespace-nowrap font-mono text-xs">
-                    {new Date(u.report_date).toLocaleString("ar-SA")}
+                    {new Date(u.report_date).toLocaleString("ar-SA-u-nu-latn")}
                   </TableCell>
                   <TableCell className="text-sm">{u.patient_name}</TableCell>
                   <TableCell className="text-sm">{u.package_name}</TableCell>

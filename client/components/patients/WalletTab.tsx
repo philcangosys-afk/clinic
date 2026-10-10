@@ -281,7 +281,7 @@ export default function WalletTab({ patientId }: { patientId: string }) {
                   return (
                     <TableRow key={row.id}>
                       <TableCell className="text-xs text-muted-foreground">
-                        {new Date(row.created_at).toLocaleString("ar-SA")}
+                        {new Date(row.created_at).toLocaleString("ar-SA-u-nu-latn")}
                       </TableCell>
                       <TableCell>
                         <Badge variant={TX_BADGE[row.transaction_type]}>

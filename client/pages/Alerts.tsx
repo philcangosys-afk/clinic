@@ -487,7 +487,7 @@ function NotificationInbox() {
                       </Badge>
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {new Date(n.created_at).toLocaleString("ar-SA")}
+                      {new Date(n.created_at).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-end">
                       <div className="flex justify-end gap-1">

@@ -61,7 +61,7 @@ function defaultFrom() {
   return toDateInputValue(date);
 }
 
-const money = (value: number | null | undefined) => Number(value ?? 0).toLocaleString("ar-SA", { maximumFractionDigits: 2 });
+const money = (value: number | null | undefined) => Number(value ?? 0).toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 2 });
 
 export default function Reports() {
   const { organization } = useOrganizationAccess();
@@ -276,7 +276,7 @@ function RevenueTab({ organizationId, from, to }: { organizationId: string | und
   const byClinic = useRevenueByClinic(organizationId, from, to);
 
   const chartData = (daily.data ?? []).map((row) => ({
-    date: new Date(row.revenue_date).toLocaleDateString("ar-SA", { day: "2-digit", month: "2-digit" }),
+    date: new Date(row.revenue_date).toLocaleDateString("ar-SA-u-nu-latn", { day: "2-digit", month: "2-digit" }),
     net_amount: Number(row.net_amount),
   }));
 
@@ -554,7 +554,7 @@ function ProfitabilityTab({ organizationId, from, to }: { organizationId: string
                 {(profitability.data ?? []).map((row) => (
                   <TableRow key={row.invoice_id}>
                     <TableCell className="text-xs text-muted-foreground">
-                      {new Date(row.created_at).toLocaleDateString("ar-SA")}
+                      {new Date(row.created_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell>{money(row.gross_revenue)}</TableCell>
                     <TableCell>{money(row.estimated_cost)}</TableCell>
@@ -636,7 +636,7 @@ function VatReturnsTab({ organizationId, from, to }: { organizationId: string | 
                   <TableRow key={row.invoice_id}>
                     <TableCell className="font-mono text-xs">#{row.invoice_number}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {new Date(row.invoice_date).toLocaleDateString("ar-SA")}
+                      {new Date(row.invoice_date).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell>{money(row.subtotal_amount)}</TableCell>
                     <TableCell>{money(row.vat_amount)}</TableCell>
@@ -675,7 +675,7 @@ function VatReturnsTab({ organizationId, from, to }: { organizationId: string | 
               {(returns.data ?? []).map((row, index) => (
                 <TableRow key={`${row.return_invoice_id}-${index}`}>
                   <TableCell className="text-xs text-muted-foreground">
-                    {new Date(row.return_date).toLocaleDateString("ar-SA")}
+                    {new Date(row.return_date).toLocaleDateString("ar-SA-u-nu-latn")}
                   </TableCell>
                   <TableCell>{row.item_name ?? "—"}</TableCell>
                   <TableCell>{row.qty}</TableCell>
@@ -776,9 +776,9 @@ function OccupationalExamsTab({ organizationId, from, to }: { organizationId: st
                     <TableCell>
                       <Badge variant={FITNESS_STATUS_BADGE[row.fitness_status]}>{FITNESS_STATUS_LABELS[row.fitness_status]}</Badge>
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{new Date(row.exam_date).toLocaleDateString("ar-SA")}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{new Date(row.exam_date).toLocaleDateString("ar-SA-u-nu-latn")}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {row.next_exam_due_date ? new Date(row.next_exam_due_date).toLocaleDateString("ar-SA") : "—"}
+                      {row.next_exam_due_date ? new Date(row.next_exam_due_date).toLocaleDateString("ar-SA-u-nu-latn") : "—"}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{row.certificate_number ?? "—"}</TableCell>
                     <TableCell>

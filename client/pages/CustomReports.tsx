@@ -587,7 +587,7 @@ export default function CustomReports() {
                   {grouped.map((row) => (
                     <TableRow key={row.group}>
                       <TableCell className="font-medium">{row.group}</TableCell>
-                      <TableCell>{row.value.toLocaleString("ar-SA")}</TableCell>
+                      <TableCell>{row.value.toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

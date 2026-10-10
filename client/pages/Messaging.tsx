@@ -221,7 +221,7 @@ function MessageLogTab() {
                         </p>
                       )}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{new Date(msg.created_at).toLocaleString("ar-SA")}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{new Date(msg.created_at).toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                   </TableRow>
                 );
               })}
@@ -807,7 +807,7 @@ function SmsLedgerTab() {
       )}
       <Card>
         <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
-          <span>الرصيد الحالي: <strong>{(balance.data?.balance ?? 0).toLocaleString("ar-SA")}</strong> رسالة</span>
+          <span>الرصيد الحالي: <strong>{(balance.data?.balance ?? 0).toLocaleString("ar-SA-u-nu-latn")}</strong> رسالة</span>
           <div className="flex items-center gap-2">
             <Label className="whitespace-nowrap text-xs text-muted-foreground">حد التنبيه عند انخفاض الرصيد</Label>
             <Input
@@ -859,7 +859,7 @@ function SmsLedgerTab() {
                       {tx.amount}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">{tx.note ?? "—"}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{new Date(tx.created_at).toLocaleString("ar-SA")}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{new Date(tx.created_at).toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                   </TableRow>
                 ))}
                 {(transactions.data ?? []).length === 0 && (

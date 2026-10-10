@@ -189,16 +189,16 @@ export default function DoctorRequests({ doctorId = null }: { doctorId?: string 
                 {r.body && <p className="mt-1 text-sm">{r.body}</p>}
                 {r.amount != null && (
                   <p className="mt-1 text-sm font-semibold tabular-nums">
-                    المبلغ: {Number(r.amount).toLocaleString("ar")}
+                    المبلغ: {Number(r.amount).toLocaleString("ar-u-nu-latn")}
                   </p>
                 )}
                 {r.preferred_date && (
                   <p className="mt-1 text-sm">
-                    التاريخ المطلوب: {new Date(r.preferred_date).toLocaleDateString("ar")}
+                    التاريخ المطلوب: {new Date(r.preferred_date).toLocaleDateString("ar-u-nu-latn")}
                   </p>
                 )}
                 <p className="mt-1 text-xs text-muted-foreground">
-                  من: {r.doctor_name ?? "—"} · {new Date(r.requested_at).toLocaleString("ar")}
+                  من: {r.doctor_name ?? "—"} · {new Date(r.requested_at).toLocaleString("ar-u-nu-latn")}
                 </p>
               </div>
 

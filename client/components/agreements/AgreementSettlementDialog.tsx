@@ -230,7 +230,7 @@ export default function AgreementSettlementDialog({
                   {(invoices.data ?? []).map((row) => (
                     <SelectItem key={row.id} value={row.id}>
                       {invoiceLabel(row)} — {formatAmount(row.net_amount)} —{" "}
-                      {new Date(row.issued_at ?? row.created_at).toLocaleDateString("ar-SA")}
+                      {new Date(row.issued_at ?? row.created_at).toLocaleDateString("ar-SA-u-nu-latn")}
                       {row.agreement_id ? " (مربوطة باتفاقية)" : ""}
                     </SelectItem>
                   ))}
@@ -341,7 +341,7 @@ export default function AgreementSettlementDialog({
                     </div>
                     <p className="text-xs text-muted-foreground">
                       {row.lines} · {row.created_by_name ?? "—"} ·{" "}
-                      {new Date(row.created_at).toLocaleString("ar-SA")}
+                      {new Date(row.created_at).toLocaleString("ar-SA-u-nu-latn")}
                     </p>
                     {row.note && <p className="text-xs">{row.note}</p>}
                   </div>

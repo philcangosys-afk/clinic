@@ -190,7 +190,7 @@ export default function Packages() {
                         </span>
                         <div className="flex items-center gap-2">
                           <Badge variant={pkg.is_active ? "success" : "secondary"}>{pkg.is_active ? "نشطة" : "معطّلة"}</Badge>
-                          <span className="font-semibold">{Number(pkg.price).toLocaleString("ar-SA")} ر.س</span>
+                          <span className="font-semibold">{Number(pkg.price).toLocaleString("ar-SA-u-nu-latn")} ر.س</span>
                         </div>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
@@ -678,7 +678,7 @@ function SubscribePatientDialog({
               <SelectContent>
                 {(packages.data ?? []).filter((p) => p.is_active).map((pkg) => (
                   <SelectItem key={pkg.id} value={pkg.id}>
-                    {pkg.name_ar} — {Number(pkg.price).toLocaleString("ar-SA")} ر.س
+                    {pkg.name_ar} — {Number(pkg.price).toLocaleString("ar-SA-u-nu-latn")} ر.س
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -861,7 +861,7 @@ function PackageMetaRow({ meta }: { meta: any | undefined }) {
       <Badge variant="outline">{SUBSCRIPTION[meta.subscription_type] ?? meta.subscription_type}</Badge>
       {Number(meta.savings ?? 0) > 0 && (
         <Badge variant="success">
-          وفر {Number(meta.savings).toLocaleString("ar-SA")} من {Number(meta.list_price ?? 0).toLocaleString("ar-SA")}
+          وفر {Number(meta.savings).toLocaleString("ar-SA-u-nu-latn")} من {Number(meta.list_price ?? 0).toLocaleString("ar-SA-u-nu-latn")}
         </Badge>
       )}
       {eligibility.map((e) => (

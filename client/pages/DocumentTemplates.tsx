@@ -317,7 +317,7 @@ function GenerateDocumentDialog({
       if (!organizationId || !template) throw new Error("بيانات غير مكتملة");
       if (template.applies_to === "patient" && !patient) throw new Error("اختر مريضًا أولًا");
       if (template.applies_to === "employee" && !employeeId) throw new Error("اختر موظفًا أولًا");
-      const title = `${template.name_ar} — ${patient?.name_ar ?? selectedEmployee?.name_ar ?? new Date().toLocaleDateString("ar-SA")}`;
+      const title = `${template.name_ar} — ${patient?.name_ar ?? selectedEmployee?.name_ar ?? new Date().toLocaleDateString("ar-SA-u-nu-latn")}`;
       const { error } = await supabase.from("generated_documents").insert({
         organization_id: organizationId,
         template_id: template.id,
@@ -554,7 +554,7 @@ function GeneratedDocumentsTab({ organizationId }: { organizationId: string | un
                 <span className="font-medium">{doc.title}</span>
                 <span className="text-xs text-muted-foreground">
                   {doc.template_name_snapshot} — {doc.patient?.name_ar ?? doc.employee?.name_ar ?? "بلا ربط"} —{" "}
-                  {new Date(doc.created_at).toLocaleString("ar-SA")}
+                  {new Date(doc.created_at).toLocaleString("ar-SA-u-nu-latn")}
                 </span>
               </div>
               <Button size="sm" variant="outline" onClick={() => printHtml(doc.title, doc.body_html)}>

@@ -197,9 +197,9 @@ export default function ClaimsWorkspace() {
                     </TableCell>
                     <TableCell>{c.company_name ?? "—"}</TableCell>
                     <TableCell className="tabular-nums">
-                      {Number(c.claimed_amount ?? 0).toLocaleString("ar-SA")} /{" "}
+                      {Number(c.claimed_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")} /{" "}
                       <span className="text-emerald-700">
-                        {Number(c.approved_amount ?? 0).toLocaleString("ar-SA")}
+                        {Number(c.approved_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                       </span>
                       {c.rejected_items > 0 && (
                         <span className="block text-xs text-rose-700">
@@ -209,10 +209,10 @@ export default function ClaimsWorkspace() {
                       )}
                     </TableCell>
                     <TableCell className="tabular-nums">
-                      {Number(c.settled_amount ?? 0).toLocaleString("ar-SA")}
+                      {Number(c.settled_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                       {Number(c.unsettled_amount ?? 0) > 0 && (
                         <span className="block text-xs text-amber-700">
-                          متبقٍّ {Number(c.unsettled_amount).toLocaleString("ar-SA")}
+                          متبقٍّ {Number(c.unsettled_amount).toLocaleString("ar-SA-u-nu-latn")}
                         </span>
                       )}
                     </TableCell>
@@ -280,7 +280,7 @@ function Stat({ label, value, tone }: { label: string; value: number; tone?: str
       <CardHeader className="pb-2">
         <CardDescription>{label}</CardDescription>
         <CardTitle className={`text-xl ${tone ?? ""}`}>
-          {value.toLocaleString("ar-SA")} ر.س
+          {value.toLocaleString("ar-SA-u-nu-latn")} ر.س
         </CardTitle>
       </CardHeader>
     </Card>
@@ -371,7 +371,7 @@ function ClaimItemsDialog({ claim, onClose }: { claim: any | null; onClose: () =
           <DialogTitle>بنود المطالبة — {claim?.patient_name}</DialogTitle>
           <DialogDescription>
             {claim?.company_name} · المطالَب{" "}
-            {Number(claim?.claimed_amount ?? 0).toLocaleString("ar-SA")} ر.س
+            {Number(claim?.claimed_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")} ر.س
           </DialogDescription>
         </DialogHeader>
 
@@ -401,15 +401,15 @@ function ClaimItemsDialog({ claim, onClose }: { claim: any | null; onClose: () =
                   </TableCell>
                   <TableCell className="font-mono text-xs">{it.service_code ?? "—"}</TableCell>
                   <TableCell className="tabular-nums">
-                    {Number(it.claimed_amount ?? 0).toLocaleString("ar-SA")}
+                    {Number(it.claimed_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                   </TableCell>
                   <TableCell className="tabular-nums">
                     {it.approved_amount != null
-                      ? Number(it.approved_amount).toLocaleString("ar-SA")
+                      ? Number(it.approved_amount).toLocaleString("ar-SA-u-nu-latn")
                       : "—"}
                     {Number(it.rejected_amount ?? 0) > 0 && (
                       <span className="block text-xs text-rose-700">
-                        مرفوض {Number(it.rejected_amount).toLocaleString("ar-SA")}
+                        مرفوض {Number(it.rejected_amount).toLocaleString("ar-SA-u-nu-latn")}
                       </span>
                     )}
                   </TableCell>
@@ -657,7 +657,7 @@ function SettlementDialog({
                   />
                   <span className="flex-1">{c.patient_name}</span>
                   <span className="tabular-nums text-muted-foreground">
-                    {Number(c.unsettled_amount).toLocaleString("ar-SA")} ر.س
+                    {Number(c.unsettled_amount).toLocaleString("ar-SA-u-nu-latn")} ر.س
                   </span>
                 </label>
               ))}
@@ -687,11 +687,11 @@ function SettlementDialog({
           {selected.length > 0 && (
             <div className="rounded-md bg-muted p-3 text-sm">
               المعتمَد على المطالبات المختارة:{" "}
-              <span className="font-semibold">{expected.toLocaleString("ar-SA")} ر.س</span>
+              <span className="font-semibold">{expected.toLocaleString("ar-SA-u-nu-latn")} ر.س</span>
               {paid && (
                 <span className={variance === 0 ? "" : "block text-amber-700"}>
                   {variance !== 0 &&
-                    `الفرق: ${variance.toLocaleString("ar-SA")} ر.س — سيظهر على كل مطالبة`}
+                    `الفرق: ${variance.toLocaleString("ar-SA-u-nu-latn")} ر.س — سيظهر على كل مطالبة`}
                 </span>
               )}
             </div>
@@ -831,7 +831,7 @@ function NphiesQueuePanel({ organizationId }: { organizationId: string | undefin
             {(ready.data ?? []).slice(0, 5).map((c) => (
               <div key={c.claim_form_id} className="flex items-center justify-between text-sm">
                 <span>
-                  {c.patient_name} — {Number(c.claimed_amount ?? 0).toLocaleString("ar-SA")} ر.س
+                  {c.patient_name} — {Number(c.claimed_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")} ر.س
                 </span>
                 <Button
                   size="sm"
@@ -855,7 +855,7 @@ function NphiesQueuePanel({ organizationId }: { organizationId: string | undefin
                   {m.message_type} · {m.direction === "outbound" ? "صادرة" : "واردة"}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {new Date(m.created_at).toLocaleString("ar-SA")} · بيئة {m.environment}
+                  {new Date(m.created_at).toLocaleString("ar-SA-u-nu-latn")} · بيئة {m.environment}
                   {m.attempt_count > 0 ? ` · ${m.attempt_count} محاولة` : ""}
                 </p>
                 {/* الدافع ومعرّفه يظهران هنا لأن أكثر الرفض سببه شركة غير مفعَّلة
@@ -865,7 +865,7 @@ function NphiesQueuePanel({ organizationId }: { organizationId: string | undefin
                     الدافع: {m.payer_name}
                     {m.payer_id ? ` (${m.payer_id})` : ""}
                     {m.claim_nphies_last_sync_at
-                      ? ` · آخر مزامنة ${new Date(m.claim_nphies_last_sync_at).toLocaleString("ar-SA")}`
+                      ? ` · آخر مزامنة ${new Date(m.claim_nphies_last_sync_at).toLocaleString("ar-SA-u-nu-latn")}`
                       : ""}
                   </p>
                 )}

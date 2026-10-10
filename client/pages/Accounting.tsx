@@ -157,7 +157,7 @@ function VouchersTab() {
       <div className="flex flex-wrap gap-2 text-sm">
         {Object.entries(totals).map(([type, amount]) => (
           <Badge key={type} variant="secondary">
-            {VOUCHER_TYPE_LABELS[type as VoucherType]}: {Number(amount).toLocaleString("ar-SA")} ر.س
+            {VOUCHER_TYPE_LABELS[type as VoucherType]}: {Number(amount).toLocaleString("ar-SA-u-nu-latn")} ر.س
           </Badge>
         ))}
       </div>
@@ -186,10 +186,10 @@ function VouchersTab() {
                         {VOUCHER_TYPE_LABELS[v.voucher_type as VoucherType]}
                       </Badge>
                     </TableCell>
-                    <TableCell>{new Date(v.voucher_date).toLocaleDateString("ar-SA")}</TableCell>
+                    <TableCell>{new Date(v.voucher_date).toLocaleDateString("ar-SA-u-nu-latn")}</TableCell>
                     <TableCell>{v.payee_name ?? v.description ?? "—"}</TableCell>
                     <TableCell>{v.patient?.name_ar ?? v.distributor?.name_ar ?? "—"}</TableCell>
-                    <TableCell className="font-semibold">{Number(v.amount).toLocaleString("ar-SA")}</TableCell>
+                    <TableCell className="font-semibold">{Number(v.amount).toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                   </TableRow>
                 ))}
                 {(vouchers.data ?? []).length === 0 && (
@@ -1051,8 +1051,8 @@ function NewJournalEntryDialog({
           </Button>
 
           <div className={`flex items-center justify-between rounded-md border p-2 text-sm ${isBalanced ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"}`}>
-            <span>إجمالي المدين: {totalDebit.toLocaleString("ar-SA")}</span>
-            <span>إجمالي الدائن: {totalCredit.toLocaleString("ar-SA")}</span>
+            <span>إجمالي المدين: {totalDebit.toLocaleString("ar-SA-u-nu-latn")}</span>
+            <span>إجمالي الدائن: {totalCredit.toLocaleString("ar-SA-u-nu-latn")}</span>
             <Badge variant={isBalanced ? "success" : "warning"}>{isBalanced ? "متوازن" : "غير متوازن"}</Badge>
           </div>
         </div>
@@ -1108,8 +1108,8 @@ function TrialBalanceTab() {
       {trialBalance.data && (
         <Card>
           <CardContent className="flex items-center justify-between py-4">
-            <span className="text-sm text-muted-foreground">إجمالي المدين: {Number(trialBalance.data.grand_total_debit).toLocaleString("ar-SA")}</span>
-            <span className="text-sm text-muted-foreground">إجمالي الدائن: {Number(trialBalance.data.grand_total_credit).toLocaleString("ar-SA")}</span>
+            <span className="text-sm text-muted-foreground">إجمالي المدين: {Number(trialBalance.data.grand_total_debit).toLocaleString("ar-SA-u-nu-latn")}</span>
+            <span className="text-sm text-muted-foreground">إجمالي الدائن: {Number(trialBalance.data.grand_total_credit).toLocaleString("ar-SA-u-nu-latn")}</span>
             <Badge variant={isBalanced ? "success" : "destructive"}>{isBalanced ? "الميزان متوازن" : "الميزان غير متوازن!"}</Badge>
           </CardContent>
         </Card>
@@ -1138,7 +1138,7 @@ function TrialBalanceTab() {
                     <TableCell>{account.name_ar}</TableCell>
                     <TableCell>{ACCOUNT_TYPE_LABELS[account.account_type]}</TableCell>
                     <TableCell className={Number(account.balance) < 0 ? "text-destructive" : ""}>
-                      {Number(account.balance).toLocaleString("ar-SA")} ر.س
+                      {Number(account.balance).toLocaleString("ar-SA-u-nu-latn")} ر.س
                     </TableCell>
                   </TableRow>
                 ))}

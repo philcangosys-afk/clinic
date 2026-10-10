@@ -1980,7 +1980,7 @@ function SmsSettingsTab({ organizationId, readOnly }: { organizationId: string |
         <div className="flex items-center gap-3">
           <span className="text-sm text-muted-foreground">الرصيد الحالي:</span>
           <Badge variant={((query.data?.balance ?? 0) <= Number(threshold)) ? "warning" : "secondary"} className="text-base">
-            {(query.data?.balance ?? 0).toLocaleString("ar-SA")} رسالة
+            {(query.data?.balance ?? 0).toLocaleString("ar-SA-u-nu-latn")} رسالة
           </Badge>
         </div>
         <div className="flex flex-col gap-1.5">
@@ -3088,7 +3088,7 @@ function LocaleTab({ organizationId }: { organizationId: string | undefined }) {
                   </Select>
                   {/*
                     `calendarDisplay` يُخرَج في `client/lib/locale.ts` ولا يستهلكه أي
-                    مكوّن: كل التواريخ مكتوبة بـ `toLocaleDateString("ar-SA")` مباشرةً.
+                    مكوّن: كل التواريخ مكتوبة بـ `toLocaleDateString("ar-SA-u-nu-latn")` مباشرةً.
                     فاختيار «هجري» كان يُظهر رسالة نجاح ولا يغيّر تاريخًا واحدًا.
                   */}
                   <span className="text-[10px] font-medium text-amber-700">

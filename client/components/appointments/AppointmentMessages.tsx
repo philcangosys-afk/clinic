@@ -166,7 +166,7 @@ export default function AppointmentMessages({ appointmentId }: { appointmentId: 
               {item.due && (
                 <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
                   <Clock className="h-3 w-3" />
-                  {new Date(item.due).toLocaleString("ar-SA")}
+                  {new Date(item.due).toLocaleString("ar-SA-u-nu-latn")}
                 </div>
               )}
             </div>
@@ -200,7 +200,7 @@ export default function AppointmentMessages({ appointmentId }: { appointmentId: 
                   </span>
                 )}
                 <span className="text-muted-foreground">
-                  {new Date(row.created_at).toLocaleString("ar-SA")}
+                  {new Date(row.created_at).toLocaleString("ar-SA-u-nu-latn")}
                 </span>
                 <span className="flex-1" />
                 {row.attempts > 0 && (
@@ -222,13 +222,13 @@ export default function AppointmentMessages({ appointmentId }: { appointmentId: 
               )}
               {row.next_attempt_at && row.status === "failed" && (
                 <div className="mt-0.5 text-muted-foreground">
-                  المحاولة التالية: {new Date(row.next_attempt_at).toLocaleString("ar-SA")}
+                  المحاولة التالية: {new Date(row.next_attempt_at).toLocaleString("ar-SA-u-nu-latn")}
                 </div>
               )}
               {row.sent_at && (
                 <div className="mt-0.5 flex items-center gap-1 text-emerald-700">
                   <CheckCircle2 className="h-3 w-3" />
-                  أكّد المزوّد الاستلام {new Date(row.sent_at).toLocaleString("ar-SA")}
+                  أكّد المزوّد الاستلام {new Date(row.sent_at).toLocaleString("ar-SA-u-nu-latn")}
                   {row.provider_message_id && ` · مرجع ${row.provider_message_id}`}
                 </div>
               )}

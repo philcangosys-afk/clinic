@@ -345,7 +345,7 @@ export default function Odontogram({ patientId }: { patientId: string }) {
               <>
                 <Badge variant="secondary">{planRows.length} إجراء</Badge>
                 <Badge variant="outline" className="tabular-nums">
-                  {planTotal.toLocaleString("ar")} تقديريًّا
+                  {planTotal.toLocaleString("ar-u-nu-latn")} تقديريًّا
                 </Badge>
               </>
             )}
@@ -574,7 +574,7 @@ function ToothPanel({
             {picked && (
               <Badge variant="secondary" className="gap-2 px-2.5 py-1 text-sm">
                 {picked.name_ar}
-                <span className="tabular-nums text-muted-foreground">{Number(picked.price ?? 0).toLocaleString("ar")}</span>
+                <span className="tabular-nums text-muted-foreground">{Number(picked.price ?? 0).toLocaleString("ar-u-nu-latn")}</span>
                 <button
                   type="button"
                   aria-label="إلغاء الخدمة"
@@ -692,7 +692,7 @@ function ToothPanel({
                 </span>
                 <span className="shrink-0 text-xs text-muted-foreground">
                   {h.status === "completed"
-                    ? `نُفِّذ ${new Date(h.performed_at).toLocaleDateString("ar")}`
+                    ? `نُفِّذ ${new Date(h.performed_at).toLocaleDateString("ar-u-nu-latn")}`
                     : h.status === "cancelled"
                       ? "ملغى"
                       : "مخطَّط"}
@@ -745,7 +745,7 @@ function PlanRow({ row, onChanged }: { row: any; onChanged: () => void }) {
           {row.item_name ?? row.procedure_kind ?? "إجراء"}
           {row.item_price != null && (
             <span className="text-xs text-muted-foreground tabular-nums">
-              {Number(row.item_price).toLocaleString("ar")}
+              {Number(row.item_price).toLocaleString("ar-u-nu-latn")}
             </span>
           )}
         </span>

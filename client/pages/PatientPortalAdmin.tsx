@@ -231,7 +231,7 @@ function RequestsPanel() {
                     <TableCell className="max-w-64 truncate text-sm">{r.details || "—"}</TableCell>
                     <TableCell className="font-mono text-xs">{r.requested_value ?? "—"}</TableCell>
                     <TableCell className="font-mono text-xs">
-                      {new Date(r.created_at).toLocaleDateString("ar-SA")}
+                      {new Date(r.created_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-end">
                       {can("portal.requests") && (
@@ -495,11 +495,11 @@ function AccountsPanel() {
                       </Badge>
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {new Date(a.linked_at).toLocaleDateString("ar-SA")}
+                      {new Date(a.linked_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       {a.last_seen_at
-                        ? new Date(a.last_seen_at).toLocaleDateString("ar-SA")
+                        ? new Date(a.last_seen_at).toLocaleDateString("ar-SA-u-nu-latn")
                         : "لم يدخل بعد"}
                     </TableCell>
                     <TableCell className="max-w-48 truncate text-xs text-muted-foreground">

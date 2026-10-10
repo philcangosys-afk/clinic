@@ -69,7 +69,7 @@ const ZATCA_LABEL: Record<string, { label: string; className: string }> = {
 };
 
 const money = (value: number) =>
-  value.toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  value.toLocaleString("ar-SA-u-nu-latn", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function monthStart() {
   const d = new Date();
@@ -237,7 +237,7 @@ export default function TaxInvoicesPanel() {
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <Stat label="عدد الفواتير" value={rows.length.toLocaleString("ar-SA")} hint={`منها ${totals.taxedCount.toLocaleString("ar-SA")} عليها ضريبة`} />
+          <Stat label="عدد الفواتير" value={rows.length.toLocaleString("ar-SA-u-nu-latn")} hint={`منها ${totals.taxedCount.toLocaleString("ar-SA-u-nu-latn")} عليها ضريبة`} />
           <Stat label="الوعاء قبل الضريبة" value={`${money(totals.taxable)} ر.س`} />
           <Stat label="مجموع الضريبة" value={`${money(totals.vat)} ر.س`} strong />
           <Stat label="الإجمالي شاملًا الضريبة" value={`${money(totals.net)} ر.س`} />
@@ -302,7 +302,7 @@ export default function TaxInvoicesPanel() {
               {rows.length > 0 && (
                 <TableFooter>
                   <TableRow className="font-semibold">
-                    <TableCell colSpan={5}>الإجمالي ({rows.length.toLocaleString("ar-SA")} فاتورة)</TableCell>
+                    <TableCell colSpan={5}>الإجمالي ({rows.length.toLocaleString("ar-SA-u-nu-latn")} فاتورة)</TableCell>
                     <TableCell className="text-end font-mono text-xs tabular-nums">{money(totals.taxable)}</TableCell>
                     <TableCell className="text-end font-mono text-xs tabular-nums text-primary">{money(totals.vat)}</TableCell>
                     <TableCell className="text-end font-mono text-xs tabular-nums">{money(totals.net)}</TableCell>

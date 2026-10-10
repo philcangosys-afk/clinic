@@ -24,7 +24,7 @@ import PayrollRuns from "@/components/hr/PayrollRuns";
 import { errorMessage } from "@/lib/error-message";
 
 function currentMonthLabel() {
-  return new Date().toLocaleDateString("ar-SA", { year: "numeric", month: "long" });
+  return new Date().toLocaleDateString("ar-SA-u-nu-latn", { year: "numeric", month: "long" });
 }
 /**
  * أول يوم في الشهر التالي، لاستعماله مع `.lt` بدل `.lte` على آخر يوم.
@@ -39,7 +39,7 @@ function nextMonthStart(month: string) {
 }
 
 function money(value: unknown) {
-  return Number(value ?? 0).toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return Number(value ?? 0).toLocaleString("ar-SA-u-nu-latn", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /** بند مسيّر معتمَد قابل للصرف — كما يعرضه منظور `v_payroll_items_payable`. */
@@ -199,7 +199,7 @@ export default function Payroll() {
                           مصروف
                           {item.paid_at && (
                             <span className="ms-1 font-normal">
-                              {new Date(item.paid_at).toLocaleDateString("ar-SA")}
+                              {new Date(item.paid_at).toLocaleDateString("ar-SA-u-nu-latn")}
                             </span>
                           )}
                         </Badge>
@@ -264,7 +264,7 @@ export default function Payroll() {
                     <TableCell className="text-xs">{voucher.voucher_date}</TableCell>
                     <TableCell className="font-medium">{voucher.employee_name ?? "—"}</TableCell>
                     <TableCell className={voucher.is_void ? "line-through" : undefined}>
-                      {Number(voucher.amount).toLocaleString("ar-SA")} ر.س
+                      {Number(voucher.amount).toLocaleString("ar-SA-u-nu-latn")} ر.س
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
                       {voucher.is_void && (

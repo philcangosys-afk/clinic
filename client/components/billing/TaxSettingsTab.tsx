@@ -506,7 +506,7 @@ export function EInvoicePanel() {
                 <div key={i.id} className="flex items-center justify-between text-sm">
                   <span>
                     #{i.document_number} — {i.patient_name} —{" "}
-                    {Number(i.net_amount).toLocaleString("ar-SA")} ر.س
+                    {Number(i.net_amount).toLocaleString("ar-SA-u-nu-latn")} ر.س
                   </span>
                   <Button
                     size="sm"
@@ -531,8 +531,8 @@ export function EInvoicePanel() {
                   #{d.document_number} — {d.patient_name ?? "—"}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {Number(d.net_amount).toLocaleString("ar-SA")} ر.س · ضريبة{" "}
-                  {Number(d.vat_amount).toLocaleString("ar-SA")} · بيئة {d.environment}
+                  {Number(d.net_amount).toLocaleString("ar-SA-u-nu-latn")} ر.س · ضريبة{" "}
+                  {Number(d.vat_amount).toLocaleString("ar-SA-u-nu-latn")} · بيئة {d.environment}
                   {d.attempt_count > 0 ? ` · ${d.attempt_count} محاولة` : ""}
                 </p>
                 {d.validation_errors && (
@@ -655,8 +655,8 @@ export function VatReturnPanel() {
       <CardHeader>
         <CardTitle>إقرار ضريبة القيمة المضافة</CardTitle>
         <CardDescription>
-          الوعاء {totals.taxable.toLocaleString("ar-SA")} · الضريبة{" "}
-          {totals.vat.toLocaleString("ar-SA")} ر.س
+          الوعاء {totals.taxable.toLocaleString("ar-SA-u-nu-latn")} · الضريبة{" "}
+          {totals.vat.toLocaleString("ar-SA-u-nu-latn")} ر.س
         </CardDescription>
         <div className="mt-2 flex items-center gap-2">
           <Select value={months} onValueChange={setMonths}>
@@ -684,7 +684,7 @@ export function VatReturnPanel() {
                 className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"
               >
                 <span>
-                  {new Date(`${r.period_month}T12:00:00`).toLocaleDateString("ar-SA-u-ca-gregory", { month: "long", year: "numeric" })} ·{" "}
+                  {new Date(`${r.period_month}T12:00:00`).toLocaleDateString("ar-SA-u-ca-gregory-nu-latn", { month: "long", year: "numeric" })} ·{" "}
                   {CATEGORY_LABELS[r.vat_category] ?? r.vat_category}
                   <span className="block text-xs text-muted-foreground">
                     {r.invoice_count} فاتورة · {r.document_type === "simplified" ? "مبسّطة" : r.document_type === "standard" ? "ضريبية (أعمال)" : r.document_type}
@@ -694,9 +694,9 @@ export function VatReturnPanel() {
                   </span>
                 </span>
                 <span className="tabular-nums">
-                  {Number(r.taxable_amount ?? 0).toLocaleString("ar-SA")} +{" "}
+                  {Number(r.taxable_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")} +{" "}
                   <span className="font-semibold">
-                    {Number(r.vat_amount ?? 0).toLocaleString("ar-SA")}
+                    {Number(r.vat_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                   </span>
                 </span>
               </div>
@@ -781,16 +781,16 @@ export function TaxInvoicePreview({ invoiceId }: { invoiceId: string | null }) {
             </span>
           </span>
           <span className="tabular-nums">
-            {Number(r.taxable_base).toLocaleString("ar-SA")} +{" "}
-            {Number(r.vat_amount).toLocaleString("ar-SA")}
+            {Number(r.taxable_base).toLocaleString("ar-SA-u-nu-latn")} +{" "}
+            {Number(r.vat_amount).toLocaleString("ar-SA-u-nu-latn")}
           </span>
         </div>
       ))}
       <div className="flex items-center justify-between border-t pt-2 text-sm font-semibold">
         <span>الإجمالي قبل الضريبة / الضريبة / بعدها</span>
         <span className="tabular-nums">
-          {totals.base.toLocaleString("ar-SA")} · {totals.vat.toLocaleString("ar-SA")} ·{" "}
-          {(totals.base + totals.vat).toLocaleString("ar-SA")}
+          {totals.base.toLocaleString("ar-SA-u-nu-latn")} · {totals.vat.toLocaleString("ar-SA-u-nu-latn")} ·{" "}
+          {(totals.base + totals.vat).toLocaleString("ar-SA-u-nu-latn")}
         </span>
       </div>
     </div>

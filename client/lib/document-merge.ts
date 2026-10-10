@@ -81,7 +81,7 @@ type MergeContextInput = {
 /** يبني خريطة مسطّحة (token -> قيمة نصية) من بيانات المريض/الموظف/المؤسسة الحالية. */
 export function buildMergeContext({ patient, employee, organization, exam, custom }: MergeContextInput): Record<string, string> {
   const context: Record<string, string> = {
-    "date.today": new Date().toLocaleDateString("ar-SA", { year: "numeric", month: "long", day: "numeric" }),
+    "date.today": new Date().toLocaleDateString("ar-SA-u-nu-latn", { year: "numeric", month: "long", day: "numeric" }),
     "organization.name": organization?.name ?? "",
     "organization.tax_number": organization?.tax_number ?? "",
   };
@@ -99,7 +99,7 @@ export function buildMergeContext({ patient, employee, organization, exam, custo
     context["employee.mobile_1"] = employee.mobile_1 ?? "";
     context["employee.file_number"] = employee.file_number != null ? String(employee.file_number) : "";
     context["employee.hire_date"] = employee.hire_date
-      ? new Date(employee.hire_date).toLocaleDateString("ar-SA")
+      ? new Date(employee.hire_date).toLocaleDateString("ar-SA-u-nu-latn")
       : "";
   }
   if (exam) {
@@ -108,9 +108,9 @@ export function buildMergeContext({ patient, employee, organization, exam, custo
     context["exam.employer_name"] = exam.employer_name ?? "";
     context["exam.restrictions_note"] = exam.restrictions_note ?? "";
     context["exam.certificate_number"] = exam.certificate_number ?? "";
-    context["exam.exam_date"] = exam.exam_date ? new Date(exam.exam_date).toLocaleDateString("ar-SA") : "";
+    context["exam.exam_date"] = exam.exam_date ? new Date(exam.exam_date).toLocaleDateString("ar-SA-u-nu-latn") : "";
     context["exam.next_exam_due_date"] = exam.next_exam_due_date
-      ? new Date(exam.next_exam_due_date).toLocaleDateString("ar-SA")
+      ? new Date(exam.next_exam_due_date).toLocaleDateString("ar-SA-u-nu-latn")
       : "";
     context["exam.doctor_name"] = exam.doctor_name ? `د. ${exam.doctor_name}` : "";
   }

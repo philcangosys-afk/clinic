@@ -220,7 +220,7 @@ export default function MedicalRecords() {
               {focused.isLoading && "جارٍ تحميل الزيارة..."}
               {!focused.isLoading && focused.data && (
                 <>
-                  {new Date(focused.data.visit_date).toLocaleString("ar-SA")}
+                  {new Date(focused.data.visit_date).toLocaleString("ar-SA-u-nu-latn")}
                   {one(focused.data.doctor) ? ` · د. ${one(focused.data.doctor)!.name_ar}` : ""}
                   {focusedPatient?.file_number ? ` · ملف ${focusedPatient.file_number}` : ""}
                 </>
@@ -295,7 +295,7 @@ export default function MedicalRecords() {
                 </div>
               </div>
               <span className="text-xs text-muted-foreground">
-                {new Date(visit.visit_date).toLocaleString("ar-SA")}
+                {new Date(visit.visit_date).toLocaleString("ar-SA-u-nu-latn")}
               </span>
             </div>
           ))}
@@ -1272,7 +1272,7 @@ function NewVisitDialog({
                   الإجمالي التقديري:{" "}
                   {services
                     .reduce((sum, s) => sum + s.qty * s.price, 0)
-                    .toLocaleString("ar-SA")}{" "}
+                    .toLocaleString("ar-SA-u-nu-latn")}{" "}
                   (قبل الضريبة والخصم — تُحسب في الفاتورة)
                 </span>
               </div>

@@ -931,7 +931,7 @@ function printPrescriptions(
     "قائمة الوصفات",
     `<h2 style="margin:0 0 4px">${escapeHtml(organizationName)}</h2>
      <p style="margin:0 0 16px;font-size:13px">قائمة الوصفات — ${rows.length} وصفة · ${new Date().toLocaleDateString(
-       "ar-SA",
+       "ar-SA-u-nu-latn",
      )}</p>${body}`,
   );
 }

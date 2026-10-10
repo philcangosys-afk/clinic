@@ -487,7 +487,7 @@ function Incidents() {
                       )}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {new Date(r.occurred_at).toLocaleDateString("ar-SA")}
+                      {new Date(r.occurred_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell>
                       {r.is_open

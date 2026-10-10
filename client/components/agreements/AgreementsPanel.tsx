@@ -121,7 +121,7 @@ export default function AgreementsPanel({
     ];
     const body = rows.map((row) => [
       row.agreement_number,
-      new Date(row.created_at).toLocaleString("ar-SA"),
+      new Date(row.created_at).toLocaleString("ar-SA-u-nu-latn"),
       row.agreement_date,
       ...(patientMode ? [] : [row.patient_name, String(row.file_number ?? "")]),
       row.services ?? "",
@@ -328,8 +328,8 @@ export default function AgreementsPanel({
                     onDoubleClick={() => setDialog({ open: true, agreementId: row.id })}
                   >
                     <td className="font-mono">{row.agreement_number}</td>
-                    <td className="whitespace-nowrap text-xs">{new Date(row.created_at).toLocaleString("ar-SA")}</td>
-                    <td className="whitespace-nowrap text-xs">{new Date(row.agreement_date).toLocaleDateString("ar-SA")}</td>
+                    <td className="whitespace-nowrap text-xs">{new Date(row.created_at).toLocaleString("ar-SA-u-nu-latn")}</td>
+                    <td className="whitespace-nowrap text-xs">{new Date(row.agreement_date).toLocaleDateString("ar-SA-u-nu-latn")}</td>
                     {!patientMode && <td className="whitespace-nowrap">{row.patient_name}</td>}
                     {!patientMode && <td className="font-mono text-xs">{row.file_number ?? ""}</td>}
                     <td className="max-w-[16rem] truncate" title={row.services ?? ""}>{row.services ?? "—"}</td>

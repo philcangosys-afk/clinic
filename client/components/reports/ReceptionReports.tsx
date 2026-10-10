@@ -377,7 +377,7 @@ export default function ReceptionReports() {
           >
             <div className="text-xs text-muted-foreground">{card.label}</div>
             <div className="text-xl font-bold tabular-nums">
-              {summary.isLoading ? "…" : Number(summary.data?.[card.key] ?? 0).toLocaleString("ar-SA")}
+              {summary.isLoading ? "…" : Number(summary.data?.[card.key] ?? 0).toLocaleString("ar-SA-u-nu-latn")}
             </div>
           </button>
         ))}
@@ -457,7 +457,7 @@ export default function ReceptionReports() {
           row.file_number ?? "—",
           row.mobile_number ?? "—",
           row.no_show_count,
-          row.last_no_show ? new Date(row.last_no_show).toLocaleDateString("ar-SA") : "—",
+          row.last_no_show ? new Date(row.last_no_show).toLocaleDateString("ar-SA-u-nu-latn") : "—",
         ])}
         exportName="متكررو-عدم-الحضور"
       />

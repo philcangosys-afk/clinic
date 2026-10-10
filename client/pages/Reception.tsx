@@ -392,7 +392,7 @@ export default function Reception() {
               >
                 <div className="flex min-w-[6rem] items-center gap-2 text-sm text-muted-foreground">
                   <CalendarClock className="h-4 w-4" />
-                  {new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
+                  {new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA-u-nu-latn", { hour: "2-digit", minute: "2-digit" })}
                 </div>
                 <button type="button" className="min-w-[10rem] flex-1 text-start" onClick={() => navigate(`/patients/${appointment.patient_id}`)}>
                   <p className="text-sm font-semibold hover:text-primary">{appointment.patient?.name_ar ?? "—"}</p>
@@ -628,7 +628,7 @@ function QueueRow({
   readOnly?: boolean;
   highlighted?: boolean;
 }) {
-  const time = new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", {
+  const time = new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA-u-nu-latn", {
     hour: "2-digit",
     minute: "2-digit",
   });

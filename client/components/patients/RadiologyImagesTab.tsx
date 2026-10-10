@@ -105,7 +105,7 @@ export default function RadiologyImagesTab({ patientId }: { patientId: string })
             </div>
             {r.note && <p className="mt-1 text-sm text-muted-foreground">{r.note}</p>}
             <p className="mt-1 text-xs text-muted-foreground">
-              {new Date(r.created_at).toLocaleString("ar")}
+              {new Date(r.created_at).toLocaleString("ar-u-nu-latn")}
               {r.doctor_name ? ` · بطلب ${r.doctor_name}` : ""}
               {r.size_bytes ? ` · ${(Number(r.size_bytes) / 1024).toFixed(0)} ك.ب` : ""}
             </p>

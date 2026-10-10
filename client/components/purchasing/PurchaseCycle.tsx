@@ -296,7 +296,7 @@ export function RequestsPanel() {
                       ))}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {Number(r.estimated_total ?? 0).toLocaleString("ar-SA")}
+                      {Number(r.estimated_total ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{r.needed_by ?? "—"}</TableCell>
                     <TableCell className="max-w-48 truncate text-xs text-muted-foreground">
@@ -725,7 +725,7 @@ export function OrdersPanel({ view }: { view: "orders" | "receipts" }) {
                       </Badge>
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {Number(o.net_amount ?? 0).toLocaleString("ar-SA")}
+                      {Number(o.net_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       {Number(o.qty_received ?? 0)} / {Number(o.qty_ordered ?? 0)}
@@ -933,7 +933,7 @@ function DraftReceiptsCard() {
                 <TableCell><PurposeBadge purpose={g.purchase_purpose} /></TableCell>
                 <TableCell className="text-sm">{g.distributor?.name_ar ?? "—"}</TableCell>
                 <TableCell className="font-mono text-xs">
-                  {new Date(g.received_at).toLocaleDateString("ar-SA")}
+                  {new Date(g.received_at).toLocaleDateString("ar-SA-u-nu-latn")}
                 </TableCell>
                 <TableCell className="text-xs">
                   {(g.goods_receipt_items ?? []).map((li: any) => (
@@ -1045,7 +1045,7 @@ function PostedReceiptsCard({ onInvoice }: { onInvoice: (receiptId: string) => v
                     <TableCell><PurposeBadge purpose={g.purchase_purpose} /></TableCell>
                     <TableCell className="text-sm">{g.distributor?.name_ar ?? "—"}</TableCell>
                     <TableCell className="font-mono text-xs">
-                      {new Date(g.received_at).toLocaleDateString("ar-SA")}
+                      {new Date(g.received_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-xs">
                       {(g.goods_receipt_items ?? []).map((li: any) => (
@@ -1352,18 +1352,18 @@ export function SupplierBalancesPanel() {
                       {b.payment_terms_days ? `${b.payment_terms_days} يومًا` : "نقدًا"}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {Number(b.total_invoiced ?? 0).toLocaleString("ar-SA")}
+                      {Number(b.total_invoiced ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {Number(b.total_settled ?? 0).toLocaleString("ar-SA")}
+                      {Number(b.total_settled ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="font-mono text-xs font-semibold">
-                      {Number(b.balance_due ?? 0).toLocaleString("ar-SA")}
+                      {Number(b.balance_due ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       {Number(b.overdue_amount ?? 0) > 0 ? (
                         <Badge variant="destructive">
-                          {Number(b.overdue_amount).toLocaleString("ar-SA")}
+                          {Number(b.overdue_amount).toLocaleString("ar-SA-u-nu-latn")}
                           {b.max_days_overdue ? ` · ${b.max_days_overdue} يومًا` : ""}
                         </Badge>
                       ) : (
@@ -1375,7 +1375,7 @@ export function SupplierBalancesPanel() {
                         <Badge variant="destructive">تجاوز الحدّ</Badge>
                       ) : b.credit_limit ? (
                         <span className="font-mono text-xs">
-                          {Number(b.credit_limit).toLocaleString("ar-SA")}
+                          {Number(b.credit_limit).toLocaleString("ar-SA-u-nu-latn")}
                         </span>
                       ) : (
                         "—"
@@ -1435,11 +1435,11 @@ export function SupplierBalancesPanel() {
                       <TableCell className="font-mono text-xs">{l.reference_number ?? "—"}</TableCell>
                       <TableCell className="font-mono text-xs">
                         {Number(l.debit_amount ?? 0) > 0
-                          ? Number(l.debit_amount).toLocaleString("ar-SA") : "—"}
+                          ? Number(l.debit_amount).toLocaleString("ar-SA-u-nu-latn") : "—"}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
                         {Number(l.credit_amount ?? 0) > 0
-                          ? Number(l.credit_amount).toLocaleString("ar-SA") : "—"}
+                          ? Number(l.credit_amount).toLocaleString("ar-SA-u-nu-latn") : "—"}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
                         {l.due_date ?? "—"}
@@ -1606,7 +1606,7 @@ export function PaySupplierDialog({ invoice, onClose }: { invoice: any | null; o
           <DialogTitle>سداد فاتورة {invoice?.invoiceNumber ?? ""}</DialogTitle>
           <DialogDescription>
             {invoice?.supplierName ?? ""}
-            {due !== null ? ` — المتبقّي ${due.toLocaleString("ar-SA")}` : ""}
+            {due !== null ? ` — المتبقّي ${due.toLocaleString("ar-SA-u-nu-latn")}` : ""}
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-3">
@@ -1816,7 +1816,7 @@ export function ReturnsAndCostsPanel() {
                       ))}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {Number(r.net_amount ?? 0).toLocaleString("ar-SA")}
+                      {Number(r.net_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell>
                       <Badge variant={r.status === "posted" ? "success" : "secondary"}>
@@ -1886,7 +1886,7 @@ export function ReturnsAndCostsPanel() {
                     </TableCell>
                     <TableCell className="text-sm">{e.distributor?.name_ar ?? "—"}</TableCell>
                     <TableCell className="font-mono text-xs">
-                      {Number(e.amount ?? 0).toLocaleString("ar-SA")}
+                      {Number(e.amount ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-sm">
                       {e.allocation_method === "by_qty" ? "بالكمّية" : "بالقيمة"}

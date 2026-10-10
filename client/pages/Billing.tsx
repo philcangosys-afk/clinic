@@ -58,6 +58,7 @@ import TaxSettingsTab, {
   TaxInvoicePreview,
 } from "@/components/billing/TaxSettingsTab";
 import TaxInvoicesPanel from "@/components/billing/TaxInvoicesPanel";
+import VatPayablePanel from "@/components/billing/VatPayablePanel";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { INVOICE_STATUS_BADGE, INVOICE_STATUS_LABELS } from "@/lib/invoice-status";
@@ -493,6 +494,8 @@ export default function Billing() {
       {showShifts && <CashShiftsPanel organizationId={organization?.id} />}
       {showTax && (
         <div className="flex flex-col gap-4">
+          {/* صافي الضريبة المستحقّة: المبيعات − المشتريات (0239) */}
+          <VatPayablePanel />
           {/* الفواتير الضريبية بوعائها وضريبتها ومجموعها (05/10/2026) */}
           <TaxInvoicesPanel />
           <TaxSettingsTab />

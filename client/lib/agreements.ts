@@ -343,7 +343,7 @@ export async function printAgreement(agreement: AgreementListRow, organizationNa
           </tr>`,
         )
         .join("");
-      return `<h3>عرض سعر رقم ${quote.quote_number} — ${esc(new Date(quote.quote_date).toLocaleDateString("ar-SA"))}
+      return `<h3>عرض سعر رقم ${quote.quote_number} — ${esc(new Date(quote.quote_date).toLocaleDateString("ar-SA-u-nu-latn"))}
         ${quote.doctor_name ? ` — ${esc(quote.doctor_name)}` : ""}</h3>
         <table>
           <thead><tr><th>الكود</th><th>الخدمة</th><th>السعر</th><th>العدد</th><th>الخصم</th>
@@ -375,7 +375,7 @@ export async function printAgreement(agreement: AgreementListRow, organizationNa
             ${
               signature && signature.startsWith("data:image/png;base64,")
                 ? `<img src="${esc(signature)}" alt="توقيع المريض" style="height:60px;vertical-align:middle" />
-                   <span style="font-size:11px">${agreement.patient_signed_at ? esc(new Date(agreement.patient_signed_at).toLocaleString("ar-SA")) : ""}</span>`
+                   <span style="font-size:11px">${agreement.patient_signed_at ? esc(new Date(agreement.patient_signed_at).toLocaleString("ar-SA-u-nu-latn")) : ""}</span>`
                 : "____________________"
             }</td>
           <td style="border:none;padding-top:30px;vertical-align:bottom">توقيع الطبيب: ____________________</td></tr>

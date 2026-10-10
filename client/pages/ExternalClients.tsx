@@ -466,7 +466,7 @@ export default function ExternalClients() {
                       )}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {new Date(client.registered_at).toLocaleDateString("ar-SA")}
+                      {new Date(client.registered_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell>
                       <Badge variant={client.is_disabled ? "secondary" : "success"}>{client.is_disabled ? "معطَّل" : "نشط"}</Badge>

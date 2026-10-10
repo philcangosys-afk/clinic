@@ -428,7 +428,7 @@ function defaultFrom() {
 /**
  * الأرقام بلغة الواجهة.
  *
- * `toLocaleString("ar-SA")` يُخرج أرقامًا هندية (٢٥٠)، وهي الصحيحة للعرض
+ * `toLocaleString("ar-SA-u-nu-latn")` يُخرج أرقامًا هندية (٢٥٠)، وهي الصحيحة للعرض
  * العربي لكنها **غير صالحة للتصدير**: Excel يقرؤها نصًّا فتنهار كل معادلة
  * في الملف. لذلك التصدير يستخدم `en-US` دائمًا مهما كانت لغة الشاشة.
  */
@@ -483,7 +483,8 @@ export default function ReportCenter() {
   const [clinic, setClinic] = useState("all");
   const [company, setCompany] = useState("all");
   const [status, setStatus] = useState("all");
-  const [useArabicNumerals, setUseArabicNumerals] = useState(true);
+  // الأرقام الإنجليزية افتراضًا في كلّ النظام (طلب المالك 10/10/2026)
+  const [useArabicNumerals, setUseArabicNumerals] = useState(false);
 
   const locale = useArabicNumerals ? "ar-SA" : "en-US";
 

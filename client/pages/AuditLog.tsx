@@ -164,7 +164,7 @@ function exportCsv(rows: AuditLogDetailView[]) {
     headers.join(","),
     ...rows.map((row) =>
       [
-        new Date(row.occurred_at).toLocaleString("ar-SA"),
+        new Date(row.occurred_at).toLocaleString("ar-SA-u-nu-latn"),
         actorOf(row),
         row.device_name,
         ACTION_LABELS[row.action_type as AuditActionType] ?? row.action_type,
@@ -348,7 +348,7 @@ export default function AuditLog() {
               <TableBody>
                 {(log.data ?? []).map((entry) => (
                   <TableRow key={entry.id}>
-                    <TableCell className="text-xs text-muted-foreground">{new Date(entry.occurred_at).toLocaleString("ar-SA")}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground">{new Date(entry.occurred_at).toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                     <TableCell className="text-sm">{actorOf(entry) || "—"}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">{entry.device_name ?? "—"}</TableCell>
                     <TableCell>

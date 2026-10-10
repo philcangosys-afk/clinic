@@ -143,7 +143,7 @@ export default function CashExpenses() {
       toast({ variant: "destructive", title: "تعذّر الإلغاء", description: errorMessage(error) }),
   });
 
-  const fmt = (n: number) => n.toLocaleString("ar-SA", { maximumFractionDigits: 2 });
+  const fmt = (n: number) => n.toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 2 });
 
   return (
     <div className="mx-auto flex max-w-6xl flex-col gap-4 p-4 sm:p-6">
@@ -509,7 +509,7 @@ function NewExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                 <Input value={supplierTaxNumber} onChange={(e) => setSupplierTaxNumber(e.target.value)} />
               </div>
               <div className="flex flex-col justify-end text-sm text-muted-foreground">
-                الضريبة المستخرجة: {vatAmount.toLocaleString("ar-SA")} ر.س
+                الضريبة المستخرجة: {vatAmount.toLocaleString("ar-SA-u-nu-latn")} ر.س
               </div>
             </div>
           )}

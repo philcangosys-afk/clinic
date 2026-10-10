@@ -300,7 +300,7 @@ function MovementsTab() {
                 const isIn = IN_TYPES.includes(m.movement_type as InventoryMovementType);
                 return (
                   <TableRow key={m.id}>
-                    <TableCell className="text-xs">{new Date(m.created_at).toLocaleString("ar-SA")}</TableCell>
+                    <TableCell className="text-xs">{new Date(m.created_at).toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                     <TableCell className="font-medium">{item?.name_ar ?? "—"}</TableCell>
                     <TableCell>{warehouse?.name ?? "—"}</TableCell>
                     <TableCell>
@@ -917,7 +917,7 @@ function StockAlertsTab() {
                   </TableCell>
                   <TableCell>{a.warehouse_name}</TableCell>
                   <TableCell className="text-xs text-muted-foreground">{a.lot_number ?? "—"}</TableCell>
-                  <TableCell>{Number(a.qty_remaining).toLocaleString("ar-SA")}</TableCell>
+                  <TableCell>{Number(a.qty_remaining).toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                   <TableCell>
                     {a.expiry_date ?? "—"}
                     {a.days_to_expiry != null && (
@@ -1222,7 +1222,7 @@ function TransfersTab() {
                         {memberNames.data?.get(t.approved_by) ?? "—"}
                       </span>
                     )}
-                    <span>{new Date(t.created_at).toLocaleString("ar-SA")}</span>
+                    <span>{new Date(t.created_at).toLocaleString("ar-SA-u-nu-latn")}</span>
                   </div>
                   <div className="mt-2 flex gap-2">
                     {(t.status === "requested" || t.status === "draft") &&

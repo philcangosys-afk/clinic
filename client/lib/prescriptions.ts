@@ -143,8 +143,8 @@ export async function printPrescription(prescriptionId: string) {
       (address ? `<p>${esc(address)}</p>` : "") +
       (b.phone ? `<p>هاتف: <span dir="ltr">${esc(b.phone)}</span></p>` : "") +
       `</div><div class="rx">℞</div></div>` +
-      `<div class="title"><h2>وصفة طبية</h2><span>${esc(issued.toLocaleDateString("ar-SA"))} — ${esc(
-        issued.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }),
+      `<div class="title"><h2>وصفة طبية</h2><span>${esc(issued.toLocaleDateString("ar-SA-u-nu-latn"))} — ${esc(
+        issued.toLocaleTimeString("ar-SA-u-nu-latn", { hour: "2-digit", minute: "2-digit" }),
       )}</span></div>` +
       `<div class="patient">` +
       `<div><b>المريض:</b> ${esc(patient.name_ar ?? "")}</div>` +

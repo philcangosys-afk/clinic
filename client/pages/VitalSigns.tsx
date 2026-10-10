@@ -251,7 +251,7 @@ export default function VitalSigns() {
                       ) : (
                         "بلا طبيب محدّد · "
                       )}
-                      {new Date(row.requested_at).toLocaleString("ar")}
+                      {new Date(row.requested_at).toLocaleString("ar-u-nu-latn")}
                     </p>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
@@ -346,7 +346,7 @@ export default function VitalSigns() {
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary">{v.source_label}</Badge>
                   <span className="text-xs text-muted-foreground">
-                    {new Date(v.recorded_at).toLocaleTimeString("ar")}
+                    {new Date(v.recorded_at).toLocaleTimeString("ar-u-nu-latn")}
                   </span>
                 </div>
               </div>

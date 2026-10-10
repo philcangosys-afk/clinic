@@ -31,7 +31,7 @@ import { errorMessage } from "@/lib/error-message";
  */
 
 const money = (v: any) =>
-  Number(v ?? 0).toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  Number(v ?? 0).toLocaleString("ar-SA-u-nu-latn", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const ASSET_STATUS: Record<string, { label: string; variant: any }> = {
   in_service:          { label: "في الخدمة",     variant: "success" },
@@ -1069,7 +1069,7 @@ function MaintenancePanel() {
                       )}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {new Date(r.reported_at).toLocaleDateString("ar-SA")}
+                      {new Date(r.reported_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-sm">{r.status}</TableCell>
                     <TableCell className="text-end">
@@ -1719,7 +1719,7 @@ function DepreciationPanel() {
                         : <Badge variant="secondary">بلا دليل حسابات</Badge>}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {new Date(r.posted_at).toLocaleDateString("ar-SA")}
+                      {new Date(r.posted_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                   </TableRow>
                 ))}

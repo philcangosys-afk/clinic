@@ -160,7 +160,7 @@ export default function PatientJourney() {
   const grouped = useMemo(() => {
     const map = new Map<string, TimelineEvent[]>();
     for (const event of filtered) {
-      const key = new Date(event.occurred_at).toLocaleDateString("ar-SA", {
+      const key = new Date(event.occurred_at).toLocaleDateString("ar-SA-u-nu-latn", {
         weekday: "long",
         day: "numeric",
         month: "long",
@@ -196,7 +196,7 @@ export default function PatientJourney() {
     const rows = filtered
       .map(
         (event) =>
-          `<tr><td>${new Date(event.occurred_at).toLocaleString("ar-SA")}</td>` +
+          `<tr><td>${new Date(event.occurred_at).toLocaleString("ar-SA-u-nu-latn")}</td>` +
           `<td>${EVENT_META[event.event_type]?.label ?? event.event_type}</td>` +
           `<td>${event.title}</td><td>${event.summary ?? ""}</td></tr>`,
       )
@@ -341,7 +341,7 @@ export default function PatientJourney() {
                     <div className="flex flex-wrap items-center gap-2">
                       <Icon className="h-4 w-4 shrink-0" />
                       <span className="text-xs opacity-70">
-                        {new Date(event.occurred_at).toLocaleTimeString("ar-SA", {
+                        {new Date(event.occurred_at).toLocaleTimeString("ar-SA-u-nu-latn", {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}
@@ -429,7 +429,7 @@ function RecordDialog({
   });
 
   const active = record?.kind === "invoice" ? invoice : visit;
-  const money = (value: unknown) => Number(value ?? 0).toLocaleString("ar-SA", { minimumFractionDigits: 2 });
+  const money = (value: unknown) => Number(value ?? 0).toLocaleString("ar-SA-u-nu-latn", { minimumFractionDigits: 2 });
 
   return (
     <Dialog open={Boolean(record)} onOpenChange={(next) => !next && onClose()}>
@@ -461,7 +461,7 @@ function RecordDialog({
               {invoice.data.is_temporary && <Badge variant="secondary">مؤقتة</Badge>}
             </div>
             <p className="text-xs text-muted-foreground">
-              {new Date(invoice.data.issued_at ?? invoice.data.created_at).toLocaleString("ar-SA")}
+              {new Date(invoice.data.issued_at ?? invoice.data.created_at).toLocaleString("ar-SA-u-nu-latn")}
             </p>
             <div className="mt-1 grid gap-1 sm:grid-cols-2">
               <span className="tabular-nums">الصافي: {money(invoice.data.net_amount)}</span>
@@ -484,7 +484,7 @@ function RecordDialog({
           <div className="flex flex-col gap-1.5 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-semibold">
-                {new Date(visit.data.visit_date ?? visit.data.created_at).toLocaleString("ar-SA")}
+                {new Date(visit.data.visit_date ?? visit.data.created_at).toLocaleString("ar-SA-u-nu-latn")}
               </span>
               {visit.data.status && <Badge variant="outline">{visit.data.status}</Badge>}
             </div>
@@ -493,7 +493,7 @@ function RecordDialog({
             {visit.data.next_visit_plan && <p className="text-xs">خطة الزيارة القادمة: {visit.data.next_visit_plan}</p>}
             {visit.data.next_visit_date && (
               <p className="text-xs">
-                الزيارة القادمة: {new Date(visit.data.next_visit_date).toLocaleDateString("ar-SA")}
+                الزيارة القادمة: {new Date(visit.data.next_visit_date).toLocaleDateString("ar-SA-u-nu-latn")}
               </p>
             )}
           </div>

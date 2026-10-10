@@ -434,7 +434,7 @@ export default function VisitCanvasDetail({ visitId }: { visitId: string }) {
                 </Badge>
                 <span className="text-xs text-muted-foreground">
                   {Number(row.qty)} ×{" "}
-                  {row.unit_price === null ? "—" : Number(row.unit_price).toLocaleString("ar-SA")}
+                  {row.unit_price === null ? "—" : Number(row.unit_price).toLocaleString("ar-SA-u-nu-latn")}
                 </span>
                 {/* الإلغاء متاح قبل الفوترة فقط — والقاعدة ترفضه بعدها على
                     كل حال، فإخفاء الزر يمنع محاولةً مصيرها الرفض. */}

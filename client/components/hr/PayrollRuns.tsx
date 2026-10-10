@@ -30,7 +30,7 @@ import { errorMessage } from "@/lib/error-message";
  */
 
 const money = (v: any) =>
-  Number(v ?? 0).toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  Number(v ?? 0).toLocaleString("ar-SA-u-nu-latn", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 const RUN_STATUS: Record<string, { label: string; variant: any }> = {
   draft:      { label: "مسوّدة",  variant: "secondary" },

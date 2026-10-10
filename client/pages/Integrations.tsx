@@ -192,7 +192,7 @@ function HealthPanel() {
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       {r.last_attempt_at
-                        ? new Date(r.last_attempt_at).toLocaleString("ar-SA")
+                        ? new Date(r.last_attempt_at).toLocaleString("ar-SA-u-nu-latn")
                         : "—"}
                     </TableCell>
                   </TableRow>
@@ -293,7 +293,7 @@ function DeadLettersPanel() {
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       {r.dead_lettered_at
-                        ? new Date(r.dead_lettered_at).toLocaleString("ar-SA")
+                        ? new Date(r.dead_lettered_at).toLocaleString("ar-SA-u-nu-latn")
                         : "—"}
                     </TableCell>
                     <TableCell className="text-end">

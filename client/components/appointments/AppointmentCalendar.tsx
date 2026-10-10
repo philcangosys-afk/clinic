@@ -291,7 +291,7 @@ function minutesFromDayStart(iso: string, startHour: number = DAY_START_HOUR, da
 }
 
 function fmtTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" });
+  return new Date(iso).toLocaleTimeString("ar-SA-u-nu-latn", { hour: "2-digit", minute: "2-digit" });
 }
 
 function sameDay(a: Date, b: Date) {
@@ -685,12 +685,12 @@ export default function AppointmentCalendar({
   };
 
   const headerLabel = useMemo(() => {
-    if (view === "month") return anchor.toLocaleDateString("ar-SA", { month: "long", year: "numeric" });
+    if (view === "month") return anchor.toLocaleDateString("ar-SA-u-nu-latn", { month: "long", year: "numeric" });
     if (view === "week" || view === "workweek") {
       const from = startOfWeek(anchor);
-      return `${from.toLocaleDateString("ar-SA", { day: "numeric", month: "short" })} — ${addDays(from, view === "workweek" ? 5 : 6).toLocaleDateString("ar-SA", { day: "numeric", month: "short" })}`;
+      return `${from.toLocaleDateString("ar-SA-u-nu-latn", { day: "numeric", month: "short" })} — ${addDays(from, view === "workweek" ? 5 : 6).toLocaleDateString("ar-SA-u-nu-latn", { day: "numeric", month: "short" })}`;
     }
-    return anchor.toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    return anchor.toLocaleDateString("ar-SA-u-nu-latn", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   }, [anchor, view]);
 
   const filterActive =
@@ -1137,7 +1137,7 @@ function DayGrid({
                     }`}
                   >
                     {isHour
-                      ? slot.toLocaleTimeString("ar-SA", { hour: "numeric", minute: "2-digit" })
+                      ? slot.toLocaleTimeString("ar-SA-u-nu-latn", { hour: "numeric", minute: "2-digit" })
                       : `:${String(slot.getMinutes()).padStart(2, "0")}`}
                   </span>
                 </div>
@@ -1243,7 +1243,7 @@ function DayGrid({
                   >
                     {canCreate && (
                       <span className="pointer-events-none hidden px-1.5 text-[10px] font-semibold text-primary group-hover:inline">
-                        + حجز {slot.toLocaleTimeString("ar-SA", { hour: "numeric", minute: "2-digit" })}
+                        + حجز {slot.toLocaleTimeString("ar-SA-u-nu-latn", { hour: "numeric", minute: "2-digit" })}
                       </span>
                     )}
                   </div>
@@ -1618,14 +1618,14 @@ function WeekGrid({
                 title="افتح هذا اليوم"
                 className={`sticky top-0 z-10 flex h-14 w-full flex-col items-center justify-center gap-0.5 border-b bg-card text-xs hover:bg-primary/10 ${isToday ? "text-primary" : ""}`}
               >
-                <span className="text-[11px] text-muted-foreground">{day.toLocaleDateString("ar-SA", { weekday: "long" })}</span>
+                <span className="text-[11px] text-muted-foreground">{day.toLocaleDateString("ar-SA-u-nu-latn", { weekday: "long" })}</span>
                 <span className="flex items-center gap-1.5">
                   <span
                     className={`flex h-7 min-w-[1.75rem] items-center justify-center rounded-full px-1 text-sm font-bold ${
                       isToday ? "bg-primary text-primary-foreground" : ""
                     }`}
                   >
-                    {day.toLocaleDateString("ar-SA", { day: "numeric" })}
+                    {day.toLocaleDateString("ar-SA-u-nu-latn", { day: "numeric" })}
                   </span>
                   {dayAppointments.length > 0 && (
                     <span className="rounded bg-muted px-1 text-[10px] text-muted-foreground">{dayAppointments.length}</span>
@@ -1727,7 +1727,7 @@ function MonthGrid({
               className={`min-h-[5.5rem] border-b border-s p-1 text-start align-top last:border-s-0 hover:bg-primary/5 ${outside ? "bg-muted/20 text-muted-foreground" : ""}`}
             >
               <div className={`mb-1 text-xs ${isToday ? "font-bold text-primary" : ""}`}>
-                {day.toLocaleDateString("ar-SA", { day: "numeric" })}
+                {day.toLocaleDateString("ar-SA-u-nu-latn", { day: "numeric" })}
               </div>
               <div className="flex flex-col gap-0.5">
                 {rows.slice(0, 3).map((row) => {
@@ -1777,7 +1777,7 @@ function ListView({
             <span className="flex items-center gap-1 text-xs text-muted-foreground">
               {row.is_waiting ? <Clock className="h-3.5 w-3.5 text-amber-600" /> : <Clock className="h-3.5 w-3.5" />}
               {row.is_waiting && <span className="text-amber-700">انتظار ·</span>}
-              {new Date(row.scheduled_start).toLocaleString("ar-SA", {
+              {new Date(row.scheduled_start).toLocaleString("ar-SA-u-nu-latn", {
                 day: "numeric",
                 month: "short",
                 hour: "2-digit",
@@ -2096,7 +2096,7 @@ function RescheduleDialog({
               <div className="grid gap-2 sm:grid-cols-2">
                 <div className="rounded-md bg-muted/40 p-2">
                   <div className="mb-1 text-[10px] text-muted-foreground">الموعد الحالي</div>
-                  <div>{new Date(pending.appointment.scheduled_start).toLocaleString("ar-SA")}</div>
+                  <div>{new Date(pending.appointment.scheduled_start).toLocaleString("ar-SA-u-nu-latn")}</div>
                   <div className="text-xs text-muted-foreground">
                     {pending.appointment.doctor?.name_ar ?? "—"}
                     {pending.appointment.clinic?.name ? ` · ${pending.appointment.clinic.name}` : ""}
@@ -2104,9 +2104,9 @@ function RescheduleDialog({
                 </div>
                 <div className="rounded-md border border-primary/40 bg-primary/5 p-2">
                   <div className="mb-1 text-[10px] text-muted-foreground">الموعد الجديد</div>
-                  <div>{pending.start.toLocaleString("ar-SA")}</div>
+                  <div>{pending.start.toLocaleString("ar-SA-u-nu-latn")}</div>
                   <div className="text-xs text-muted-foreground">
-                    حتى {newEnd.toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })} ·{" "}
+                    حتى {newEnd.toLocaleTimeString("ar-SA-u-nu-latn", { hour: "2-digit", minute: "2-digit" })} ·{" "}
                     {Math.round(durationMinutes)} دقيقة
                   </div>
                 </div>

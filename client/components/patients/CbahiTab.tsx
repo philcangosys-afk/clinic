@@ -346,7 +346,7 @@ export default function CbahiTab({ patientId }: { patientId: string }) {
                 return (
                   <TableRow key={row.id}>
                     <TableCell className="text-xs text-muted-foreground">
-                      {new Date(row.created_at).toLocaleDateString("ar-SA")}
+                      {new Date(row.created_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="font-medium">
                       {definition?.title ?? row.form_type}

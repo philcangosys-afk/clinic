@@ -1130,7 +1130,7 @@ export default function ZATCASettings() {
                   <span>
                     انتهاء الشهادة:{" "}
                     {setup.certificate_expires_at
-                      ? new Date(setup.certificate_expires_at).toLocaleString("ar-SA")
+                      ? new Date(setup.certificate_expires_at).toLocaleString("ar-SA-u-nu-latn")
                       : "يحتاج مراجعة"}
                   </span>
                 </div>
@@ -1182,7 +1182,7 @@ export default function ZATCASettings() {
                       {item.result === "success" ? "نجح" : "فشل"}
                       {item.http_status ? ` — HTTP ${item.http_status}` : ""}
                     </span>
-                    <time className="text-muted-foreground">{new Date(item.created_at).toLocaleString("ar-SA")}</time>
+                    <time className="text-muted-foreground">{new Date(item.created_at).toLocaleString("ar-SA-u-nu-latn")}</time>
                   </div>
                   {detailMessage && (
                     <p className="mt-2 break-words rounded-md bg-rose-50 px-2 py-1.5 text-rose-800" dir="auto">

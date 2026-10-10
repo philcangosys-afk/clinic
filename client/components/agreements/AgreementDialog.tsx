@@ -249,7 +249,7 @@ function AgreementSignatureDialog({
         {signed && (
           <div className="flex flex-col gap-2 rounded-md border p-2">
             <span className="text-xs text-muted-foreground">
-              موقّعة{agreement?.patient_signed_at ? ` — ${new Date(agreement.patient_signed_at).toLocaleString("ar-SA")}` : ""}
+              موقّعة{agreement?.patient_signed_at ? ` — ${new Date(agreement.patient_signed_at).toLocaleString("ar-SA-u-nu-latn")}` : ""}
             </span>
             {existing.data && <img src={existing.data} alt="توقيع المريض" className="h-24 w-auto self-start bg-white" />}
             {canManage && (
@@ -563,7 +563,7 @@ export default function AgreementDialog({
     }
   };
 
-  const createdAt = row?.created_at ? new Date(row.created_at).toLocaleString("ar-SA") : "—";
+  const createdAt = row?.created_at ? new Date(row.created_at).toLocaleString("ar-SA-u-nu-latn") : "—";
   const title = currentId ? `تفاصيل الاتفاقية رقم ${row?.agreement_number ?? "…"}` : "اتفاقية جديدة";
 
   return (
@@ -819,7 +819,7 @@ export default function AgreementDialog({
                     onDoubleClick={() => setQuoteEditor({ open: true, quoteId: quote.id })}
                   >
                     <td className="font-mono">{quote.quote_number}</td>
-                    <td className="whitespace-nowrap text-xs">{new Date(quote.quote_date).toLocaleString("ar-SA")}</td>
+                    <td className="whitespace-nowrap text-xs">{new Date(quote.quote_date).toLocaleString("ar-SA-u-nu-latn")}</td>
                     <td>{quote.doctor_name ?? "—"}</td>
                     <td>{quote.clinic_name ?? "—"}</td>
                     <td className="max-w-[12rem] truncate" title={quote.note ?? ""}>

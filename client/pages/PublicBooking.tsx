@@ -382,7 +382,7 @@ export default function PublicBooking() {
                   <dl className="mx-auto mt-5 max-w-md space-y-2 rounded-2xl bg-[#f4f8f7] p-4 text-sm">
                     <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">الاسم</dt><dd className="font-bold">{result.patient_name}</dd></div>
                     <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">الجوال</dt><dd className="font-bold" dir="ltr">{result.patient_mobile}</dd></div>
-                    <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">الموعد</dt><dd className="text-end font-bold">{new Date(result.scheduled_start).toLocaleString("ar-SA", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}</dd></div>
+                    <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">الموعد</dt><dd className="text-end font-bold">{new Date(result.scheduled_start).toLocaleString("ar-SA-u-nu-latn", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" })}</dd></div>
                     <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">العيادة</dt><dd className="font-bold">{result.clinic_name}</dd></div>
                     <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">الطبيب</dt><dd className="text-end font-bold">{result.doctor_name ? `${doctorTitle(result.doctor_name)}${result.doctor_specialty ? ` — ${result.doctor_specialty}` : ""}` : "أي طبيب متاح (يحدّده الاستقبال)"}</dd></div>
                     <div className="flex justify-between gap-3"><dt className="text-[#6e827d]">الخدمة</dt><dd className="text-end font-bold">{result.service_text}</dd></div>
@@ -421,7 +421,7 @@ export default function PublicBooking() {
                   </select></label>
                   <div className="overflow-hidden rounded-2xl border border-[#d9e4e1]">
                     <button type="button" disabled={!bookingDetailsComplete || slotsLoading} onClick={() => setAppointmentPickerOpen((open) => !open)} className="flex w-full items-center justify-between gap-3 bg-[#f7fbfa] px-4 py-3 text-start hover:bg-[#eef7f4] disabled:cursor-not-allowed disabled:opacity-60">
-                      <span><strong className="block text-sm">{selectedSlotStart ? "الموعد المختار" : "تاريخ الحجز *"}</strong><small className="mt-0.5 block text-[#6e827d]">{selectedSlotStart ? new Date(selectedSlotStart).toLocaleString("ar-SA", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : bookingDetailsComplete ? (doctorId ? "اضغط لاختيار اليوم والوقت من دوام الطبيب" : "اضغط لاختيار اليوم والوقت من دوام أطباء العيادة") : "أكمل البيانات بالأعلى أولًا"}</small></span>
+                      <span><strong className="block text-sm">{selectedSlotStart ? "الموعد المختار" : "تاريخ الحجز *"}</strong><small className="mt-0.5 block text-[#6e827d]">{selectedSlotStart ? new Date(selectedSlotStart).toLocaleString("ar-SA-u-nu-latn", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" }) : bookingDetailsComplete ? (doctorId ? "اضغط لاختيار اليوم والوقت من دوام الطبيب" : "اضغط لاختيار اليوم والوقت من دوام أطباء العيادة") : "أكمل البيانات بالأعلى أولًا"}</small></span>
                       <ChevronLeft className={`h-5 w-5 text-[#0a816d] transition-transform ${appointmentPickerOpen ? "-rotate-90" : ""}`} />
                     </button>
                     {appointmentPickerOpen && (
@@ -433,7 +433,7 @@ export default function PublicBooking() {
                           <div className="mx-auto max-w-xs">
                             <div className="flex items-center justify-between rounded-lg bg-[#f4f8f7] px-1.5 py-1.5">
                               <button type="button" aria-label="الشهر السابق" disabled={visibleMonthIndex <= 0} onClick={() => showMonth(-1)} className="grid h-7 w-7 place-items-center rounded-md hover:bg-white disabled:opacity-25"><ChevronRight className="h-4 w-4" /></button>
-                              <strong className="text-xs sm:text-sm">{visibleMonth.toLocaleDateString("ar-SA", { month: "long", year: "numeric" })}</strong>
+                              <strong className="text-xs sm:text-sm">{visibleMonth.toLocaleDateString("ar-SA-u-nu-latn", { month: "long", year: "numeric" })}</strong>
                               <button type="button" aria-label="الشهر التالي" disabled={visibleMonthIndex < 0 || visibleMonthIndex >= availableMonthKeys.length - 1} onClick={() => showMonth(1)} className="grid h-7 w-7 place-items-center rounded-md hover:bg-white disabled:opacity-25"><ChevronLeft className="h-4 w-4" /></button>
                             </div>
                             <div className="mt-1.5 grid grid-cols-7 gap-1 text-center text-[9px] font-bold text-[#6e827d] sm:text-[10px]">
@@ -446,7 +446,7 @@ export default function PublicBooking() {
                                     setDate(calendarDate);
                                     setSelectedSlotStart("");
                                   }} className={`h-8 rounded-md text-[10px] font-extrabold transition sm:h-9 sm:text-xs ${isAvailable ? "border border-[#9ed8cb] bg-[#e8f8f4] text-[#067663] hover:border-[#0baa8e]" : "cursor-not-allowed bg-[#f1f3f2] text-[#adb8b5]"}`}>
-                                    {Number(calendarDate.slice(-2)).toLocaleString("ar-SA")}
+                                    {Number(calendarDate.slice(-2)).toLocaleString("ar-SA-u-nu-latn")}
                                   </button>
                                 );
                               })}
@@ -458,12 +458,12 @@ export default function PublicBooking() {
                           <div className="mx-auto max-w-xs">
                             <div className="mb-3 flex items-center justify-between gap-2">
                               <button type="button" onClick={() => { setDate(""); setSelectedSlotStart(""); }} className="inline-flex items-center gap-1 rounded-lg border border-[#d9e4e1] px-2 py-1.5 text-xs font-bold text-[#067663]"><ChevronRight className="h-4 w-4" /> رجوع</button>
-                              <span className="text-xs font-bold">{new Date(`${date}T12:00:00`).toLocaleDateString("ar-SA", { weekday: "long", day: "numeric", month: "long" })}</span>
+                              <span className="text-xs font-bold">{new Date(`${date}T12:00:00`).toLocaleDateString("ar-SA-u-nu-latn", { weekday: "long", day: "numeric", month: "long" })}</span>
                             </div>
                             <div className="grid max-h-44 grid-cols-3 gap-1.5 overflow-y-auto pe-1 sm:grid-cols-4">
                               {selectedDateSlots.map((slot) => (
                                 <button key={slot.start} type="button" onClick={() => { setSelectedSlotStart(slot.start); setAppointmentPickerOpen(false); }} className={`rounded-lg border px-1 py-2 text-[11px] font-bold ${selectedSlotStart === slot.start ? "border-[#0baa8e] bg-[#0baa8e] text-white" : "border-[#d9e4e1] bg-white text-[#37514b] hover:border-[#0baa8e]"}`}>
-                                  {new Date(slot.start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
+                                  {new Date(slot.start).toLocaleTimeString("ar-SA-u-nu-latn", { hour: "2-digit", minute: "2-digit" })}
                                 </button>
                               ))}
                             </div>

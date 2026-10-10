@@ -1894,7 +1894,7 @@ function AppointmentsTab({ patientId }: { patientId: string }) {
  *
  * كان صفوفًا جامدة: يرى الموظّف «متبقّي 28.75» ولا يعرف ممّ تتكوّن الفاتورة
  * ولا يستطيع قبض المتبقّي، فيغادر الملفّ إلى شاشة الفواتير ويبحث من جديد.
- * والمبالغ كانت تُنسَّق بـ`toLocaleString("ar-SA")` فتخرج بأرقام عربية-هندية
+ * والمبالغ كانت تُنسَّق بـ`toLocaleString("ar-SA-u-nu-latn")` فتخرج بأرقام عربية-هندية
  * وتاريخٍ هجريّ مخالفًا لبقيّة النظام — و`lib/locale` موجودة لهذا بالضبط.
  */
 function InvoicesTab({ patientId }: { patientId: string }) {

@@ -113,7 +113,7 @@ export default function ServicePriceLists({
       <div>
         <div className="mb-2 flex items-center gap-2">
           <Label>الأسعار السارية</Label>
-          <Badge variant="secondary">السعر الأساسي للصنف {basePrice.toLocaleString("ar-SA")} ر.س</Badge>
+          <Badge variant="secondary">السعر الأساسي للصنف {basePrice.toLocaleString("ar-SA-u-nu-latn")} ر.س</Badge>
         </div>
         {history.isLoading && <Skeleton className="h-16 w-full" />}
         {!history.isLoading && current.length === 0 && (
@@ -129,7 +129,7 @@ export default function ServicePriceLists({
                 <span className="font-medium">{row.price_list_name}</span>
               </div>
               <div className="mt-1 text-muted-foreground">
-                {Number(row.price).toLocaleString("ar-SA")} ر.س
+                {Number(row.price).toLocaleString("ar-SA-u-nu-latn")} ر.س
                 {Number(row.discount_percent) > 0 && ` — خصم ${row.discount_percent}%`}
                 {` — من ${row.effective_from}`}
               </div>
@@ -219,7 +219,7 @@ export default function ServicePriceLists({
             {(history.data ?? []).map((row) => (
               <TableRow key={row.id} className={row.is_current ? "" : "text-muted-foreground"}>
                 <TableCell>{row.price_list_name}</TableCell>
-                <TableCell>{Number(row.price).toLocaleString("ar-SA")}</TableCell>
+                <TableCell>{Number(row.price).toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                 <TableCell>{Number(row.discount_percent) > 0 ? `${row.discount_percent}%` : "—"}</TableCell>
                 <TableCell className="font-mono text-xs">{row.effective_from}</TableCell>
                 <TableCell className="font-mono text-xs">{row.effective_to ?? "سارٍ"}</TableCell>

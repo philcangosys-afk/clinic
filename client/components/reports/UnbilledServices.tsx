@@ -114,7 +114,7 @@ export default function UnbilledServices() {
       <CardContent className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <Badge variant="secondary">{(rows.data ?? []).length} خدمة</Badge>
-          <Badge variant="outline">الإجمالي {total.toLocaleString("ar-SA")} ر.س</Badge>
+          <Badge variant="outline">الإجمالي {total.toLocaleString("ar-SA-u-nu-latn")} ر.س</Badge>
           {(rows.data ?? []).length >= ROW_CAP && (
             <span className="text-xs text-muted-foreground">
               يُعرض أول {ROW_CAP} سطر — ضيّق الفترة
@@ -161,7 +161,7 @@ export default function UnbilledServices() {
                   <TableCell>{row.item_name}</TableCell>
                   <TableCell className="text-sm text-muted-foreground">{row.doctor_name ?? "—"}</TableCell>
                   <TableCell>{row.qty}</TableCell>
-                  <TableCell>{Number(row.line_total).toLocaleString("ar-SA")} ر.س</TableCell>
+                  <TableCell>{Number(row.line_total).toLocaleString("ar-SA-u-nu-latn")} ر.س</TableCell>
                   <TableCell className="font-mono text-xs">
                     {String(row.visit_date).slice(0, 10)}
                   </TableCell>

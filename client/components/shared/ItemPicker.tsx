@@ -192,7 +192,7 @@ export default function ItemPicker({
             >
               <Package className="h-4 w-4 text-muted-foreground" />
               <span className="flex-1">{localName(item, dataLanguage)}</span>
-              <span className="text-xs text-muted-foreground">{Number(item.price).toLocaleString("ar-SA")} ر.س</span>
+              <span className="text-xs text-muted-foreground">{Number(item.price).toLocaleString("ar-SA-u-nu-latn")} ر.س</span>
             </button>
           ))}
         </div>

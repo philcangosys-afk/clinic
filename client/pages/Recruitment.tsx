@@ -475,7 +475,7 @@ function CandidateInterviewsDialog({
                   {iv.interviewer_name && ` · ${iv.interviewer_name}`}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {iv.scheduled_at ? new Date(iv.scheduled_at).toLocaleString("ar-SA") : "بلا موعد محدد"}
+                  {iv.scheduled_at ? new Date(iv.scheduled_at).toLocaleString("ar-SA-u-nu-latn") : "بلا موعد محدد"}
                   {iv.notes && ` · ${iv.notes}`}
                 </p>
               </div>

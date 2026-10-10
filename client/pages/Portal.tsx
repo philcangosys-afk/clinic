@@ -28,7 +28,7 @@ import { errorMessage } from "@/lib/error-message";
  * ولا يعدّل هويته (يطلب فيراجَع)، ولا يرى نتيجة لم تُعتمد بعد.
  */
 const money = (v: any) =>
-  Number(v ?? 0).toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  Number(v ?? 0).toLocaleString("ar-SA-u-nu-latn", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default function Portal() {
   const [ready, setReady] = useState(false);
@@ -213,7 +213,7 @@ function PortalAppointments({ orgId }: { orgId: string }) {
               {(appointments.data ?? []).map((a) => (
                 <TableRow key={a.id}>
                   <TableCell className="font-mono text-xs">
-                    {new Date(a.scheduled_start).toLocaleString("ar-SA")}
+                    {new Date(a.scheduled_start).toLocaleString("ar-SA-u-nu-latn")}
                   </TableCell>
                   <TableCell className="text-sm">{a.clinic_name ?? "—"}</TableCell>
                   <TableCell className="text-sm">{a.doctor_name ?? "—"}</TableCell>
@@ -322,7 +322,7 @@ function PortalResults() {
                     {r.reference_text ?? "—"}
                   </TableCell>
                   <TableCell className="font-mono text-xs">
-                    {r.resulted_at ? new Date(r.resulted_at).toLocaleDateString("ar-SA") : "—"}
+                    {r.resulted_at ? new Date(r.resulted_at).toLocaleDateString("ar-SA-u-nu-latn") : "—"}
                   </TableCell>
                 </TableRow>
               ))}
@@ -384,7 +384,7 @@ function PortalInvoices() {
                 <TableRow key={i.id}>
                   <TableCell className="font-mono text-xs">#{i.invoice_number}</TableCell>
                   <TableCell className="font-mono text-xs">
-                    {new Date(i.created_at).toLocaleDateString("ar-SA")}
+                    {new Date(i.created_at).toLocaleDateString("ar-SA-u-nu-latn")}
                   </TableCell>
                   <TableCell className="font-mono text-xs">{money(i.net_amount)}</TableCell>
                   <TableCell className="font-mono text-xs">{money(i.paid_amount)}</TableCell>
@@ -480,7 +480,7 @@ function PortalDocuments() {
                     )}
                   </TableCell>
                   <TableCell className="font-mono text-xs">
-                    {new Date(d.created_at).toLocaleDateString("ar-SA")}
+                    {new Date(d.created_at).toLocaleDateString("ar-SA-u-nu-latn")}
                   </TableCell>
                   <TableCell className="text-end">
                     <Button size="sm" variant="ghost" onClick={() => open.mutate(d)}>

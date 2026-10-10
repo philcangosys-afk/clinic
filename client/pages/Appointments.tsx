@@ -1142,7 +1142,7 @@ export default function Appointments() {
                   <Badge className={statusBadgeClass(appointment.status)}>{statusLabel(appointment.status)}</Badge>
                 </div>
                 <p className="mt-2 text-xs font-medium">
-                  {new Date(appointment.scheduled_start).toLocaleString("ar-SA", {
+                  {new Date(appointment.scheduled_start).toLocaleString("ar-SA-u-nu-latn", {
                     weekday: "short", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit",
                   })}
                 </p>
@@ -1302,7 +1302,7 @@ export default function Appointments() {
                           <p className="text-xs text-muted-foreground">
                             {extrasOf(appointment).is_waiting
                               ? "موعد انتظار"
-                              : new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" })}
+                              : new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA-u-nu-latn", { hour: "2-digit", minute: "2-digit" })}
                             {appointment.clinic?.name ? ` · ${appointment.clinic.name}` : ""}
                           </p>
                         </button>
@@ -2495,7 +2495,7 @@ function CreateAppointmentDialog({
                 <Label>الأوقات المتاحة</Label>
                 <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto rounded-md border p-2">
                   {(slots.data ?? []).map((slot: any) => {
-                    const label = new Date(slot.slot_start).toLocaleTimeString("ar-SA", {
+                    const label = new Date(slot.slot_start).toLocaleTimeString("ar-SA-u-nu-latn", {
                       hour: "2-digit",
                       minute: "2-digit",
                     });

@@ -31,7 +31,7 @@ import { errorMessage } from "@/lib/error-message";
  */
 
 const money = (v: any) =>
-  Number(v ?? 0).toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  Number(v ?? 0).toLocaleString("ar-SA-u-nu-latn", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 export default function LedgerWorkspace() {
   return (
@@ -149,7 +149,7 @@ function PeriodsPanel() {
           organization_id: organization!.id,
           fiscal_year_id: year.id,
           period_number: i + 1,
-          name: s.toLocaleDateString("ar-SA", { month: "long", year: "numeric" }),
+          name: s.toLocaleDateString("ar-SA-u-nu-latn", { month: "long", year: "numeric" }),
           start_date: fmt(s),
           end_date: fmt(e),
         };

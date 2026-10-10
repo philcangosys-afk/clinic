@@ -243,7 +243,7 @@ export default function Index() {
           <KpiCard
             icon={WalletCards}
             label="مستحقات غير مُحصّلة"
-            value={stats.data ? `${stats.data.unpaidTotal.toLocaleString("ar-SA")} ر.س` : undefined}
+            value={stats.data ? `${stats.data.unpaidTotal.toLocaleString("ar-SA-u-nu-latn")} ر.س` : undefined}
             loading={stats.isLoading}
             tone="warning"
           />
@@ -279,7 +279,7 @@ export default function Index() {
                   <p className="text-xs text-muted-foreground">
                     {!doctorView && <>د. {appointment.doctor?.name_ar ?? "—"} ·{" "}</>}
                     {appointment.patient?.file_number != null && <>ملف {appointment.patient.file_number} ·{" "}</>}
-                    {new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA", {
+                    {new Date(appointment.scheduled_start).toLocaleTimeString("ar-SA-u-nu-latn", {
                       hour: "2-digit",
                       minute: "2-digit",
                     })}

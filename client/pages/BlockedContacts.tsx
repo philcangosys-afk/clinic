@@ -261,15 +261,15 @@ export default function BlockedContacts() {
                       )}
                     </TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      <div>من {new Date(row.starts_at).toLocaleDateString("ar-SA")}</div>
-                      <div>{row.ends_at ? `إلى ${new Date(row.ends_at).toLocaleDateString("ar-SA")}` : "دائم"}</div>
+                      <div>من {new Date(row.starts_at).toLocaleDateString("ar-SA-u-nu-latn")}</div>
+                      <div>{row.ends_at ? `إلى ${new Date(row.ends_at).toLocaleDateString("ar-SA-u-nu-latn")}` : "دائم"}</div>
                     </TableCell>
                     <TableCell>
                       {row.is_in_effect ? (
                         <Badge variant="destructive">ساري</Badge>
                       ) : isScheduled(row) ? (
                         <Badge variant="warning">
-                          يبدأ {new Date(row.starts_at).toLocaleDateString("ar-SA")}
+                          يبدأ {new Date(row.starts_at).toLocaleDateString("ar-SA-u-nu-latn")}
                         </Badge>
                       ) : row.is_active ? (
                         <Badge variant="outline">منتهٍ</Badge>

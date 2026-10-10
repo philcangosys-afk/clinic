@@ -119,7 +119,7 @@ export default function SessionsPanel({ patientId }: { patientId: string }) {
                     </Badge>
                   ) : (
                     <Badge variant="secondary">
-                      {new Date(d.next_due_date).toLocaleDateString("ar")}
+                      {new Date(d.next_due_date).toLocaleDateString("ar-u-nu-latn")}
                     </Badge>
                   )}
                 </span>
@@ -365,7 +365,7 @@ function RecordSession({
           {lastSession.body_area ? ` — ${lastSession.body_area}` : ""}
           {lastSession.device_name ? ` — ${lastSession.device_name}` : ""}
           {lastSession.performed_at
-            ? ` — ${new Date(lastSession.performed_at).toLocaleDateString("ar")}`
+            ? ` — ${new Date(lastSession.performed_at).toLocaleDateString("ar-u-nu-latn")}`
             : ""}
           {lastSession.parameters && Object.keys(lastSession.parameters).length > 0 && (
             <span className="block text-xs text-muted-foreground">
@@ -652,7 +652,7 @@ function SessionRow({ session, organizationId }: { session: any; organizationId?
         </span>
         <span className="text-xs text-muted-foreground">
           {session.performed_at
-            ? new Date(session.performed_at).toLocaleString("ar")
+            ? new Date(session.performed_at).toLocaleString("ar-u-nu-latn")
             : session.scheduled_date}
         </span>
       </div>

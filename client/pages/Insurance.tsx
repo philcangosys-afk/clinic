@@ -365,7 +365,7 @@ function MembershipsList({ organizationId }: { organizationId: string | undefine
               </p>
               <p className="text-xs text-muted-foreground">
                 رقم العضوية: {m.membership_number}
-                {m.expiry_date && ` · ينتهي: ${new Date(m.expiry_date).toLocaleDateString("ar-SA")}`}
+                {m.expiry_date && ` · ينتهي: ${new Date(m.expiry_date).toLocaleDateString("ar-SA-u-nu-latn")}`}
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1086,7 +1086,7 @@ function printClaimForm(form: any) {
       .sign{margin-top:36px;display:flex;justify-content:space-between;font-size:13px}
     </style></head><body>
     <h1>نموذج ${esc(typeLabel)}</h1>
-    <p class="muted">رقم النموذج: ${esc(form.id)} · التاريخ: ${new Date(form.created_at).toLocaleDateString("ar-SA")}</p>
+    <p class="muted">رقم النموذج: ${esc(form.id)} · التاريخ: ${new Date(form.created_at).toLocaleDateString("ar-SA-u-nu-latn")}</p>
 
     <h2>بيانات المريض</h2>
     <table>
@@ -1248,7 +1248,7 @@ function ClaimsTab() {
                   {form.patient?.name_ar ?? "—"} · {FORM_TYPE_LABELS[form.form_type as InsuranceClaimFormType]}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  د. {form.doctor?.name_ar ?? "—"} · {new Date(form.created_at).toLocaleDateString("ar-SA")}
+                  د. {form.doctor?.name_ar ?? "—"} · {new Date(form.created_at).toLocaleDateString("ar-SA-u-nu-latn")}
                   {form.auto_created && " · أُنشئ تلقائيًا"}
                   {form.resubmission_count > 0 && ` · المحاولة ${form.resubmission_count + 1}`}
                 </p>
@@ -1256,7 +1256,7 @@ function ClaimsTab() {
                   <p className="text-xs text-rose-700">
                     سبب الردّ: {form.rejection_reason}
                     {form.rejection_code ? ` (${form.rejection_code})` : ""}
-                    {form.approved_amount != null && ` · المعتمَد ${Number(form.approved_amount).toLocaleString("ar-SA")} ر.س`}
+                    {form.approved_amount != null && ` · المعتمَد ${Number(form.approved_amount).toLocaleString("ar-SA-u-nu-latn")} ر.س`}
                   </p>
                 )}
                 {/* المطالبة `validation_failed` كانت صفًّا ميتًا: لا نصّ يقول ما
@@ -1465,7 +1465,7 @@ function PreauthTab() {
                 <p className="text-sm font-semibold">{item.patient?.name_ar ?? "—"}</p>
                 <p className="text-xs text-muted-foreground">
                   {item.item?.name_ar ?? item.service_description ?? "—"} ·{" "}
-                  {Number(item.requested_amount ?? 0).toLocaleString("ar-SA")} ر.س
+                  {Number(item.requested_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")} ر.س
                   {item.doctor?.name_ar && ` · د. ${item.doctor.name_ar}`}
                   {item.clinic?.name && ` · ${item.clinic.name}`}
                   {item.approval_number && ` · رقم الموافقة: ${item.approval_number}`}
@@ -1935,7 +1935,7 @@ function ClaimBatchesTab() {
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {b.period_start && b.period_end ? `${b.period_start} → ${b.period_end} · ` : ""}
-                  المطالَب به من الشركة: {Number(b.total_amount).toLocaleString("ar-SA")} ر.س
+                  المطالَب به من الشركة: {Number(b.total_amount).toLocaleString("ar-SA-u-nu-latn")} ر.س
                 </p>
               </div>
               <div className="flex items-center gap-2">
@@ -2262,11 +2262,11 @@ function BatchItemsDialog({
                   حصّة الشركة{" "}
                   {inv.insurance_share_amount == null
                     ? "—"
-                    : Number(inv.insurance_share_amount).toLocaleString("ar-SA")}{" "}
+                    : Number(inv.insurance_share_amount).toLocaleString("ar-SA-u-nu-latn")}{" "}
                   ر.س
                   <span className="text-xs text-muted-foreground">
                     {" "}
-                    (صافي الفاتورة {Number(inv.net_amount).toLocaleString("ar-SA")})
+                    (صافي الفاتورة {Number(inv.net_amount).toLocaleString("ar-SA-u-nu-latn")})
                   </span>
                 </span>
               </button>
@@ -2278,7 +2278,7 @@ function BatchItemsDialog({
             <div key={item.id} className="flex items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
               <span>
                 #{item.sales_invoices?.invoice_number} · {item.sales_invoices?.patient?.name_ar ?? "—"} ·{" "}
-                {Number(item.amount).toLocaleString("ar-SA")} ر.س
+                {Number(item.amount).toLocaleString("ar-SA-u-nu-latn")} ر.س
               </span>
               <div className="flex items-center gap-1.5">
                 <Select value={item.status} onValueChange={(v) => setItemStatus.mutate({ id: item.id, status: v })}>
@@ -3322,9 +3322,9 @@ function CoverageCheckCard() {
             </p>
             {membership.annual_limit != null && (
               <p className="text-xs text-muted-foreground">
-                السقف السنوي {Number(membership.annual_limit).toLocaleString("ar-SA")} · المستهلك{" "}
-                {Number(membership.used_amount ?? 0).toLocaleString("ar-SA")} · المتبقّي{" "}
-                {Number(membership.remaining_amount ?? 0).toLocaleString("ar-SA")} ر.س
+                السقف السنوي {Number(membership.annual_limit).toLocaleString("ar-SA-u-nu-latn")} · المستهلك{" "}
+                {Number(membership.used_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")} · المتبقّي{" "}
+                {Number(membership.remaining_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")} ر.س
               </p>
             )}
           </div>
@@ -3332,7 +3332,7 @@ function CoverageCheckCard() {
 
         {itemId && price.data && (
           <p className="text-xs text-muted-foreground">
-            السعر المُطبَّق {Number(price.data.price).toLocaleString("ar-SA")} ر.س من{" "}
+            السعر المُطبَّق {Number(price.data.price).toLocaleString("ar-SA-u-nu-latn")} ر.س من{" "}
             {PRICE_SOURCE_LABELS[price.data.source_kind] ?? price.data.source_kind}
             {price.data.source_list_name ? ` — ${price.data.source_list_name}` : ""}
           </p>
@@ -3355,19 +3355,19 @@ function CoverageCheckCard() {
             <div className="mt-2 grid grid-cols-3 gap-2 text-sm">
               <div>
                 <span className="block text-xs text-muted-foreground">المبلغ</span>
-                {Number(coverage.data.amount).toLocaleString("ar-SA")} ر.س
+                {Number(coverage.data.amount).toLocaleString("ar-SA-u-nu-latn")} ر.س
               </div>
               <div>
                 <span className="block text-xs text-muted-foreground">
                   على المريض ({coverage.data.copay_percent}٪)
                 </span>
                 <span className="font-semibold">
-                  {Number(coverage.data.patient_share).toLocaleString("ar-SA")} ر.س
+                  {Number(coverage.data.patient_share).toLocaleString("ar-SA-u-nu-latn")} ر.س
                 </span>
               </div>
               <div>
                 <span className="block text-xs text-muted-foreground">على الشركة</span>
-                {Number(coverage.data.insurer_share).toLocaleString("ar-SA")} ر.س
+                {Number(coverage.data.insurer_share).toLocaleString("ar-SA-u-nu-latn")} ر.س
               </div>
             </div>
             {(coverage.data.blocks ?? []).length > 0 && (
@@ -3434,8 +3434,8 @@ function ClaimRegisterCard() {
       <CardHeader>
         <CardTitle>سجل المطالبات</CardTitle>
         <CardDescription>
-          المطالَب {totals.claimed.toLocaleString("ar-SA")} · المعتمَد{" "}
-          {totals.approved.toLocaleString("ar-SA")} · المرفوض {totals.rejected.toLocaleString("ar-SA")} ر.س
+          المطالَب {totals.claimed.toLocaleString("ar-SA-u-nu-latn")} · المعتمَد{" "}
+          {totals.approved.toLocaleString("ar-SA-u-nu-latn")} · المرفوض {totals.rejected.toLocaleString("ar-SA-u-nu-latn")} ر.س
         </CardDescription>
         <div className="mt-2">
           <Select value={filter} onValueChange={setFilter}>
@@ -3474,10 +3474,10 @@ function ClaimRegisterCard() {
                   </TableCell>
                   <TableCell>{r.company_name ?? "—"}</TableCell>
                   <TableCell>
-                    {Number(r.claimed_amount ?? 0).toLocaleString("ar-SA")}
+                    {Number(r.claimed_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     {r.approved_amount != null && (
                       <span className="block text-xs text-emerald-700">
-                        معتمَد {Number(r.approved_amount).toLocaleString("ar-SA")}
+                        معتمَد {Number(r.approved_amount).toLocaleString("ar-SA-u-nu-latn")}
                       </span>
                     )}
                   </TableCell>

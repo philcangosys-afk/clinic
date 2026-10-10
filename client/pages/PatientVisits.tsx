@@ -531,7 +531,7 @@ export default function PatientVisits() {
                           </Badge>
                         </TableCell>
                         <TableCell>
-                          {Number(row.services_amount ?? 0).toLocaleString("ar-SA")} ر.س
+                          {Number(row.services_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")} ر.س
                         </TableCell>
                       </TableRow>
                     ))}
@@ -731,7 +731,7 @@ function VisitTable({
                   <span className="font-mono text-xs">#{row.invoice_number}</span>
                   <span className="text-xs text-muted-foreground">
                     {INVOICE_STATUS[row.invoice_status] ?? row.invoice_status} —{" "}
-                    {Number(row.invoice_amount ?? 0).toLocaleString("ar-SA")}
+                    {Number(row.invoice_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                   </span>
                 </span>
               ) : row.has_services_no_invoice ? (
@@ -873,16 +873,16 @@ function VisitActionsDialog({ visit, onClose }: { visit: any | null; onClose: ()
           <Info label="الخدمات" value={String(visit?.service_count ?? 0)} />
           <Info
             label="مبلغ الخدمات"
-            value={`${Number(visit?.services_amount ?? 0).toLocaleString("ar-SA")} ر.س`}
+            value={`${Number(visit?.services_amount ?? 0).toLocaleString("ar-SA-u-nu-latn")} ر.س`}
           />
           {visit?.signed_at && (
-            <Info label="وُقِّعت" value={new Date(visit.signed_at).toLocaleString("ar-SA")} />
+            <Info label="وُقِّعت" value={new Date(visit.signed_at).toLocaleString("ar-SA-u-nu-latn")} />
           )}
           {visit?.closed_at && (
-            <Info label="أُغلقت" value={new Date(visit.closed_at).toLocaleString("ar-SA")} />
+            <Info label="أُغلقت" value={new Date(visit.closed_at).toLocaleString("ar-SA-u-nu-latn")} />
           )}
           {visit?.reopened_at && (
-            <Info label="أُعيد فتحها" value={new Date(visit.reopened_at).toLocaleString("ar-SA")} />
+            <Info label="أُعيد فتحها" value={new Date(visit.reopened_at).toLocaleString("ar-SA-u-nu-latn")} />
           )}
         </div>
 
@@ -946,7 +946,7 @@ function VisitActionsDialog({ visit, onClose }: { visit: any | null; onClose: ()
             {(audit.data ?? []).map((entry) => (
               <div key={entry.id} className="flex flex-wrap gap-2 rounded-md border px-2 py-1 text-xs">
                 <span className="font-mono text-muted-foreground">
-                  {new Date(entry.occurred_at).toLocaleString("ar-SA")}
+                  {new Date(entry.occurred_at).toLocaleString("ar-SA-u-nu-latn")}
                 </span>
                 <span>{entry.details}</span>
                 {entry.reason && <span className="text-muted-foreground">— {entry.reason}</span>}

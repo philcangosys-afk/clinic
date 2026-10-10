@@ -279,7 +279,7 @@ export default function Contracts() {
                       </Badge>
                     )}
                   </TableCell>
-                  <TableCell>{c.basic_salary.toLocaleString("ar-SA")}</TableCell>
+                  <TableCell>{c.basic_salary.toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                   <TableCell>
                     <Badge
                       variant={

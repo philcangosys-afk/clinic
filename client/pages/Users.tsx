@@ -969,7 +969,7 @@ export default function Users() {
                       </Badge>
                     </TableCell>
                     <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
-                      {new Date(row.created_at).toLocaleDateString("ar-SA")}
+                      {new Date(row.created_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-center">
                       {viewerIsAdmin && (

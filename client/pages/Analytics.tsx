@@ -244,7 +244,7 @@ function KpiCard({
         <CardTitle className="text-2xl">
           {isMoney
             ? formatMoney(metric.current_value, currencyCode, dataLanguage)
-            : Number(metric.current_value ?? 0).toLocaleString("ar-SA")}
+            : Number(metric.current_value ?? 0).toLocaleString("ar-SA-u-nu-latn")}
         </CardTitle>
       </CardHeader>
       <CardContent className="pt-0">
@@ -263,7 +263,7 @@ function KpiCard({
             <span className="text-muted-foreground">
               ({isMoney
                 ? formatMoney(metric.previous_value, currencyCode, dataLanguage)
-                : Number(metric.previous_value ?? 0).toLocaleString("ar-SA")})
+                : Number(metric.previous_value ?? 0).toLocaleString("ar-SA-u-nu-latn")})
             </span>
           </span>
         )}

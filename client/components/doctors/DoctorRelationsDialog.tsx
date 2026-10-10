@@ -560,9 +560,9 @@ function ServicesTab({
                   <TableCell>{row.duration_minutes ? `${row.duration_minutes} د` : "افتراضي"}</TableCell>
                   <TableCell>
                     {row.price_override !== null
-                      ? `${Number(row.price_override).toLocaleString("ar-SA")} (خاص)`
+                      ? `${Number(row.price_override).toLocaleString("ar-SA-u-nu-latn")} (خاص)`
                       : item
-                        ? Number(item.price).toLocaleString("ar-SA")
+                        ? Number(item.price).toLocaleString("ar-SA-u-nu-latn")
                         : "—"}
                   </TableCell>
                   <TableCell className="text-end">
@@ -1370,10 +1370,10 @@ function ExceptionsTab({
                   </Badge>
                 </TableCell>
                 <TableCell className="font-mono text-xs">
-                  {new Date(row.starts_at).toLocaleString("ar-SA")}
+                  {new Date(row.starts_at).toLocaleString("ar-SA-u-nu-latn")}
                 </TableCell>
                 <TableCell className="font-mono text-xs">
-                  {new Date(row.ends_at).toLocaleString("ar-SA")}
+                  {new Date(row.ends_at).toLocaleString("ar-SA-u-nu-latn")}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {row.reason ?? row.note ?? "—"}

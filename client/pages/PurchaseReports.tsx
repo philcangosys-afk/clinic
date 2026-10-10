@@ -53,7 +53,7 @@ function today() {
   return new Date().toLocaleDateString("en-CA");
 }
 
-const fmt = (n: number) => n.toLocaleString("ar-SA", { maximumFractionDigits: 2 });
+const fmt = (n: number) => n.toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 2 });
 
 export default function PurchaseReports() {
   const { organization } = useOrganizationAccess();

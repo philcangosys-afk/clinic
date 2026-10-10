@@ -111,7 +111,7 @@ export function PatientVisitsTab({ patientId }: { patientId: string }) {
                   <Fragment key={row.id}>
                   <TableRow>
                     <TableCell className="text-xs text-muted-foreground">
-                      {new Date(row.visit_date).toLocaleString("ar-SA")}
+                      {new Date(row.visit_date).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-sm">{doctor?.name_ar ?? "—"}</TableCell>
                     <TableCell className="max-w-xs truncate text-sm">
@@ -123,7 +123,7 @@ export function PatientVisitsTab({ patientId }: { patientId: string }) {
                     <TableCell className="max-w-xs text-xs text-muted-foreground">
                       {row.next_visit_date && (
                         <div className="font-medium text-foreground">
-                          {new Date(row.next_visit_date).toLocaleDateString("ar-SA")}
+                          {new Date(row.next_visit_date).toLocaleDateString("ar-SA-u-nu-latn")}
                         </div>
                       )}
                       <div className="truncate">{row.next_visit_plan ?? (row.next_visit_date ? "" : "—")}</div>
@@ -290,7 +290,7 @@ export function PatientPrescriptionsTab({ patientId }: { patientId: string }) {
                 return (
                   <TableRow key={row.id}>
                     <TableCell className="text-xs text-muted-foreground">
-                      {new Date(row.issued_at).toLocaleDateString("ar-SA")}
+                      {new Date(row.issued_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-sm">{doctor?.name_ar ?? "—"}</TableCell>
                     <TableCell className="max-w-xs truncate text-sm">{names || "—"}</TableCell>
@@ -370,7 +370,7 @@ export function PatientAgreementsTab({ patientId }: { patientId: string }) {
 
   const rows = agreements.data ?? [];
   const money = (value: number | null | undefined) =>
-    Number(value ?? 0).toLocaleString("ar-SA", { maximumFractionDigits: 2 });
+    Number(value ?? 0).toLocaleString("ar-SA-u-nu-latn", { maximumFractionDigits: 2 });
 
   return (
     <Card>
@@ -412,7 +412,7 @@ export function PatientAgreementsTab({ patientId }: { patientId: string }) {
                   <TableRow key={row.id}>
                     <TableCell className="font-mono text-xs">{row.agreement_number}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {new Date(row.agreement_date).toLocaleDateString("ar-SA")}
+                      {new Date(row.agreement_date).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-sm">{doctor?.name_ar ?? "—"}</TableCell>
                     <TableCell className="tabular-nums">{money(row.total_amount)}</TableCell>

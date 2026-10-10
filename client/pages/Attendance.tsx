@@ -293,7 +293,7 @@ export default function Attendance() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">حضور اليوم</CardTitle>
-          <CardDescription>{new Date().toLocaleDateString("ar-SA", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</CardDescription>
+          <CardDescription>{new Date().toLocaleDateString("ar-SA-u-nu-latn", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}</CardDescription>
         </CardHeader>
         <CardContent>
           {today.isLoading && <Skeleton className="h-40 w-full" />}
@@ -320,10 +320,10 @@ export default function Attendance() {
                       </span>
                     </TableCell>
                     <TableCell className="text-xs">
-                      {row.check_in_at ? new Date(row.check_in_at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }) : "—"}
+                      {row.check_in_at ? new Date(row.check_in_at).toLocaleTimeString("ar-SA-u-nu-latn", { hour: "2-digit", minute: "2-digit" }) : "—"}
                     </TableCell>
                     <TableCell className="text-xs">
-                      {row.check_out_at ? new Date(row.check_out_at).toLocaleTimeString("ar-SA", { hour: "2-digit", minute: "2-digit" }) : "—"}
+                      {row.check_out_at ? new Date(row.check_out_at).toLocaleTimeString("ar-SA-u-nu-latn", { hour: "2-digit", minute: "2-digit" }) : "—"}
                     </TableCell>
                     <TableCell>
                       <Badge variant={STATUS_BADGE[row.status]}>{STATUS_LABELS[row.status]}</Badge>
@@ -430,8 +430,8 @@ export default function Attendance() {
                 <TableRow key={r.id}>
                   <TableCell className="text-xs">{r.work_date}</TableCell>
                   <TableCell className="font-medium">{r.employees?.name_ar ?? "—"}</TableCell>
-                  <TableCell className="text-xs">{r.check_in_at ? new Date(r.check_in_at).toLocaleTimeString("ar-SA") : "—"}</TableCell>
-                  <TableCell className="text-xs">{r.check_out_at ? new Date(r.check_out_at).toLocaleTimeString("ar-SA") : "—"}</TableCell>
+                  <TableCell className="text-xs">{r.check_in_at ? new Date(r.check_in_at).toLocaleTimeString("ar-SA-u-nu-latn") : "—"}</TableCell>
+                  <TableCell className="text-xs">{r.check_out_at ? new Date(r.check_out_at).toLocaleTimeString("ar-SA-u-nu-latn") : "—"}</TableCell>
                   <TableCell>
                     <Badge variant={STATUS_BADGE[r.status as AttendanceStatus]}>{STATUS_LABELS[r.status as AttendanceStatus]}</Badge>
                   </TableCell>

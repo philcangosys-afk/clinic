@@ -77,7 +77,7 @@ const num = (s: string) => {
   return Number.isFinite(v) ? v : 0;
 };
 const money = (n: number) =>
-  n.toLocaleString("ar-SA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  n.toLocaleString("ar-SA-u-nu-latn", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 /** حساب البند — الصيغة نفسها التي في الدالّة: الأساس = الكمية × السعر − الخصم. */
 function lineTotals(line: Line) {

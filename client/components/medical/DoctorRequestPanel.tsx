@@ -933,7 +933,7 @@ export function DoctorInbox({
                 <p className="mt-1 rounded-md bg-muted/60 px-2 py-1 text-sm">{v.request_note}</p>
               )}
               <p className="mt-1 text-xs text-muted-foreground">
-                {new Date(v.recorded_at).toLocaleString("ar")}
+                {new Date(v.recorded_at).toLocaleString("ar-u-nu-latn")}
               </p>
             </div>
             <Link to={`/patients/${v.patient_id}`}>
@@ -999,7 +999,7 @@ export function DoctorInbox({
                 </p>
               )}
               <p className="mt-1 text-xs text-muted-foreground">
-                {r.last_image_at ? new Date(r.last_image_at).toLocaleString("ar") : ""}
+                {r.last_image_at ? new Date(r.last_image_at).toLocaleString("ar-u-nu-latn") : ""}
               </p>
             </div>
             <Link to={`/patients/${r.patient_id}`}>

@@ -217,7 +217,7 @@ export default function ResultAttachments({
           )}
           <span className="min-w-0 flex-1 truncate text-sm">{row.file_name ?? "ملف"}</span>
           <span className="shrink-0 text-[10px] text-muted-foreground">
-            {new Date(row.created_at).toLocaleDateString("ar-SA")}
+            {new Date(row.created_at).toLocaleDateString("ar-SA-u-nu-latn")}
           </span>
           <Button size="sm" variant="ghost" disabled={busy} onClick={() => openFile(row)} title="فتح">
             <Download className="h-3.5 w-3.5" />

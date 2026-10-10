@@ -79,7 +79,7 @@ export default function BillingItemLink({
         {value ? (
           <Badge variant="secondary" className="max-w-[14rem] truncate">
             {value.name_ar}
-            {value.price !== null && ` — ${Number(value.price).toLocaleString("ar-SA")}`}
+            {value.price !== null && ` — ${Number(value.price).toLocaleString("ar-SA-u-nu-latn")}`}
           </Badge>
         ) : (
           <Badge variant="outline" className="text-muted-foreground">

@@ -206,7 +206,7 @@ export default function RadiologyConsole() {
                     )}
                     <p className="mt-1 text-xs text-muted-foreground">
                       الطبيب الطالب: {row.doctor_name ?? "—"} ·{" "}
-                      {new Date(row.ordered_at).toLocaleString("ar")}
+                      {new Date(row.ordered_at).toLocaleString("ar-u-nu-latn")}
                       {row.image_count > 0 && ` · ${row.image_count} صورة مرفوعة`}
                     </p>
                   </div>

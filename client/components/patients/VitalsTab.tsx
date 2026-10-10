@@ -382,7 +382,7 @@ export default function VitalsTab({ patientId }: { patientId: string }) {
                 {rows.map((row) => (
                   <TableRow key={row.id}>
                     <TableCell className="text-xs text-muted-foreground">
-                      {new Date(row.recorded_at).toLocaleString("ar-SA")}
+                      {new Date(row.recorded_at).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="tabular-nums">
                       {row.blood_pressure_systolic != null && row.blood_pressure_diastolic != null

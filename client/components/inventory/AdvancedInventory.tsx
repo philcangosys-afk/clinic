@@ -480,7 +480,7 @@ function CountsPanel() {
                       </Badge>
                     </TableCell>
                     <TableCell className="font-mono text-xs">
-                      {new Date(c.started_at).toLocaleDateString("ar-SA")}
+                      {new Date(c.started_at).toLocaleDateString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="text-end">
                       <div className="flex justify-end gap-1">
@@ -566,7 +566,7 @@ function CountsPanel() {
                         )}
                       </TableCell>
                       <TableCell className="font-mono text-xs">
-                        {Number(l.variance_value ?? 0).toLocaleString("ar-SA")}
+                        {Number(l.variance_value ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                       </TableCell>
                       <TableCell className="max-w-40 truncate text-xs text-muted-foreground">
                         {l.variance_reason ?? "—"}
@@ -983,11 +983,11 @@ function AgingPanel() {
                     <TableCell className="text-sm">{a.item_name}</TableCell>
                     <TableCell className="font-mono text-xs">{a.qty_on_hand}</TableCell>
                     <TableCell className="font-mono text-xs">
-                      {Number(a.stock_value ?? 0).toLocaleString("ar-SA")}
+                      {Number(a.stock_value ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
                       {a.last_out_at
-                        ? new Date(a.last_out_at).toLocaleDateString("ar-SA")
+                        ? new Date(a.last_out_at).toLocaleDateString("ar-SA-u-nu-latn")
                         : "لم يُصرف قطّ"}
                     </TableCell>
                     <TableCell className="font-mono text-xs">
@@ -1065,7 +1065,7 @@ function AgingPanel() {
                     <TableCell className="font-mono text-xs">{l.qty_remaining}</TableCell>
                     <TableCell className="font-mono text-xs">{l.available_qty}</TableCell>
                     <TableCell className="font-mono text-xs">
-                      {Number(l.stock_value ?? 0).toLocaleString("ar-SA")}
+                      {Number(l.stock_value ?? 0).toLocaleString("ar-SA-u-nu-latn")}
                     </TableCell>
                     <TableCell>
                       <Badge variant={l.lot_status === "available" ? "success" : "destructive"}>
@@ -1356,7 +1356,7 @@ function LotTraceCard({ lot, onClose }: { lot: any; onClose: () => void }) {
                     </Badge>
                   </TableCell>
                   <TableCell className="font-mono text-xs">
-                    {new Date(s.occurred_at).toLocaleString("ar-SA")}
+                    {new Date(s.occurred_at).toLocaleString("ar-SA-u-nu-latn")}
                   </TableCell>
                   <TableCell className="font-mono text-xs">{s.qty}</TableCell>
                   <TableCell className="max-w-64 truncate text-xs text-muted-foreground">

@@ -694,7 +694,7 @@ function ListItemsDialog({
             {(rows.data ?? []).map((row) => (
               <TableRow key={row.id} className={row.is_current ? "" : "text-muted-foreground"}>
                 <TableCell>{row.item_name}</TableCell>
-                <TableCell>{Number(row.price).toLocaleString("ar-SA")}</TableCell>
+                <TableCell>{Number(row.price).toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                 <TableCell>{Number(row.discount_percent) > 0 ? `${row.discount_percent}%` : "—"}</TableCell>
                 <TableCell className="font-mono text-xs">{row.effective_from}</TableCell>
                 <TableCell className="font-mono text-xs">{row.effective_to ?? "سارٍ"}</TableCell>
