@@ -37,6 +37,13 @@ type VatPayable = {
   debit_count: number;
   debit_taxable: number;
   debit_vat: number;
+  /** فواتير Kizen (الأرشيف) من تاريخ التسجيل الضريبيّ — 0240 */
+  legacy_count?: number;
+  legacy_taxable?: number;
+  legacy_vat?: number;
+  legacy_return_count?: number;
+  legacy_return_taxable?: number;
+  legacy_return_vat?: number;
   purchase_count: number;
   purchase_taxable: number;
   purchase_vat: number;
@@ -112,6 +119,25 @@ export default function VatPayablePanel() {
         { label: "المبيعات (الفواتير الصادرة)", count: d.sales_count, taxable: d.sales_taxable, vat: d.sales_vat, sign: 1 },
         { label: "الإشعارات الدائنة والمرتجعات", count: d.credit_count, taxable: d.credit_taxable, vat: d.credit_vat, sign: -1 },
         { label: "الإشعارات المدينة", count: d.debit_count, taxable: d.debit_taxable, vat: d.debit_vat, sign: 1 },
+        // فواتير Kizen المرحّلة: من تاريخ التسجيل الضريبيّ (0240) — تظهر متى وُجدت في الفترة
+        ...((d.legacy_count ?? 0) > 0 || (d.legacy_return_count ?? 0) > 0
+          ? [
+              {
+                label: "مبيعات النظام السابق (Kizen)",
+                count: d.legacy_count ?? 0,
+                taxable: d.legacy_taxable ?? 0,
+                vat: d.legacy_vat ?? 0,
+                sign: 1,
+              },
+              {
+                label: "مرتجعات النظام السابق (Kizen)",
+                count: d.legacy_return_count ?? 0,
+                taxable: d.legacy_return_taxable ?? 0,
+                vat: d.legacy_return_vat ?? 0,
+                sign: -1,
+              },
+            ]
+          : []),
       ],
       input: [
         { label: "المشتريات بفاتورة ضريبية", count: d.purchase_count, taxable: d.purchase_taxable, vat: d.purchase_vat, sign: 1 },
@@ -207,8 +233,8 @@ export default function VatPayablePanel() {
           صافي الضريبة المستحقّة
         </CardTitle>
         <CardDescription>
-          ضريبة المبيعات ناقص ضريبة المشتريات القابلة للخصم — يُحسب تلقائيًّا من الفواتير الصادرة وفواتير المشتريات
-          والمصروفات في الفترة.
+          ضريبة المبيعات ناقص ضريبة المشتريات القابلة للخصم — يُحسب تلقائيًّا من الفواتير الصادرة وفواتير Kizen المرحّلة
+          (من تاريخ التسجيل الضريبيّ) وفواتير المشتريات والمصروفات في الفترة. المشتريات تُحتسب بتاريخ فاتورة المورد.
         </CardDescription>
         <div className="mt-2 flex flex-wrap items-end gap-2">
           <div className="flex flex-wrap gap-1">
