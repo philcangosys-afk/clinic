@@ -21,7 +21,9 @@ export function errorMessage(error: unknown, fallback = "حدث خطأ غير م
 
   if (typeof error === "string") return error.trim() || fallback;
 
-  if (error instanceof Error && error.message.trim()) return error.message;
+  if (error instanceof Error && error.message.trim()) {
+    return friendlyTechnicalMessage(error.message, "") ?? error.message;
+  }
 
   const row = error as {
     message?: unknown;
@@ -35,11 +37,40 @@ export function errorMessage(error: unknown, fallback = "حدث خطأ غير م
   const hint = typeof row.hint === "string" ? row.hint.trim() : "";
   const code = typeof row.code === "string" ? row.code.trim() : "";
 
+  /**
+   * رسائل تقنية لا تُعرض كما هي (10/10/2026): «GRANT SELECT … TO anon» لا يفهمها
+   * الموظّف ولا يستطيع فعل شيء بها. تُترجم إلى ما يفعله، ويبقى الرمز للتشخيص.
+   */
+  const friendly = friendlyTechnicalMessage(message, code, hint);
+  if (friendly) return code ? `${friendly} [${code}]` : friendly;
+
   const head = message || details || fallback;
   const parts = [head];
   // التفاصيل تُضاف حين تحمل معلومة زائدة على الرسالة لا تكرارًا لها
   if (details && details !== head) parts.push(details);
-  if (hint && hint !== head) parts.push(hint);
+  // تلميح PostgREST بأوامر SQL («GRANT …») لمن يدير القاعدة لا لمن يستعمل الشاشة
+  if (hint && hint !== head && !/\bGRANT\b|\bTO anon\b/i.test(hint)) parts.push(hint);
   if (code) parts.push(`[${code}]`);
   return parts.join(" · ");
+}
+
+/** ترجمة الأخطاء التقنية الشائعة إلى ما يفهمه المستخدم ويفعله. */
+function friendlyTechnicalMessage(message: string, code: string, hint = ""): string | null {
+  // طلبٌ خرج بلا رمز المستخدم (جلسة لم تُجدَّد)
+  // PostgREST يذكر الدور في التلميح: «GRANT SELECT ON public.patients TO anon»
+  if ((code === "42501" && /\banon\b/i.test(`${message} ${hint}`)) || code === "ZC_SESSION") {
+    return code === "ZC_SESSION" && message
+      ? message
+      : "انقطعت جلسة الدخول لحظيًّا فلم تُقرأ البيانات. أعد المحاولة، وإن تكرّر فسجّل الخروج ثمّ الدخول.";
+  }
+  if (code === "PGRST301" || code === "PGRST303" || /jwt expired/i.test(message)) {
+    return "انتهت جلسة الدخول — حدّث الصفحة، وإن تكرّر فسجّل الدخول من جديد.";
+  }
+  if (code === "57014" || /statement timeout|canceling statement/i.test(message)) {
+    return "الخادم مشغول ولم يكمل الطلب في وقته — أعد المحاولة بعد لحظات.";
+  }
+  if (/failed to fetch|networkerror|load failed/i.test(message)) {
+    return "تعذّر الاتصال بالخادم — تحقّق من الإنترنت ثمّ أعد المحاولة.";
+  }
+  return null;
 }

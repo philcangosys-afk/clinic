@@ -26,6 +26,8 @@ export type ExportDaySummary = {
   refunded_amount: number;
   net_collected_amount: number;
   outstanding_amount: number;
+  /** 0243 — سداد موردين ومصروفات خرجت من اليومية (ليست مرتجعًا) */
+  expenses_amount?: number;
 };
 
 export type ExportDayCollection = {
@@ -203,9 +205,12 @@ function amountRows(data: ExportDayData): AmountRow[] {
     { label: "المعفى من الضريبة", value: num(d.exemption_amount), kind: "money" },
     { label: "صافي الفواتير", value: num(d.net_amount), kind: "money", strong: true },
     { label: "المحصَّل", value: num(d.collected_amount), kind: "money" },
-    { label: "المرتجع", value: num(d.refunded_amount), kind: "money" },
+    { label: "المرتجع للمرضى", value: num(d.refunded_amount), kind: "money" },
     { label: "صافي المحصَّل", value: num(d.net_collected_amount), kind: "money", strong: true },
     { label: "غير محصَّل", value: num(d.outstanding_amount), kind: "money" },
+    ...(Number(d.expenses_amount ?? 0) > 0
+      ? [{ label: "مدفوعات موردين ومصروفات", value: num(d.expenses_amount), kind: "money" as const }]
+      : []),
   ];
 }
 
@@ -456,7 +461,10 @@ function infoHtml(data: ExportDayData) {
     ? []
     : [
         ["المحصَّل", money(data.day.collected_amount)],
-        ["المرتجع", money(data.day.refunded_amount)],
+        ["المرتجع للمرضى", money(data.day.refunded_amount)],
+        ...(Number(data.day.expenses_amount ?? 0) > 0
+          ? ([["مدفوعات موردين ومصروفات", money(data.day.expenses_amount)]] as [string, string][])
+          : []),
       ];
   const all = [...pairs, ...extra];
   return `<h2>بيانات اليومية</h2><div class="info">${all

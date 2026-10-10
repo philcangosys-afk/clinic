@@ -62,6 +62,8 @@ type DaySummary = {
   auto_closed: boolean | null;
   /** 0191 — قد يغيب إن لم تُنفَّذ الترقية بعد */
   opened_by?: string | null;
+  /** 0243 — ما صُرف في اليومية لغير المرضى (سداد موردين، مصروفات) */
+  expenses_amount?: number;
 };
 
 /** من فتح اليومية ومن أقفلها ومن أصدر فواتيرها (0191). */
@@ -530,7 +532,11 @@ export default function BusinessDayPanel() {
               <Metric label="المعفى من الضريبة" value={formatAmount(shown.exemption_amount)} />
             )}
             {Number(shown.refunded_amount) > 0 && (
-              <Metric label="المرتجع" value={formatAmount(shown.refunded_amount)} tone="rose" />
+              <Metric label="المرتجع للمرضى" value={formatAmount(shown.refunded_amount)} tone="rose" />
+            )}
+            {/* سداد الموردين والمصروفات: خرجت من اليومية لكنّها ليست مرتجعًا ولا تُنقص التحصيل (0243) */}
+            {Number(shown.expenses_amount ?? 0) > 0 && (
+              <Metric label="مدفوعات موردين ومصروفات" value={formatAmount(shown.expenses_amount)} />
             )}
             <Metric
               label="غير محصَّل"
