@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { errorMessage } from "@/lib/error-message";
 import { formatAmount } from "@/lib/locale";
 import { usePermissions } from "@/lib/permissions";
+import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { NO_DOCTOR, useSessionDoctor } from "@/lib/session-doctor";
 import { useToast } from "@/hooks/use-toast";
 import {
@@ -142,6 +143,15 @@ export default function QuoteEditorDialog({
   const { can } = usePermissions();
   const canManage = can("agreements.manage") && !agreement.is_disabled;
   const { isDoctorRole } = useSessionDoctor();
+  /**
+   * الخصم للاستقبال والمالك ومدير المنشأة وحدهم (قرار المالك 14/10/2026، 0244).
+   * الطبيب يرى الخصم ولا يكتبه ولا يغيّره — والقاعدة ترفضه منه كذلك. الخصم
+   * الافتراضيّ للخدمة من الكتالوج يبقى كما هو: قرار الإدارة لا الطبيب.
+   */
+  const { membership, legacyMode } = useOrganizationAccess();
+  const canDiscount =
+    legacyMode || ["owner", "organization_admin", "receptionist"].includes(membership?.role_key ?? "");
+  const discountLockedTitle = "الخصم للاستقبال والإدارة";
   /**
    * «فوترة» للاستقبال وحده (قرار المالك): الطبيب يُنشئ ويعدّل ويُشعر، ولا يُصدر
    * فاتورة. وما أُلغيت مديونيته لا يُفوتَر (يُعاد من الاتفاقية أوّلًا).
@@ -591,10 +601,17 @@ export default function QuoteEditorDialog({
               max={100}
               placeholder="%"
               value={generalDiscount}
-              disabled={readOnly}
+              disabled={readOnly || !canDiscount}
+              title={canDiscount ? undefined : discountLockedTitle}
               onChange={(event) => setGeneralDiscount(event.target.value)}
             />
-            <Button size="sm" variant="outline" disabled={readOnly || !generalDiscount} onClick={applyGeneralDiscount}>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={readOnly || !canDiscount || !generalDiscount}
+              title={canDiscount ? undefined : discountLockedTitle}
+              onClick={applyGeneralDiscount}
+            >
               <Percent className="h-4 w-4" />
               خصم عام
             </Button>
@@ -789,7 +806,8 @@ export default function QuoteEditorDialog({
                           min={0}
                           value={line.discountAmount > 0 ? line.discountAmount : calc.discount || ""}
                           placeholder="0"
-                          disabled={readOnly}
+                          disabled={readOnly || !canDiscount}
+                          title={canDiscount ? undefined : discountLockedTitle}
                           onChange={(event) =>
                             update(line.key, { discountAmount: Number(event.target.value) || 0, discountPercent: 0 })
                           }
@@ -803,7 +821,8 @@ export default function QuoteEditorDialog({
                           max={100}
                           value={calc.percent || ""}
                           placeholder="0"
-                          disabled={readOnly}
+                          disabled={readOnly || !canDiscount}
+                          title={canDiscount ? undefined : discountLockedTitle}
                           onChange={(event) =>
                             update(line.key, { discountPercent: Number(event.target.value) || 0, discountAmount: 0 })
                           }
