@@ -59,6 +59,7 @@ import TaxSettingsTab, {
 } from "@/components/billing/TaxSettingsTab";
 import TaxInvoicesPanel from "@/components/billing/TaxInvoicesPanel";
 import VatPayablePanel from "@/components/billing/VatPayablePanel";
+import PaymentMethodBreakdown from "@/components/billing/PaymentMethodBreakdown";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { INVOICE_STATUS_BADGE, INVOICE_STATUS_LABELS } from "@/lib/invoice-status";
@@ -73,21 +74,31 @@ const STATUS_BADGE = INVOICE_STATUS_BADGE;
  * عمليات بحث. والتاريخ تاريخ **يوم العمل** لا التقويم: فاتورة الواحدة فجرًا
  * تُحسب لليوم الذي قبلها إن كان يوم العمل يمتدّ بعد منتصف الليل.
  */
+/**
+ * صفحاتٌ لا «أحدث 500» (17/10/2026): القائمة تُجلب صفحةً صفحة بحجمٍ يختاره
+ * المستخدم (50 أو 100 أو 200)، مع العدد الكلّيّ من القاعدة. فلا تُقطع
+ * المدّة الطويلة عند 500، ولا يُحمَّل ما لا يُعرض.
+ */
 function useInvoices(
   organizationId: string | undefined,
   status: string,
   quotesOnly: boolean,
   businessFrom: string | null,
   businessTo: string | null,
+  page: number,
+  pageSize: number,
 ) {
   return useQuery({
-    queryKey: ["invoices-list", organizationId, status, quotesOnly, businessFrom, businessTo],
+    queryKey: ["invoices-list", organizationId, status, quotesOnly, businessFrom, businessTo, page, pageSize],
     enabled: Boolean(organizationId && businessFrom && businessTo),
+    // الصفحة السابقة تبقى ظاهرةً حتى تصل التالية — لا وميض جدولٍ فارغ
+    placeholderData: (previous) => previous,
     queryFn: async () => {
       let query = supabase
         .from("sales_invoices")
         .select(
           "id, invoice_number, document_number, document_type, appointment_id, created_at, status, is_temporary, invoice_type, subtotal_amount, discount_amount, vat_amount, exemption_amount, net_amount, paid_amount, credited_amount, remaining_amount, insurance_share_amount, patient_share_amount, insurance_company_name, external_customer_name, zatca_invoice_number, zatca_qr, is_insurance_invoice, created_by, nationality_value_id, patient:patients!sales_invoices_patient_tenant_fk(id, name_ar, file_number), doctor:doctors!sales_invoices_doctor_tenant_fk(name_ar), nationality:lookup_values!sales_invoices_nationality_value_id_fkey(name_ar), business_day:business_days!inner(business_date)",
+          { count: "exact" },
         )
         // التصفية بالمؤسسة إلزامية: سياسة RLS تسمح بكل مؤسسة **ينتمي إليها**
         // المستخدم، لا بالمؤسسة النشطة وحدها — فبدونها كانت قائمة عضو في
@@ -96,15 +107,65 @@ function useInvoices(
         .gte("business_day.business_date", businessFrom)
         .lte("business_day.business_date", businessTo)
         .order("created_at", { ascending: false })
-        .limit(500);
+        .order("id", { ascending: false })
+        .range(page * pageSize, page * pageSize + pageSize - 1);
       if (status !== "all") query = query.eq("status", status);
       query = query.eq("is_temporary", quotesOnly);
-      const { data, error } = await query;
+      const { data, error, count } = await query;
       if (error) throw error;
-      return (data ?? []) as unknown as SalesInvoiceWithPatient[];
+      return {
+        rows: (data ?? []) as unknown as SalesInvoiceWithPatient[],
+        count: count ?? 0,
+      };
     },
   });
 }
+
+/**
+ * إجماليّ المدّة كاملةً لرأس الشاشة — لا إجماليّ الصفحة المعروضة وحدها.
+ * أعمدةٌ ثلاثة فقط، دفعاتٍ من ألف.
+ */
+function useInvoiceTotals(
+  organizationId: string | undefined,
+  status: string,
+  quotesOnly: boolean,
+  businessFrom: string | null,
+  businessTo: string | null,
+) {
+  return useQuery({
+    queryKey: ["invoices-list", "totals", organizationId, status, quotesOnly, businessFrom, businessTo],
+    enabled: Boolean(organizationId && businessFrom && businessTo),
+    queryFn: async () => {
+      let net = 0;
+      let remaining = 0;
+      for (let page = 0; page < 50; page += 1) {
+        let query = supabase
+          .from("sales_invoices")
+          .select("net_amount, remaining_amount, invoice_type, business_day:business_days!inner(business_date)")
+          .eq("organization_id", organizationId)
+          .gte("business_day.business_date", businessFrom)
+          .lte("business_day.business_date", businessTo)
+          .eq("is_temporary", quotesOnly)
+          .order("id")
+          .range(page * 1000, page * 1000 + 999);
+        if (status !== "all") query = query.eq("status", status);
+        const { data, error } = await query;
+        if (error) throw error;
+        const rows = (data ?? []) as { net_amount: number; remaining_amount: number; invoice_type: string | null }[];
+        for (const row of rows) {
+          // المرتجع والإشعار الدائن يُنقصان الصافي ولا يُحسبان متبقّيًا على المريض (0205)
+          const isReturn = row.invoice_type === "return";
+          net += (isReturn ? -1 : 1) * Number(row.net_amount ?? 0);
+          if (!isReturn) remaining += Number(row.remaining_amount ?? 0);
+        }
+        if (rows.length < 1000) break;
+      }
+      return { net, remaining };
+    },
+  });
+}
+
+const PAGE_SIZES = [50, 100, 200] as const;
 
 /**
  * اسم الموظف مُصدِر الفاتورة يأتي من `v_organization_members_directory`
@@ -207,7 +268,29 @@ export default function Billing() {
   const rangeIsToday =
     listFrom === currentBusinessDate.data && listTo === currentBusinessDate.data;
   const rangeInvalid = Boolean(listFrom && listTo && listTo < listFrom);
+  /** الصفحة وحجمها (17/10/2026) — تعود إلى الأولى مع كلّ تغييرٍ في المرشّحات. */
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState<number>(50);
+  useEffect(() => {
+    setPage(0);
+  }, [statusFilter, quotesOnly, listFrom, listTo, pageSize]);
   const invoices = useInvoices(
+    organization?.id,
+    statusFilter,
+    quotesOnly,
+    rangeInvalid ? null : listFrom,
+    rangeInvalid ? null : listTo,
+    page,
+    pageSize,
+  );
+  const invoiceRows = invoices.data?.rows ?? [];
+  const invoiceCount = invoices.data?.count ?? 0;
+  const pageCount = Math.max(1, Math.ceil(invoiceCount / pageSize));
+  // فواتير أُلغيت أو نُقلت فقصرت القائمة: لا تبقى الشاشة على صفحةٍ لم تعد موجودة
+  useEffect(() => {
+    if (invoices.data && page > 0 && page >= pageCount) setPage(pageCount - 1);
+  }, [invoices.data, page, pageCount]);
+  const rangeTotals = useInvoiceTotals(
     organization?.id,
     statusFilter,
     quotesOnly,
@@ -387,15 +470,8 @@ export default function Billing() {
     onError: billingFail("تعذر الخصم"),
   });
 
-  const totals = useMemo(() => {
-    const rows = invoices.data ?? [];
-    // المرتجع والإشعار الدائن يُنقصان الصافي ولا يُحسبان متبقّيًا على المريض (0205)
-    const isReturn = (row: { invoice_type?: string | null }) => row.invoice_type === "return";
-    return {
-      net: rows.reduce((sum, row) => sum + (isReturn(row) ? -1 : 1) * Number(row.net_amount), 0),
-      remaining: rows.reduce((sum, row) => sum + (isReturn(row) ? 0 : Number(row.remaining_amount)), 0),
-    };
-  }, [invoices.data]);
+  // إجماليّ المدّة كلّها لا الصفحة المعروضة (useInvoiceTotals)
+  const totals = rangeTotals.data ?? { net: 0, remaining: 0 };
 
   return (
     <div className="mx-auto flex max-w-7xl flex-col gap-5 p-4 sm:p-6">
@@ -517,7 +593,7 @@ export default function Billing() {
                   : listFrom === listTo
                     ? `يوم العمل ${listFrom ?? ""}`
                     : `أيام العمل من ${listFrom ?? ""} إلى ${listTo ?? ""}`}
-                {(invoices.data ?? []).length === 500 && " — تُعرض أحدث 500 فاتورة، ضيّق المدّة لرؤية ما قبلها"}
+                {invoiceCount > 0 && ` — ${invoiceCount} ${quotesOnly ? "عرض" : "فاتورة"}`}
               </CardDescription>
             </div>
             <div className="flex flex-wrap items-end gap-2">
@@ -558,7 +634,11 @@ export default function Billing() {
             )}
           </div>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-3">
+          {/* المحصَّل حسب طريقة الدفع لأيام العمل المعروضة (17/10/2026) */}
+          {!quotesOnly && !rangeInvalid && (
+            <PaymentMethodBreakdown organizationId={organization?.id} from={listFrom} to={listTo} />
+          )}
           {invoices.isLoading && (
             <div className="flex flex-col gap-2">
               {Array.from({ length: 5 }).map((_, index) => (
@@ -600,7 +680,7 @@ export default function Billing() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(invoices.data ?? []).map((invoice) => (
+                {invoiceRows.map((invoice) => (
                   <TableRow key={invoice.id}>
                     <TableCell className="font-mono text-xs">
                       #{invoice.invoice_number}
@@ -895,7 +975,7 @@ export default function Billing() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {(invoices.data ?? []).length === 0 && (
+                {invoiceRows.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={17} className="py-8 text-center text-sm text-muted-foreground">
                       لا توجد فواتير مطابقة.
@@ -904,6 +984,60 @@ export default function Billing() {
                 )}
               </TableBody>
             </Table>
+          )}
+          {/* الصفحات وحجمها (17/10/2026) */}
+          {!invoices.isLoading && invoiceCount > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">عرض</span>
+                <Select value={String(pageSize)} onValueChange={(value) => setPageSize(Number(value))}>
+                  <SelectTrigger className="h-8 w-20">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PAGE_SIZES.map((size) => (
+                      <SelectItem key={size} value={String(size)}>
+                        {size}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <span className="text-muted-foreground">في الصفحة</span>
+              </div>
+              <span className="tabular-nums text-muted-foreground">
+                {page * pageSize + 1}–{Math.min((page + 1) * pageSize, invoiceCount)} من {invoiceCount}
+                {invoices.isFetching && " · جارٍ التحميل…"}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button size="sm" variant="outline" className="h-8" disabled={page === 0} onClick={() => setPage(0)}>
+                  الأولى
+                </Button>
+                <Button size="sm" variant="outline" className="h-8" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+                  السابقة
+                </Button>
+                <span className="px-2 tabular-nums">
+                  {page + 1} / {pageCount}
+                </span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8"
+                  disabled={page + 1 >= pageCount}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  التالية
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8"
+                  disabled={page + 1 >= pageCount}
+                  onClick={() => setPage(pageCount - 1)}
+                >
+                  الأخيرة
+                </Button>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>}
