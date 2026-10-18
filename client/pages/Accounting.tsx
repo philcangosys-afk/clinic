@@ -108,7 +108,7 @@ function useVouchers(organizationId: string | undefined, typeFilter: VoucherType
       let query = supabase
         .from("financial_vouchers")
         .select(
-          "id, voucher_number, voucher_type, voucher_date, amount, payee_name, description, patient:patients(name_ar), distributor:distributors(name_ar)",
+          "id, voucher_number, voucher_type, voucher_date, amount, payee_name, description, is_void, void_reason, patient:patients(name_ar), distributor:distributors(name_ar)",
         )
         .eq("organization_id", organizationId)
         .order("voucher_date", { ascending: false })
@@ -127,9 +127,36 @@ function VouchersTab() {
   const [createOpen, setCreateOpen] = useState(false);
   const [registersOpen, setRegistersOpen] = useState(false);
   const vouchers = useVouchers(organization?.id, typeFilter);
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { can } = usePermissions();
+  /**
+   * إلغاء السند من هنا (18/10/2026): سند قبضٍ سُجّل بالخطأ لمكافأة طبيب لم يكن
+   * له زرّ إلغاء في هذه الشاشة. يُلغى بسببٍ مكتوب عبر `app_void_financial_voucher`
+   * — لا حذف — ويبقى في القائمة مشطوبًا. السند في مناوبة مقفلة تمنعه القاعدة.
+   */
+  const canVoid = can("billing.void");
+  const voidVoucher = useMutation({
+    mutationFn: async ({ id, reason }: { id: string; reason: string }) => {
+      const { error } = await supabase.rpc("app_void_financial_voucher", { p_voucher_id: id, p_reason: reason });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["financial-vouchers"] });
+      queryClient.invalidateQueries({ queryKey: ["cash-expenses"] });
+      queryClient.invalidateQueries({ queryKey: ["business-days"] });
+      queryClient.invalidateQueries({ queryKey: ["business-day-history"] });
+      queryClient.invalidateQueries({ queryKey: ["business-day-collections"] });
+      toast({ title: "أُلغي السند" });
+    },
+    onError: (error: unknown) =>
+      toast({ variant: "destructive", title: "تعذّر إلغاء السند", description: errorMessage(error) }),
+  });
 
+  // الملغى لا يدخل المجاميع
   const totals: Record<string, number> = (vouchers.data ?? []).reduce(
     (acc: Record<string, number>, v: any) => {
+      if (v.is_void) return acc;
       acc[v.voucher_type] = (acc[v.voucher_type] ?? 0) + Number(v.amount);
       return acc;
     },
@@ -175,11 +202,12 @@ function VouchersTab() {
                   <TableHead>البيان / يصرف لـ</TableHead>
                   <TableHead>المريض/المورّد</TableHead>
                   <TableHead>المبلغ</TableHead>
+                  <TableHead className="w-24" />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {(vouchers.data ?? []).map((v: any) => (
-                  <TableRow key={v.id}>
+                  <TableRow key={v.id} className={v.is_void ? "text-muted-foreground line-through" : undefined}>
                     <TableCell className="font-mono text-xs">#{v.voucher_number}</TableCell>
                     <TableCell>
                       <Badge variant={v.voucher_type === "receipt" ? "success" : "secondary"}>
@@ -190,11 +218,33 @@ function VouchersTab() {
                     <TableCell>{v.payee_name ?? v.description ?? "—"}</TableCell>
                     <TableCell>{v.patient?.name_ar ?? v.distributor?.name_ar ?? "—"}</TableCell>
                     <TableCell className="font-semibold">{Number(v.amount).toLocaleString("ar-SA-u-nu-latn")}</TableCell>
+                    <TableCell className="no-underline">
+                      {v.is_void ? (
+                        <Badge variant="destructive" title={v.void_reason ?? undefined}>
+                          ملغى
+                        </Badge>
+                      ) : (
+                        canVoid && (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 px-2 text-xs text-destructive"
+                            disabled={voidVoucher.isPending}
+                            onClick={() => {
+                              const reason = window.prompt(`سبب إلغاء السند #${v.voucher_number}؟`);
+                              if (reason && reason.trim()) voidVoucher.mutate({ id: v.id, reason: reason.trim() });
+                            }}
+                          >
+                            إلغاء
+                          </Button>
+                        )
+                      )}
+                    </TableCell>
                   </TableRow>
                 ))}
                 {(vouchers.data ?? []).length === 0 && (
                   <TableRow>
-                    <TableCell colSpan={6} className="py-8 text-center text-sm text-muted-foreground">
+                    <TableCell colSpan={7} className="py-8 text-center text-sm text-muted-foreground">
                       لا توجد سندات مطابقة.
                     </TableCell>
                   </TableRow>
@@ -228,7 +278,12 @@ function NewVoucherDialog({
   const { organization } = useOrganizationAccess();
   // نسبة الضريبة من إعداد المنشأة — نفس ما تقرؤه شاشة الفوترة
   const orgVatRate = Number(organization?.default_vat_rate ?? 15);
-  const [voucherType, setVoucherType] = useState<VoucherType>("receipt");
+  /**
+   * سند الصرف افتراضًا لا سند القبض (18/10/2026): مكافأة طبيبٍ سُجّلت «سند
+   * قبض» لأنّه كان الاختيار الأوّل، فدخلت تحصيل اليومية وظهر «غير محصَّل»
+   * سالبًا. قبض المرضى يكون من الفاتورة؛ وهذه الشاشة للصرف غالبًا.
+   */
+  const [voucherType, setVoucherType] = useState<VoucherType>("expense");
   const [employeeRefId, setEmployeeRefId] = useState("");
   const [amount, setAmount] = useState("");
   const [voucherDate, setVoucherDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -269,7 +324,7 @@ function NewVoucherDialog({
   });
 
   const resetForm = () => {
-    setVoucherType("receipt");
+    setVoucherType("expense");
     setEmployeeRefId("");
     setAmount("");
     setVoucherDate(new Date().toISOString().slice(0, 10));
@@ -326,6 +381,9 @@ function NewVoucherDialog({
       if (!organizationId) throw new Error("لا توجد مؤسسة نشطة");
       if (voucherType === "salary" && !employeeRefId)
         throw new Error("اختر الموظف — سند الراتب لا يُحفظ بدونه");
+      // سند القبض هنا من مريضٍ فقط: ما يُعطى لطبيبٍ أو موظّف أو مورّد صرفٌ لا قبض
+      if (voucherType === "receipt" && !patient?.id)
+        throw new Error("سند القبض يكون من مريض — اختر المريض. لمكافأةٍ أو مصروفٍ أو سدادٍ اختر «سند صرف»");
       const { error } = await supabase.from("financial_vouchers").insert({
         organization_id: organizationId,
         voucher_type: voucherType,
@@ -506,7 +564,7 @@ function NewVoucherDialog({
           )}
           {voucherType === "receipt" && (
             <div className="flex flex-col gap-1.5 sm:col-span-2">
-              <Label>المريض (اختياري)</Label>
+              <Label>المريض *</Label>
               <PatientPicker onSelect={(p) => setPatient({ id: p.id, name_ar: p.name_ar })} />
               {patient && <p className="text-xs text-muted-foreground">المحدَّد: {patient.name_ar}</p>}
             </div>

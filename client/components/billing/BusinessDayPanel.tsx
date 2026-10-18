@@ -534,10 +534,7 @@ export default function BusinessDayPanel() {
             {Number(shown.refunded_amount) > 0 && (
               <Metric label="المرتجع للمرضى" value={formatAmount(shown.refunded_amount)} tone="rose" />
             )}
-            {/* سداد الموردين والمصروفات: خرجت من اليومية لكنّها ليست مرتجعًا ولا تُنقص التحصيل (0243) */}
-            {Number(shown.expenses_amount ?? 0) > 0 && (
-              <Metric label="مدفوعات موردين ومصروفات" value={formatAmount(shown.expenses_amount)} />
-            )}
+            {/* سداد الموردين والمصروفات خارج اليومية كلّيًّا (طلب المالك 18/10/2026، 0246) */}
             <Metric
               label="غير محصَّل"
               value={formatAmount(shown.outstanding_amount)}
