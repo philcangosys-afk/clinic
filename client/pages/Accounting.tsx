@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BookOpen, CheckCircle2, Plus, Sparkles, Trash2 } from "lucide-react";
+import { BookOpen, CheckCircle2, Plus, Printer, Sparkles, Trash2 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import type {
@@ -38,6 +38,7 @@ import CashRegistersDialog from "@/components/billing/CashRegistersDialog";
 import { usePermissions } from "@/lib/permissions";
 import { useToast } from "@/hooks/use-toast";
 import { errorMessage } from "@/lib/error-message";
+import { printVoucherById } from "@/lib/voucher-print";
 
 const ACCOUNT_TYPE_LABELS: Record<AccountType, string> = {
   asset: "أصول",
@@ -147,6 +148,10 @@ function VouchersTab() {
       queryClient.invalidateQueries({ queryKey: ["business-days"] });
       queryClient.invalidateQueries({ queryKey: ["business-day-history"] });
       queryClient.invalidateQueries({ queryKey: ["business-day-collections"] });
+      // سند سداد فاتورة شراء: يعود مبلغه إلى متبقّيها (0247)
+      queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["purchase-invoice-vouchers"] });
+      queryClient.invalidateQueries({ queryKey: ["supplier-balances"] });
       toast({ title: "أُلغي السند" });
     },
     onError: (error: unknown) =>
@@ -202,7 +207,7 @@ function VouchersTab() {
                   <TableHead>البيان / يصرف لـ</TableHead>
                   <TableHead>المريض/المورّد</TableHead>
                   <TableHead>المبلغ</TableHead>
-                  <TableHead className="w-24" />
+                  <TableHead className="w-40" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -219,6 +224,21 @@ function VouchersTab() {
                     <TableCell>{v.patient?.name_ar ?? v.distributor?.name_ar ?? "—"}</TableCell>
                     <TableCell className="font-semibold">{Number(v.amount).toLocaleString("ar-SA-u-nu-latn")}</TableCell>
                     <TableCell className="no-underline">
+                      <div className="flex items-center gap-1">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 px-2 text-xs"
+                        title="طباعة السند"
+                        onClick={() =>
+                          printVoucherById(v.id).catch((error) =>
+                            toast({ variant: "destructive", title: "تعذّرت طباعة السند", description: errorMessage(error) }),
+                          )
+                        }
+                      >
+                        <Printer className="h-3.5 w-3.5" />
+                        طباعة
+                      </Button>
                       {v.is_void ? (
                         <Badge variant="destructive" title={v.void_reason ?? undefined}>
                           ملغى
@@ -239,6 +259,7 @@ function VouchersTab() {
                           </Button>
                         )
                       )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

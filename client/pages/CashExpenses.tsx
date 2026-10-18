@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Plus, RefreshCcw, Wallet } from "lucide-react";
+import { Ban, Plus, Printer, RefreshCcw, Wallet } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { usePermissions } from "@/lib/permissions";
 import { errorMessage } from "@/lib/error-message";
+import { printVoucherById } from "@/lib/voucher-print";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -246,16 +247,31 @@ export default function CashExpenses() {
                       )}
                     </TableCell>
                     <TableCell className="text-end">
-                      {row.is_void ? (
-                        <Badge variant="destructive" title={row.void_reason ?? undefined}>ملغى</Badge>
-                      ) : (
-                        can("billing.void") && (
-                          <Button size="sm" variant="ghost" onClick={() => setVoiding(row)}>
-                            <Ban className="h-3.5 w-3.5" />
-                            إلغاء
-                          </Button>
-                        )
-                      )}
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="طباعة السند"
+                          onClick={() =>
+                            printVoucherById(row.id).catch((error) =>
+                              toast({ variant: "destructive", title: "تعذّرت طباعة السند", description: errorMessage(error) }),
+                            )
+                          }
+                        >
+                          <Printer className="h-3.5 w-3.5" />
+                          طباعة
+                        </Button>
+                        {row.is_void ? (
+                          <Badge variant="destructive" title={row.void_reason ?? undefined}>ملغى</Badge>
+                        ) : (
+                          can("billing.void") && (
+                            <Button size="sm" variant="ghost" onClick={() => setVoiding(row)}>
+                              <Ban className="h-3.5 w-3.5" />
+                              إلغاء
+                            </Button>
+                          )
+                        )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))}

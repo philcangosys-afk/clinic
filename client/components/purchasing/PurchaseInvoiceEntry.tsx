@@ -1,11 +1,12 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Building2, Eye, PackagePlus, Plus, Search, Trash2, UserPlus, Wallet } from "lucide-react";
+import { Ban, Building2, Eye, PackagePlus, Pencil, Plus, Printer, Search, Trash2, UserPlus, Wallet } from "lucide-react";
 
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
 import { supabase } from "@/lib/supabase";
 import { usePermissions } from "@/lib/permissions";
 import { errorMessage } from "@/lib/error-message";
+import { printPurchaseInvoiceById, printVoucherById } from "@/lib/voucher-print";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -39,6 +40,10 @@ import {
  *
  * الإلغاء بسبب لا حذف، وبشرط ألّا يكون عليها سداد ولا صُرف من أصنافها — فتخرج
  * كمّياتها من المخزون.
+ *
+ * التعديل (0247) بالنافذة نفسها و`app_update_purchase_invoice`: البيانات دائمًا،
+ * والأصناف والمستودع ما لم يُصرف شيءٌ منها. والطباعة الرسمية للفاتورة ولسندات
+ * سدادها من `voucher-print.ts`.
  */
 
 type Supplier = { id: string; name_ar: string; tax_number: string | null; payment_terms_days: number | null };
@@ -193,6 +198,12 @@ export function PurchaseInvoicesPanel() {
   const [viewing, setViewing] = useState<any | null>(null);
   const [cancelling, setCancelling] = useState<any | null>(null);
   const [paying, setPaying] = useState<any | null>(null);
+  const [editing, setEditing] = useState<any | null>(null);
+  const { toast } = useToast();
+  const printInvoice = (id: string) =>
+    printPurchaseInvoiceById(id).catch((error) =>
+      toast({ variant: "destructive", title: "تعذّرت الطباعة", description: errorMessage(error) }),
+    );
 
   const invoices = useQuery({
     queryKey: ["purchase-invoices", orgId, from, to],
@@ -313,7 +324,7 @@ export function PurchaseInvoicesPanel() {
                   <TableHead>المسدَّد</TableHead>
                   <TableHead>المتبقّي</TableHead>
                   <TableHead>الحالة</TableHead>
-                  <TableHead className="w-40" />
+                  <TableHead className="w-52" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -327,6 +338,7 @@ export function PurchaseInvoicesPanel() {
                     !inv.goods_receipt_id;
                   const canPay =
                     can("suppliers.pay") && inv.status !== "cancelled" && remaining > 0.009;
+                  const canEdit = can("purchasing.invoice") && inv.status !== "cancelled";
                   return (
                     <TableRow key={inv.id} className={inv.status === "cancelled" ? "opacity-60" : undefined}>
                       <TableCell className="font-mono text-xs">{inv.invoice_number ?? "—"}</TableCell>
@@ -356,6 +368,14 @@ export function PurchaseInvoicesPanel() {
                           <Button size="sm" variant="ghost" onClick={() => setViewing(inv)} title="عرض">
                             <Eye className="h-4 w-4" />
                           </Button>
+                          <Button size="sm" variant="ghost" onClick={() => printInvoice(inv.id)} title="طباعة الفاتورة">
+                            <Printer className="h-4 w-4" />
+                          </Button>
+                          {canEdit && (
+                            <Button size="sm" variant="ghost" onClick={() => setEditing(inv)} title="تعديل الفاتورة">
+                              <Pencil className="h-4 w-4" />
+                            </Button>
+                          )}
                           {canPay && (
                             <Button
                               size="sm"
@@ -403,9 +423,25 @@ export function PurchaseInvoicesPanel() {
       </CardContent>
 
       <NewPurchaseInvoiceDialog open={creating} onOpenChange={setCreating} />
+      <NewPurchaseInvoiceDialog
+        open={Boolean(editing)}
+        editing={editing}
+        onOpenChange={(next) => {
+          if (!next) setEditing(null);
+        }}
+      />
       <PurchaseInvoiceDetailsDialog
         invoice={viewing}
         onClose={() => setViewing(null)}
+        onPrint={viewing ? () => printInvoice(viewing.id) : undefined}
+        onEdit={
+          viewing && can("purchasing.invoice") && viewing.status !== "cancelled"
+            ? () => {
+                setEditing(viewing);
+                setViewing(null);
+              }
+            : undefined
+        }
         onCancel={
           viewing &&
           can("purchasing.invoice") &&
@@ -437,7 +473,22 @@ function Stat({ label, value, strong }: { label: string; value: string; strong?:
 /* ══════════════════════════════════════════════════════════════════════════
  * نافذة فاتورة الشراء — كلّ شيء في نافذةٍ واحدة
  * ════════════════════════════════════════════════════════════════════════ */
-function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+/** مفتاح البنود للمقارنة: هل تغيّرت أصناف الفاتورة عمّا حُفظ؟ */
+const linesSignature = (lines: Line[]) =>
+  lines
+    .map((l) =>
+      [
+        l.item.id, num(l.qty), num(l.free_qty), num(l.unit_price), num(l.discount), num(l.vat_rate),
+        l.lot_number.trim(), l.expiry_date,
+      ].join("|"),
+    )
+    .sort()
+    .join("\n");
+
+function NewPurchaseInvoiceDialog({
+  open, onOpenChange, editing = null,
+}: { open: boolean; onOpenChange: (open: boolean) => void; editing?: any | null }) {
+  const isEdit = Boolean(editing);
   const { organization } = useOrganizationAccess();
   const orgId = organization?.id;
   const queryClient = useQueryClient();
@@ -466,9 +517,120 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
   const [taxNo, setTaxNo] = useState("");
   const [supplierFormOpen, setSupplierFormOpen] = useState(false);
   const [itemFormOpen, setItemFormOpen] = useState(false);
+  // وضع التعديل: الفاتورة المحمَّلة، وبنودها كما حُفظت، وسبب التعديل
+  const [loadedId, setLoadedId] = useState<string | null>(null);
+  const [initialSignature, setInitialSignature] = useState("");
+  const [editReason, setEditReason] = useState("");
 
-  const supplier = (suppliers.data ?? []).find((s) => s.id === supplierId);
-  const warehouse = (warehouses.data ?? []).find((w) => w.id === warehouseId);
+  // البنود المحفوظة وهل صُرف أو حُجز منها شيء (فلا تُعدَّل إلّا البيانات)
+  const existing = useQuery({
+    queryKey: ["purchase-invoice-edit", editing?.id],
+    enabled: open && Boolean(editing?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("purchase_invoice_items")
+        .select(
+          "id, qty, free_qty, purchase_price, line_discount_amount, vat_rate, lot_number, expiry_date, " +
+            "item:items(id, name_ar, code, barcode, unit, cost_price, track_expiry)",
+        )
+        .eq("purchase_invoice_id", editing!.id)
+        .order("created_at");
+      if (error) throw error;
+      const rows = ((data ?? []) as any[]).map((row) => ({ ...row, item: Array.isArray(row.item) ? row.item[0] : row.item }));
+      const ids = rows.map((r) => r.id);
+      let consumed = false;
+      if (ids.length > 0) {
+        const lots = await supabase
+          .from("inventory_lots")
+          .select("qty_received, qty_remaining, reserved_quantity")
+          .in("purchase_invoice_item_id", ids);
+        if (lots.error) throw lots.error;
+        consumed = ((lots.data ?? []) as any[]).some(
+          (l) => Number(l.qty_remaining ?? 0) < Number(l.qty_received ?? 0) || Number(l.reserved_quantity ?? 0) > 0,
+        );
+      }
+      const returns = await supabase
+        .from("purchase_returns")
+        .select("id", { count: "exact", head: true })
+        .eq("purchase_invoice_id", editing!.id)
+        .neq("status", "cancelled");
+      return { rows, consumed, hasReturns: (returns.count ?? 0) > 0 };
+    },
+  });
+  const linesLocked =
+    isEdit && (Boolean(editing?.goods_receipt_id) || Boolean(existing.data?.consumed) || Boolean(existing.data?.hasReturns));
+  const editPaid = isEdit ? Number(editing?.paid_amount ?? 0) : 0;
+  const supplierLocked = isEdit && (editPaid > 0 || Boolean(editing?.goods_receipt_id));
+
+  useEffect(() => {
+    if (!open || !editing || !existing.data || loadedId === editing.id) return;
+    const loaded: Line[] = existing.data.rows.map((row: any, index: number) => ({
+      key: `${row.id}-${index}`,
+      item: {
+        id: row.item?.id ?? "",
+        name_ar: row.item?.name_ar ?? "—",
+        code: row.item?.code ?? null,
+        barcode: row.item?.barcode ?? null,
+        unit: row.item?.unit ?? null,
+        cost_price: row.item?.cost_price ?? null,
+        track_expiry: Boolean(row.item?.track_expiry),
+      },
+      qty: String(Number(row.qty ?? 0)),
+      free_qty: Number(row.free_qty ?? 0) ? String(Number(row.free_qty)) : "",
+      unit_price: String(Number(row.purchase_price ?? 0)),
+      discount: Number(row.line_discount_amount ?? 0) ? String(Number(row.line_discount_amount)) : "",
+      vat_rate: String(Number(row.vat_rate ?? 0)),
+      lot_number: row.lot_number ?? "",
+      expiry_date: row.expiry_date ?? "",
+    }));
+    setSupplierId(editing.distributor_id ?? "");
+    setInvoiceNumber(editing.invoice_number ?? "");
+    setInvoiceDate(editing.invoice_date ?? todayIso());
+    setWarehouseId(editing.warehouse_id ?? "");
+    setPurpose((editing.purchase_purpose as PurchasePurpose | null) ?? "");
+    setNote(editing.note ?? "");
+    setLines(loaded);
+    setTaxed(Number(editing.vat_amount ?? 0) > 0 || loaded.some((l) => num(l.vat_rate) > 0));
+    setTaxNo(editing.supplier_tax_number ?? "");
+    setPayNow(false);
+    setEditReason("");
+    setInitialSignature(linesSignature(loaded));
+    setLoadedId(editing.id);
+  }, [open, editing, existing.data, loadedId]);
+
+  // إغلاق نافذة التعديل يمسحها: التعديل التالي يُحمَّل من القاعدة لا من مسوّدة قديمة
+  useEffect(() => {
+    if (!open && loadedId) {
+      reset();
+      setLoadedId(null);
+      setInitialSignature("");
+      setEditReason("");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, loadedId]);
+
+  // المورد/المستودع المحفوظ في الفاتورة يبقى في القائمة ولو صار معطّلًا
+  const supplierOptions: Supplier[] = useMemo(() => {
+    const list = suppliers.data ?? [];
+    if (!editing?.distributor_id || list.some((s) => s.id === editing.distributor_id)) return list;
+    return [
+      ...list,
+      {
+        id: editing.distributor_id,
+        name_ar: editing.distributor?.name_ar ?? "المورد الحالي",
+        tax_number: editing.distributor?.tax_number ?? null,
+        payment_terms_days: null,
+      },
+    ];
+  }, [suppliers.data, editing]);
+  const warehouseOptions: Warehouse[] = useMemo(() => {
+    const list = warehouses.data ?? [];
+    if (!editing?.warehouse_id || list.some((w) => w.id === editing.warehouse_id)) return list;
+    return [...list, { id: editing.warehouse_id, name: editing.warehouse?.name ?? "المستودع الحالي", branch_id: null, purpose: null }];
+  }, [warehouses.data, editing]);
+
+  const supplier = supplierOptions.find((s) => s.id === supplierId);
+  const warehouse = warehouseOptions.find((w) => w.id === warehouseId);
   const warehousePurpose = warehouse?.purpose && warehouse.purpose !== "general" ? (warehouse.purpose as PurchasePurpose) : null;
   const effectivePurpose = warehousePurpose ?? (purpose || null);
   const defaultVat = taxed ? "15" : "0";
@@ -492,6 +654,8 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
     setSupplierId(id);
     setTaxNo("");
     const next = (suppliers.data ?? []).find((s) => s.id === id);
+    // في التعديل لا تُمسّ ضريبة البنود بتغيير المورد — تُبدَّل يدويًّا إن لزم
+    if (isEdit) return;
     // نوع الفاتورة يتبع المورد: مسجَّلٌ ضريبيًّا ← ضريبية 15٪، وإلّا بدون ضريبة. ويُبدَّل يدويًّا.
     applyTaxMode(Boolean(taxNumber ?? next?.tax_number));
   };
@@ -546,16 +710,26 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
   const effectivePay = payNow ? (payAmount.trim() === "" ? net : num(payAmount)) : 0;
   const today = todayIso();
 
+  const linesChanged = !isEdit || linesSignature(lines) !== initialSignature || warehouseId !== (editing?.warehouse_id ?? "");
+
   const problems: string[] = [];
+  if (isEdit && loadedId !== editing?.id) problems.push("جارٍ تحميل الفاتورة");
   if (!supplierId) problems.push("اختر المورد");
   if (needsTaxNo && !/^[0-9]{15}$/.test(taxNo.trim()))
     problems.push("اكتب الرقم الضريبي للمورد (15 رقمًا) أو اختر «بدون ضريبة»");
+  if (isEdit && taxed && taxNo.trim() && !/^[0-9]{15}$/.test(taxNo.trim()))
+    problems.push("الرقم الضريبي للمورد 15 رقمًا");
   if (!invoiceNumber.trim()) problems.push("اكتب رقم فاتورة المورد");
   if (!invoiceDate) problems.push("اختر تاريخ الفاتورة");
   else if (invoiceDate > today) problems.push("تاريخ الفاتورة في المستقبل");
   if (!warehouseId) problems.push("اختر المستودع الذي تدخل إليه الأصناف");
   if (lines.length === 0) problems.push("أضف صنفًا واحدًا على الأقل");
-  for (const line of lines) {
+  if (isEdit && linesChanged && linesLocked)
+    problems.push("صُرف من أصناف هذه الفاتورة أو عليها مرتجع — تُعدَّل بياناتها فقط");
+  if (isEdit && net < editPaid - 0.001)
+    problems.push(`الصافي بعد التعديل أقلّ ممّا سُدّد (${money(editPaid)}) — ألغِ سند السداد الزائد أوّلًا`);
+  if (isEdit && !editReason.trim()) problems.push("اكتب سبب التعديل");
+  for (const line of linesChanged ? lines : []) {
     const t = lineTotals(line);
     if (num(line.qty) <= 0) problems.push(`كمية «${line.item.name_ar}» يجب أن تكون أكبر من صفر`);
     if (num(line.unit_price) < 0 || num(line.free_qty) < 0 || num(line.discount) < 0)
@@ -564,7 +738,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
     if (line.item.track_expiry && !line.expiry_date) problems.push(`اكتب تاريخ صلاحية «${line.item.name_ar}»`);
     if (line.expiry_date && line.expiry_date <= today) problems.push(`«${line.item.name_ar}» منتهي الصلاحية`);
   }
-  if (payNow) {
+  if (payNow && !isEdit) {
     if (!can("suppliers.pay")) problems.push("صلاحيتك لا تسمح بالسداد للموردين — احفظها آجلة");
     if (effectivePay <= 0) problems.push("المبلغ المدفوع يجب أن يكون أكبر من صفر");
     if (effectivePay > net + 0.001) problems.push("المبلغ المدفوع أكبر من صافي الفاتورة");
@@ -575,6 +749,39 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
     mutationFn: async () => {
       if (!orgId) throw new Error("لا توجد منشأة نشطة");
       if (problems.length > 0) throw new Error(problems[0]);
+      if (isEdit) {
+        const update = {
+          warehouse_id: warehouseId,
+          distributor_id: supplierId,
+          invoice_number: invoiceNumber.trim(),
+          invoice_date: invoiceDate,
+          purchase_purpose: effectivePurpose,
+          supplier_tax_number: taxed ? taxNo.trim() || null : null,
+          note: note.trim() || null,
+          reason: editReason.trim(),
+          // البنود تُرسل إن تغيّرت وحدها: فاتورةٌ صُرف منها تُعدَّل بياناتها دون أن تُمسّ
+          ...(linesChanged
+            ? {
+                lines: lines.map((l) => ({
+                  item_id: l.item.id,
+                  qty: num(l.qty),
+                  free_qty: num(l.free_qty),
+                  unit_price: num(l.unit_price),
+                  discount_amount: num(l.discount),
+                  vat_rate: num(l.vat_rate),
+                  lot_number: l.lot_number.trim() || null,
+                  expiry_date: l.expiry_date || null,
+                })),
+              }
+            : {}),
+        };
+        const { data, error } = await supabase.rpc("app_update_purchase_invoice", {
+          p_invoice_id: editing!.id,
+          p_payload: update,
+        });
+        if (error) throw error;
+        return data as string;
+      }
       const payload = {
         organization_id: orgId,
         warehouse_id: warehouseId,
@@ -610,6 +817,10 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["purchase-invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["purchase-invoice-lines"] });
+      queryClient.invalidateQueries({ queryKey: ["purchase-invoice-edit"] });
+      queryClient.invalidateQueries({ queryKey: ["purchase-invoice-vouchers"] });
+      queryClient.invalidateQueries({ queryKey: ["vat-payable"] });
       queryClient.invalidateQueries({ queryKey: ["supplier-balances"] });
       queryClient.invalidateQueries({ queryKey: ["supplier-ledger"] });
       queryClient.invalidateQueries({ queryKey: ["procurement-spend"] });
@@ -620,6 +831,16 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
         predicate: (q) =>
           q.queryKey.some((k) => typeof k === "string" && /inventory|stock|lots|warehouse-balance/i.test(k)),
       });
+      if (isEdit) {
+        toast({
+          title: `عُدّلت فاتورة الشراء ${invoiceNumber.trim()}`,
+          description: linesChanged
+            ? `أُعيد إدخال ${lines.length} أصناف «${warehouse?.name ?? ""}» — الصافي ${money(net)}`
+            : "عُدّلت بيانات الفاتورة — الأصناف والمخزون كما هي",
+        });
+        onOpenChange(false);
+        return;
+      }
       toast({
         title: `حُفظت فاتورة الشراء ${invoiceNumber.trim()}`,
         description: `دخلت ${lines.length} أصناف «${warehouse?.name ?? ""}» — الصافي ${money(net)}${
@@ -643,33 +864,50 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
     >
       <DialogContent className="max-h-[94vh] max-w-6xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>فاتورة شراء جديدة</DialogTitle>
+          <DialogTitle>{isEdit ? `تعديل فاتورة الشراء ${editing?.invoice_number ?? ""}` : "فاتورة شراء جديدة"}</DialogTitle>
           <DialogDescription>
-            بيانات الفاتورة والمورد، ثمّ الأصناف، ثمّ الحفظ — تدخل الأصناف المستودع المختار وتُسجَّل على
-            حساب المورد.
+            {isEdit
+              ? "عدّل ما يلزم ثمّ اكتب سبب التعديل — إن تغيّرت الأصناف أو المستودع تخرج الكمّيات السابقة بحركةٍ عكسية وتدخل الجديدة."
+              : "بيانات الفاتورة والمورد، ثمّ الأصناف، ثمّ الحفظ — تدخل الأصناف المستودع المختار وتُسجَّل على حساب المورد."}
           </DialogDescription>
         </DialogHeader>
+
+        {isEdit && existing.isLoading && <Skeleton className="h-10 w-full" />}
+        {isEdit && existing.isError && (
+          <p className="text-sm text-destructive">تعذّر تحميل الفاتورة: {errorMessage(existing.error)}</p>
+        )}
+        {isEdit && linesLocked && (
+          <p className="rounded-md border border-amber-400/60 bg-amber-50 px-3 py-2 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+            {editing?.goods_receipt_id
+              ? "فاتورةٌ على مستند استلام — تُعدَّل بياناتها فقط (الرقم، التاريخ، الرقم الضريبي، الملاحظة)."
+              : existing.data?.hasReturns
+                ? "على الفاتورة مرتجع مشتريات — تُعدَّل بياناتها فقط."
+                : "صُرف أو حُجز من أصناف هذه الفاتورة — تُعدَّل بياناتها فقط؛ وتصحيح الكمّيات بمرتجع المشتريات."}
+          </p>
+        )}
 
         {/* ── ١) بيانات الفاتورة ── */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center justify-between gap-2">
               <Label>المورد *</Label>
-              <button
-                type="button"
-                className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-                onClick={() => setSupplierFormOpen((o) => !o)}
-              >
-                <UserPlus className="h-3.5 w-3.5" />
-                مورد جديد
-              </button>
+              {!supplierLocked && (
+                <button
+                  type="button"
+                  className="flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                  onClick={() => setSupplierFormOpen((o) => !o)}
+                >
+                  <UserPlus className="h-3.5 w-3.5" />
+                  مورد جديد
+                </button>
+              )}
             </div>
-            <Select value={supplierId} onValueChange={(v) => chooseSupplier(v)}>
+            <Select value={supplierId} onValueChange={(v) => chooseSupplier(v)} disabled={supplierLocked}>
               <SelectTrigger>
                 <SelectValue placeholder={suppliers.isLoading ? "جارٍ التحميل..." : "اختر المورد"} />
               </SelectTrigger>
               <SelectContent>
-                {(suppliers.data ?? []).map((s) => (
+                {supplierOptions.map((s) => (
                   <SelectItem key={s.id} value={s.id}>{s.name_ar}</SelectItem>
                 ))}
               </SelectContent>
@@ -679,6 +917,9 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
                 {supplier.tax_number ? `الرقم الضريبي ${supplier.tax_number}` : "بلا رقم ضريبي في بطاقته"}
                 {supplier.payment_terms_days ? ` · مهلة السداد ${supplier.payment_terms_days} يومًا` : ""}
               </p>
+            )}
+            {supplierLocked && editPaid > 0 && (
+              <p className="text-[11px] text-muted-foreground">عليها سداد للمورد — لا يتغيّر المورد.</p>
             )}
             {!suppliers.isLoading && (suppliers.data ?? []).length === 0 && !supplierFormOpen && (
               <p className="text-[11px] text-muted-foreground">لا موردين بعد — اضغط «مورد جديد».</p>
@@ -694,12 +935,12 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
           </div>
           <div className="flex flex-col gap-1.5">
             <Label>المستودع الذي تدخل إليه *</Label>
-            <Select value={warehouseId} onValueChange={setWarehouseId}>
+            <Select value={warehouseId} onValueChange={setWarehouseId} disabled={linesLocked}>
               <SelectTrigger>
                 <SelectValue placeholder={warehouses.isLoading ? "جارٍ التحميل..." : "اختر المستودع"} />
               </SelectTrigger>
               <SelectContent>
-                {(warehouses.data ?? []).map((w) => (
+                {warehouseOptions.map((w) => (
                   <SelectItem key={w.id} value={w.id}>
                     {w.name}
                     {w.purpose && w.purpose !== "general" ? ` — ${purposeLabel(w.purpose)}` : ""}
@@ -729,6 +970,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
                   type="button"
                   role="radio"
                   aria-checked={taxed}
+                  disabled={linesLocked}
                   onClick={() => applyTaxMode(true)}
                   className={`rounded px-3 py-1 ${taxed ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
                 >
@@ -738,6 +980,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
                   type="button"
                   role="radio"
                   aria-checked={!taxed}
+                  disabled={linesLocked}
                   onClick={() => applyTaxMode(false)}
                   className={`rounded px-3 py-1 ${!taxed ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
                 >
@@ -745,7 +988,19 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
                 </button>
               </div>
             </div>
-            {taxed && supplier?.tax_number && (
+            {isEdit && taxed && !needsTaxNo && (
+              <div className="flex flex-col gap-1.5">
+                <Label className="text-xs">الرقم الضريبي على الفاتورة (فارغ = رقم بطاقة المورد)</Label>
+                <Input
+                  value={taxNo}
+                  onChange={(e) => setTaxNo(e.target.value.replace(/\D/g, "").slice(0, 15))}
+                  inputMode="numeric"
+                  placeholder={supplier?.tax_number ?? "15 رقمًا"}
+                  className="w-48 font-mono"
+                />
+              </div>
+            )}
+            {!isEdit && taxed && supplier?.tax_number && (
               <p className="pb-1.5 text-sm">
                 الرقم الضريبي للمورد: <span className="font-mono font-semibold">{supplier.tax_number}</span>
               </p>
@@ -782,12 +1037,14 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
         <div className="flex flex-col gap-2 rounded-lg border p-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-sm font-semibold">الأصناف</p>
-            <Button size="sm" variant="outline" onClick={() => setItemFormOpen((o) => !o)}>
-              <PackagePlus className="h-4 w-4" />
-              صنف جديد
-            </Button>
+            {!linesLocked && (
+              <Button size="sm" variant="outline" onClick={() => setItemFormOpen((o) => !o)}>
+                <PackagePlus className="h-4 w-4" />
+                صنف جديد
+              </Button>
+            )}
           </div>
-          {itemFormOpen && (
+          {itemFormOpen && !linesLocked && (
             <QuickItemForm
               initialName={itemSearch}
               onCancel={() => setItemFormOpen(false)}
@@ -797,7 +1054,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
               }}
             />
           )}
-          <div className="relative">
+          <div className={linesLocked ? "hidden" : "relative"}>
             <Search className="pointer-events-none absolute start-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
             <Input
               value={itemSearch}
@@ -812,7 +1069,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
               className="ps-8"
             />
           </div>
-          {term && (
+          {term && !linesLocked && (
             <div className="flex flex-col divide-y rounded-md border">
               {matches.map((item) => (
                 <button
@@ -842,7 +1099,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
           )}
 
           {lines.length > 0 && (
-            <div className="overflow-x-auto">
+            <fieldset disabled={linesLocked} className="min-w-0 overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -885,7 +1142,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
                         </TableCell>
                         <TableCell>
                           <Input type="number" min={0} max={100} step="any" className="w-16" value={line.vat_rate}
-                                 disabled={!taxed}
+                                 disabled={!taxed || linesLocked}
                                  title={taxed ? undefined : "فاتورة بدون ضريبة"}
                                  onChange={(e) => updateLine(line.key, { vat_rate: e.target.value })} />
                         </TableCell>
@@ -904,6 +1161,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
                         <TableCell className="whitespace-nowrap font-mono text-xs">{money(t.net)}</TableCell>
                         <TableCell>
                           <Button size="sm" variant="ghost" className="text-destructive" title="حذف السطر"
+                                  disabled={linesLocked}
                                   onClick={() => setLines((c) => c.filter((l) => l.key !== line.key))}>
                             <Trash2 className="h-4 w-4" />
                           </Button>
@@ -913,23 +1171,42 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
                   })}
                 </TableBody>
               </Table>
-            </div>
+            </fieldset>
           )}
         </div>
 
         {/* ── ٣) المجاميع والسداد ── */}
         <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
           <div className="flex flex-col gap-2 rounded-lg border p-3">
+            {isEdit ? (
+              <>
+                <p className="text-sm">
+                  المسدَّد من الفاتورة: <span className="font-mono font-semibold">{money(editPaid)}</span>
+                  {" — "}المتبقّي بعد التعديل:{" "}
+                  <span className="font-mono font-semibold">{money(round2(Math.max(net - editPaid, 0)))}</span>
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  السداد لا يُعدَّل من هنا: يُضاف من زرّ السداد في القائمة، ويُلغى سندٌ خاطئ من «المحاسبة ← السندات» فيعود
+                  مبلغه إلى المتبقّي.
+                </p>
+                <div className="flex flex-col gap-1">
+                  <Label className="text-xs">سبب التعديل *</Label>
+                  <Input value={editReason} onChange={(e) => setEditReason(e.target.value)} dir="auto"
+                         placeholder="مثال: خطأ في رقم فاتورة المورد / الكمية" />
+                </div>
+              </>
+            ) : (
             <label className="flex items-center gap-2 text-sm font-semibold">
               <input type="checkbox" checked={payNow} onChange={(e) => setPayNow(e.target.checked)} />
               دُفعت الآن (كلّها أو جزء منها)
             </label>
-            {!payNow && (
+            )}
+            {!isEdit && !payNow && (
               <p className="text-xs text-muted-foreground">
                 تُحفظ آجلةً على حساب المورد، وتُسدَّد لاحقًا من زرّ السداد في القائمة أو من «الموردون ← الأرصدة والسداد».
               </p>
             )}
-            {payNow && (
+            {!isEdit && payNow && (
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <div className="flex flex-col gap-1">
                   <Label className="text-xs">المبلغ المدفوع</Label>
@@ -973,7 +1250,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
             )}
             <div className="flex flex-col gap-1">
               <Label className="text-xs">ملاحظة</Label>
-              <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
+              <Textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} dir="auto" />
             </div>
           </div>
 
@@ -984,7 +1261,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
             <Row label="الضريبة" value={money(round2(totals.vat))} />
             <div className="my-1 border-t" />
             <Row label="الصافي" value={money(net)} strong />
-            {payNow && (
+            {!isEdit && payNow && (
               <>
                 <Row label="المدفوع الآن" value={money(effectivePay)} />
                 <Row label="يبقى على حساب المورد" value={money(round2(net - effectivePay))} />
@@ -993,7 +1270,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
           </div>
         </div>
 
-        {problems.length > 0 && lines.length > 0 && (
+        {problems.length > 0 && (lines.length > 0 || isEdit) && (
           <p className="text-xs text-destructive">{problems[0]}</p>
         )}
 
@@ -1002,7 +1279,7 @@ function NewPurchaseInvoiceDialog({ open, onOpenChange }: { open: boolean; onOpe
             إغلاق
           </Button>
           <Button disabled={problems.length > 0 || save.isPending} onClick={() => save.mutate()}>
-            {save.isPending ? "جارٍ الحفظ..." : "حفظ الفاتورة"}
+            {save.isPending ? "جارٍ الحفظ..." : isEdit ? "حفظ التعديل" : "حفظ الفاتورة"}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -1185,8 +1462,27 @@ function Row({ label, value, strong }: { label: string; value: string; strong?: 
  * تفاصيل الفاتورة
  * ════════════════════════════════════════════════════════════════════════ */
 function PurchaseInvoiceDetailsDialog({
-  invoice, onClose, onCancel,
-}: { invoice: any | null; onClose: () => void; onCancel?: () => void }) {
+  invoice, onClose, onCancel, onEdit, onPrint,
+}: { invoice: any | null; onClose: () => void; onCancel?: () => void; onEdit?: () => void; onPrint?: () => void }) {
+  const { toast } = useToast();
+  // سندات سداد الفاتورة (الرابط من 0247) — كلٌّ يُطبع سندَ صرفٍ رسميًّا
+  const vouchers = useQuery({
+    queryKey: ["purchase-invoice-vouchers", invoice?.id],
+    enabled: Boolean(invoice?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("financial_vouchers")
+        .select("id, voucher_number, voucher_date, amount, is_void, void_reason, method:lookup_values!payment_method_value_id(name_ar)")
+        .eq("related_purchase_invoice_id", invoice!.id)
+        .order("voucher_number");
+      if (error) throw error;
+      return ((data ?? []) as any[]).map((row) => ({ ...row, method: Array.isArray(row.method) ? row.method[0] : row.method }));
+    },
+  });
+  const printVoucher = (id: string) =>
+    printVoucherById(id).catch((error) =>
+      toast({ variant: "destructive", title: "تعذّرت طباعة السند", description: errorMessage(error) }),
+    );
   const lines = useQuery({
     queryKey: ["purchase-invoice-lines", invoice?.id],
     enabled: Boolean(invoice?.id),
@@ -1274,7 +1570,57 @@ function PurchaseInvoiceDetailsDialog({
           </div>
         )}
 
+        {(vouchers.data ?? []).length > 0 && (
+          <div className="flex flex-col gap-1.5">
+            <p className="text-sm font-semibold">سندات السداد</p>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>رقم السند</TableHead>
+                    <TableHead>التاريخ</TableHead>
+                    <TableHead>طريقة الدفع</TableHead>
+                    <TableHead>المبلغ</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(vouchers.data ?? []).map((v) => (
+                    <TableRow key={v.id} className={v.is_void ? "text-muted-foreground line-through" : undefined}>
+                      <TableCell className="font-mono text-xs">#{v.voucher_number}</TableCell>
+                      <TableCell className="text-xs">{v.voucher_date}</TableCell>
+                      <TableCell className="text-xs">{v.method?.name_ar ?? "—"}</TableCell>
+                      <TableCell className="font-mono text-xs">{money(Number(v.amount ?? 0))}</TableCell>
+                      <TableCell className="no-underline">
+                        <div className="flex items-center gap-1">
+                          {v.is_void && <Badge variant="destructive" title={v.void_reason ?? undefined}>ملغى</Badge>}
+                          <Button size="sm" variant="ghost" title="طباعة السند" onClick={() => printVoucher(v.id)}>
+                            <Printer className="h-4 w-4" />
+                            طباعة
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        )}
+
         <DialogFooter>
+          {onPrint && (
+            <Button variant="outline" onClick={onPrint}>
+              <Printer className="h-4 w-4" />
+              طباعة الفاتورة
+            </Button>
+          )}
+          {onEdit && (
+            <Button variant="outline" onClick={onEdit}>
+              <Pencil className="h-4 w-4" />
+              تعديل
+            </Button>
+          )}
           {onCancel && (
             <Button variant="outline" className="text-destructive" onClick={onCancel}>
               <Ban className="h-4 w-4" />
