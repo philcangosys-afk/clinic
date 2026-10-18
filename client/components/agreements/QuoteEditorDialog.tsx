@@ -144,14 +144,30 @@ export default function QuoteEditorDialog({
   const canManage = can("agreements.manage") && !agreement.is_disabled;
   const { isDoctorRole } = useSessionDoctor();
   /**
-   * الخصم للاستقبال والمالك ومدير المنشأة وحدهم (قرار المالك 14/10/2026، 0244).
-   * الطبيب يرى الخصم ولا يكتبه ولا يغيّره — والقاعدة ترفضه منه كذلك. الخصم
-   * الافتراضيّ للخدمة من الكتالوج يبقى كما هو: قرار الإدارة لا الطبيب.
+   * الخصم (0244 ثمّ 0245): المالك ومدير المنشأة والاستقبال بلا حدّ؛ ومن مُنح
+   * صلاحية «خصم على عروض أسعار الاتفاقيات» (`agreements.discount`) — كالطبيب —
+   * حتى النسبة القصوى لصفته أو دوره من «الأدوار والصلاحيات» (30٪ للطبيب).
+   * والقاعدة تفرض الأمرين. الخصم الافتراضيّ للخدمة من الكتالوج يمرّ دائمًا.
    */
   const { membership, legacyMode } = useOrganizationAccess();
-  const canDiscount =
+  const unlimitedDiscount =
     legacyMode || ["owner", "organization_admin", "receptionist"].includes(membership?.role_key ?? "");
-  const discountLockedTitle = "الخصم للاستقبال والإدارة";
+  const canDiscount = unlimitedDiscount || can("agreements.discount");
+  const discountLimit = useQuery({
+    queryKey: ["my-discount-limit", organizationId],
+    enabled: Boolean(organizationId) && canDiscount && !unlimitedDiscount,
+    staleTime: 5 * 60_000,
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("app_discount_limit", { p_organization_id: organizationId });
+      if (error) throw error;
+      return data === null || data === undefined ? null : Number(data);
+    },
+  });
+  /** أقصى نسبة لهذا المستخدم — null = بلا حدّ */
+  const maxDiscount = unlimitedDiscount ? null : (discountLimit.data ?? null);
+  const discountLockedTitle = "الخصم يحتاج صلاحية «خصم على عروض أسعار الاتفاقيات»";
+  const clampPercent = (value: number) =>
+    maxDiscount === null ? Math.min(Math.max(value, 0), 100) : Math.min(Math.max(value, 0), maxDiscount);
   /**
    * «فوترة» للاستقبال وحده (قرار المالك): الطبيب يُنشئ ويعدّل ويُشعر، ولا يُصدر
    * فاتورة. وما أُلغيت مديونيته لا يُفوتَر (يُعاد من الاتفاقية أوّلًا).
@@ -331,6 +347,10 @@ export default function QuoteEditorDialog({
     const pct = Number(generalDiscount);
     if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
       toast({ variant: "destructive", title: "النسبة من 0 إلى 100" });
+      return;
+    }
+    if (maxDiscount !== null && pct > maxDiscount) {
+      toast({ variant: "destructive", title: `أقصى خصمٍ مسموح لك ${maxDiscount}٪` });
       return;
     }
     setLines((prev) => prev.map((line) => ({ ...line, discountAmount: 0, discountPercent: pct })));
@@ -598,8 +618,8 @@ export default function QuoteEditorDialog({
               className="h-8 w-20"
               type="number"
               min={0}
-              max={100}
-              placeholder="%"
+              max={maxDiscount ?? 100}
+              placeholder={maxDiscount !== null ? `≤${maxDiscount}%` : "%"}
               value={generalDiscount}
               disabled={readOnly || !canDiscount}
               title={canDiscount ? undefined : discountLockedTitle}
@@ -615,6 +635,9 @@ export default function QuoteEditorDialog({
               <Percent className="h-4 w-4" />
               خصم عام
             </Button>
+            {canDiscount && maxDiscount !== null && (
+              <span className="text-[11px] text-muted-foreground">أقصى خصم لك {maxDiscount}٪</span>
+            )}
           </div>
           {quoteId && canManage && !isCancelled && (
             <Button
@@ -818,13 +841,16 @@ export default function QuoteEditorDialog({
                           className="h-8 w-14 px-2"
                           type="number"
                           min={0}
-                          max={100}
+                          max={maxDiscount ?? 100}
                           value={calc.percent || ""}
                           placeholder="0"
                           disabled={readOnly || !canDiscount}
-                          title={canDiscount ? undefined : discountLockedTitle}
+                          title={canDiscount ? (maxDiscount !== null ? `أقصى خصم لك ${maxDiscount}٪` : undefined) : discountLockedTitle}
                           onChange={(event) =>
-                            update(line.key, { discountPercent: Number(event.target.value) || 0, discountAmount: 0 })
+                            update(line.key, {
+                              discountPercent: clampPercent(Number(event.target.value) || 0),
+                              discountAmount: 0,
+                            })
                           }
                         />
                       </td>

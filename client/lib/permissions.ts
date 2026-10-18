@@ -168,6 +168,8 @@ export type PermissionKey =
   /* اتفاقيات العلاج وعروض أسعارها: الاطّلاع، والإنشاء والتعديل والتعطيل (0193) */
   | "agreements.view"
   | "agreements.manage"
+  /** خصم على عروض أسعار الاتفاقيات حتى حدّ الصفة/الدور (0245) */
+  | "agreements.discount"
   /* إلغاء مديونية الاتفاقية دون حذفها (0208) */
   | "agreements.cancel_debt"
   | "rad.view"

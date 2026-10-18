@@ -424,6 +424,38 @@ function RoleEditorDialog({
   const [openSections, setOpenSections] = useState<Set<string>>(new Set(["فتح الشاشات"]));
   const [detailed, setDetailed] = useState<Set<string>>(new Set());
 
+  /**
+   * أقصى خصمٍ على عروض الأسعار لأصحاب هذه الصفة أو الدور (0245) — يظهر متى
+   * مُنحت «خصم على عروض أسعار الاتفاقيات». يُحفظ في `discount_limits` القائم:
+   * الصفة بمفتاحها، والدور المخصّص بمعرّفه. فارغٌ = بلا حدّ.
+   */
+  const discountRef = baseOverride ? baseOverride.roleKey : role?.id ?? null;
+  const discountUnlimitedRole =
+    ["owner", "organization_admin", "receptionist"].includes(baseOverride?.roleKey ?? "");
+  const [discountMax, setDiscountMax] = useState("");
+  const [discountTouched, setDiscountTouched] = useState(false);
+  const currentDiscount = useQuery({
+    queryKey: ["role-discount-limit", organizationId, discountRef],
+    enabled: Boolean(organizationId && discountRef),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("discount_limits")
+        .select("max_percent")
+        .eq("organization_id", organizationId)
+        .eq("applies_to_role", discountRef)
+        .is("applies_to_user_id", null)
+        .limit(1)
+        .maybeSingle();
+      if (error) throw error;
+      return data ? Number((data as { max_percent: number }).max_percent) : null;
+    },
+  });
+  useEffect(() => {
+    if (!discountTouched && currentDiscount.isSuccess) {
+      setDiscountMax(currentDiscount.data === null ? "" : String(currentDiscount.data));
+    }
+  }, [currentDiscount.isSuccess, currentDiscount.data, discountTouched]);
+
   const existing = useQuery({
     queryKey: ["organization-role-permissions", role?.id],
     enabled: Boolean(role?.id),
@@ -459,6 +491,20 @@ function RoleEditorDialog({
     setKeys(keysForLevel(rows, level), true);
   };
 
+  const saveDiscountLimit = async (ref: string | null) => {
+    if (!organizationId || !ref || !discountTouched || discountUnlimitedRole) return;
+    const value = discountMax.trim() === "" ? null : Number(discountMax);
+    if (value !== null && (!Number.isFinite(value) || value < 0 || value > 100)) {
+      throw new Error("أقصى خصم على عروض الأسعار: نسبة من 0 إلى 100، أو فارغ بلا حدّ");
+    }
+    const { error } = await supabase.rpc("app_set_role_discount_limit", {
+      p_organization_id: organizationId,
+      p_role_ref: ref,
+      p_max_percent: value,
+    });
+    if (error) throw error;
+  };
+
   const save = useMutation({
     mutationFn: async () => {
       if (!organizationId) throw new Error("لا توجد منشأة نشطة");
@@ -469,10 +515,11 @@ function RoleEditorDialog({
           p_permissions: [...granted],
         });
         if (error) throw error;
+        await saveDiscountLimit(baseOverride.roleKey);
         return;
       }
       if (!nameAr.trim()) throw new Error("اسم الدور بالعربية مطلوب");
-      const { error } = await supabase.rpc("app_save_organization_role", {
+      const { data: savedRoleId, error } = await supabase.rpc("app_save_organization_role", {
         p_organization_id: organizationId,
         p_role_id: role?.id ?? null,
         p_name_ar: nameAr.trim(),
@@ -482,12 +529,16 @@ function RoleEditorDialog({
         p_permissions: [...granted],
       });
       if (error) throw error;
+      await saveDiscountLimit((typeof savedRoleId === "string" ? savedRoleId : null) ?? role?.id ?? null);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["organization-roles"] });
       queryClient.invalidateQueries({ queryKey: ["organization-role-permissions"] });
       queryClient.invalidateQueries({ queryKey: ["base-role-overrides"] });
       queryClient.invalidateQueries({ queryKey: ["my-permissions"] });
+      queryClient.invalidateQueries({ queryKey: ["role-discount-limit"] });
+      queryClient.invalidateQueries({ queryKey: ["my-discount-limit"] });
+      queryClient.invalidateQueries({ queryKey: ["discount_limits"] });
       toast({
         title: baseOverride
           ? `حُفظت صلاحيات صفة «${ROLE_LABELS[baseOverride.roleKey] ?? baseOverride.roleKey}»`
@@ -581,6 +632,31 @@ function RoleEditorDialog({
         </div>
 
         {catalog.isLoading && <Skeleton className="h-64 w-full" />}
+
+        {/* حدّ الخصم على عروض الأسعار — يظهر متى مُنحت صلاحيته (0245) */}
+        {granted.has("agreements.discount") && !discountUnlimitedRole && (
+          <div className="flex flex-wrap items-end gap-3 rounded-lg border border-amber-300 bg-amber-50/60 px-3 py-2 dark:bg-amber-950/20">
+            <div className="flex flex-col gap-1">
+              <Label className="text-xs">أقصى خصم على عروض أسعار الاتفاقيات %</Label>
+              <Input
+                type="number"
+                min={0}
+                max={100}
+                className="h-8 w-28"
+                placeholder="بلا حدّ"
+                value={discountMax}
+                onChange={(event) => {
+                  setDiscountTouched(true);
+                  setDiscountMax(event.target.value);
+                }}
+              />
+            </div>
+            <p className="max-w-md pb-1 text-[11px] text-muted-foreground">
+              أعلى نسبة خصمٍ يكتبها أصحاب هذه الصفة أو الدور على سطرٍ في عرض السعر. فارغ = بلا حدّ. الاستقبال
+              والمالك بلا حدّ دائمًا.
+            </p>
+          </div>
+        )}
 
         <div className="flex flex-col gap-2">
           {sections.map((section) => {
