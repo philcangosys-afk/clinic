@@ -175,6 +175,7 @@ do $$
 declare
   v_src    text;
   v_new    text;
+  v_seg    text;
   v_anchor constant text := 'v_pct  := case when v_gross > 0 then round(v_disc / v_gross * 100.0, 2) else 0 end;';
   -- رقعة 0244 كما كُتبت حرفيًّا — تُستبدل إن وُجدت
   v_old0244 constant text := $o$
@@ -236,7 +237,20 @@ begin
   if position(v_old0244 in v_src) > 0 then
     v_new := replace(v_src, v_old0244, v_block);
   elsif position('0244: الخصم' in v_src) > 0 then
-    raise exception 'رقعة 0244 موجودة لكن نصّها تغيّر — أوقفتُ الترحيل كلّه';
+    -- رقعة 0244 بنصٍّ يختلف حرفيًّا (مسافات/أسطر): تُحدَّد ببنيتها —
+    -- من تعليقها حتى أوّل «end if; end if;» (نهاية: if role / if line … elsif … end if; end if;)
+    if (length(v_src) - length(replace(v_src, '-- 0244: الخصم', ''))) / length('-- 0244: الخصم') <> 1 then
+      raise exception 'رقعة 0244 مكرّرة في الدالّة — أوقفتُ الترحيل كلّه';
+    end if;
+    v_seg := substring(v_src from '-- 0244: الخصم.*?end if;\s*end if;');
+    if v_seg is null
+       or position('app_has_role' in v_seg) = 0
+       or position('x0244' in v_seg) = 0
+       or position('elsif' in v_seg) = 0
+       or length(v_seg) > 2500 then
+      raise exception 'رقعة 0244 موجودة لكن بنيتها تغيّرت — أوقفتُ الترحيل كلّه';
+    end if;
+    v_new := replace(v_src, v_seg, ltrim(v_block, E'\n '));
   else
     if (length(v_src) - length(replace(v_src, v_anchor, ''))) / length(v_anchor) <> 1 then
       raise exception 'تعذّر ترقيع app_save_agreement_quote — موضع حساب نسبة الخصم تغيّر';
