@@ -16,6 +16,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { MutationCache, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { registerScreenLoader } from "./lib/screen-preload";
+import IdleQueryPause from "./components/layout/IdleQueryPause";
 import { importFresh, installStaleChunkReload } from "./lib/stale-chunk";
 
 type ScreenComponent = LazyExoticComponent<ComponentType<any>> & { preload: () => Promise<unknown> };
@@ -257,6 +258,8 @@ const routedModules = [...moduleRegistry.filter((item) => item.id !== "dashboard
 
 const App = () => (
   <QueryClientProvider client={queryClient}>
+    {/* الجهاز الخامل 5 دقائق لا يسأل القاعدة دوريًّا (22/10) — التحديث الفوريّ والتنبيهات تبقى */}
+    <IdleQueryPause />
     <TooltipProvider>
       <Toaster />
       <Sonner />

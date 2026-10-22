@@ -603,8 +603,8 @@ function InboxCard({
   const rows = useQuery({
     queryKey: ["follow-up-center", organizationId, day, effectiveDoctor ?? "all"],
     enabled: !blindDoctor,
-    // النافذة الجانبية تُبطل هذا المفتاح عند كل حدثٍ فوريّ؛ والدورة احتياطٌ
-    refetchInterval: 30_000,
+    // النافذة الجانبية تُبطل هذا المفتاح عند كل حدثٍ فوريّ؛ والدورة احتياطٌ (22/10: 30 ← 60)
+    refetchInterval: 60_000,
     queryFn: async () => {
       const { fromIso, toIso } = localDayBounds(day);
       let q = supabase

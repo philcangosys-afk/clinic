@@ -19,8 +19,10 @@ export default function NotificationBell() {
   const summary = useQuery({
     queryKey: ["notification-summary", organization?.id],
     enabled: Boolean(organization?.id),
-    // التنبيه الحرِج لا يحتمل انتظار إعادة تحميل الصفحة
-    refetchInterval: 60_000,
+    // التنبيه الجديد يُحدّث الجرس فورًا: LiveNotifier (كلّ 30 ثانية) يُبطل هذا
+    // المفتاح عند وصول أيّ تنبيه، وشاشة التنبيهات عند القراءة. الدورة هنا
+    // احتياطٌ لما قُرئ على جهازٍ آخر فقط — كانت كلّ دقيقة لكلّ تبويب (22/10).
+    refetchInterval: 10 * 60_000,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_notification_summary").select("unread_count, critical_count")

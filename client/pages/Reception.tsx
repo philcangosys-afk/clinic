@@ -121,7 +121,9 @@ function useTodayQueue(organizationId: string | undefined, doctorFilter: string,
   return useQuery({
     queryKey: ["reception-queue", organizationId, doctorFilter, day],
     enabled: Boolean(organizationId),
-    refetchInterval: 30_000,
+    // التحديث الفوريّ (ReceptionBoard ← useAppointmentsLive) يُبطل هذا المفتاح
+    // مع كلّ تغيّرٍ في المواعيد؛ الدورة احتياطٌ إن انقطع البثّ (22/10: 30 ← 60)
+    refetchInterval: 60_000,
     queryFn: async () => {
       let query = supabase
         .from("appointments")

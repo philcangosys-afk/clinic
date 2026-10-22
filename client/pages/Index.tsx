@@ -10,6 +10,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { useOrganizationAccess } from "@/contexts/OrganizationAccessContext";
+import { useAppointmentsLive } from "@/hooks/use-appointments-live";
 import { useSessionDoctor } from "@/lib/session-doctor";
 import { statusBadgeClass, statusLabel } from "@/lib/appointment-status";
 import { supabase } from "@/lib/supabase";
@@ -42,8 +43,9 @@ function useDashboardStats(organizationId: string | undefined, doctorId: string 
   return useQuery({
     queryKey: ["dashboard-stats", organizationId, doctorId],
     enabled: Boolean(organizationId),
-    // لوحة الطبيب تتجدّد وحدها: «في انتظارك» يتغيّر مع كلّ تسجيل وصول
-    refetchInterval: doctorId ? 30_000 : false,
+    // لوحة الطبيب تتجدّد وحدها: «في انتظارك» يتغيّر مع كلّ تسجيل وصول —
+    // فورًا بالبثّ (useAppointmentsLive أدناه)، والدورة احتياطٌ (22/10: 30 ← 60)
+    refetchInterval: doctorId ? 60_000 : false,
     queryFn: async () => {
       /**
        * كل عدّاد مقيَّد بالمؤسسة النشطة: سياسة RLS تسمح بكل مؤسسة **ينتمي
@@ -165,6 +167,8 @@ export default function Index() {
   const hideDues =
     doctorView || (Boolean(scopeDoctorId) && !["owner", "organization_admin"].includes(roleKey));
   const stats = useDashboardStats(access.organization?.id, doctorView ? scopeDoctorId : null);
+  // تسجيل وصول مريضٍ للطبيب يظهر في لوحته خلال ثانية (للطبيب وحده)
+  useAppointmentsLive(doctorView ? access.organization?.id : null, [["dashboard-stats"]], "doctor-dashboard");
   const quickLinks = doctorView ? DOCTOR_QUICK_LINKS : QUICK_LINKS;
 
   if (access.legacyMode) {

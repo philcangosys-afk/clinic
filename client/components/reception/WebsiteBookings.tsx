@@ -96,7 +96,7 @@ function useWebsiteBookings(enabled: boolean) {
   return useQuery({
     queryKey: BOOKINGS_KEY(organization?.id),
     enabled: enabled && Boolean(organization?.id),
-    refetchInterval: 30_000,
+    refetchInterval: 60_000,
     queryFn: async () => {
       const { data, error } = await supabase
         .from("v_website_bookings")
