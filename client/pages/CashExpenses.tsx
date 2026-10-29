@@ -20,7 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
-import LookupSelect from "@/components/shared/LookupSelect";
+import LookupSelect, { useLookupValues } from "@/components/shared/LookupSelect";
 import {
   PURCHASE_PURPOSES,
   PurposeBadge,
@@ -60,6 +60,7 @@ type ExpenseRow = {
   category: { name_ar: string } | { name_ar: string }[] | null;
   clinic: { name: string } | { name: string }[] | null;
   cash_register: { name: string } | { name: string }[] | null;
+  method: { name_ar: string } | { name_ar: string }[] | null;
 };
 
 const one = <T,>(value: T | T[] | null | undefined): T | null =>
@@ -94,7 +95,7 @@ export default function CashExpenses() {
       const { data, error } = await supabase
         .from("financial_vouchers")
         .select(
-          "id, voucher_number, voucher_date, amount, vat_amount, payee_name, description, purchase_purpose, expense_source_document, expense_source_number, is_void, void_reason, category:lookup_values!expense_category_value_id(name_ar), clinic:clinics(name), cash_register:cash_registers(name)",
+          "id, voucher_number, voucher_date, amount, vat_amount, payee_name, description, purchase_purpose, expense_source_document, expense_source_number, is_void, void_reason, category:lookup_values!expense_category_value_id(name_ar), clinic:clinics(name), cash_register:cash_registers(name), method:lookup_values!payment_method_value_id(name_ar)",
         )
         .eq("organization_id", organization!.id)
         .eq("voucher_type", "expense")
@@ -211,7 +212,7 @@ export default function CashExpenses() {
                   <TableHead>نوع المصروف</TableHead>
                   <TableHead>يُصرف لـ / البيان</TableHead>
                   <TableHead>العيادة</TableHead>
-                  <TableHead>الصندوق</TableHead>
+                  <TableHead>دُفع من</TableHead>
                   <TableHead>المبلغ</TableHead>
                   <TableHead />
                 </TableRow>
@@ -237,7 +238,12 @@ export default function CashExpenses() {
                       )}
                     </TableCell>
                     <TableCell className="text-xs">{one(row.clinic)?.name ?? "—"}</TableCell>
-                    <TableCell className="text-xs">{one(row.cash_register)?.name ?? "—"}</TableCell>
+                    <TableCell className="text-xs">
+                      {one(row.cash_register)?.name ?? one(row.method)?.name_ar ?? "—"}
+                      {one(row.cash_register) && one(row.method) && (
+                        <span className="block text-[10px] text-muted-foreground">{one(row.method)?.name_ar}</span>
+                      )}
+                    </TableCell>
                     <TableCell className="whitespace-nowrap font-semibold">
                       {fmt(Number(row.amount))}
                       {Number(row.vat_amount ?? 0) > 0 && (
@@ -330,6 +336,19 @@ function SummaryTile({ label, value }: { label: string; value: string }) {
 
 const NONE = "__none__";
 
+/**
+ * نوع مصروفٍ يُصرف لشخصٍ من المنشأة: راتب، مكافأة، حافز، بدل، عمولة، سلفة.
+ * يُعرف من اسمه في «أنواع المصروفات» — فيطلب المستفيد (موظف أو طبيب) ويقترح
+ * الدفع من البنك، كما تُدفع الرواتب والمكافآت عادةً.
+ */
+const STAFF_PAY_RE = /راتب|رواتب|مكاف[أا]|حافز|حوافز|أجر|اجور|أجور|بدل|عمولة|سلف/;
+
+/** طرق الدفع التي هي حسابٌ بنكيّ: التحويل، الشيك، أو طريقةٌ باسم بنك. */
+const isBankMethod = (m: { code: string | null; name_ar: string }) =>
+  m.code === "bank_transfer" || m.code === "cheque" || /بنك|تحويل|شيك|حوالة/.test(m.name_ar);
+
+type PaySource = "cash" | "bank";
+
 function NewExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { organization } = useOrganizationAccess();
   const queryClient = useQueryClient();
@@ -348,6 +367,96 @@ function NewExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const [sourceNumber, setSourceNumber] = useState("");
   const [requiresVat, setRequiresVat] = useState(false);
   const [supplierTaxNumber, setSupplierTaxNumber] = useState("");
+  // مصدر الدفع: صندوقٌ نقديّ أو حسابٌ بنكيّ — ويُقترح البنك للرواتب والمكافآت
+  const [source, setSource] = useState<PaySource>("cash");
+  const [sourceTouched, setSourceTouched] = useState(false);
+  const [bankMethodId, setBankMethodId] = useState("");
+  const [bankRef, setBankRef] = useState("");
+  // المستفيد من المنشأة: «e:<id>» موظف، «d:<id>» طبيب
+  const [beneficiary, setBeneficiary] = useState(NONE);
+
+  const categories = useLookupValues("expense_categories");
+  const categoryName = (categories.data ?? []).find((c) => c.id === categoryId)?.name_ar ?? "";
+  const isStaffPay = STAFF_PAY_RE.test(categoryName);
+
+  const methods = useQuery({
+    queryKey: ["expense-payment-methods", organization?.id],
+    enabled: open && Boolean(organization?.id),
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("v_reference_data")
+        .select("value_id, code, name_ar, sort_order")
+        .eq("category_key", "payment_methods")
+        .eq("is_disabled", false)
+        .or(`organization_id.is.null,organization_id.eq.${organization!.id}`)
+        .order("sort_order")
+        .order("name_ar");
+      if (error) throw error;
+      return (data ?? []) as { value_id: string; code: string | null; name_ar: string }[];
+    },
+  });
+  const cashMethodId = (methods.data ?? []).find((m) => m.code === "cash")?.value_id ?? null;
+  const bankMethods = (methods.data ?? []).filter(isBankMethod);
+
+  // الموظفون النشطون والأطباء المفعَّلون — لصرف الراتب والمكافأة لشخصٍ بعينه
+  const people = useQuery({
+    queryKey: ["expense-beneficiaries", organization?.id],
+    enabled: open && Boolean(organization?.id),
+    queryFn: async () => {
+      const [emp, doc] = await Promise.all([
+        supabase
+          .from("employees")
+          .select("id, name_ar, status")
+          .eq("organization_id", organization!.id)
+          .order("name_ar"),
+        supabase
+          .from("doctors")
+          .select("id, name_ar, is_enabled")
+          .eq("organization_id", organization!.id)
+          .order("name_ar"),
+      ]);
+      if (emp.error) throw emp.error;
+      if (doc.error) throw doc.error;
+      return {
+        employees: ((emp.data ?? []) as { id: string; name_ar: string; status: string | null }[]).filter(
+          (e) => !e.status || e.status === "active",
+        ),
+        doctors: ((doc.data ?? []) as { id: string; name_ar: string; is_enabled: boolean | null }[]).filter(
+          (d) => d.is_enabled !== false,
+        ),
+      };
+    },
+  });
+  const beneficiaryName = (() => {
+    if (beneficiary === NONE) return "";
+    const [kind, id] = [beneficiary.slice(0, 1), beneficiary.slice(2)];
+    if (kind === "d") return (people.data?.doctors ?? []).find((d) => d.id === id)?.name_ar ?? "";
+    return (people.data?.employees ?? []).find((e) => e.id === id)?.name_ar ?? "";
+  })();
+
+  const chooseCategory = (id: string) => {
+    setCategoryId(id);
+    const name = (categories.data ?? []).find((c) => c.id === id)?.name_ar ?? "";
+    // الراتب والمكافأة يُقترح لهما البنك ما لم يختر المستخدم المصدر بنفسه
+    if (!sourceTouched) setSource(STAFF_PAY_RE.test(name) ? "bank" : "cash");
+  };
+  const chooseSource = (next: PaySource) => {
+    setSource(next);
+    setSourceTouched(true);
+  };
+  const chooseBeneficiary = (next: string) => {
+    const previous = beneficiaryName;
+    setBeneficiary(next);
+    // «يُصرف لـ» يتبع المستفيد ما لم يكتب المستخدم فيه شيئًا آخر
+    const name = (() => {
+      if (next === NONE) return "";
+      const id = next.slice(2);
+      return next.startsWith("d:")
+        ? (people.data?.doctors ?? []).find((d) => d.id === id)?.name_ar ?? ""
+        : (people.data?.employees ?? []).find((e) => e.id === id)?.name_ar ?? "";
+    })();
+    if (!payee.trim() || payee.trim() === previous) setPayee(name);
+  };
 
   const registers = useQuery({
     queryKey: ["cash-registers-select", organization?.id],
@@ -391,6 +500,11 @@ function NewExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
     setSourceNumber("");
     setRequiresVat(false);
     setSupplierTaxNumber("");
+    setSource("cash");
+    setSourceTouched(false);
+    setBankMethodId("");
+    setBankRef("");
+    setBeneficiary(NONE);
   };
 
   const value = Number(amount) || 0;
@@ -403,7 +517,10 @@ function NewExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
       if (!purpose) throw new Error("اختر الجهة التي صُرف لها المبلغ");
       if (value <= 0) throw new Error("أدخل المبلغ");
       if (!categoryId) throw new Error("اختر نوع المصروف");
-      if (!registerId) throw new Error("اختر الصندوق الذي صُرف منه");
+      if (source === "cash" && !registerId) throw new Error("اختر الصندوق الذي صُرف منه");
+      if (source === "bank" && !bankMethodId) throw new Error("اختر الحساب البنكي الذي صُرف منه");
+      if (isStaffPay && beneficiary === NONE) throw new Error("اختر الموظف أو الطبيب المستفيد");
+      const beneficiaryId = beneficiary === NONE ? null : beneficiary.slice(2);
       const { error } = await supabase.from("financial_vouchers").insert({
         organization_id: organization.id,
         voucher_type: "expense",
@@ -411,9 +528,15 @@ function NewExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
         amount: value,
         purchase_purpose: purpose,
         expense_category_value_id: categoryId,
-        payee_name: payee.trim() || null,
+        payee_name: payee.trim() || beneficiaryName || null,
         description: description.trim() || null,
-        cash_register_id: registerId,
+        // الصندوق للنقد وحده؛ والبنك يُعرف بطريقة الدفع ومرجع الحوالة أو الشيك
+        cash_register_id: source === "cash" ? registerId : null,
+        payment_method_value_id: source === "cash" ? cashMethodId : bankMethodId,
+        bank_transfer_ref: source === "bank" ? bankRef.trim() || null : null,
+        doctor_id: beneficiary.startsWith("d:") ? beneficiaryId : null,
+        employee_ref_id: beneficiary.startsWith("e:") ? beneficiaryId : null,
+        employee_name: beneficiary.startsWith("e:") ? beneficiaryName || null : null,
         clinic_id: clinicId === NONE ? null : clinicId,
         expense_source_document: sourceDocument.trim() || null,
         expense_source_number: sourceNumber.trim() || null,
@@ -442,10 +565,11 @@ function NewExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Wallet className="h-4 w-4" />
-            مصروف نقدي جديد
+            مصروف جديد
           </DialogTitle>
           <DialogDescription>
-            سند صرف من الصندوق لما لا يدخل المخزون. يُرحَّل إلى القيود كما يُرحَّل أيّ سند صرف.
+            سند صرف من الصندوق أو البنك لما لا يدخل المخزون — ومنه الرواتب والمكافآت. يُرحَّل إلى القيود كما
+            يُرحَّل أيّ سند صرف.
           </DialogDescription>
         </DialogHeader>
         <div className="flex max-h-[65vh] flex-col gap-3 overflow-y-auto">
@@ -464,23 +588,99 @@ function NewExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
             </div>
             <div className="flex flex-col gap-1.5">
               <Label>نوع المصروف *</Label>
-              <LookupSelect categoryKey="expense_categories" value={categoryId} onChange={setCategoryId} />
+              <LookupSelect categoryKey="expense_categories" value={categoryId} onChange={chooseCategory} />
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label>الصندوق *</Label>
-              <Select value={registerId} onValueChange={setRegisterId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="اختر الصندوق" />
+              <Label>{isStaffPay ? "المستفيد (موظف أو طبيب) *" : "المستفيد من المنشأة (اختياري)"}</Label>
+              <Select value={beneficiary} onValueChange={chooseBeneficiary}>
+                <SelectTrigger aria-invalid={isStaffPay && beneficiary === NONE}>
+                  <SelectValue placeholder="اختر" />
                 </SelectTrigger>
                 <SelectContent>
-                  {(registers.data ?? []).map((r) => (
-                    <SelectItem key={r.id} value={r.id}>
-                      {r.name}
+                  <SelectItem value={NONE}>{isStaffPay ? "اختر الموظف أو الطبيب" : "ليس لشخصٍ من المنشأة"}</SelectItem>
+                  {(people.data?.doctors ?? []).map((d) => (
+                    <SelectItem key={`d:${d.id}`} value={`d:${d.id}`}>
+                      د. {d.name_ar.replace(/^د\.?\s*/, "")}
+                    </SelectItem>
+                  ))}
+                  {(people.data?.employees ?? []).map((e) => (
+                    <SelectItem key={`e:${e.id}`} value={`e:${e.id}`}>
+                      {e.name_ar}
                     </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
+            <div className="flex flex-col gap-1.5 sm:col-span-2">
+              <Label>دُفع من *</Label>
+              <div className="flex gap-1 rounded-md border p-1 text-sm" role="radiogroup" aria-label="مصدر الدفع">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={source === "cash"}
+                  onClick={() => chooseSource("cash")}
+                  className={`flex-1 rounded px-3 py-1.5 ${source === "cash" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                >
+                  الصندوق (نقدًا)
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={source === "bank"}
+                  onClick={() => chooseSource("bank")}
+                  className={`flex-1 rounded px-3 py-1.5 ${source === "bank" ? "bg-primary text-primary-foreground" : "hover:bg-muted"}`}
+                >
+                  البنك (تحويل / شيك)
+                </button>
+              </div>
+              {isStaffPay && !sourceTouched && source === "bank" && (
+                <span className="text-[11px] text-muted-foreground">الرواتب والمكافآت تُصرف عادةً من البنك — غيّره إن دُفع نقدًا.</span>
+              )}
+            </div>
+            {source === "cash" ? (
+              <div className="flex flex-col gap-1.5 sm:col-span-2">
+                <Label>الصندوق *</Label>
+                <Select value={registerId} onValueChange={setRegisterId}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="اختر الصندوق" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(registers.data ?? []).map((r) => (
+                      <SelectItem key={r.id} value={r.id}>
+                        {r.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-col gap-1.5">
+                  <Label>الحساب البنكي / طريقة الصرف *</Label>
+                  <Select value={bankMethodId} onValueChange={setBankMethodId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder={methods.isLoading ? "جارٍ التحميل..." : "اختر البنك"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {bankMethods.map((m) => (
+                        <SelectItem key={m.value_id} value={m.value_id}>
+                          {m.name_ar}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {!methods.isLoading && bankMethods.length === 0 && (
+                    <span className="text-[11px] text-destructive">
+                      لا حساب بنكيّ في «طرق الدفع» — أضفه من الإعدادات ← اللوائح المرجعية.
+                    </span>
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <Label>رقم الحوالة / الشيك</Label>
+                  <Input value={bankRef} onChange={(e) => setBankRef(e.target.value)} dir="ltr" />
+                </div>
+              </>
+            )}
             <div className="flex flex-col gap-1.5">
               <Label>يُصرف لـ</Label>
               <Input value={payee} onChange={(e) => setPayee(e.target.value)} placeholder="الجهة أو الشخص المستلم" />
@@ -531,7 +731,17 @@ function NewExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
           )}
         </div>
         <DialogFooter>
-          <Button disabled={save.isPending || !purpose || value <= 0 || !categoryId || !registerId} onClick={() => save.mutate()}>
+          <Button
+            disabled={
+              save.isPending ||
+              !purpose ||
+              value <= 0 ||
+              !categoryId ||
+              (source === "cash" ? !registerId : !bankMethodId) ||
+              (isStaffPay && beneficiary === NONE)
+            }
+            onClick={() => save.mutate()}
+          >
             {save.isPending ? "جارٍ الحفظ…" : "حفظ المصروف"}
           </Button>
         </DialogFooter>
